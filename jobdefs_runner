@@ -1,0 +1,178 @@
+#!/bin/bash
+
+# Shell wrapper for jobdefs_runner.py
+# This script handles all environment setup in a single shell session
+# and then calls the Python script with the same arguments
+
+# Basic debugging
+echo "=== Shell wrapper starting ==="
+echo "Script path: $0"
+echo "Arguments: $@"
+echo "Current directory: $(pwd)"
+echo "Shell: $SHELL"
+echo "Bash version: $(bash --version | head -1)"
+echo "================================"
+
+set -e  # Exit on any error
+
+# Function to print usage
+usage() {
+    echo "Usage: $0 [options] --jobdefs <jobdefs_file>"
+    echo "  --debug     Enable debug output"
+    echo "  --jobdefs   Path to job definitions file"
+    echo "  All other options are passed through to the Python script"
+    echo ""
+    echo "Python script options:"
+    echo "  --copy-input        Copy input files using mdh"
+    echo "  --dry-run          Print commands without actually running pushOutput"
+    echo "  --nevts <n>        Number of events to process (-1 for all events)"
+    exit 1
+}
+
+# Parse command line arguments
+DEBUG=false
+JOBDEFS_FILE=""
+PYTHON_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --debug)
+            DEBUG=true
+            PYTHON_ARGS+=("$1")
+            shift
+            ;;
+        --jobdefs)
+            JOBDEFS_FILE="$2"
+            PYTHON_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            # Pass through all other arguments to Python script
+            PYTHON_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Check required arguments
+if [[ -z "$JOBDEFS_FILE" ]]; then
+    echo "Error: --jobdefs is required"
+    usage
+fi
+
+# Debug output
+if [[ "$DEBUG" == "true" ]]; then
+    echo "=== Shell wrapper debug info ==="
+    echo "Job definitions file: $JOBDEFS_FILE"
+    echo "Current directory: $(pwd)"
+    echo "Python version: $(python3 --version)"
+    echo "=== Environment before setup ==="
+    echo "PATH: $PATH"
+    echo "MUSE_DIR: $MUSE_DIR"
+    echo "FHICL_FILE_PATH: $FHICL_FILE_PATH"
+    echo "================================"
+fi
+
+# Source the Mu2e art setup
+echo "Sourcing Mu2e art setup..."
+echo "Checking if setup file exists..."
+if [[ ! -f "/cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh" ]]; then
+    echo "ERROR: Mu2e art setup file not found: /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh"
+    echo "Current directory: $(pwd)"
+    echo "ls -la /cvmfs/mu2e.opensciencegrid.org/ | head -10:"
+    ls -la /cvmfs/mu2e.opensciencegrid.org/ | head -10
+    exit 1
+fi
+echo "Setup file exists, attempting to source..."
+
+echo "About to run: source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh"
+
+# Try to source with error capture
+set +e  # Temporarily disable exit on error
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh 2>&1
+SOURCE_EXIT_CODE=$?
+set -e  # Re-enable exit on error
+
+echo "Source command completed, exit code: $SOURCE_EXIT_CODE"
+
+if [[ $SOURCE_EXIT_CODE -ne 0 ]]; then
+    echo "ERROR: Failed to source Mu2e art setup"
+    echo "Let's try to see what's in the setup file:"
+    echo "First 20 lines of setup file:"
+    head -20 /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+    echo "Last 20 lines of setup file:"
+    tail -20 /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+    exit 1
+fi
+
+echo "Successfully sourced Mu2e art setup"
+
+# Setup muse ops
+echo "Setting up muse ops..."
+if ! command -v muse &> /dev/null; then
+    echo "ERROR: muse command not found after sourcing setup"
+    echo "PATH: $PATH"
+    exit 1
+fi
+
+muse setup ops
+if [[ $? -ne 0 ]]; then
+    echo "ERROR: Failed to run 'muse setup ops'"
+    exit 1
+fi
+
+# Setup OfflineOps
+echo "Setting up OfflineOps..."
+echo "About to run: setup OfflineOps"
+
+# Try to run setup with error capture
+set +e  # Temporarily disable exit on error
+setup OfflineOps 2>&1
+SETUP_EXIT_CODE=$?
+set -e  # Re-enable exit on error
+
+echo "Setup OfflineOps completed, exit code: $SETUP_EXIT_CODE"
+
+if [[ $SETUP_EXIT_CODE -ne 0 ]]; then
+    echo "ERROR: Failed to run 'setup OfflineOps'"
+    echo "Let's check what setup commands are available:"
+    echo "Available setup commands:"
+    setup -h 2>&1 || echo "setup command not available"
+    echo "PATH: $PATH"
+    echo "MANPATH: $MANPATH"
+    exit 1
+fi
+
+echo "Successfully set up OfflineOps"
+
+# Debug output after setup
+if [[ "$DEBUG" == "true" ]]; then
+    echo "=== Environment after setup ==="
+    echo "PATH: $PATH"
+    echo "MUSE_DIR: $MUSE_DIR"
+    echo "FHICL_FILE_PATH: $FHICL_FILE_PATH"
+    echo "================================"
+fi
+
+# Find the Python script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/jobdefs_runner.py"
+
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+    echo "Error: Python script not found at $PYTHON_SCRIPT"
+    exit 1
+fi
+
+# Make sure the Python script is executable
+chmod +x "$PYTHON_SCRIPT"
+
+# Build the Python command with all arguments
+PYTHON_CMD="python3 $PYTHON_SCRIPT ${PYTHON_ARGS[@]}"
+
+echo "Executing: $PYTHON_CMD"
+
+# Execute the Python script
+exec $PYTHON_CMD
