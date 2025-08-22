@@ -114,7 +114,7 @@ class Mu2eJobFCL:
     
     def _locate_file(self, filename: str) -> str:
         """Locate a file using samweb and return its physical path."""
-        from utils.samweb_wrapper import locate_file
+        from .samweb_wrapper import locate_file
         
         location = locate_file(filename)
         if not location:

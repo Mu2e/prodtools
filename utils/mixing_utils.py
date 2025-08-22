@@ -7,7 +7,7 @@ import copy
 import json
 import sys
 import itertools
-from utils.prod_utils import *
+from .prod_utils import *
 
 # Pileup mixer configurations
 PILEUP_MIXERS = {
@@ -41,7 +41,7 @@ def build_pileup_args(config):
                 continue
             pileup_list = f"{key}Cat.txt"
             # Get ALL pileup files from the dataset and write them to the catalog
-            from utils.samweb_wrapper import list_files
+            from .samweb_wrapper import list_files
             result = list_files(f"dh.dataset={ds} and event_count>0")
             with open(pileup_list, 'w') as pf:
                 pf.write('\n'.join(result))

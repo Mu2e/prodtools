@@ -4,8 +4,8 @@ import logging
 import json
 import os
 from pathlib import Path
-from utils.jobfcl import Mu2eJobFCL
-from utils.jobdef import create_jobdef
+from .jobfcl import Mu2eJobFCL
+from .jobdef import create_jobdef
 
 def setup_logging(verbose: bool) -> None:
     logging.basicConfig(
@@ -44,7 +44,7 @@ def run(cmd, capture=False, shell=False):
 
 def locate_parfile(parfile):
     """Locate the parfile using samweb."""
-    from utils.samweb_wrapper import locate_file
+    from .samweb_wrapper import locate_file
     
     loc = locate_file(parfile)
     if not loc:
@@ -103,7 +103,7 @@ def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
 
 def get_def_counts(dataset, include_empty=False):
     """Get file count and event count for a dataset."""
-    from utils.samweb_wrapper import count_files, list_files
+    from .samweb_wrapper import count_files, list_files
     
     # Count files
     query = f"defname: {dataset}" if include_empty else f"defname: {dataset} and event_count>0"
@@ -173,7 +173,7 @@ def find_json_entry(json_path, desc, dsconf, index):
         pass
     elif 'pbeam' in json_text:
         # Needs expansion
-        from utils.mixing_utils import expand_mix_config
+        from .mixing_utils import expand_mix_config
         configs = expand_mix_config(json_path)
     if index is not None:
         try: return configs[index]
@@ -295,7 +295,7 @@ def create_index_definition(output_index_dataset, job_count, input_index_dataset
         job_count: Number of jobs to process
         input_index_dataset: input index definition name
     """
-    from utils.samweb_wrapper import delete_definition, create_definition, describe_definition
+    from .samweb_wrapper import delete_definition, create_definition, describe_definition
     
     idx_format = f"{job_count:07d}"
     try:

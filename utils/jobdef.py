@@ -333,6 +333,8 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
 
     # Handle seed if needed
     if _seed_needed(template_path):
+        # This matches the Perl behavior exactly: set the string reference
+        # The mu2ejobfcl tool will process this string and add the actual baseSeed value
         tbs['seed'] = 'services.SeedService.baseSeed'
 
     # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
