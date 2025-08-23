@@ -1,9 +1,10 @@
 # Mu2e Production Tools - Usage Examples
 
-This document provides practical examples for using the Python-based Mu2e production tools that replace the original Perl scripts.
+This document provides practical examples for using the Python-based Mu2e production tools.
 
 ## Quick Navigation
 
+- **[Environment Setup](#environment-setup)** - Required Mu2e environment configuration
 - **[Job Definition Creation](#1-creating-job-definitions)** - Generate job definition tarballs
 - **[FCL Generation](#2-fcl-configuration-generation)** - Create FCL files from jobdefs
 - **[Mixing Jobs](#3-mixing-job-definitions)** - Complete guide to mixing jobs
@@ -79,9 +80,52 @@ python3 utils/jobdef.py --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/M
     --auxinput "25:physics.filters.EleBeamFlashMixer.fileNames:elebeam.txt"
 ```
 
+### C. FCL Template and Overrides
+
+The system now uses a smart template approach that creates a `template.fcl` file containing:
+
+```fcl
+#include "Production/JobConfig/cosmic/ExtractedCRY.fcl"
+services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+```
+
+**Key Benefits:**
+- **No FCL expansion**: Base FCL files are not expanded, keeping templates clean
+- **Overrides included**: FCL overrides are directly embedded in the template
+- **Minimal templates**: `template.fcl` contains just the include directive + overrides
+- **Perfect parity**: Python and Perl versions produce identical output
+
+**How it works:**
+1. **Template creation**: `write_fcl_template()` creates `template.fcl` with include + overrides
+2. **Embedding**: `--embed template.fcl` embeds this content into the final `mu2e.fcl`
+3. **Result**: Clean, minimal FCL files with overrides included but base FCL not expanded
+
 ## 2. FCL Configuration Generation
 
-### A. From Job Definition Files
+### A. New Template-Based Approach
+
+The system now uses a smart template approach that creates minimal, clean FCL files:
+
+**Template Creation:**
+```python
+# The write_fcl_template() function creates template.fcl with:
+#include "Production/JobConfig/cosmic/ExtractedCRY.fcl"
+services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+```
+
+**Job Definition Generation:**
+```bash
+# Uses --embed template.fcl to embed the template content
+mu2ejobdef --setup /path/to/setup.sh --dsconf MDC2020av --desc ExtractedCRY \
+    --dsowner mu2e --embed template.fcl
+```
+
+**Result:**
+- **template.fcl**: Contains include directive + overrides (not expanded)
+- **mu2e.fcl**: Contains embedded template content with overrides included
+- **Clean output**: No base FCL expansion, just the template content embedded
+
+### B. From Job Definition Files
 
 Generate FCL configurations from existing job definition tarballs:
 
@@ -194,6 +238,52 @@ Different `pbeam` configurations generate different mixing scenarios:
 
 - **`Mix1BB`**: Single bunch beam configuration → `OneBB.fcl`
 - **`Mix2BB`**: Two bunch beam configuration → `TwoBB.fcl`
+
+### E. Successful Mixing Examples
+
+#### MDC2020ba_best_v1_3 Configuration
+
+The following mixing configurations have been successfully tested and verified:
+
+```bash
+# Set up environment first
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+
+# Generate all 8 mixing configurations for MDC2020ba_best_v1_3
+python3 json2jobdef.py --json ../Production/data/mix.json --dsconf MDC2020ba_best_v1_3
+```
+
+**Successfully Generated Configurations:**
+1. **ensembleMDS2bMix1BB** ✅
+2. **ensembleMDS2bMix2BB** ✅  
+3. **DIOtail95Mix1BB** ✅
+4. **DIOtail95Mix2BB** ✅
+5. **CePLeadingLogMix1BB** ✅
+6. **CePLeadingLogMix2BB** ✅
+7. **CeMLeadingLogMix1BB** ✅
+8. **CeMLeadingLogMix2BB** ✅
+
+**Example Output for DIOtail95Mix1BB:**
+```
+Processing configuration 2: DIOtail95Mix1BB
+Input data: dts.mu2e.DIOtail95.MDC2020at.art
+Merge events: 2000
+Pileup mixers:
+  MuBeam: 1 file
+  EleBeam: 25 files  
+  Neutrals: 50 files
+  MuStop: 2 files
+Generated: cnf.oksuzian.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.tar
+Generated: cnf.oksuzian.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.fcl
+```
+
+**Key Features Confirmed:**
+- ✅ **baseSeed handling** - No errors across all configurations
+- ✅ **MaxEventsToSkip** - Correctly propagated from template.fcl
+- ✅ **Merge factor calculation** - Accurate file selection based on event counts
+- ✅ **Auxiliary file handling** - Proper pileup file catalogs
+- ✅ **FCL generation** - Complete configurations ready for production
 
 ## 4. JSON Configuration Expansion
 
@@ -344,10 +434,12 @@ export fname=etc.mu2e.index.000.0000042.txt  # Job index from grid system
 
 ### B. Custom FCL Overrides
 
+The new template-based approach handles FCL overrides elegantly:
+
 ```json
 {
   "fcl_overrides": {
-    "#include": ["Custom/JobConfig/MyConfig.fcl"],
+    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
     "physics.producers.generate.inputModule": "compressDigiMCs",
     "outputs.PrimaryOutput.fileName": "dts.owner.CustomJob.version.sequencer.art",
     "outputs.PrimaryOutput.compressionLevel": 1,
@@ -356,15 +448,109 @@ export fname=etc.mu2e.index.000.0000042.txt  # Job index from grid system
 }
 ```
 
-## 7. Key Features
+**How FCL Overrides Work:**
+
+1. **Template Creation**: `write_fcl_template()` creates `template.fcl` with:
+   ```fcl
+   #include "Production/JobConfig/cosmic/ExtractedCRY.fcl"
+   services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+   physics.producers.generate.inputModule: "compressDigiMCs"
+   outputs.PrimaryOutput.fileName: "dts.owner.CustomJob.version.sequencer.art"
+   outputs.PrimaryOutput.compressionLevel: 1
+   services.SeedService.baseSeed: 12345
+   ```
+
+2. **Embedding**: `--embed template.fcl` embeds this complete template into `mu2e.fcl`
+
+3. **Result**: The final `mu2e.fcl` contains the include directive plus all overrides, but the base FCL is never expanded
+
+**Benefits:**
+- **Clean templates**: Only include directive + overrides, no base FCL content
+- **Overrides included**: All FCL overrides are directly embedded
+- **No expansion**: Base FCL files remain unexpanded for maintainability
+- **Perfect parity**: Both Python and Perl versions handle overrides identically
+
+## 7. Troubleshooting
+
+### Common Issues and Solutions
+
+#### Environment Setup Problems
+
+**Problem**: `samweb: command not found`
+```bash
+# Solution: Set up Mu2e environment
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+```
+
+**Problem**: `fhicl-get: command not found`
+```bash
+# Solution: Ensure OfflineOps is set up
+muse setup ops
+which fhicl-get
+```
+
+#### baseSeed Errors
+
+**Problem**: `can't obtain string from nil` during mu2e execution
+```bash
+# Solution: This has been fixed in the current version
+# The tools now correctly handle SeedService.baseSeed
+# Verify with: grep "baseSeed" cnf.*.fcl
+```
+
+#### File Access Issues
+
+**Problem**: `mdh: command not found`
+```bash
+# Solution: Set up Mu2e environment
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+```
+
+## 8. Key Features
 
 ### A. Production-Ready Tools
 
 - ✅ **Complete mixing job support** with auxiliary file catalogs
 - ✅ **JSON-based configuration** with parameter expansion
 - ✅ **XrootD path generation** for proper file access
-- ✅ **Production parity** verified against existing Perl tools
+- ✅ **Production parity** verified against existing production tools
 - ✅ **Debugging support** with `--no-cleanup` option
+- ✅ **Environment setup** with proper Mu2e tools integration
+- ✅ **Smart FCL templates** with `--embed template.fcl` approach
+- ✅ **Perfect parity testing** between Python and Perl implementations
+
+### B. Parity Testing
+
+The Python implementation has been thoroughly tested for parity with the Perl `mu2ejobdef` tool:
+
+```bash
+# Run parity test to verify Python and Perl versions produce identical output
+python3 parity_test.py --json first_entry.json
+
+# This will:
+# 1. Generate job definition using Python json2jobdef.py
+# 2. Generate job definition using Perl mu2ejobdef
+# 3. Compare both outputs for byte-for-byte parity
+# 4. Report success/failure with detailed error information
+```
+
+**Parity Test Results:**
+- ✅ **jobpars.json**: Identical content between Python and Perl versions
+- ✅ **mu2e.fcl**: Identical content between Python and Perl versions  
+- ✅ **Template handling**: Both use `--embed template.fcl` approach
+- ✅ **FCL overrides**: Correctly applied in both versions
+- ✅ **Environment handling**: Both versions work with same Mu2e setup
+
+### C. Successfully Tested Workflows
+
+- ✅ **Complete mixing job support** with auxiliary file catalogs
+- ✅ **JSON-based configuration** with parameter expansion
+- ✅ **XrootD path generation** for proper file access
+- ✅ **Production parity** verified against existing production tools
+- ✅ **Debugging support** with `--no-cleanup` option
+- ✅ **Environment setup** with proper Mu2e tools integration
 
 ### B. Successfully Tested Workflows
 
@@ -373,5 +559,37 @@ export fname=etc.mu2e.index.000.0000042.txt  # Job index from grid system
 - ✅ **JSON expansion** for parameter space exploration
 - ✅ **Batch processing** for production campaigns
 - ✅ **Jobpars.json verification** against production files
+- ✅ **MDC2020ba_best_v1_3** mixing configurations (all 8 types)
+- ✅ **baseSeed handling** - No more mu2e execution errors
+- ✅ **Environment integration** with muse setup ops
 
-The Python implementations achieve complete functional parity with the original Perl tools while providing better maintainability and debugging capabilities.
+The Python implementations provide complete production functionality with better maintainability and debugging capabilities. All mixing configurations for MDC2020ba_best_v1_3 have been successfully tested and verified.
+
+## Environment Setup
+
+### Required Mu2e Environment
+
+Before using the production tools, you must set up the Mu2e environment:
+
+```bash
+# 1. Source the Mu2e setup script
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+
+# 2. Set up the OfflineOps environment
+muse setup ops
+
+# 3. Verify the environment is ready
+which samweb
+which fhicl-get
+which mdh
+```
+
+**Important**: The `muse setup ops` command is essential for accessing SAMweb, FHiCL tools, and other Mu2e utilities.
+
+### Environment Verification
+
+After setup, verify these tools are available:
+- `samweb` - Scientific Asset Management client
+- `fhicl-get` - FHiCL configuration parser
+- `mdh` - Mu2e Data Handling utilities
+- `python3` - Python 3 interpreter
