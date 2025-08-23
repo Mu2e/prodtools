@@ -185,21 +185,24 @@ def find_json_entry(json_path, desc, dsconf, index):
 
 def write_fcl_template(base, overrides):
     """
-    Write FCL template file with base include and overrides.
+    Write FCL template file with just an include directive and overrides.
     
     Args:
         base: Base FCL file to include
         overrides: Dictionary of FCL overrides
     """
     with open('template.fcl', 'w') as f:
-        print(f'#include "{base}"', file=f)
+        # Write just the include directive for the base FCL
+        f.write(f'#include "{base}"\n')
+        
+        # Add overrides
         for key, val in overrides.items():
             if key == '#include':
                 includes = val if isinstance(val, list) else [val]
                 for inc in includes:
-                    print(f'#include "{inc}"', file=f)
+                    f.write(f'#include "{inc}"\n')
             else:
-                print(f"{key}: {json.dumps(val)}", file=f)
+                f.write(f'{key}: {json.dumps(val) if isinstance(val, str) else val}\n')
 
 
 def parse_jobdef_fields(jobdefs_file, index=None):

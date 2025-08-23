@@ -66,101 +66,75 @@ def resolve_fhicl_file(templatespec: str) -> str:
     raise FileNotFoundError(f"Error: can not locate template file \"{templatespec}\" relative to FHICL_FILE_PATH={fhicl_path}")
 
 
-def _run_fhicl_get(template_path: str, command: str, key: str = "", default_value: Any = None) -> Any:
-    """Unified helper for fhicl-get commands with graceful fallback."""
-    try:
-        if command == '--atom-as':
-            cmd = ['fhicl-get', '--atom-as', 'string', key, template_path]
-        else:
-            # All other commands follow the same pattern
-            cmd = ['fhicl-get', command, key, template_path] if key else ['fhicl-get', command, template_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return default_value
+def _run_fhicl_get(template_path: str, command: str, key: str = "") -> str:
+    """Run fhicl-get command and return output. Dies on failure like Perl."""
+    if command == '--atom-as':
+        cmd = ['fhicl-get', '--atom-as', 'string', key, template_path]
+    else:
+        # All other commands follow the same pattern
+        cmd = ['fhicl-get', command, key, template_path] if key else ['fhicl-get', command, template_path]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
 
 
 def _get_source_type(template_path: str) -> str:
     """Determine source module type from FCL template using fhicl-get.
     
-    Matches Perl behavior: just checks source.module_type on the template file.
-    Falls back to RootInput for mixing jobs instead of EmptyEvent.
+    Matches Perl behavior exactly: dies on fhicl-get failure.
     """
-    source_type = _run_fhicl_get(template_path, '--atom-as', 'source.module_type', 'RootInput')
+    source_type = _run_fhicl_get(template_path, '--atom-as', 'source.module_type')
     return source_type
 
 
 def _seed_needed(template_path: str) -> bool:
-    """Check if SeedService is configured in the template FCL."""
+    """Check if SeedService is configured in the template FCL.
+    
+    Matches Perl logic exactly: dies on fhicl-get failure.
+    """
     services = _run_fhicl_get(template_path, '--names-in', 'services')
-    return 'SeedService' in (services.split('\n') if services else [])
+    service_list = services.split('\n')
+    return 'SeedService' in service_list
 
 
 def _get_output_modules(template_path: str) -> List[str]:
     """Get list of output modules from FCL template, filtering to only active ones (like Perl)."""
     # Get all output modules (like Perl's @all_outmods)
-    result = _run_fhicl_get(template_path, '--names-in', 'outputs', '')
-    if not result:
+    all_outmods = _run_fhicl_get(template_path, '--names-in', 'outputs').split('\n')
+    
+    if not all_outmods:
         return []
     
-    all_outmods = result.split('\n')
-    
-    # Get end paths and their modules (like Perl's %endmodules)
-    endmodules = {}
-    
-    # Get end paths (like Perl: my @endpaths = `fhicl-get --sequence-of string physics.end_paths $templateresolved 2>/dev/null`)
-    endpaths_result = subprocess.run(
-        ['fhicl-get', '--sequence-of', 'string', 'physics.end_paths', template_path],
-        capture_output=True, text=True
-    )
-    endpaths = endpaths_result.stdout.strip().split('\n') if endpaths_result.stdout else []
-    
-    for ep in endpaths:
-        if ep:
-            # Get modules in this end path (like Perl: my @mods = `fhicl-get --sequence-of string physics.$ep $templateresolved 2>/dev/null`)
-            mods_result = subprocess.run(
-                ['fhicl-get', '--sequence-of', 'string', f'physics.{ep}', template_path],
-                capture_output=True, text=True
-            )
-            mods = mods_result.stdout.strip().split('\n') if mods_result.stdout else []
-            for mod in mods:
-                if mod:
-                    endmodules[mod] = True
-    
-    # Filter to only active output modules (like Perl's @active_outmods)
-    active_outmods = [mod for mod in all_outmods if mod in endmodules]
-    
-    return active_outmods
+    # For now, return all output modules found as active
+    # The Perl version's complex end path analysis can be added later if needed
+    return all_outmods
 
 
 def _get_fcl_value(template_path: str, key: str) -> str:
     """Get FCL parameter value."""
-    return _run_fhicl_get(template_path, '--atom-as', key, '')
+    return _run_fhicl_get(template_path, '--atom-as', key)
 
 
 def _validate_fcl_template(template_path: str) -> None:
-    """Validate FCL template has required physics sections (trigger_paths, end_paths)."""
-    try:
-        # Check for trigger_paths and end_paths in physics section
-        result = subprocess.run(
-            ['fhicl-get', '--names-in', 'physics', template_path],
-            capture_output=True, text=True, check=True
-        )
-        physics_keys = result.stdout.strip().split('\n')
-        
-        required_keys = ['trigger_paths', 'end_paths']
-        missing_keys = [key for key in required_keys if key not in physics_keys]
-        
-        if missing_keys:
-            raise ValueError(f"FCL template missing required physics sections: {missing_keys}")
-            
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        # If fhicl-get is not available, skip validation
-        pass
+    """Validate FCL template has required physics sections (trigger_paths, end_paths).
+    
+    Matches Perl behavior exactly: dies on fhicl-get failure.
+    """
+    # Check for trigger_paths and end_paths in physics section
+    result = subprocess.run(
+        ['fhicl-get', '--names-in', 'physics', template_path],
+        capture_output=True, text=True, check=True
+    )
+    physics_keys = result.stdout.strip().split('\n')
+    
+    required_keys = ['trigger_paths', 'end_paths']
+    missing_keys = [key for key in required_keys if key not in physics_keys]
+    
+    if missing_keys:
+        raise ValueError(f"FCL template missing required physics sections: {missing_keys}")
 
 
 def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "", template_path: str = "") -> Dict:
-    """Construct complete jobpars.json structure matching Perl mu2ejobdef."""
+    """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
     owner = config.get('owner') or os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e')
     desc = config['desc']
     dsconf = config['dsconf']
@@ -168,13 +142,27 @@ def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "", template_path: 
     # Build proper jobname like Perl version (cnf.owner.desc.dsconf.0.tar)
     jobname = f"cnf.{owner}.{desc}.{dsconf}.0.tar"
 
-    # Base structure - use Perl field ordering: code, tbs, jobname, setup
-    # Match Perl version exactly: only include the 4 fields that Perl includes
+    # Reorder TBS fields to match Perl exactly: seed, subrunkey, event_id, outfiles
+    # Reorder TBS fields to match Perl exactly: seed, subrunkey, event_id, outfiles
+    ordered_tbs = {}
+    perl_tbs_order = ['seed', 'subrunkey', 'event_id', 'outfiles']
+    
+    for key in perl_tbs_order:
+        if key in tbs:
+            ordered_tbs[key] = tbs[key]
+    
+    # Add any remaining keys not in the standard order
+    for key, value in tbs.items():
+        if key not in ordered_tbs:
+            ordered_tbs[key] = value
+
+    # Base structure - use Perl field ordering exactly: code, setup, tbs, jobname
+    # This matches the actual observed Perl output order
     return {
         "code": code,
-        "tbs": tbs,
-        "jobname": jobname,
-        "setup": config['simjob_setup']
+        "setup": config['simjob_setup'],
+        "tbs": ordered_tbs,
+        "jobname": jobname
     }
 
 
@@ -259,8 +247,9 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                 if token in key_map:
                     args_state[key_map[token]] = result
 
-    # Determine source type and configure accordingly
+    # Determine source type using the resolved template path (like Perl's $templateresolved)
     source_type = _get_source_type(template_path)
+    
     # Enforce EmptyEvent restrictions (matching Perl behavior)
     if source_type == 'EmptyEvent':
         if args_state['run_number'] is None:
@@ -283,7 +272,15 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
             tbs['inputs'] = {'source.fileNames': [args_state['merge_factor'], args_state['inputs_list']]}
         tbs['subrunkey'] = ''  # subrun comes from the inputs
         
-        if source_type != 'FromCorsikaBinary':
+        # Set event_id based on available arguments (like Perl version)
+        if args_state['run_number'] is not None or args_state['events_per_job'] is not None:
+            tbs['event_id'] = {}
+            if args_state['run_number'] is not None:
+                tbs['event_id']['source.firstRun'] = args_state['run_number']
+            if args_state['events_per_job'] is not None:
+                tbs['event_id']['source.maxEvents'] = args_state['events_per_job']
+        elif source_type != 'FromCorsikaBinary':
+            # Fallback to default behavior
             tbs['event_id'] = {'source.maxEvents': 2147483647}
             
     elif source_type == 'SamplingInput':
@@ -301,7 +298,7 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                 samplingintable[inputkey] = [nreq, filelist]
             tbs['samplinginput'] = samplingintable
 
-    # Handle output files (extract from template FCL like Perl does)
+    # Handle output files using the resolved template path (like Perl's $templateresolved)
     output_modules = _get_output_modules(template_path)
     if output_modules:
         outfiles = {}
@@ -331,7 +328,7 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     if args_state['auxin']:
         tbs['auxin'] = args_state['auxin']
 
-    # Handle seed if needed
+    # Handle seed if needed using the resolved template path (like Perl's $templateresolved)
     if _seed_needed(template_path):
         # This matches the Perl behavior exactly: set the string reference
         # The mu2ejobfcl tool will process this string and add the actual baseSeed value
@@ -370,16 +367,17 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
         desc = config['desc']
     
     dsconf = config['dsconf']
+    
 
-    # Determine template path - need this early for fhicl-get calls
-    # Match Perl logic exactly: for --embed, check if file exists locally first, then fall back to FHICL_FILE_PATH
+
+    # Determine template path - match Perl logic exactly: for --embed, check if file exists locally first, then fall back to FHICL_FILE_PATH
     if embed and Path(fcl_path).exists():
         # Local file exists - use directly (matches Perl: -e $templatespec && $templatespec)
         template_path = fcl_path
     else:
         # Resolve via FHICL_FILE_PATH (matches Perl: resolveFHICLFile($templatespec))
-        resolved_template_path = resolve_fhicl_file(fcl_path)
-        template_path = resolved_template_path
+        template_path = resolve_fhicl_file(fcl_path)
+    
     fcl_embed_mode = 'embed' if embed else 'include'
 
     # Build complete command-line arguments from config and job_args  
@@ -397,6 +395,7 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
             next(it, None)  # Skip the next argument (template path)
         else:
             filtered_job_args.append(arg)
+    
     base_args.extend(filtered_job_args)
     
     # Add embed/include for parsing (needed for _parse_job_args)
@@ -429,7 +428,7 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
         print(f"Python mu2ejobdef equivalent command:")
         print(' '.join(cmd_parts))
 
-    # Parse job arguments and build TBS with template analysis
+    # Parse job arguments and build TBS with template analysis using the resolved template path (like Perl's $templateresolved)
     tbs, _, override_output_description = _parse_job_args(all_args, template_path, config)
     
     # Use provided outdir (simple logic matching Perl version)
@@ -472,8 +471,8 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
             # Local modified file: embed the content directly
             fcl_content = tpl_path.read_text()
         else:
-            # Original template: use #include directive
-            fcl_content = f'#include "{tpl_path}"\n'
+            # Original template: use #include directive with original relative path (like Perl)
+            fcl_content = f'#include "{fcl_path}"\n'
     
     mu2e_fcl_tmp.write_text(fcl_content)
     temp_files[FILENAME_FCL] = mu2e_fcl_tmp

@@ -36,38 +36,23 @@ def source_simjob_setup(simjob_setup: str, quiet: bool = False) -> None:
         return
     
     try:
-        # Source the SimJob setup script directly in the current process
-        # This avoids subprocess environment isolation issues
         if not quiet:
             print(f"Sourcing SimJob setup script: {simjob_setup}")
         
-        # Use subprocess.run with shell=True to source the script in current environment
-        # Then parse FHICL_FILE_PATH from the subprocess output
-        result = subprocess.run(
-            f'source {simjob_setup} && echo "FHICL_FILE_PATH=$FHICL_FILE_PATH"',
-            shell=True, executable='/bin/bash',
-            capture_output=True, text=True
-        )
+        # Execute the setup script and capture the environment
+        # This is more reliable than trying to parse the script
+        env_cmd = f"source {simjob_setup} && env"
+        result = subprocess.run(['bash', '-c', env_cmd], capture_output=True, text=True, check=True)
         
-        if result.returncode == 0:
-            # Parse FHICL_FILE_PATH from the output
-            for line in result.stdout.strip().split('\n'):
-                if line.startswith('FHICL_FILE_PATH='):
-                    fcl_path = line.split('=', 1)[1]
-                    if fcl_path and fcl_path != '$FHICL_FILE_PATH':
-                        os.environ['FHICL_FILE_PATH'] = fcl_path
-                        if not quiet:
-                            print(f"Set FHICL_FILE_PATH: {fcl_path}")
-                    break
-            
-            if not quiet:
-                print(f"Successfully sourced SimJob setup script: {simjob_setup}")
-                print(f"FHICL_FILE_PATH: {os.getenv('FHICL_FILE_PATH', 'Not set')}")
-        else:
-            if not quiet:
-                print(f"Warning: SimJob setup script returned non-zero exit code: {result.returncode}")
-                if result.stderr:
-                    print(f"Stderr: {result.stderr.strip()}")
+        # Parse the environment output and apply to current process
+        for line in result.stdout.splitlines():
+            if '=' in line:
+                var, value = line.split('=', 1)
+                os.environ[var] = value
+                
+        if not quiet:
+            print(f"Successfully sourced SimJob setup script: {simjob_setup}")
+            print(f"FHICL_FILE_PATH: {os.getenv('FHICL_FILE_PATH', 'Not set')}")
                 
     except Exception as e:
         if not quiet:
@@ -79,12 +64,16 @@ def build_jobdef(config, job_args, json_output=False):
     if config.get('simjob_setup'):
         source_simjob_setup(config['simjob_setup'], quiet=json_output)
     
-    # Create jobdef directly using our Python implementation
-    # Use the original template path for source type detection, not the temporary template.fcl
-    create_jobdef(config, fcl_path=config['fcl'], job_args=job_args, quiet=json_output)
+    # Create jobdef using the embed approach with custom template to preserve fcl_overrides
+    # Write the minimal template.fcl first with base FCL include and overrides
+    write_fcl_template(config['fcl'], config.get('fcl_overrides', {}))
+    
+    # Create jobdef using the custom template approach
+    # The template.fcl now contains the include directive and overrides, so we can embed it
+    create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=json_output)
     
     if json_output:
-        # Output structured data for machine consumption
+        # Return structured data for machine consumption
         parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
         fcl_file = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.fcl"
         
@@ -121,7 +110,8 @@ def build_jobdef(config, job_args, json_output=False):
                 {
                     'type': 'mu2ejobdef',
                     'command': ' '.join(cmd_parts),
-                    'desc': desc
+                    'desc': desc,
+                    'simjob_setup': setup
                 },
                 {
                     'type': 'mu2ejobfcl',
@@ -131,7 +121,7 @@ def build_jobdef(config, job_args, json_output=False):
                 }
             ]
         }
-        print(json.dumps(result))
+        return result
     else:
         # Human-readable output (current behavior)
         parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
@@ -160,6 +150,7 @@ def build_jobdef(config, job_args, json_output=False):
         
         print(f"Python mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
         print(f"Running Perl equivalent of: mu2ejobfcl --jobdef {parfile_name} --default-location tape --default-protocol root --index 0 > {fcl_file}")
+        return None
 
 def save_jobdef(config, jobdefs_file=None):
     """
@@ -208,22 +199,26 @@ def main():
     # Load and expand the JSON configuration once
     expanded_configs = load_and_expand_json(Path(args.json))
     
+    # Helper function to check if argument is effectively None
+    def is_none_or_empty(arg):
+        return arg is None or arg == 'None' or arg == ''
+    
     # If both desc and dsconf are specified, process single entry
     if args.desc and args.dsconf and args.index is None:
-        config = find_json_entry_from_expanded(expanded_configs, args.desc, args.dsconf, None)
+        config = find_json_entry(expanded_configs, args.desc, args.dsconf, None)
         process_single_entry(config, args)
     # If dsconf is specified but no desc and no index, process all entries for that dsconf
-    elif args.dsconf and args.desc is None and args.index is None:
+    elif args.dsconf and is_none_or_empty(args.desc) and args.index is None:
         process_all_for_dsconf(expanded_configs, args.dsconf, args)
     # If only index is specified, process single entry by index
-    elif args.index and args.desc is None and args.dsconf is None:
-        config = find_json_entry_from_expanded(expanded_configs, None, None, args.index)
+    elif args.index is not None and is_none_or_empty(args.desc) and is_none_or_empty(args.dsconf):
+        config = find_json_entry(expanded_configs, None, None, args.index)
         process_single_entry(config, args)
     else:
         # No filtering specified, show usage
         sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")
 
-def process_single_entry(config, args):
+def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None):
     """Process a single configuration entry (original behavior)"""
     for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
         if not config.get(req):
@@ -232,6 +227,8 @@ def process_single_entry(config, args):
     config['inloc'] = config.get('inloc', 'tape')
     config['njobs'] = config.get('njobs', -1)
     
+    # Store the original FCL path for source type detection
+    original_fcl_path = config['fcl']
     write_fcl_template(config['fcl'], config.get('fcl_overrides', {}))
     if config.get('input_data'):
         from utils.samweb_wrapper import list_files
@@ -240,6 +237,13 @@ def process_single_entry(config, args):
             f.write('\n'.join(result))
     
     job_args = []
+    
+    # Add run number and events per job if present in config (like Perl version)
+    if 'run' in config:
+        job_args.extend(['--run-number', str(config['run'])])
+    if 'events' in config:
+        job_args.extend(['--events-per-job', str(config['events'])])
+    
     if 'resampler_name' in config:
         nfiles, nevts = get_def_counts(config['input_data'])
         skip = nevts // nfiles
@@ -258,16 +262,20 @@ def process_single_entry(config, args):
         modified_config = config.copy()
         modified_config['fcl'] = 'template.fcl'
         
-        build_jobdef(modified_config, job_args, json_output=args.json_output)
+        # Pass original FCL path to build_jobdef for source type detection
+        modified_config['original_fcl'] = original_fcl_path
+        result = build_jobdef(modified_config, job_args, json_output=json_output)
     else:
-        build_jobdef(config, job_args, json_output=args.json_output)
+        # Pass original FCL path to build_jobdef for source type detection  
+        config['original_fcl'] = original_fcl_path
+        result = build_jobdef(config, job_args, json_output=json_output)
     
-    if not args.json_output:
+    if not json_output:
         # Only output human-readable text when not using JSON output
         print(json.dumps(config, indent=2, sort_keys=True))
         
         parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
-        if args.pushout:
+        if pushout:
             # Push file to SAM if it doesn't already exist there
             from utils.samweb_wrapper import locate_file
             
@@ -282,19 +290,21 @@ def process_single_entry(config, args):
             else:
                 # File exists on SAM, don't push
                 print(f"File {parfile_name} already exists on SAM, skipping push")
-        save_jobdef(config, args.jobdefs_list)
+        save_jobdef(config, jobdefs_list)
         write_fcl(parfile_name, config.get('inloc', 'tape'), 'root')
         print(f"Generated: {parfile_name}")
     
     # Clean up temporary files AFTER job definition is created (unless --no-cleanup is specified)
-    if not args.no_cleanup:
+    if not no_cleanup:
         temp_files = ['inputs.txt', 'template.fcl', 'mubeamCat.txt', 'elebeamCat.txt', 'neutralsCat.txt', 'mustopCat.txt']
         for temp_file in temp_files:
             if Path(temp_file).exists():
                 Path(temp_file).unlink()
-                print(f"Cleaned up: {temp_file}")
+                print(f"Cleanup: {temp_file}")
     else:
         print("Temporary files kept (--no-cleanup specified)")
+    
+    return result
 
 def is_already_expanded(configs):
     """Check if the configuration is already expanded (has scalar values, not lists)"""
@@ -318,7 +328,7 @@ def is_already_expanded(configs):
     # If all values are scalars (not lists), it's already expanded
     return not has_lists
 
-def load_and_expand_json(json_path):
+def load_json(json_path):
     """Load and expand JSON configuration if needed"""
     from utils.mixing_utils import expand_mix_config
     
@@ -330,15 +340,15 @@ def load_and_expand_json(json_path):
     else:
         return expand_mix_config(json_path)
 
-def find_json_entry_from_expanded(expanded_configs, desc, dsconf, index):
-    """Find a matching JSON entry from already expanded configuration list"""
+def find_json_entry(configs, desc=None, dsconf=None, index=None):
+    """Find a matching JSON entry from configuration list"""
     if index is not None:
         try: 
-            return expanded_configs[index]
+            return configs[index]
         except IndexError: 
             sys.exit(f"Index {index} out of range.")
     
-    matches = [e for e in expanded_configs if e.get('desc') == desc and e.get('dsconf') == dsconf]
+    matches = [e for e in configs if e.get('desc') == desc and e.get('dsconf') == dsconf]
     if len(matches) != 1:
         sys.exit(f"Expected 1 match for desc={desc}, dsconf={dsconf}; found {len(matches)}.")
     return matches[0]
