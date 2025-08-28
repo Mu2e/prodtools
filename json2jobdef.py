@@ -23,15 +23,9 @@ from utils.jobdef import create_jobdef
 
 def build_jobdef(config, job_args, json_output=False, original_fcl_path=None):
     # Create jobdef using the embed approach with custom template to preserve fcl_overrides
-    # For mixing jobs, create template.fcl with actual FCL content (matching Perl behavior)
-    # For non-mixing jobs, use the include-based approach
-    if original_fcl_path and 'pbeam' in config:
-        # Mixing job: create template.fcl with include-based template using ORIGINAL base FCL
-        # This avoids self-include and relies on FHICL_FILE_PATH (like Perl)
-        write_fcl_template(original_fcl_path, config.get('fcl_overrides', {}))
-    else:
-        # Non-mixing job: use include-based template
-        write_fcl_template(config['fcl'], config.get('fcl_overrides', {}))
+    # Use original FCL path if provided, otherwise use config FCL
+    fcl_path = original_fcl_path or config['fcl']
+    write_fcl_template(fcl_path, config.get('fcl_overrides', {}))
     
     # Build the Perl commands that would be equivalent (always build for potential display)
     setup = config['simjob_setup']
