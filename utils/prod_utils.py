@@ -12,6 +12,14 @@ def setup_logging(verbose: bool) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="[%(levelname)s] %(message)s"
     )
+    
+    # Suppress debug messages from external libraries when verbose is enabled
+    if verbose:
+        # Suppress requests library debug messages
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("requests").setLevel(logging.WARNING)
+        # Suppress samweb_client debug messages
+        logging.getLogger("samweb_client").setLevel(logging.WARNING)
 
 def run(cmd, capture=False, shell=False):
     """
@@ -42,19 +50,6 @@ def run(cmd, capture=False, shell=False):
 
 
 
-def locate_parfile(parfile):
-    """Locate the parfile using samweb."""
-    from .samweb_wrapper import locate_file
-    
-    loc = locate_file(parfile)
-    if not loc:
-        sys.exit(f"Parfile not found: {parfile}")
-    
-    # Handle the case where locate_file returns a dict
-    if isinstance(loc, dict):
-        loc = loc.get('location', '')
-    
-    return (loc[7:] if loc.startswith('dcache:') else loc) + '/' + parfile
 
 def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
     """
@@ -148,40 +143,7 @@ def calculate_merge_factor(fields):
     
     return merge_factor
 
-def find_json_entry(json_path, desc, dsconf, index):
-    """
-    Find a matching JSON entry from configuration file.
-    
-    Args:
-        json_path: Path to JSON file
-        desc: Description to match
-        dsconf: Dataset configuration to match  
-        index: Index to return (if not None)
-        
-    Returns:
-        Matching configuration dictionary
-    """
-    json_text = json_path.read_text()
-    configs = json.loads(json_text)
-    
-    # Check if this is already an expanded configuration (has scalar values, not lists)
-    # If the first config has scalar values and contains 'pbeam', it's already expanded
-    if (isinstance(configs, list) and len(configs) > 0 and 
-        isinstance(configs[0], dict) and 'pbeam' in configs[0] and
-        not any(isinstance(v, list) for v in configs[0].values())):
-        # Already expanded, use as-is
-        pass
-    elif 'pbeam' in json_text:
-        # Needs expansion
-        from .mixing_utils import expand_mix_config
-        configs = expand_mix_config(json_path)
-    if index is not None:
-        try: return configs[index]
-        except IndexError: sys.exit(f"Index {index} out of range.")
-    matches = [e for e in configs if e.get('desc') == desc and e.get('dsconf') == dsconf]
-    if len(matches) != 1:
-        sys.exit(f"Expected 1 match for desc={desc}, dsconf={dsconf}; found {len(matches)}.")
-    return matches[0]
+# Removed duplicate find_json_entry; use json2jobdef.load_json + json2jobdef.find_json_entry
 
 def write_fcl_template(base, overrides):
     """
@@ -203,7 +165,6 @@ def write_fcl_template(base, overrides):
                     f.write(f'#include "{inc}"\n')
             else:
                 f.write(f'{key}: {json.dumps(val) if isinstance(val, str) else val}\n')
-
 
 def parse_jobdef_fields(jobdefs_file, index=None):
     """

@@ -16,38 +16,18 @@ Features implemented:
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
+from .mu2e_common import Mu2eFilename
 
 # Constants matching Perl mu2ejobdef exactly
 FILENAME_JSON = 'jobpars.json'
 FILENAME_FCL = 'mu2e.fcl'
 FILENAME_TARBALL = 'code.tar'
 FILENAME_TARSETUP = 'Code/setup.sh'
-
-class Mu2eFilename:
-    """Mu2e filename parser, simplified version of Perl Mu2eFilename."""
-    def __init__(self, filename: str = ""):
-        self.filename = filename
-        # Default values for all fields
-        self.tier = self.owner = self.description = self.configuration = self.sequencer = self.extension = ""
-        if filename:
-            self._parse(filename)
-    
-    def _parse(self, filename: str):
-        """Parse mu2e filename format: tier.owner.description.configuration.sequencer.extension"""
-        parts = filename.split('.')
-        fields = ['tier', 'owner', 'description', 'configuration', 'sequencer', 'extension']
-        for i, field in enumerate(fields):
-            setattr(self, field, parts[i] if i < len(parts) else "")
-    
-    def basename(self) -> str:
-        """Return the filename."""
-        return self.filename
 
 
 def resolve_fhicl_file(templatespec: str) -> str:
@@ -70,6 +50,8 @@ def _run_fhicl_get(template_path: str, command: str, key: str = "") -> str:
     """Run fhicl-get command and return output. Dies on failure like Perl."""
     if command == '--atom-as':
         cmd = ['fhicl-get', '--atom-as', 'string', key, template_path]
+    elif command == '--sequence-of':
+        cmd = ['fhicl-get', '--sequence-of', 'string', key, template_path]
     else:
         # All other commands follow the same pattern
         cmd = ['fhicl-get', command, key, template_path] if key else ['fhicl-get', command, template_path]
@@ -82,6 +64,8 @@ def _get_source_type(template_path: str) -> str:
     
     Matches Perl behavior exactly: dies on fhicl-get failure.
     """
+    # Try to get source type - if this fails, the FCL doesn't have a source section
+    # This matches Perl behavior: it dies on fhicl-get failure
     source_type = _run_fhicl_get(template_path, '--atom-as', 'source.module_type')
     return source_type
 
@@ -89,24 +73,85 @@ def _get_source_type(template_path: str) -> str:
 def _seed_needed(template_path: str) -> bool:
     """Check if SeedService is configured in the template FCL.
     
-    Matches Perl logic exactly: dies on fhicl-get failure.
+    Matches Perl seedNeeded() function exactly: checks services.SeedService.baseSeed.
     """
-    services = _run_fhicl_get(template_path, '--names-in', 'services')
-    service_list = services.split('\n')
-    return 'SeedService' in service_list
+    # Go one level up from the seed field name in fclkey_randomSeed to
+    # the module name in $tablename (matches Perl logic exactly)
+    # Perl: my @elements = split(/\./, fclkey_randomSeed);
+    #       pop @elements; # seed name
+    #       my $ssname = pop @elements;
+    #       my $tablename = join('.', @elements);
+    
+    fclkey_randomSeed = 'services.SeedService.baseSeed'
+    elements = fclkey_randomSeed.split('.')
+    elements.pop()  # Remove 'baseSeed'
+    ssname = elements.pop()  # Remove 'SeedService'
+    tablename = '.'.join(elements)  # 'services'
+    
+    # Perl: my @svclist = `fhicl-get --names-in $tablename $filename 2>/dev/null`;
+    #       return 0 + grep /^$ssname\z/, @svclist;
+    try:
+        svclist = _run_fhicl_get(template_path, '--names-in', tablename)
+        service_list = svclist.split('\n')
+        # Return count of exact matches (like Perl's 0 + grep)
+        return sum(1 for service in service_list if service == ssname)
+    except:
+        # If fhicl-get fails, return 0 (like Perl's 2>/dev/null behavior)
+        return 0
 
 
 def _get_output_modules(template_path: str) -> List[str]:
-    """Get list of output modules from FCL template, filtering to only active ones (like Perl)."""
+    """Get list of output modules from FCL template, filtering to only active ones (like Perl).
+    
+    Matches Perl's complex logic: analyzes end paths to determine active output modules.
+    Handles both FCL structures: end_paths as names or as values.
+    """
+
+    
     # Get all output modules (like Perl's @all_outmods)
     all_outmods = _run_fhicl_get(template_path, '--names-in', 'outputs').split('\n')
     
     if not all_outmods:
         return []
     
-    # For now, return all output modules found as active
-    # The Perl version's complex end path analysis can be added later if needed
-    return all_outmods
+    # Filter to only active modules (like Perl's complex logic)
+    # Perl: Prepare a list of all active end path modules (outputs, but also analyzers)
+    # Get end paths (NOT trigger paths - this was the bug!)
+    endpaths = _run_fhicl_get(template_path, '--sequence-of', 'physics.end_paths').split('\n')
+    
+    # Build set of active end path modules (like Perl's %endmodules)
+    endmodules = set()
+    for ep in endpaths:
+        if ep == '@nil':
+            continue
+        
+        # Get modules in this end path
+        # Handle both cases: end_paths contains names or values
+        try:
+            mods = _run_fhicl_get(template_path, '--sequence-of', f'physics.{ep}').split('\n')
+            for m in mods:
+                if m:  # Skip empty entries
+                    endmodules.add(m)
+        except:
+            # If this fails, the end path name might be the actual end path
+            # Try to get modules directly from the end path name
+            try:
+                mods = _run_fhicl_get(template_path, '--sequence-of', f'physics.{ep}').split('\n')
+                for m in mods:
+                    if m:  # Skip empty entries
+                        endmodules.add(m)
+            except:
+                # If both fail, skip this end path
+                continue
+    
+    # Only return output modules that are in active end paths
+    # Perl: my @active_outmods = grep { $endmodules{$_} } @all_outmods;
+    active_outmods = []
+    for mod in all_outmods:
+        if mod and mod != '' and mod in endmodules:
+            active_outmods.append(mod)
+    
+    return active_outmods
 
 
 def _get_fcl_value(template_path: str, key: str) -> str:
@@ -119,6 +164,8 @@ def _validate_fcl_template(template_path: str) -> None:
     
     Matches Perl behavior exactly: dies on fhicl-get failure.
     """
+
+    
     # Check for trigger_paths and end_paths in physics section
     result = subprocess.run(
         ['fhicl-get', '--names-in', 'physics', template_path],
@@ -170,6 +217,90 @@ def _read_filelist(path: str) -> List[str]:
     """Read file list, filtering out empty lines."""
     with open(path) as f:
         return [line.strip() for line in f if line.strip()]
+
+
+def _validate_options_for_source_type(source_type: str, args_state: Dict) -> None:
+    """Validate options for source type (matching Perl's validateOptionsForSourceType exactly).
+    
+    Matches Perl's complex validation logic with required/allowed options per source type.
+    """
+    # Define validation rules for each source type (matching Perl exactly)
+    validation_rules = {
+        'EmptyEvent': {
+            'required': ['run_number', 'events_per_job', 'description'],
+            'allowed': []
+        },
+        'RootInput': {
+            'required': ['inputs', 'merge_factor'],
+            'allowed': ['description', 'auto_description']
+        },
+        'FromCorsikaBinary': {
+            'required': ['inputs', 'merge_factor'],
+            'allowed': ['description', 'auto_description']
+        },
+        'FromSTMTestBeamData': {
+            'required': ['inputs', 'merge_factor'],
+            'allowed': ['description', 'auto_description']
+        },
+        'SamplingInput': {
+            'required': ['run_number', 'description', 'samplinginput'],
+            'allowed': []
+        }
+    }
+    
+    if source_type not in validation_rules:
+        raise ValueError(f"Unknown source type {source_type}")
+    
+    rule = validation_rules[source_type]
+    
+    # Get all options for incompatibility checking
+    all_options = set()
+    for rule_set in validation_rules.values():
+        all_options.update(rule_set['required'])
+        all_options.update(rule_set['allowed'])
+    
+    # Check required options (matching Perl's nonempty() logic)
+    for option in rule['required']:
+        if option == 'description':
+            # Description is always available from config
+            continue
+        elif option == 'samplinginput':
+            # Check if sampling is non-empty
+            if not args_state.get('sampling'):
+                raise ValueError(f"Error: --samplinginput must be specified and nonempty for fcl files that use source type {source_type}.")
+        elif option == 'inputs':
+            # Check if inputs list is non-empty
+            if not args_state.get('inputs_list'):
+                raise ValueError(f"Error: --inputs must be specified and nonempty for fcl files that use source type {source_type}.")
+        elif option == 'merge_factor':
+            # Check if merge_factor is positive
+            if not args_state.get('merge_factor') or args_state['merge_factor'] <= 0:
+                raise ValueError(f"Error: --merge-factor must be specified and positive for fcl files that use source type {source_type}.")
+        elif option == 'run_number':
+            # Check if run_number is specified
+            if args_state.get('run_number') is None:
+                raise ValueError(f"Error: --run-number must be specified for fcl files that use source type {source_type}.")
+        elif option == 'events_per_job':
+            # Check if events_per_job is specified
+            if args_state.get('events_per_job') is None:
+                raise ValueError(f"Error: --events-per-job must be specified for fcl files that use source type {source_type}.")
+    
+    # Check for incompatible options (matching Perl's veto logic)
+    for option in all_options:
+        if option in rule['required'] or option in rule['allowed']:
+            continue
+        
+        # Check if this incompatible option is present and non-empty
+        if option == 'samplinginput' and args_state.get('sampling'):
+            raise ValueError(f"Error: --samplinginput is not compatible with fcl files that use source type {source_type}.")
+        elif option == 'inputs' and args_state.get('inputs_list'):
+            raise ValueError(f"Error: --inputs is not compatible with fcl files that use source type {source_type}.")
+        elif option == 'merge_factor' and args_state.get('merge_factor') != 1:
+            raise ValueError(f"Error: --merge-factor is not compatible with fcl files that use source type {source_type}.")
+        elif option == 'run_number' and args_state.get('run_number') is not None:
+            raise ValueError(f"Error: --run-number is not compatible with fcl files that use source type {source_type}.")
+        elif option == 'events_per_job' and args_state.get('events_per_job') is not None:
+            raise ValueError(f"Error: --events-per-job is not compatible with fcl files that use source type {source_type}.")
 
 
 def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None) -> Tuple[Dict, str, bool]:
@@ -250,17 +381,11 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     # Determine source type using the resolved template path (like Perl's $templateresolved)
     source_type = _get_source_type(template_path)
     
-    # Enforce EmptyEvent restrictions (matching Perl behavior)
+    # Validate options for source type (matching Perl's validateOptionsForSourceType exactly)
+    _validate_options_for_source_type(source_type, args_state)
+    
+    # Build TBS based on source type (matching Perl behavior exactly)
     if source_type == 'EmptyEvent':
-        if args_state['run_number'] is None:
-            raise ValueError("--run-number must be specified for EmptyEvent source type")
-        if args_state['events_per_job'] is None:
-            raise ValueError("--events-per-job must be specified for EmptyEvent source type")
-        if args_state['inputs_list']:
-            raise ValueError("--inputs is not compatible with EmptyEvent source type")
-        if args_state['merge_factor'] != 1:  # Only error if explicitly set to non-default value
-            raise ValueError("--merge-factor is not compatible with EmptyEvent source type")
-        
         tbs['event_id'] = {
             'source.firstRun': args_state['run_number'],
             'source.maxEvents': args_state['events_per_job']
@@ -316,6 +441,8 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                     replaced_pattern = filename_pattern.strip()
                     replaced_pattern = replaced_pattern.replace('.owner.', f'.{config.get("owner", "mu2e")}.')
                     replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
+                    # Also replace 'configuration' literal string like Perl does
+                    replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
                     outfiles[output_key] = replaced_pattern
                 else:
                     # No template pattern found - this shouldn't happen in a properly resolved template
@@ -323,6 +450,25 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                     raise ValueError(f"Error: {output_key} is not defined")
         if outfiles:
             tbs['outfiles'] = outfiles
+
+    # Handle TFileService (like Perl's separate TFileService handling)
+    try:
+        tfileservice_filename = _get_fcl_value(template_path, 'services.TFileService.fileName')
+        if tfileservice_filename and tfileservice_filename.strip() and tfileservice_filename.strip() != '/dev/null':
+            # Do placeholder replacement like Perl does
+            replaced_pattern = tfileservice_filename.strip()
+            replaced_pattern = replaced_pattern.replace('.owner.', f'.{config.get("owner", "mu2e")}.')
+            replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
+            # Also replace 'configuration' literal string like Perl does
+            replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
+            
+            # Add to outfiles (Perl adds it to %outtable)
+            if 'outfiles' not in tbs:
+                tbs['outfiles'] = {}
+            tbs['outfiles']['services.TFileService.fileName'] = replaced_pattern
+    except:
+        # If TFileService.fileName is not defined, skip it
+        pass
 
     # Handle auxiliary inputs
     if args_state['auxin']:

@@ -12,97 +12,66 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef
 
-def source_simjob_setup(simjob_setup: str, quiet: bool = False) -> None:
-    """
-    Source a SimJob setup script to set the correct environment variables.
-    This is equivalent to 'source simjob_setup' in bash.
-    """
-    if not simjob_setup or not os.path.exists(simjob_setup):
-        return
-    
-    # Check if FHICL_FILE_PATH is already set - if so, just return without setting it again
-    if os.getenv('FHICL_FILE_PATH'):
-        if not quiet:
-            print(f"FHICL_FILE_PATH is already set: {os.getenv('FHICL_FILE_PATH')}")
-        return
-    
-    try:
-        if not quiet:
-            print(f"Sourcing SimJob setup script: {simjob_setup}")
-        
-        # Execute the setup script and capture the environment
-        # This is more reliable than trying to parse the script
-        env_cmd = f"source {simjob_setup} && env"
-        result = subprocess.run(['bash', '-c', env_cmd], capture_output=True, text=True, check=True)
-        
-        # Parse the environment output and apply to current process
-        for line in result.stdout.splitlines():
-            if '=' in line:
-                var, value = line.split('=', 1)
-                os.environ[var] = value
-                
-        if not quiet:
-            print(f"Successfully sourced SimJob setup script: {simjob_setup}")
-            print(f"FHICL_FILE_PATH: {os.getenv('FHICL_FILE_PATH', 'Not set')}")
-                
-    except Exception as e:
-        if not quiet:
-            print(f"Warning: Error sourcing SimJob setup script {simjob_setup}: {e}")
-        # Don't fail the jobdef creation, just continue with current environment
 
-def build_jobdef(config, job_args, json_output=False):
-    # Source the SimJob setup script to set correct environment variables (especially FHICL_FILE_PATH)
-    if config.get('simjob_setup'):
-        source_simjob_setup(config['simjob_setup'], quiet=json_output)
-    
+
+def build_jobdef(config, job_args, json_output=False, original_fcl_path=None):
     # Create jobdef using the embed approach with custom template to preserve fcl_overrides
-    # Write the minimal template.fcl first with base FCL include and overrides
-    write_fcl_template(config['fcl'], config.get('fcl_overrides', {}))
+    # For mixing jobs, create template.fcl with actual FCL content (matching Perl behavior)
+    # For non-mixing jobs, use the include-based approach
+    if original_fcl_path and 'pbeam' in config:
+        # Mixing job: create template.fcl with include-based template using ORIGINAL base FCL
+        # This avoids self-include and relies on FHICL_FILE_PATH (like Perl)
+        write_fcl_template(original_fcl_path, config.get('fcl_overrides', {}))
+    else:
+        # Non-mixing job: use include-based template
+        write_fcl_template(config['fcl'], config.get('fcl_overrides', {}))
     
-    # Create jobdef using the custom template approach
-    # The template.fcl now contains the include directive and overrides, so we can embed it
+    # Build the Perl commands that would be equivalent (always build for potential display)
+    setup = config['simjob_setup']
+    dsconf = config['dsconf']
+    desc = config['desc']
+    owner = config['owner']
+    
+    # Build command parts dynamically based on what's in the config
+    cmd_parts = [
+        'mu2ejobdef',
+        '--setup', setup,
+        '--dsconf', dsconf,
+        '--desc', desc,
+        '--dsowner', owner
+    ]
+    
+    # Only add --run-number if it's present in config
+    if 'run' in config:
+        cmd_parts.extend(['--run-number', str(config['run'])])
+    
+    # Only add --events-per-job if it's present in config
+    if 'events' in config:
+        cmd_parts.extend(['--events-per-job', str(config['events'])])
+    
+    # Add job_args and template
+    cmd_parts.extend(job_args)
+    cmd_parts.extend(['--embed', 'template.fcl'])
+    
+    # Always show the mu2ejobdef equivalent command when verbose logging is enabled
+    import logging
+    if logging.getLogger().level <= logging.DEBUG:
+        print(f"🐪 mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
+    
+    # Now create jobdef using the template.fcl (which contains analyzable content)
     create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=json_output)
     
     if json_output:
         # Return structured data for machine consumption
         parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
         fcl_file = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.fcl"
-        
-        # Build the Perl commands that would be equivalent
-        setup = config['simjob_setup']
-        dsconf = config['dsconf']
-        desc = config['desc']
-        owner = config['owner']
-        
-        # Build command parts dynamically based on what's in the config
-        cmd_parts = [
-            'mu2ejobdef',
-            '--setup', setup,
-            '--dsconf', dsconf,
-            '--desc', desc,
-            '--dsowner', owner
-        ]
-        
-        # Only add --run-number if it's present in config
-        if 'run' in config:
-            cmd_parts.extend(['--run-number', str(config['run'])])
-        
-        # Only add --events-per-job if it's present in config
-        if 'events' in config:
-            cmd_parts.extend(['--events-per-job', str(config['events'])])
-        
-        # Add job_args and template
-        cmd_parts.extend(job_args)
-        cmd_parts.extend(['--embed', 'template.fcl'])
         
         result = {
             'success': True,
@@ -126,27 +95,6 @@ def build_jobdef(config, job_args, json_output=False):
         # Human-readable output (current behavior)
         parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
         fcl_file = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.fcl"
-        
-        # Build command parts dynamically for human-readable output too
-        cmd_parts = [
-            'mu2ejobdef',
-            '--setup', config['simjob_setup'],
-            '--dsconf', config['dsconf'],
-            '--desc', config['desc'],
-            '--dsowner', config['owner']
-        ]
-        
-        # Only add --run-number if it's present in config
-        if 'run' in config:
-            cmd_parts.extend(['--run-number', str(config['run'])])
-        
-        # Only add --events-per-job if it's present in config
-        if 'events' in config:
-            cmd_parts.extend(['--events-per-job', str(config['events'])])
-        
-        # Add job_args and template
-        cmd_parts.extend(job_args)
-        cmd_parts.extend(['--embed', 'template.fcl'])
         
         print(f"Python mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
         print(f"Running Perl equivalent of: mu2ejobfcl --jobdef {parfile_name} --default-location tape --default-protocol root --index 0 > {fcl_file}")
@@ -197,7 +145,7 @@ def main():
     setup_logging(args.verbose)
     
     # Load and expand the JSON configuration once
-    expanded_configs = load_and_expand_json(Path(args.json))
+    expanded_configs = load_json(Path(args.json))
     
     # Helper function to check if argument is effectively None
     def is_none_or_empty(arg):
@@ -206,14 +154,14 @@ def main():
     # If both desc and dsconf are specified, process single entry
     if args.desc and args.dsconf and args.index is None:
         config = find_json_entry(expanded_configs, args.desc, args.dsconf, None)
-        process_single_entry(config, args)
+        process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None)
     # If dsconf is specified but no desc and no index, process all entries for that dsconf
     elif args.dsconf and is_none_or_empty(args.desc) and args.index is None:
         process_all_for_dsconf(expanded_configs, args.dsconf, args)
     # If only index is specified, process single entry by index
     elif args.index is not None and is_none_or_empty(args.desc) and is_none_or_empty(args.dsconf):
         config = find_json_entry(expanded_configs, None, None, args.index)
-        process_single_entry(config, args)
+        process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None)
     else:
         # No filtering specified, show usage
         sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")
@@ -250,8 +198,12 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
         with open('template.fcl', 'a') as f:
             f.write(f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {skip}\n")
         job_args = ['--auxinput', f"{config.get('merge_factor',1)}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
+        # For resampler jobs, also call build_jobdef to generate the job definition
+        result = build_jobdef(config, job_args, json_output=json_output, original_fcl_path=original_fcl_path)
     elif 'merge_factor' in config:
         job_args = ['--inputs','inputs.txt','--merge-factor', str(config['merge_factor'])]
+        # For merge jobs, also call build_jobdef to generate the job definition
+        result = build_jobdef(config, job_args, json_output=json_output, original_fcl_path=original_fcl_path)
     elif 'pbeam' in config:
         merge_factor = calculate_merge_factor(config)
         job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
@@ -262,9 +214,9 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
         modified_config = config.copy()
         modified_config['fcl'] = 'template.fcl'
         
-        # Pass original FCL path to build_jobdef for source type detection
-        modified_config['original_fcl'] = original_fcl_path
-        result = build_jobdef(modified_config, job_args, json_output=json_output)
+        # For mixing jobs, analyze the ORIGINAL FCL file (not template.fcl)
+        # This matches Perl's behavior exactly: analyze base FCL, embed template.fcl
+        result = build_jobdef(modified_config, job_args, json_output=json_output, original_fcl_path=config['fcl'])
     else:
         # Pass original FCL path to build_jobdef for source type detection  
         config['original_fcl'] = original_fcl_path

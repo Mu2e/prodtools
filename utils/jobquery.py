@@ -11,31 +11,18 @@ import sys
 import tarfile
 from pathlib import Path
 
+from .mu2e_common import Mu2eJobBase
 
-class Mu2eJobPars:
+class Mu2eJobPars(Mu2eJobBase):
     """Python equivalent of Mu2eJobPars.pm"""
     
     def __init__(self, parfile):
         """Initialize with a job parameter file (.tar)"""
-        self.parfile = parfile
+        super().__init__(parfile)
+        self.parfile = parfile  # Keep for backward compatibility
         self.json_data = self._extract_json()
     
-    def _extract_json(self):
-        """Extract and parse jobpars.json from the tar file"""
-        with tarfile.open(self.parfile, 'r') as tar:
-            # Look for jobpars.json in the tar file
-            json_member = None
-            for member in tar.getmembers():
-                if member.name.endswith('jobpars.json'):
-                    json_member = member
-                    break
-            
-            if not json_member:
-                raise ValueError(f"jobpars.json not found in {self.parfile}")
-            
-            # Extract and parse JSON
-            json_file = tar.extractfile(json_member)
-            return json.load(json_file)
+
     
     def jobname(self):
         """Get the job name"""

@@ -14,74 +14,19 @@ from typing import Dict, List, Optional, Union
 import hashlib
 import re
 
-class Mu2eFilename:
-    """Parse and manipulate Mu2e filenames."""
-    
-    def __init__(self, filename: str):
-        self.filename = filename
-        self._parse()
-    
-    def _parse(self):
-        """Parse filename into components."""
-        # Format: tier.owner.description.dsconf.sequencer.extension
-        # Example: dts.mu2e.CosmicCRYExtracted.MDC2020av.001205_00000000.art
-        parts = self.filename.split('.')
-        if len(parts) >= 6:
-            self.tier = parts[0]
-            self.owner = parts[1]
-            self.description = parts[2]
-            self.dsconf = parts[3]
-            self.sequencer = parts[4]
-            self.extension = parts[5] if len(parts) > 5 else ''
-        else:
-            # Fallback for simpler filenames
-            self.tier = parts[0] if len(parts) > 0 else ''
-            self.owner = parts[1] if len(parts) > 1 else ''
-            self.description = parts[2] if len(parts) > 2 else ''
-            self.dsconf = parts[3] if len(parts) > 3 else ''
-            self.sequencer = parts[4] if len(parts) > 4 else ''
-            self.extension = parts[5] if len(parts) > 5 else ''
-    
-    def basename(self) -> str:
-        """Return the basename of the file."""
-        return self.filename
-    
-    def dataset(self) -> str:
-        """Return the dataset name."""
-        return f"{self.owner}.{self.description}.{self.dsconf}"
-    
-    def dsname(self) -> str:
-        """Return the dataset name (alias for dataset)."""
-        return self.dataset()
+from .mu2e_common import Mu2eFilename, Mu2eJobBase
 
-class Mu2eJobIO:
+class Mu2eJobIO(Mu2eJobBase):
     """Python port of mu2ejobiodetail functionality."""
     
     def __init__(self, jobdef: str):
         """Initialize with job definition file."""
-        self.jobdef = jobdef
+        super().__init__(jobdef)
         self.json_data = self._extract_json()
     
-    def _extract_json(self) -> dict:
-        """Extract jobpars.json from tar file."""
-        with tarfile.open(self.jobdef, 'r') as tar:
-            json_member = None
-            for member in tar.getmembers():
-                if member.name.endswith('jobpars.json'):
-                    json_member = member
-                    break
-            if not json_member:
-                raise ValueError(f"jobpars.json not found in {self.jobdef}")
-            json_file = tar.extractfile(json_member)
-            return json.load(json_file)
+
     
-    def _my_random(self, *args) -> int:
-        """Generate deterministic random number from inputs."""
-        h = hashlib.sha256()
-        for arg in args:
-            h.update(str(arg).encode())
-        # Take first 8 hex digits (32 bits)
-        return int(h.hexdigest()[:8], 16)
+
     
     def job_primary_inputs(self, index: int) -> Dict[str, List[str]]:
         """Get primary input files for job index."""

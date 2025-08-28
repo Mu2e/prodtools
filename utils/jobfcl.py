@@ -14,52 +14,14 @@ from typing import Dict, List, Optional, Union
 import hashlib
 import re
 
-class Mu2eFilename:
-    """Parse and manipulate Mu2e filenames."""
-    
-    def __init__(self, filename: str):
-        self.filename = filename
-        self._parse()
-    
-    def _parse(self):
-        """Parse filename into components."""
-        # Format: tier.owner.description.dsconf.sequencer.extension
-        # Example: dts.mu2e.CosmicCRYExtracted.MDC2020av.001205_00000000.art
-        parts = self.filename.split('.')
-        if len(parts) >= 6:
-            self.tier = parts[0]
-            self.owner = parts[1]
-            self.description = parts[2]
-            self.dsconf = parts[3]
-            self.sequencer = parts[4]
-            self.extension = parts[5] if len(parts) > 5 else ''
-        else:
-            # Fallback for simpler filenames
-            self.tier = parts[0] if len(parts) > 0 else ''
-            self.owner = parts[1] if len(parts) > 1 else ''
-            self.description = parts[2] if len(parts) > 2 else ''
-            self.dsconf = parts[3] if len(parts) > 3 else ''
-            self.sequencer = parts[4] if len(parts) > 4 else ''
-            self.extension = parts[5] if len(parts) > 5 else ''
-    
-    def basename(self) -> str:
-        """Return the basename of the file."""
-        return self.filename
-    
-    def dataset(self) -> str:
-        """Return the dataset name."""
-        return f"{self.owner}.{self.description}.{self.dsconf}"
-    
-    def dsname(self) -> str:
-        """Return the dataset name (alias for dataset)."""
-        return self.dataset()
+from .mu2e_common import Mu2eFilename, Mu2eJobBase
 
-class Mu2eJobFCL:
+class Mu2eJobFCL(Mu2eJobBase):
     """Python port of mu2ejobfcl functionality."""
     
     def __init__(self, jobdef: str, inloc: str = 'tape', proto: str = 'file'):
         """Initialize with job definition file."""
-        self.jobdef = jobdef
+        super().__init__(jobdef)
         self.inloc = inloc
         self.proto = proto
         self.json_data = self._extract_json()
@@ -70,22 +32,7 @@ class Mu2eJobFCL:
         self.owner = self.json_data.get('owner', default_owner)
         self.dsconf = self.json_data.get('dsconf', 'unknown')
     
-    def _extract_json(self) -> dict:
-        """Extract jobpars.json from tar file."""
-        with tarfile.open(self.jobdef, 'r') as tar:
-            # Find jobpars.json member
-            json_member = None
-            for member in tar.getmembers():
-                if member.name.endswith('jobpars.json'):
-                    json_member = member
-                    break
-            
-            if not json_member:
-                raise ValueError(f"jobpars.json not found in {self.jobdef}")
-            
-            # Extract and return JSON content
-            json_file = tar.extractfile(json_member)
-            return json.load(json_file)
+
     
     def _extract_fcl(self) -> str:
         """Extract mu2e.fcl from tar file."""
@@ -104,13 +51,7 @@ class Mu2eJobFCL:
             fcl_file = tar.extractfile(fcl_member)
             return fcl_file.read().decode('utf-8')
     
-    def _my_random(self, *args) -> int:
-        """Generate deterministic random number from inputs."""
-        h = hashlib.sha256()
-        for arg in args:
-            h.update(str(arg).encode())
-        # Take first 8 hex digits (32 bits)
-        return int(h.hexdigest()[:8], 16)
+
     
     def _locate_file(self, filename: str) -> str:
         """Locate a file using samweb and return its physical path."""
