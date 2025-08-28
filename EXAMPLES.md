@@ -11,6 +11,22 @@ This document provides practical examples for using the Python-based Mu2e produc
 - **[JSON Expansion](#4-json-configuration-expansion)** - Parameter space exploration
 - **[Production Execution](#5-production-job-execution)** - Run production workflows
 
+## Environment Setup
+
+**IMPORTANT: Set up the Mu2e environment before using any tools:**
+
+```bash
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+muse setup SimJob
+```
+
+This setup provides access to:
+- `fhicl-get` - FHiCL configuration parser
+- `mu2ejobdef` - Mu2e job definition tool (for parity testing)
+- `samweb_client` - Python library for SAM data access
+- `mdh` - Mu2e data handling tools
+
 ## Overview
 
 The `prodtools` package provides Python implementations of key Mu2e production tools:
@@ -246,10 +262,7 @@ Different `pbeam` configurations generate different mixing scenarios:
 The following mixing configurations have been successfully tested and verified:
 
 ```bash
-# Set up environment first
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-
+# After setting up the environment (see Environment Setup section above)
 # Generate all 8 mixing configurations for MDC2020ba_best_v1_3
 python3 json2jobdef.py --json ../Production/data/mix.json --dsconf MDC2020ba_best_v1_3
 ```
@@ -338,10 +351,7 @@ ls cnf.*.tar > batch_jobdefs.txt
 Execute production workflows from job definition files:
 
 ```bash
-# First, set up the required environment
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-
+# After setting up the environment (see Environment Setup section above)
 # Set the job index environment variable (required for production)
 export fname=etc.mu2e.index.000.0000000.txt
 
@@ -384,10 +394,7 @@ Format: `{tarball_name} {total_jobs} {input_location} {output_location}`
 For actual grid submission (without `--dry-run`):
 
 ```bash
-# Set up grid environment
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-
+# After setting up the environment (see Environment Setup section above)
 # Production execution
 export fname=etc.mu2e.index.000.0000042.txt  # Job index from grid system
 ./jobdefs_runner.py --jobdefs jobdefs_MDC2020aw.txt --nevts -1
@@ -476,18 +483,13 @@ The new template-based approach handles FCL overrides elegantly:
 
 #### Environment Setup Problems
 
-**Problem**: `samweb: command not found`
+**Problem**: `samweb: command not found` or `fhicl-get: command not found`
 ```bash
-# Solution: Set up Mu2e environment
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-```
-
-**Problem**: `fhicl-get: command not found`
-```bash
-# Solution: Ensure OfflineOps is set up
-muse setup ops
+# Solution: Follow the Environment Setup section above
+# Verify tools are available:
 which fhicl-get
+which mu2ejobdef
+python3 -c "import samweb_client; print('samweb_client is available')"
 ```
 
 #### baseSeed Errors
@@ -502,11 +504,7 @@ which fhicl-get
 #### File Access Issues
 
 **Problem**: `mdh: command not found`
-```bash
-# Solution: Set up Mu2e environment
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-```
+**Solution**: Follow the Environment Setup section above.
 
 ## 8. Key Features
 
@@ -543,53 +541,57 @@ python3 parity_test.py --json first_entry.json
 - ✅ **FCL overrides**: Correctly applied in both versions
 - ✅ **Environment handling**: Both versions work with same Mu2e setup
 
-### C. Successfully Tested Workflows
+**Running All Parity Tests:**
 
-- ✅ **Complete mixing job support** with auxiliary file catalogs
-- ✅ **JSON-based configuration** with parameter expansion
-- ✅ **XrootD path generation** for proper file access
-- ✅ **Production parity** verified against existing production tools
-- ✅ **Debugging support** with `--no-cleanup` option
-- ✅ **Environment setup** with proper Mu2e tools integration
+```bash
+# After setting up the environment (see Environment Setup section above)
+# Run all parity tests using the automated script
+./parity_test.sh
+
+# This script automatically:
+# - Runs parity tests on stage1.json (5 configurations)
+# - Runs parity tests on resampler.json (23 configurations)  
+# - Runs parity tests on mix.json (32 configurations)
+# - Executes compare_tarballs.sh to show results
+```
+
+**Running Individual Parity Tests:**
+
+```bash
+# Stage1 jobs only
+python parity_test.py --json ../Production/data/stage1.json
+
+# Resampler jobs only  
+python parity_test.py --json ../Production/data/resampler.json
+
+# Mixing jobs only
+python parity_test.py --json ../Production/data/mix.json
+
+# Check results
+./compare_tarballs.sh
+```
+
+**What This Does:**
+- **Automated testing**: `parity_test.sh` runs all tests in sequence
+- **Comprehensive coverage**: Tests stage1 (5 configs), resampler (23 configs), and mixing (32 configs) jobs
+- **Automatic comparison**: Runs `compare_tarballs.sh` to show all results
+- **Organized output**: Creates test/python/ and test/perl/ directories for easy comparison
+- **Environment handling**: Automatically works with different SimJob environments
 
 ### B. Successfully Tested Workflows
 
+- ✅ **Complete mixing job support** with auxiliary file catalogs
 - ✅ **Mixing jobdef generation** from JSON templates
 - ✅ **FCL generation** with correct auxiliary file counts  
 - ✅ **JSON expansion** for parameter space exploration
+- ✅ **XrootD path generation** for proper file access
+- ✅ **Production parity** verified against existing production tools
 - ✅ **Batch processing** for production campaigns
 - ✅ **Jobpars.json verification** against production files
 - ✅ **MDC2020ba_best_v1_3** mixing configurations (all 8 types)
 - ✅ **baseSeed handling** - No more mu2e execution errors
 - ✅ **Environment integration** with muse setup ops
+- ✅ **Verbose output control** - `--verbose` shows mu2ejobdef commands without SAM API noise
+- ✅ **Clean logging** - Suppressed external library debug messages for focused output
 
 The Python implementations provide complete production functionality with better maintainability and debugging capabilities. All mixing configurations for MDC2020ba_best_v1_3 have been successfully tested and verified.
-
-## Environment Setup
-
-### Required Mu2e Environment
-
-Before using the production tools, you must set up the Mu2e environment:
-
-```bash
-# 1. Source the Mu2e setup script
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-
-# 2. Set up the OfflineOps environment
-muse setup ops
-
-# 3. Verify the environment is ready
-which samweb
-which fhicl-get
-which mdh
-```
-
-**Important**: The `muse setup ops` command is essential for accessing SAMweb, FHiCL tools, and other Mu2e utilities.
-
-### Environment Verification
-
-After setup, verify these tools are available:
-- `samweb` - Scientific Asset Management client
-- `fhicl-get` - FHiCL configuration parser
-- `mdh` - Mu2e Data Handling utilities
-- `python3` - Python 3 interpreter

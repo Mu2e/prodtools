@@ -104,7 +104,6 @@ def expand_configs(configs, mixing=False):
                 job = prepare_fields_for_mixing(job)
             
             all_jobs.append(job)
-            print(json.dumps(job, indent=2))
 
     return all_jobs
 

@@ -49,7 +49,9 @@ def create_mu2ejobdef(perl_commands):
     
     # Run the mu2ejobdef command
     command = mu2ejobdef_cmd['command']
+
     print(f"      🐪 mu2ejobdef command: {command}")
+    
     # Don't source the setup script again since it's already sourced in the main shell
     result = subprocess.run(command, shell=True, capture_output=True, text=True, env=os.environ.copy())
     
@@ -78,6 +80,11 @@ def create_jobdefs_from_json(json_file):
     success_count = 0
     for i in range(total_count):
         config = find_json_entry(configs=configs, index=i)
+        
+        # Clean up template.fcl from previous iteration to avoid interference
+        if Path('template.fcl').exists():
+            Path('template.fcl').unlink()
+            print(f"  🧹 Cleaned up template.fcl from previous configuration")
         
         if create_jobdef(config):
             success_count += 1
