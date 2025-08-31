@@ -32,13 +32,14 @@ This setup provides access to:
 For convenience, you can use the included setup script:
 
 ```bash
+cd prodtools
 source setup.sh
 ```
 
 This script automatically:
 - Sources the Mu2e environment
 - Sets up muse (`muse setup ops`, `muse setup SimJob`)
-- Adds `prodtools/` and `prodtools/test/` to your PATH
+- Adds `prodtools/` to your PATH
 - Enables running all commands directly from anywhere
 
 **After sourcing, you can run commands directly:**
@@ -55,19 +56,13 @@ cd test
 ./compare_tarballs.sh     # Compare test results
 ```
 
-**Benefits:**
-- No need to remember full paths
-- Commands work from any directory
-- Consistent environment setup
-- Faster development workflow
-
 ## Overview
 
-The `prodtools` package provides Python implementations of key Mu2e production tools:
+The `prodtools` package provides implementations of Mu2e production tools:
 
 - `json2jobdef.py` - Create job definition tarballs from JSON configs
 - `fcl_maker.py` - Generate FCL configurations from jobdefs or datasets
-- `jobdefs_runner.py` - Execute production jobs from job definitions
+- `jobdefs_runner.py` and `jobdefs_runner` - Execute production jobs from job definitions
 - `json_expander.py` - Generate parameter combinations from templates
 
 ## 1. Creating Job Definitions
@@ -78,33 +73,43 @@ Create job definitions using JSON configuration files:
 
 ```json
 [
-  {
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
-    "fcl": "Production/JobConfig/cosmic/S2Resampler.fcl",
-    "dsconf": "MDC2020az",
-    "desc": "CosmicCORSIKALow",
-    "outloc": "disk",
-    "owner": "mu2e",
-    "njobs": 1,
-    "run": 1203,
-    "events": 500000,
-    "input_data": "sim.mu2e.CosmicDSStopsCORSIKALow.MDC2020aa.art"
-  }
+    {
+	"desc": "POT_Run1_a",
+	"dsconf": "MDC2020ba",
+	"fcl": "Production/JobConfig/beam/POT.fcl",
+	"fcl_overrides": {
+	    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+		"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+	},
+	"njobs": 20000,
+	"events": 5000,
+	"run": 1431,
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ba/setup.sh",
+	"owner": "mu2e"
+    }
 ]
 ```
 
 **Usage:**
 ```bash
-# Create job definition from JSON
-python3 json2jobdef.py --json config.json --index 0
+# Create job definition from JSON for 1st entry
+json2jobdef.py --json $MUSE_WORK_DIR/Production/data/stage1.json --index 0
 
-# Keep temporary files for debugging
-python3 json2jobdef.py --json config.json --index 0 --no-cleanup
+# Create job definition from JSON for a pair of desc and dsconf
+json2jobdef.py --json $MUSE_WORK_DIR/Production/data/stage1.json --desc POT_Run1_a --dsconf MDC2020ba
+
+# Create job definitions from JSON for all enrties that match dsconf
+json2jobdef.py --json $MUSE_WORK_DIR/Production/data/stage1.json --dsconf MDC2020ba
+
 ```
 
 **Output:**
 - `cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.tar` (job definition tarball)
-- `cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.fcl` (FCL configuration)
+- `jobdefs_list.json` (descriptions of all job definitions to run over)
+- `cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.fcl` (FCL test file)
 
 ### B. Direct Job Definition Creation
 
@@ -112,7 +117,7 @@ For more control, use the `jobdef.py` utility directly:
 
 ```bash
 # Basic job definition creation
-python3 utils/jobdef.py --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh \
+./utils/jobdef.py --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh \
     --dsconf MDC2020az --desc CosmicCORSIKALow --dsowner mu2e \
     --embed Production/JobConfig/cosmic/S2Resampler.fcl
 
