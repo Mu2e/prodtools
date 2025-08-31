@@ -27,6 +27,40 @@ This setup provides access to:
 - `samweb_client` - Python library for SAM data access
 - `mdh` - Mu2e data handling tools
 
+### Alternative: Automated Environment Setup
+
+For convenience, you can use the included setup script:
+
+```bash
+source setup.sh
+```
+
+This script automatically:
+- Sources the Mu2e environment
+- Sets up muse (`muse setup ops`, `muse setup SimJob`)
+- Adds `prodtools/` and `prodtools/test/` to your PATH
+- Enables running all commands directly from anywhere
+
+**After sourcing, you can run commands directly:**
+```bash
+# Production tools
+json2jobdef.py --json config.json --index 0
+fcl_maker.py --dataset dts.mu2e.RPCExternal.MDC2020az.art
+jobdefs_runner.py --jobdefs jobdefs.txt --dry-run
+
+# Test tools (run from test/ directory)
+cd test
+./parity_test.sh          # Run index 0 only (default)
+./parity_test.sh --all    # Run all configurations
+./compare_tarballs.sh     # Compare test results
+```
+
+**Benefits:**
+- No need to remember full paths
+- Commands work from any directory
+- Consistent environment setup
+- Faster development workflow
+
 ## Overview
 
 The `prodtools` package provides Python implementations of key Mu2e production tools:
@@ -506,7 +540,40 @@ python3 -c "import samweb_client; print('samweb_client is available')"
 **Problem**: `mdh: command not found`
 **Solution**: Follow the Environment Setup section above.
 
-## 8. Key Features
+## 8. Running Parity Tests
+
+### A. Basic Usage
+
+The parity tests should be run from the `test/` directory to ensure all relative paths work correctly:
+
+```bash
+# Navigate to test directory
+cd test
+
+# Run only index 0 configurations (default)
+./parity_test.sh
+
+# Run all configurations
+./parity_test.sh --all
+
+# Compare results manually
+./compare_tarballs.sh
+```
+
+### B. What Parity Tests Do
+
+1. **Generate job definitions** using both Python (`json2jobdef.py`) and Perl (`mu2ejobdef`) tools
+2. **Compare outputs** for byte-for-byte parity between implementations
+3. **Test multiple configurations** from stage1, resampler, and mixing job types
+4. **Clean environment** by removing previous test outputs before each run
+
+### C. Test Coverage
+
+- **Stage1 Jobs**: 5 configurations (cosmic, beam, etc.)
+- **Resampler Jobs**: 23 configurations (various resampling scenarios)
+- **Mixing Jobs**: 32 configurations (different mixing combinations)
+
+## 9. Key Features
 
 ### A. Production-Ready Tools
 
@@ -545,7 +612,8 @@ python3 parity_test.py --json first_entry.json
 
 ```bash
 # After setting up the environment (see Environment Setup section above)
-# Run all parity tests using the automated script
+# Navigate to test directory and run all parity tests
+cd test
 ./parity_test.sh
 
 # This script automatically:
@@ -558,6 +626,9 @@ python3 parity_test.py --json first_entry.json
 **Running Individual Parity Tests:**
 
 ```bash
+# Navigate to test directory first
+cd test
+
 # Stage1 jobs only
 python parity_test.py --json ../Production/data/stage1.json
 
