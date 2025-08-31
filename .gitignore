@@ -7,6 +7,7 @@
 *.fcl
 jobpars.json
 template.fcl
+inputs.txt
 
 # Test directories
 test/
@@ -89,3 +90,6 @@ Thumbs.db
 *.err
 *.out
 jobdefs_list.txt
+
+# Pileup catalog files (generated during mixing job setup)
+*Cat.txt
