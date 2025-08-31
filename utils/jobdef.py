@@ -21,7 +21,7 @@ from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
-from .mu2e_common import Mu2eFilename
+from .job_common import Mu2eFilename
 
 # Constants matching Perl mu2ejobdef exactly
 FILENAME_JSON = 'jobpars.json'
@@ -623,8 +623,8 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     mu2e_fcl_tmp.write_text(fcl_content)
     temp_files[FILENAME_FCL] = mu2e_fcl_tmp
     
-    # Create tarball
-    with tarfile.open(out, 'w') as tar:
+    # Create tarball with compression
+    with tarfile.open(out, 'w:gz') as tar:
         for filename, filepath in temp_files.items():
             tar.add(filepath, arcname=filename)
     
