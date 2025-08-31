@@ -3,8 +3,6 @@
 # Simple shell wrapper for jobdefs_runner.py
 # Sets up Mu2e environment and calls the Python script
 
-set -e  # Exit on any error
-
 # Check required arguments
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo "Usage: $0 [options] --jobdefs <jobdefs_file>"
@@ -15,11 +13,6 @@ if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     exit 1
 fi
 
-# Source Mu2e environment
-echo "Setting up Mu2e environment..."
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-
 # Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/jobdefs_runner.py"
@@ -28,6 +21,16 @@ if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     echo "Error: Python script not found at $PYTHON_SCRIPT"
     exit 1
 fi
+
+# Setup Mu2e environment
+if [[ -f "/cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh" ]]; then
+    source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+    muse setup ops
+else
+    echo "Warning: Mu2e environment not found"
+fi
+
+setup OfflineOps
 
 # Execute the Python script with all arguments
 exec python3 "$PYTHON_SCRIPT" "$@"

@@ -11,7 +11,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from .mu2e_common import Mu2eJobBase
+from .job_common import Mu2eJobBase
 
 class Mu2eJobPars(Mu2eJobBase):
     """Python equivalent of Mu2eJobPars.pm"""

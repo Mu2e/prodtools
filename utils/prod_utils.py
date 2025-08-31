@@ -250,21 +250,23 @@ def replace_file_extensions(input_str, first_field, last_field):
     fields[-1] = last_field
     return '.'.join(fields)
 
-def create_index_definition(output_index_dataset, job_count, input_index_dataset="etc.mu2e.index.000.txt"):
-    """
-    Create a SAM index definition for job processing.
-    
-    Args:
-        output_index_dataset: output index definition name
-        job_count: Number of jobs to process
-        input_index_dataset: input index definition name
-    """
+def create_index_definition(output_index_dataset, job_count, input_index_dataset):
+        
     from .samweb_wrapper import delete_definition, create_definition, describe_definition
     
+    idx_name = f"i{output_index_dataset}"
     idx_format = f"{job_count:07d}"
+    
+    # Check if definition exists before trying to delete it
     try:
-        delete_definition(f"idx_{output_index_dataset}")
-    except Exception:
-        pass  # Definition doesn't exist, which is fine
-    create_definition(f"idx_{output_index_dataset}", f"dh.dataset {input_index_dataset} and dh.sequencer < {idx_format}")
-    describe_definition(f"idx_{output_index_dataset}")
+        describe_definition(idx_name)
+        print(f"Definition {idx_name} exists, attempting to delete...")
+        delete_definition(idx_name)
+        print(f"Successfully deleted {idx_name}")
+    except Exception as e:
+        print(f"Definition {idx_name} does not exist, skipping deletion")
+
+    # Create the new definition
+    print(f"Creating definition {idx_name}...")
+    create_definition(idx_name, f"dh.dataset {input_index_dataset} and dh.sequencer < {idx_format}")
+    describe_definition(idx_name)

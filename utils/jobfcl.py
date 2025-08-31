@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Union
 import hashlib
 import re
 
-from .mu2e_common import Mu2eFilename, Mu2eJobBase
+from .job_common import Mu2eFilename, Mu2eJobBase
 
 class Mu2eJobFCL(Mu2eJobBase):
     """Python port of mu2ejobfcl functionality."""

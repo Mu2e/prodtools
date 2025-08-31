@@ -19,27 +19,63 @@ from utils.mixing_utils import *
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef
 
+def _create_inputs_file(dataset):
+    """Helper: create inputs.txt file from dataset."""
+    from utils.samweb_wrapper import list_files
+    result = list_files(f"dh.dataset={dataset} and event_count>0")
+    with open('inputs.txt', 'w') as f:
+        f.write('\n'.join(result))
 
+def get_parfile_name(config):
+    """Generate consistent parfile name from config."""
+    return f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
 
-def build_jobdef(config, job_args, json_output=False, original_fcl_path=None):
+def get_fcl_name(config):
+    """Generate consistent FCL filename from config."""
+    return f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.fcl"
+
+def validate_required_fields(config, required_fields=None):
+    """Validate that config has all required fields."""
+    if required_fields is None:
+        required_fields = ('simjob_setup', 'fcl', 'dsconf', 'outloc')
+    
+    for req in required_fields:
+        if not config.get(req):
+            sys.exit(f"Missing required field: {req}")
+
+def determine_job_type(config):
+    """Determine the job type based on config contents.
+    
+    Returns:
+        'resampler' - Resampling jobs with resampler_name
+        'merge'     - File merging jobs with merge_factor 
+        'mixing'    - Pileup mixing jobs with pbeam
+        'stage1'    - Primary simulation jobs (cosmic, beam, etc.)
+    """
+    if 'resampler_name' in config:
+        return 'resampler'
+    elif 'merge_factor' in config:
+        return 'merge'
+    elif 'pbeam' in config:
+        return 'mixing'
+    else:
+        return 'stage1'
+
+def build_jobdef(config, job_args, json_output=False):
     # Create jobdef using the embed approach with custom template to preserve fcl_overrides
-    # Use original FCL path if provided, otherwise use config FCL
-    fcl_path = original_fcl_path or config['fcl']
-    write_fcl_template(fcl_path, config.get('fcl_overrides', {}))
+    # For mixing jobs, template.fcl is already created by build_pileup_args
+    # For non-mixing jobs, create the template here
+    fcl_path = config['fcl']
+    if 'pbeam' not in config:
+        write_fcl_template(fcl_path, config.get('fcl_overrides', {}))
     
     # Build the Perl commands that would be equivalent (always build for potential display)
-    setup = config['simjob_setup']
-    dsconf = config['dsconf']
-    desc = config['desc']
-    owner = config['owner']
-    
-    # Build command parts dynamically based on what's in the config
     cmd_parts = [
         'mu2ejobdef',
-        '--setup', setup,
-        '--dsconf', dsconf,
-        '--desc', desc,
-        '--dsowner', owner
+        '--setup', config['simjob_setup'],
+        '--dsconf', config['dsconf'],
+        '--desc', config['desc'],
+        '--dsowner', config['owner']
     ]
     
     # Only add --run-number if it's present in config
@@ -60,26 +96,28 @@ def build_jobdef(config, job_args, json_output=False, original_fcl_path=None):
         print(f"🐪 mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
     
     # Now create jobdef using the template.fcl (which contains analyzable content)
+    # Always create the tarball regardless of json_output setting
     create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=json_output)
+    
+    # Get the parfile name for both modes
+    parfile_name = get_parfile_name(config)
+    fcl_file = get_fcl_name(config)
     
     if json_output:
         # Return structured data for machine consumption
-        parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
-        fcl_file = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.fcl"
-        
         result = {
             'success': True,
             'perl_commands': [
                 {
                     'type': 'mu2ejobdef',
                     'command': ' '.join(cmd_parts),
-                    'desc': desc,
-                    'simjob_setup': setup
+                    'desc': config['desc'],
+                    'simjob_setup': config['simjob_setup']
                 },
                 {
                     'type': 'mu2ejobfcl',
                     'command': f"mu2ejobfcl --jobdef {parfile_name} --default-location tape --default-protocol root --index 0 > {fcl_file}",
-                    'desc': desc,
+                    'desc': config['desc'],
                     'index': 0
                 }
             ]
@@ -87,18 +125,16 @@ def build_jobdef(config, job_args, json_output=False, original_fcl_path=None):
         return result
     else:
         # Human-readable output (current behavior)
-        parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
-        fcl_file = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.fcl"
-        
         print(f"Python mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
         print(f"Running Perl equivalent of: mu2ejobfcl --jobdef {parfile_name} --default-location tape --default-protocol root --index 0 > {fcl_file}")
         return None
 
-def save_jobdef(config, jobdefs_file=None):
+def append_jobdef(config, jobdefs_file=None):
     """
-    Save job information to a jobdefs file with unique entries.
+    Append job information to a jobdefs file in JSON format.
+    Handles both simple and complex outloc structures.
     """
-    parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
+    parfile_name = get_parfile_name(config)
     
     # Query job count if njobs is -1
     njobs = config['njobs']
@@ -107,27 +143,72 @@ def save_jobdef(config, jobdefs_file=None):
         njobs = jp.njobs()
         print(f"Queried job count: {njobs}")
     
-    new_entry = f"{parfile_name} {njobs} {config['inloc']} {config['outloc']}\n"
+    # Create JSON structure for the job definition
+    jobdef_entry = {
+        "tarball": parfile_name,
+        "njobs": njobs,
+        "inloc": config['inloc'],
+        "outputs": []
+    }
     
-    # Use provided jobdefs file or default to jobdefs_list.txt
+    # Handle outloc - must be dict with dataset-specific locations
+    outloc = config['outloc']
+    
+    if not isinstance(outloc, dict):
+        print(f"Warning: outloc must be a dictionary with dataset-specific locations for {config.get('desc', 'unknown')}")
+        return
+    
+    # Add each dataset with its location
+    for dataset_name, location in outloc.items():
+        jobdef_entry["outputs"].append({
+            "dataset": dataset_name,
+            "location": location
+        })
+    
+    # Write JSON entry to file
+    _write_jobdef_json_entry(jobdef_entry, jobdefs_file)
+
+def _write_jobdef_json_entry(jobdef_entry, jobdefs_file=None):
+    """Helper function to write jobdef entries in JSON format."""
+    # Use provided jobdefs file or default to jobdefs_list.json
     if jobdefs_file:
         dsconf_file = Path(jobdefs_file)
     else:
-        dsconf_file = Path("jobdefs_list.txt")
+        dsconf_file = Path("jobdefs_list.json")
     
-    if dsconf_file.exists() and parfile_name in dsconf_file.read_text():
-        print(f"Entry already exists in {dsconf_file}")
-        return
+    # Check if file exists and load existing entries
+    existing_entries = []
+    if dsconf_file.exists():
+        try:
+            existing_content = dsconf_file.read_text()
+            if existing_content.strip():
+                existing_entries = json.loads(existing_content)
+                if not isinstance(existing_entries, list):
+                    existing_entries = [existing_entries]
+        except json.JSONDecodeError:
+            print(f"Warning: Could not parse existing {dsconf_file}, starting fresh")
+            existing_entries = []
     
-    with open(dsconf_file, 'a') as f:
-        f.write(new_entry)
-    print(f"Added {new_entry} to {dsconf_file}")
+    # Check for duplicate tarball entries
+    tarball_name = jobdef_entry["tarball"]
+    for existing in existing_entries:
+        if existing.get("tarball") == tarball_name:
+            print(f"Entry already exists in {dsconf_file}")
+            return
+    
+    # Add new entry and write back to file
+    existing_entries.append(jobdef_entry)
+    
+    with open(dsconf_file, 'w') as f:
+        json.dump(existing_entries, f, indent=2)
+    
+    print(f"Added JSON entry for {tarball_name} to {dsconf_file}")
 
 def main():
     p = argparse.ArgumentParser(description='Generate Mu2e job definitions from JSON configuration')
     p.add_argument('--json', required=True, help='Input JSON file')
-    p.add_argument('--desc', help='Dataset descriptor')
-    p.add_argument('--dsconf', help='Dataset configuration')
+    p.add_argument('--desc', type=str, help='Dataset descriptor')
+    p.add_argument('--dsconf', type=str, help='Dataset configuration')
     p.add_argument('--index', type=int, help='Entry index in JSON list')
     p.add_argument('--pushout', action='store_true', help='Enable SAM pushOutput')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
@@ -141,87 +222,76 @@ def main():
     # Load and expand the JSON configuration once
     expanded_configs = load_json(Path(args.json))
     
-    # Helper function to check if argument is effectively None
-    def is_none_or_empty(arg):
-        return arg is None or arg == 'None' or arg == ''
-    
     # If both desc and dsconf are specified, process single entry
     if args.desc and args.dsconf and args.index is None:
         config = find_json_entry(expanded_configs, args.desc, args.dsconf, None)
-        process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None)
+        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs_list)
     # If dsconf is specified but no desc and no index, process all entries for that dsconf
-    elif args.dsconf and is_none_or_empty(args.desc) and args.index is None:
+    elif args.dsconf and args.desc is None and args.index is None:
         process_all_for_dsconf(expanded_configs, args.dsconf, args)
     # If only index is specified, process single entry by index
-    elif args.index is not None and is_none_or_empty(args.desc) and is_none_or_empty(args.dsconf):
+    elif args.index is not None and args.desc is None and args.dsconf is None:
         config = find_json_entry(expanded_configs, None, None, args.index)
-        process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None)
+        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs_list)
     else:
         # No filtering specified, show usage
         sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")
 
 def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None):
     """Process a single configuration entry (original behavior)"""
-    for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
-        if not config.get(req):
-            sys.exit(f"Missing required field: {req}")
+    validate_required_fields(config)
     config['owner'] = config.get('owner', os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e'))
     config['inloc'] = config.get('inloc', 'tape')
     config['njobs'] = config.get('njobs', -1)
     
     # Store the original FCL path for source type detection
     original_fcl_path = config['fcl']
-    write_fcl_template(config['fcl'], config.get('fcl_overrides', {}))
+    
+    # Create inputs.txt first if needed
     if config.get('input_data'):
-        from utils.samweb_wrapper import list_files
-        result = list_files(f"dh.dataset={config['input_data']} and event_count>0")
-        with open('inputs.txt', 'w') as f:
-            f.write('\n'.join(result))
+        _create_inputs_file(config['input_data'])
     
     job_args = []
     
-    # Add run number and events per job if present in config (like Perl version)
-    if 'run' in config:
-        job_args.extend(['--run-number', str(config['run'])])
-    if 'events' in config:
-        job_args.extend(['--events-per-job', str(config['events'])])
+    job_type = determine_job_type(config)
     
-    if 'resampler_name' in config:
+    if job_type == 'resampler':
+        # Resampler jobs: add MaxEventsToSkip parameter to template
         nfiles, nevts = get_def_counts(config['input_data'])
         skip = nevts // nfiles
         with open('template.fcl', 'a') as f:
             f.write(f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {skip}\n")
         job_args = ['--auxinput', f"{config.get('merge_factor',1)}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
-        # For resampler jobs, also call build_jobdef to generate the job definition
-        result = build_jobdef(config, job_args, json_output=json_output, original_fcl_path=original_fcl_path)
-    elif 'merge_factor' in config:
-        job_args = ['--inputs','inputs.txt','--merge-factor', str(config['merge_factor'])]
-        # For merge jobs, also call build_jobdef to generate the job definition
-        result = build_jobdef(config, job_args, json_output=json_output, original_fcl_path=original_fcl_path)
-    elif 'pbeam' in config:
+        
+    elif job_type == 'merge':
+        # Merge jobs: simple file merging
+        merge_factor = calculate_merge_factor(config)
+        job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
+        
+    elif job_type == 'mixing':
+        # Mixing jobs: add MaxEventsToSkip parameter to template
         merge_factor = calculate_merge_factor(config)
         job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
         job_args += build_pileup_args(config)
         
-        # For mixing jobs, use the modified template.fcl instead of the original template
-        # This ensures MaxEventsToSkip parameters are included
-        modified_config = config.copy()
-        modified_config['fcl'] = 'template.fcl'
-        
-        # For mixing jobs, analyze the ORIGINAL FCL file (not template.fcl)
-        # This matches Perl's behavior exactly: analyze base FCL, embed template.fcl
-        result = build_jobdef(modified_config, job_args, json_output=json_output, original_fcl_path=config['fcl'])
     else:
-        # Pass original FCL path to build_jobdef for source type detection  
-        config['original_fcl'] = original_fcl_path
-        result = build_jobdef(config, job_args, json_output=json_output)
+        # Stage1 jobs: no special processing needed
+        job_args = []
     
-    if not json_output:
-        # Only output human-readable text when not using JSON output
-        print(json.dumps(config, indent=2, sort_keys=True))
-        
-        parfile_name = f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
-        if pushout:
+    # build_jobdef handles FCL template creation for non-mixing jobs
+    # Always fcl-analyze the ORIGINAL FCL file for job structure understanding
+    result = build_jobdef(config, job_args, json_output=json_output)
+    
+    append_jobdef(config, jobdefs_list)    
+    # Get the parfile name for pushout operations
+    parfile_name = get_parfile_name(config)
+    
+    # Handle pushout regardless of json_output setting
+    if pushout:
+        # First check if the local file exists before attempting SAM operations
+        if not Path(parfile_name).exists():
+            print(f"Warning: Local file {parfile_name} not found, skipping pushout")
+        else:
             # Push file to SAM if it doesn't already exist there
             from utils.samweb_wrapper import locate_file
             
@@ -236,19 +306,23 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
             else:
                 # File exists on SAM, don't push
                 print(f"File {parfile_name} already exists on SAM, skipping push")
-        save_jobdef(config, jobdefs_list)
+    
+    if not json_output:
+        # Only output human-readable text when not using JSON output
+        print(json.dumps(config, indent=2, sort_keys=True))
+        
         write_fcl(parfile_name, config.get('inloc', 'tape'), 'root')
         print(f"Generated: {parfile_name}")
     
     # Clean up temporary files AFTER job definition is created (unless --no-cleanup is specified)
-    if not no_cleanup:
+    if no_cleanup:
+        print("Temporary files kept (--no-cleanup specified)")
+    else:
         temp_files = ['inputs.txt', 'template.fcl', 'mubeamCat.txt', 'elebeamCat.txt', 'neutralsCat.txt', 'mustopCat.txt']
         for temp_file in temp_files:
             if Path(temp_file).exists():
                 Path(temp_file).unlink()
                 print(f"Cleanup: {temp_file}")
-    else:
-        print("Temporary files kept (--no-cleanup specified)")
     
     return result
 
@@ -262,29 +336,32 @@ def is_already_expanded(configs):
         if not isinstance(config, dict):
             raise ValueError(f"Entry {i} is not a dictionary: {type(config)}")
         
-            # Check if all values are either all scalars or all lists
-    values = list(config.values())
-    has_lists = any(isinstance(v, list) for v in values)
-    has_scalars = any(not isinstance(v, list) for v in values)
+        # Check if this config has lists (needs expansion)
+        values = list(config.values())
+        has_lists = any(isinstance(v, list) for v in values)
+        
+        # If any config has lists, the whole configuration needs expansion
+        if has_lists:
+            return False
     
-    # Mixed configurations are not allowed
-    if has_lists and has_scalars:
-        raise ValueError(f"Mixed configuration detected in entry {i}: some values are lists and some are scalars. This is not allowed.")
-    
-    # If all values are scalars (not lists), it's already expanded
-    return not has_lists
+    # If no configs have lists, they're all already expanded
+    return True
 
 def load_json(json_path):
     """Load and expand JSON configuration if needed"""
-    from utils.mixing_utils import expand_mix_config
-    
     json_text = json_path.read_text()
     configs = json.loads(json_text)
     
-    if is_already_expanded(configs):
-        return configs
+    # Only expand mixing configurations, not stage1 or resampler
+    if json_path.name == 'mix.json':
+        from utils.mixing_utils import expand_mix_config
+        if is_already_expanded(configs):
+            return configs
+        else:
+            return expand_mix_config(json_path)
     else:
-        return expand_mix_config(json_path)
+        # For non-mixing configs, just return as-is
+        return configs
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):
     """Find a matching JSON entry from configuration list"""
@@ -315,10 +392,11 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
         print(f"\nProcessing entry {i+1}/{len(matching_configs)}: {config.get('desc', 'Unknown')}")
         
         # Check required fields before calling process_single_entry
-        for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
-            if not config.get(req):
-                print(f"Warning: Missing required field {req}, skipping entry")
-                continue
+        try:
+            validate_required_fields(config)
+        except SystemExit as e:
+            print(f"Warning: {e}, skipping entry")
+            continue
         
         # Use the existing process_single_entry function
         process_single_entry(config, args)
