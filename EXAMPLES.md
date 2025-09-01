@@ -96,13 +96,13 @@ Create job definitions using JSON configuration files:
 **Usage:**
 ```bash
 # Create job definition from JSON for 1st entry
-json2jobdef.py --json $MUSE_WORK_DIR/Production/data/stage1.json --index 0
+json2jobdef.py --json Production/data/stage1.json --index 0
 
 # Create job definition from JSON for a pair of desc and dsconf
-json2jobdef.py --json $MUSE_WORK_DIR/Production/data/stage1.json --desc POT_Run1_a --dsconf MDC2020ba
+json2jobdef.py --json Production/data/stage1.json --desc POT_Run1_a --dsconf MDC2020ba
 
 # Create job definitions from JSON for all enrties that match dsconf
-json2jobdef.py --json $MUSE_WORK_DIR/Production/data/stage1.json --dsconf MDC2020ba
+json2jobdef.py --json Production/data/stage1.json --dsconf MDC2020ba
 
 ```
 
@@ -116,69 +116,21 @@ json2jobdef.py --json $MUSE_WORK_DIR/Production/data/stage1.json --dsconf MDC202
 For more control, use the `jobdef.py` utility directly:
 
 ```bash
-# Basic job definition creation
-./utils/jobdef.py --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh \
-    --dsconf MDC2020az --desc CosmicCORSIKALow --dsowner mu2e \
-    --embed Production/JobConfig/cosmic/S2Resampler.fcl
+# Stage-1 example
 
-# With run number and events per job
-python3 utils/jobdef.py --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh \
-    --dsconf MDC2020az --desc CosmicCORSIKALow --dsowner mu2e \
-    --embed Production/JobConfig/cosmic/S2Resampler.fcl \
-    --run-number 1203 --events-per-job 500000
+jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020av/setup.sh \
+	--dsconf MDC2020av --desc ExtractedCRY --dsowner mu2e \
+	--run-number 1205 --events-per-job 500000 \
+	--include Production/JobConfig/cosmic/ExtractedCRY.fcl
 
-# Mixing job with auxiliary inputs
-python3 utils/jobdef.py --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh \
-    --dsconf MDC2020az --desc MixingJob --dsowner mu2e \
-    --embed Production/JobConfig/mixing/Mix.fcl \
-    --auxinput "1:physics.filters.MuBeamFlashMixer.fileNames:mubeam.txt" \
-    --auxinput "25:physics.filters.EleBeamFlashMixer.fileNames:elebeam.txt"
+# Resampler example
+json2jobdef.py --json Production/data/resampler.json --index 0 --verbose # to get a command example
+jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ap/setup.sh \
+	--dsconf MDC2020ap --desc RMCFlatGammaStops --dsowner mu2e \
+	--run-number 1202 --events-per-job 1000000 \
+	--auxinput 1:physics.filters.TargetStopResampler.fileNames:inputs.txt --embed template.fcl
+
 ```
-
-### C. FCL Template and Overrides
-
-The system now uses a smart template approach that creates a `template.fcl` file containing:
-
-```fcl
-#include "Production/JobConfig/cosmic/ExtractedCRY.fcl"
-services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
-```
-
-**Key Benefits:**
-- **No FCL expansion**: Base FCL files are not expanded, keeping templates clean
-- **Overrides included**: FCL overrides are directly embedded in the template
-- **Minimal templates**: `template.fcl` contains just the include directive + overrides
-- **Perfect parity**: Python and Perl versions produce identical output
-
-**How it works:**
-1. **Template creation**: `write_fcl_template()` creates `template.fcl` with include + overrides
-2. **Embedding**: `--embed template.fcl` embeds this content into the final `mu2e.fcl`
-3. **Result**: Clean, minimal FCL files with overrides included but base FCL not expanded
-
-## 2. FCL Configuration Generation
-
-### A. New Template-Based Approach
-
-The system now uses a smart template approach that creates minimal, clean FCL files:
-
-**Template Creation:**
-```python
-# The write_fcl_template() function creates template.fcl with:
-#include "Production/JobConfig/cosmic/ExtractedCRY.fcl"
-services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
-```
-
-**Job Definition Generation:**
-```bash
-# Uses --embed template.fcl to embed the template content
-mu2ejobdef --setup /path/to/setup.sh --dsconf MDC2020av --desc ExtractedCRY \
-    --dsowner mu2e --embed template.fcl
-```
-
-**Result:**
-- **template.fcl**: Contains include directive + overrides (not expanded)
-- **mu2e.fcl**: Contains embedded template content with overrides included
-- **Clean output**: No base FCL expansion, just the template content embedded
 
 ### B. From Job Definition Files
 
@@ -202,32 +154,12 @@ Generate FCL files directly from dataset names:
 
 ```bash
 # Generate FCL from dataset name - automatically finds and downloads jobdef
-./fcl_maker.py --dataset dts.mu2e.RPCExternalPhysical.MDC2020az.art
+fcl_maker.py --dataset dts.mu2e.RPCExternalPhysical.MDC2020az.art
 
 # This will:
 # 1. Find the corresponding jobdef: cnf.mu2e.RPCExternalPhysical.MDC2020az.0.tar
 # 2. Download it using mdh copy-file
 # 3. Generate: cnf.mu2e.RPCExternalPhysical.MDC2020az.0.fcl
-```
-
-**Example Output:**
-```fcl
-#include "Production/JobConfig/primary/RPCExternalPhysical.fcl"
-services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
-physics.filters.TargetPiStopResampler.mu2e.MaxEventsToSkip: 10636
-
-#----------------------------------------------------------------
-# Code added by mu2ejobfcl for job index 0:
-source.firstRun: 1202
-source.maxEvents: 1000000
-source.firstSubRun: 0
-physics.filters.TargetPiStopResampler.fileNames: [
-    "xroot://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/mu2e/tape/phy-sim/sim/mu2e/PhysicalPionStops/MDC2020ay/art/be/25/sim.mu2e.PhysicalPionStops.MDC2020ay.001202_00001637.art"
-]
-outputs.PrimaryOutput.fileName: "dts.mu2e.RPCExternalPhysical.MDC2020az.001202_00000000.art"
-services.SeedService.baseSeed: 1
-# End code added by mu2ejobfcl:
-#----------------------------------------------------------------
 ```
 
 ## 3. Mixing Job Definitions
@@ -238,117 +170,47 @@ Mixing jobs combine signal events with pileup backgrounds from multiple sources:
 
 ```json
 {
-  "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art"],
-  "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
-  "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"], 
-  "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
-  "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
-  "mubeam_count": [1],
-  "elebeam_count": [25],
-  "neutrals_count": [50],
-  "mustop_count": [2],
-  "dsconf": ["MDC2020aw_best_v1_3"],
-  "pbeam": ["Mix1BB", "Mix2BB"],
-  "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh"],
-  "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
-  "merge_events": [2000],
-  "owner": ["mu2e"],
-  "inloc": ["tape"],
-  "outloc": ["tape"]
-}
+        "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art", "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art", "dts.mu2e.FlateMinus.MDC2020ar.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020aw_best_v1_3"],
+        "mixconf": [0],
+        "pbeam": ["Mix1BB", "Mix2BB"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "owner": ["mu2e"],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2,
+                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+            }
+        ]
+    }
 ```
 
 ### B. Generate Mixing Job Definitions
 
 ```bash
 # 1. Expand the mixing template to individual configurations
-./json_expander.py --json data/mix.json --output expanded_mix.json --mixing
+json_expander.py --json $MUSE_WORK_DIR/Production/data/mix.json \
+	--output expanded_mix.json
 
 # 2. Generate jobdef for a specific mixing configuration
-./json2jobdef.py --json data/mix.json --index 0
+json2jobdef.py --json data/mix.json --index 0
 
-# 3. Generate multiple jobdefs in batch
-for i in {0..7}; do
-  ./json2jobdef.py --json data/mix.json --index $i
-done
-```
-
-### C. What Mixing Jobs Generate
-
-Each mixing job definition creates:
-
-**1. Job Definition Tarball (`cnf.*.tar`)**
-- `jobpars.json`: Contains auxiliary files for maximum flexibility
-- FCL templates with mixing-specific configurations
-- Setup scripts and metadata
-
-**2. FCL Configuration (`cnf.*.fcl`)**
-- Uses only the **requested counts** from JSON (e.g., 25 elebeam files)
-- Includes proper `xroot://` paths for grid access
-- Applies beam-specific configurations (OneBB.fcl, TwoBB.fcl)
-
-### D. Mixing Job Types
-
-Different `pbeam` configurations generate different mixing scenarios:
-
-- **`Mix1BB`**: Single bunch beam configuration → `OneBB.fcl`
-- **`Mix2BB`**: Two bunch beam configuration → `TwoBB.fcl`
-
-### E. Successful Mixing Examples
-
-#### MDC2020ba_best_v1_3 Configuration
-
-The following mixing configurations have been successfully tested and verified:
-
-```bash
-# After setting up the environment (see Environment Setup section above)
-# Generate all 8 mixing configurations for MDC2020ba_best_v1_3
-python3 json2jobdef.py --json ../Production/data/mix.json --dsconf MDC2020ba_best_v1_3
-```
-
-**Successfully Generated Configurations:**
-1. **ensembleMDS2bMix1BB** ✅
-2. **ensembleMDS2bMix2BB** ✅  
-3. **DIOtail95Mix1BB** ✅
-4. **DIOtail95Mix2BB** ✅
-5. **CePLeadingLogMix1BB** ✅
-6. **CePLeadingLogMix2BB** ✅
-7. **CeMLeadingLogMix1BB** ✅
-8. **CeMLeadingLogMix2BB** ✅
-
-**Example Output for DIOtail95Mix1BB:**
-```
-Processing configuration 2: DIOtail95Mix1BB
-Input data: dts.mu2e.DIOtail95.MDC2020at.art
-Merge events: 2000
-Pileup mixers:
-  MuBeam: 1 file
-  EleBeam: 25 files  
-  Neutrals: 50 files
-  MuStop: 2 files
-Generated: cnf.oksuzian.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.tar
-Generated: cnf.oksuzian.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.fcl
-```
-
-**Key Features Confirmed:**
-- ✅ **baseSeed handling** - No errors across all configurations
-- ✅ **MaxEventsToSkip** - Correctly propagated from template.fcl
-- ✅ **Merge factor calculation** - Accurate file selection based on event counts
-- ✅ **Auxiliary file handling** - Proper pileup file catalogs
-- ✅ **FCL generation** - Complete configurations ready for production
-
-## 4. JSON Configuration Expansion
-
-### A. Parameter Space Exploration
-
-Generate multiple job configurations from templates with parameter variations:
-
-```bash
-# Basic expansion - generate all combinations of list parameters
-./json_expander.py --json data/mix.json --output expanded_configs.json
-
-# With mixing-specific enhancements
-./json_expander.py --json data/mix.json --output mixing_configs.json --mixing
+# 3. Generate multiple jobdefs for specific dsconf
+json2jobdef.py --json Production/data/mix.json --dsconf MDC2020ba_best_v1_3
 ```
 
 ### B. Input Template Format
@@ -368,21 +230,6 @@ The input JSON can contain arrays for any parameter to create combinations:
 }
 ```
 
-### C. Production Workflow Integration
-
-```bash
-# 1. Generate all job configurations
-./json_expander.py --json campaign_template.json --output all_jobs.json --mixing
-
-# 2. Process each configuration
-for i in $(seq 0 23); do
-  python3 json2jobdef.py --json all_jobs.json --index $i
-done
-
-# 3. Create batch execution list
-ls cnf.*.tar > batch_jobdefs.txt
-```
-
 ## 5. Production Job Execution
 
 ### A. Basic Execution
@@ -395,10 +242,10 @@ Execute production workflows from job definition files:
 export fname=etc.mu2e.index.000.0000000.txt
 
 # Run a production job with dry-run mode
-./jobdefs_runner.py --jobdefs jobdefs_MDC2020aw.txt --ignore-jobdef-setup --dry-run --nevts 5
+jobdefs_runner --jobdefs jobdefs_list.json --dry-run --nevts 5
 ```
 
-### B. What `jobdefs_runner.py` Does
+### B. What `jobdefs_runner.py (jobdefs_runner - bash wrapper)` Does
 
 1. **Token Validation** - Verifies grid authentication
 2. **Job Parsing** - Extracts parameters from jobdefs file using the `fname` index
@@ -410,77 +257,33 @@ export fname=etc.mu2e.index.000.0000000.txt
 ### C. Command Line Options
 
 ```bash
-./jobdefs_runner.py --help
-
-Options:
-  --jobdefs JOBDEFS         Path to the jobdefs_*.txt file (required)
-  --ignore-jobdef-setup     Skip the SimJob environment setup
-  --dry-run                 Print commands without running pushOutput
-  --nevts NEVTS            Number of events to process (-1 for all)
-  --copy-input             Copy input files locally using mdh
+jobdefs_runner -h
+Usage: jobdefs_runner [options] --jobdefs <jobdefs_file>
+  --jobdefs   Path to job definitions file (required)
+  --copy-input        Copy input files using mdh
+  --dry-run          Print commands without actually running pushOutput
+  --nevts <n>        Number of events to process (-1 for all events)
 ```
 
 ### D. Example jobdefs File Format
 
-```text
-cnf.mu2e.RPCInternal.MDC2020aw.0.tar 2000 tape tape
-```
-
-Format: `{tarball_name} {total_jobs} {input_location} {output_location}`
-
-### E. Production Grid Usage
-
-For actual grid submission (without `--dry-run`):
-
-```bash
-# After setting up the environment (see Environment Setup section above)
-# Production execution
-export fname=etc.mu2e.index.000.0000042.txt  # Job index from grid system
-./jobdefs_runner.py --jobdefs jobdefs_MDC2020aw.txt --nevts -1
-
-# This will:
-# 1. Process all events (-1 means no limit)
-# 2. Generate output .art files
-# 3. Automatically run pushOutput to submit to SAM
-# 4. Handle log file management
-```
-
-## 6. Advanced Examples
-
-### A. Multi-job Production Setup
-
 ```json
-[
   {
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
-    "fcl": "Production/JobConfig/beam/BeamResampler.fcl",
-    "dsconf": "MDC2020az",
-    "desc": "BeamResampling",
-    "outloc": "tape",
-    "owner": "mu2e",
-    "njobs": 100,
-    "run": 1001,
-    "events": 1000000,
-    "input_data": "sim.mu2e.BeamData.MDC2020aa.art"
-  },
-  {
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
-    "fcl": "Production/JobConfig/cosmic/CosmicResampler.fcl",
-    "dsconf": "MDC2020az", 
-    "desc": "CosmicResampling",
-    "outloc": "tape",
-    "owner": "mu2e",
-    "njobs": 50,
-    "run": 1002,
-    "events": 500000,
-    "input_data": "sim.mu2e.CosmicData.MDC2020aa.art"
+    "tarball": "cnf.mu2e.CeMLeadingLogMix2BB.MDC2020ba_best_v1_3.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "dig.mu2e.*.art",
+        "location": "tape"
+      }
+    ]
   }
-]
 ```
 
 ### B. Custom FCL Overrides
 
-The new template-based approach handles FCL overrides elegantly:
+Template-based approach handles FCL overrides:
 
 ```json
 {
@@ -531,15 +334,6 @@ which mu2ejobdef
 python3 -c "import samweb_client; print('samweb_client is available')"
 ```
 
-#### baseSeed Errors
-
-**Problem**: `can't obtain string from nil` during mu2e execution
-```bash
-# Solution: This has been fixed in the current version
-# The tools now correctly handle SeedService.baseSeed
-# Verify with: grep "baseSeed" cnf.*.fcl
-```
-
 #### File Access Issues
 
 **Problem**: `mdh: command not found`
@@ -570,104 +364,9 @@ cd test
 1. **Generate job definitions** using both Python (`json2jobdef.py`) and Perl (`mu2ejobdef`) tools
 2. **Compare outputs** for byte-for-byte parity between implementations
 3. **Test multiple configurations** from stage1, resampler, and mixing job types
-4. **Clean environment** by removing previous test outputs before each run
 
 ### C. Test Coverage
 
 - **Stage1 Jobs**: 5 configurations (cosmic, beam, etc.)
 - **Resampler Jobs**: 23 configurations (various resampling scenarios)
 - **Mixing Jobs**: 32 configurations (different mixing combinations)
-
-## 9. Key Features
-
-### A. Production-Ready Tools
-
-- ✅ **Complete mixing job support** with auxiliary file catalogs
-- ✅ **JSON-based configuration** with parameter expansion
-- ✅ **XrootD path generation** for proper file access
-- ✅ **Production parity** verified against existing production tools
-- ✅ **Debugging support** with `--no-cleanup` option
-- ✅ **Environment setup** with proper Mu2e tools integration
-- ✅ **Smart FCL templates** with `--embed template.fcl` approach
-- ✅ **Perfect parity testing** between Python and Perl implementations
-
-### B. Parity Testing
-
-The Python implementation has been thoroughly tested for parity with the Perl `mu2ejobdef` tool:
-
-```bash
-# Run parity test to verify Python and Perl versions produce identical output
-python3 parity_test.py --json first_entry.json
-
-# This will:
-# 1. Generate job definition using Python json2jobdef.py
-# 2. Generate job definition using Perl mu2ejobdef
-# 3. Compare both outputs for byte-for-byte parity
-# 4. Report success/failure with detailed error information
-```
-
-**Parity Test Results:**
-- ✅ **jobpars.json**: Identical content between Python and Perl versions
-- ✅ **mu2e.fcl**: Identical content between Python and Perl versions  
-- ✅ **Template handling**: Both use `--embed template.fcl` approach
-- ✅ **FCL overrides**: Correctly applied in both versions
-- ✅ **Environment handling**: Both versions work with same Mu2e setup
-
-**Running All Parity Tests:**
-
-```bash
-# After setting up the environment (see Environment Setup section above)
-# Navigate to test directory and run all parity tests
-cd test
-./parity_test.sh
-
-# This script automatically:
-# - Runs parity tests on stage1.json (5 configurations)
-# - Runs parity tests on resampler.json (23 configurations)  
-# - Runs parity tests on mix.json (32 configurations)
-# - Executes compare_tarballs.sh to show results
-```
-
-**Running Individual Parity Tests:**
-
-```bash
-# Navigate to test directory first
-cd test
-
-# Stage1 jobs only
-python parity_test.py --json ../Production/data/stage1.json
-
-# Resampler jobs only  
-python parity_test.py --json ../Production/data/resampler.json
-
-# Mixing jobs only
-python parity_test.py --json ../Production/data/mix.json
-
-# Check results
-./compare_tarballs.sh
-```
-
-**What This Does:**
-- **Automated testing**: `parity_test.sh` runs all tests in sequence
-- **Comprehensive coverage**: Tests stage1 (5 configs), resampler (23 configs), and mixing (32 configs) jobs
-- **Automatic comparison**: Runs `compare_tarballs.sh` to show all results
-- **Organized output**: Creates test/python/ and test/perl/ directories for easy comparison
-- **Environment handling**: Automatically works with different SimJob environments
-
-### B. Successfully Tested Workflows
-
-- ✅ **Complete mixing job support** with auxiliary file catalogs
-- ✅ **Mixing jobdef generation** from JSON templates
-- ✅ **FCL generation** with correct auxiliary file counts  
-- ✅ **JSON expansion** for parameter space exploration
-- ✅ **XrootD path generation** for proper file access
-- ✅ **Production parity** verified against existing production tools
-- ✅ **Batch processing** for production campaigns
-- ✅ **Jobpars.json verification** against production files
-- ✅ **MDC2020ba_best_v1_3** mixing configurations (all 8 types)
-- ✅ **baseSeed handling** - No more mu2e execution errors
-- ✅ **Environment integration** with muse setup ops
-- ✅ **Verbose output control** - `--verbose` shows mu2ejobdef commands without SAM API noise
-- ✅ **Clean logging** - Suppressed external library debug messages for focused output
-
-The Python implementations provide complete production functionality with better maintainability and debugging capabilities. All mixing configurations for MDC2020ba_best_v1_3 have been successfully tested and verified.
