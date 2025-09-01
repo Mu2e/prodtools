@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Add parent directory to path to import json2jobdef
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from json2jobdef import process_single_entry, load_json, find_json_entry
+from utils.json2jobdef import process_single_entry, load_json, find_json_entry
 
 # File patterns for job definition outputs
 JOBDEF_FILE_PATTERNS = ['cnf.*.0.tar', 'cnf.*.0.fcl']
