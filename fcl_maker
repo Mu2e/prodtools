@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Simple shell wrapper for fcl_maker.py
+# Sets up Mu2e environment and calls the Python script
+
+# Check required arguments
+if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    echo "Usage: $0 [options]"
+    echo "  --dataset <dataset>    Dataset name (required)"
+    echo "  --local-jobdef <file>  Local job definition file"
+    echo "  --index <n>            Job index"
+    echo "  --default-proto <proto> Default protocol"
+    echo "  --default-loc <loc>    Default location"
+    echo ""
+    echo "Example:"
+    echo "  $0 --dataset cnf.mu2e.RPCInternalPhysical.MDC2020az.tar"
+    echo "  $0 --local-jobdef jobdef.tar --index 0"
+    exit 1
+fi
+
+# Find and execute the Python script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/utils/fcl_maker.py"
+
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+    echo "Error: Python script not found at $PYTHON_SCRIPT"
+    exit 1
+fi
+
+# Execute the Python script with all arguments
+exec python3 "$PYTHON_SCRIPT" "$@"

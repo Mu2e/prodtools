@@ -1,21 +1,23 @@
 #!/bin/bash
 
-# Simple shell wrapper for jobdefs_runner.py
+# Simple shell wrapper for jobdefs_expander.py
 # Sets up Mu2e environment and calls the Python script
 
 # Check required arguments
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    echo "Usage: $0 [options] --jobdefs <jobdefs_file>"
-    echo "  --jobdefs   Path to job definitions file (required)"
-    echo "  --copy-input        Copy input files using mdh"
-    echo "  --dry-run          Print commands without actually running pushOutput"
-    echo "  --nevts <n>        Number of events to process (-1 for all events)"
+    echo "Usage: $0 [options]"
+    echo "  --map <json_file>      Input jobdef JSON file (required)"
+    echo "  --prod                 Create SAM index definitions"
+    echo ""
+    echo "Example:"
+    echo "  $0 --map jobdefs_list.json"
+    echo "  $0 --map jobdefs_list.json --prod"
     exit 1
 fi
 
 # Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_SCRIPT="$SCRIPT_DIR/utils/jobdefs_runner.py"
+PYTHON_SCRIPT="$SCRIPT_DIR/utils/mkidxdef.py"
 
 if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     echo "Error: Python script not found at $PYTHON_SCRIPT"

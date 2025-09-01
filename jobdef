@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# Simple shell wrapper for jobdef.py
+# Check required arguments
+if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    echo "Usage: $0 [options]"
+    echo "  --setup <setup.sh>     Path to setup script (required)"
+    echo "  --dsconf <dsconf>      Dataset configuration (required)"
+    echo "  --desc <desc>          Description (required)"
+    echo "  --dsowner <owner>      Dataset owner (required)"
+    echo "  --run-number <n>       Run number"
+    echo "  --events-per-job <n>   Events per job"
+    echo "  --embed <fcl>          Embed FCL file"
+    echo "  --quiet                Suppress verbose output"
+    echo ""
+    echo "Example:"
+    echo "  $0 --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020av/setup.sh \\"
+    echo "      --dsconf MDC2020av --desc ExtractedCRY --dsowner mu2e \\"
+    echo "      --run-number 1205 --events-per-job 500000 --embed template.fcl"
+    exit 1
+fi
+
+# Find and execute the Python script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/utils/jobdef.py"
+
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+    echo "Error: Python script not found at $PYTHON_SCRIPT"
+    exit 1
+fi
+
+# Execute the Python script with all arguments
+exec python3 "$PYTHON_SCRIPT" "$@"

@@ -9,8 +9,17 @@ jobpars.json
 template.fcl
 inputs.txt
 
-# Test directories
-test/
+# Test directories (ignore outputs, allow scripts)
+test/*.root
+test/*.art
+test/*.tar
+test/*.fcl
+test/jobpars.json
+test/template.fcl
+test/inputs.txt
+test/*Cat.txt
+test/python/
+test/perl/
 temp_compare/
 temp/
 

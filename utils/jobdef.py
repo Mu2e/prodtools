@@ -13,15 +13,19 @@ Features implemented:
   - Output file name processing and override logic
   - SeedService detection via fhicl-get
 """
+import os
+import sys
+# Add parent directory to path when run directly
+if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
-import os
 import subprocess
 from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
-from .job_common import Mu2eFilename
+from utils.job_common import Mu2eFilename
 
 # Constants matching Perl mu2ejobdef exactly
 FILENAME_JSON = 'jobpars.json'
