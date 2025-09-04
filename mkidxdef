@@ -5,13 +5,13 @@
 
 # Check required arguments
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    echo "Usage: $0 [options]"
-    echo "  --map <json_file>      Input jobdef JSON file (required)"
+    echo "Usage: mkidxdef [options]"
+    echo "  --jobdefs <json_file>  Input jobdef JSON file (required)"
     echo "  --prod                 Create SAM index definitions"
     echo ""
     echo "Example:"
-    echo "  $0 --map jobdefs_list.json"
-    echo "  $0 --map jobdefs_list.json --prod"
+    echo "  mkidxdef --jobdefs jobdefs_list.json"
+    echo "  mkidxdef --jobdefs jobdefs_list.json --prod"
     exit 1
 fi
 

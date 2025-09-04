@@ -5,13 +5,13 @@
 
 # Check required arguments
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    echo "Usage: $0 [options]"
+    echo "Usage: jsonexpander [options]"
     echo "  --json <json_file>     JSON configuration file (required)"
     echo "  --output <file>        Output file"
     echo "  --verbose              Enable verbose output"
     echo ""
     echo "Example:"
-    echo "  $0 --json config.json --output expanded_config.json"
+    echo "  jsonexpander --json config.json --output expanded_config.json"
     exit 1
 fi
 

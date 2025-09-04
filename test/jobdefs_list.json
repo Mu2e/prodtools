@@ -233,5 +233,49 @@
         "location": "tape"
       }
     ]
+  },
+  {
+    "tarball": "cnf.mu2e.CeEndpointMix1BB.MDC2020aw_best_v1_3.0.tar",
+    "njobs": 1000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "dig.mu2e.*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.POT_Run1_a.MDC2025ab.0.tar",
+    "njobs": 25000,
+    "inloc": "none",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "disk"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.CosmicDSStopsCRY.MDC2025ab.0.tar",
+    "njobs": 10000,
+    "inloc": "none",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.ExtractedCRY.MDC2025ab.0.tar",
+    "njobs": 20000,
+    "inloc": "none",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
   }
 ]

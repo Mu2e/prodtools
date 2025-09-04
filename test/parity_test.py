@@ -29,8 +29,18 @@ def move_jobdef_files(target_dir: Path):
                 shutil.move(str(file_path), str(target_dir / file_path.name))
                 print(f"    Moved {file_path.name} to {target_dir.name}/")
 
-def create_jobdef(config):
+def create_jobdef(config, json_file_path):
     """Create jobdef for a single configuration using json2jobdef."""
+    
+    # Print the equivalent json2jobdef command that would be run
+    config_index = config.get('index', 0)
+    dsconf = config.get('dsconf', '')
+    
+    json2jobdef_cmd = f"json2jobdef --json {json_file_path} --index {config_index}"
+    if dsconf:
+        json2jobdef_cmd += f" --dsconf {dsconf}"
+    
+    print(f"  🐍 json2jobdef command: {json2jobdef_cmd}")
     
     # Call process_single_entry directly with JSON output
     result = process_single_entry(config, json_output=True, no_cleanup=True)
@@ -100,7 +110,7 @@ def create_jobdefs_from_json(json_file, index=None):
             Path('template.fcl').unlink()
             print(f"  🧹 Cleaned up template.fcl from previous configuration")
         
-        if create_jobdef(config):
+        if create_jobdef(config, json_file):
             print(f"✅ Successfully processed configuration {index}: {config['desc']}")
             return True
         else:
@@ -117,7 +127,7 @@ def create_jobdefs_from_json(json_file, index=None):
                 Path('template.fcl').unlink()
                 print(f"  🧹 Cleaned up template.fcl from previous configuration")
             
-            if create_jobdef(config):
+            if create_jobdef(config, json_file):
                 success_count += 1
         
         print(f"{success_count}/{total_count} jobdefs successfully processed")
@@ -130,13 +140,13 @@ def main():
         epilog="""
 Examples:
   # Test all configurations in mix.json
-  python parity_test.py --json ../../Production/data/mix.json
+  python parity_test.py --json ../data/mix.json
   
   # Test only the first configuration (index 0)
-  python parity_test.py --json ../../Production/data/mix.json --index 0
+  python parity_test.py --json ../data/mix.json --index 0
   
   # Test only the third configuration (index 2)
-  python parity_test.py --json ../../Production/data/mix.json --index 2
+  python parity_test.py --json ../data/mix.json --index 2
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )

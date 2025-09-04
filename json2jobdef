@@ -3,18 +3,38 @@
 # Simple shell wrapper for json2jobdef.py
 # Sets up Mu2e environment and calls the Python script
 
-# Check required arguments
-if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    echo "Usage: $0 [options]"
+# Check if help is requested - pass through to Python script for complete help
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    # Find and execute the Python script with help
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PYTHON_SCRIPT="$SCRIPT_DIR/utils/json2jobdef.py"
+    
+    if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+        echo "Error: Python script not found at $PYTHON_SCRIPT"
+        exit 1
+    fi
+    
+    exec python3 "$PYTHON_SCRIPT" "$@"
+fi
+
+# Check for no arguments
+if [[ $# -eq 0 ]]; then
+    echo "Usage: json2jobdef [options]"
     echo "  --json <json_file>     Path to JSON configuration file (required)"
     echo "  --index <n>            Index of configuration to process"
     echo "  --dsconf <dsconf>      Override dataset configuration"
     echo "  --verbose              Enable verbose output"
     echo "  --no-cleanup           Keep temporary files"
+    echo "  --jobdefs <filename>   Custom filename for jobdefs list"
+    echo "  --pushout              Enable SAM pushOutput"
+    echo "  --json-output          Output structured JSON"
     echo ""
     echo "Example:"
-    echo "  $0 --json config.json --index 0"
-    echo "  $0 --json mix.json --dsconf MDC2020ba_best_v1_3"
+    echo "  json2jobdef --json config.json --index 0"
+    echo "  json2jobdef --json mix.json --dsconf MDC2020ba_best_v1_3"
+    echo "  json2jobdef --json data/stage1.json --jobdefs my_jobdefs.json"
+    echo ""
+    echo "For complete help with all options, use: json2jobdef --help"
     exit 1
 fi
 

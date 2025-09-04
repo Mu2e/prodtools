@@ -5,16 +5,20 @@
 
 # Check required arguments
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    echo "Usage: $0 [options]"
-    echo "  --dataset <dataset>    Dataset name (required)"
+    echo "Usage: fcldump [options]"
+    echo "  --dataset <dataset>    Dataset name"
+    echo "  --target <file>        Target output file (e.g., dig.mu2e.*.001202_00000428.art)"
     echo "  --local-jobdef <file>  Local job definition file"
     echo "  --index <n>            Job index"
-    echo "  --default-proto <proto> Default protocol"
-    echo "  --default-loc <loc>    Default location"
+    echo "  --proto <proto>        Default protocol (default: root)"
+    echo "  --loc <loc>            Default location (default: tape)"
     echo ""
-    echo "Example:"
-    echo "  $0 --dataset cnf.mu2e.RPCInternalPhysical.MDC2020az.tar"
-    echo "  $0 --local-jobdef jobdef.tar --index 0"
+    echo "Examples:"
+    echo "  fcldump --dataset dts.mu2e.RPCInternalPhysical.MDC2020az.art"
+    echo "  fcldump --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art"
+    echo "  fcldump --local-jobdef jobdef.tar --index 0"
+    echo ""
+    echo "Note: Either --dataset, --target, or --local-jobdef must be provided"
     exit 1
 fi
 

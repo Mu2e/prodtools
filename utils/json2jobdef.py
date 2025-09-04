@@ -213,7 +213,7 @@ def main():
     p.add_argument('--pushout', action='store_true', help='Enable SAM pushOutput')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
-    p.add_argument('--jobdefs-list', help='Custom filename for jobdefs list (default: jobdefs_list.txt)')
+    p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.txt)')
     p.add_argument('--json-output', action='store_true', help='Output structured JSON instead of human-readable text')
     args = p.parse_args()
 
@@ -225,14 +225,14 @@ def main():
     # If both desc and dsconf are specified, process single entry
     if args.desc and args.dsconf and args.index is None:
         config = find_json_entry(expanded_configs, args.desc, args.dsconf, None)
-        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs_list)
+        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs)
     # If dsconf is specified but no desc and no index, process all entries for that dsconf
     elif args.dsconf and args.desc is None and args.index is None:
         process_all_for_dsconf(expanded_configs, args.dsconf, args)
     # If only index is specified, process single entry by index
     elif args.index is not None and args.desc is None and args.dsconf is None:
         config = find_json_entry(expanded_configs, None, None, args.index)
-        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs_list)
+        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs)
     else:
         # No filtering specified, show usage
         sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")
@@ -241,7 +241,7 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     """Process a single configuration entry (original behavior)"""
     validate_required_fields(config)
     config['owner'] = config.get('owner', os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e'))
-    config['inloc'] = config.get('inloc', 'tape')
+    config['inloc'] = config.get('inloc', 'none')
     config['njobs'] = config.get('njobs', -1)
     
     # Store the original FCL path for source type detection
@@ -399,7 +399,7 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             continue
         
         # Use the existing process_single_entry function
-        process_single_entry(config, args)
+        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs)
         
         # Clean up template.fcl for next iteration (since process_single_entry cleans up)
         if Path('template.fcl').exists():

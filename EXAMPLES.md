@@ -6,7 +6,7 @@ This document provides practical examples for using the Python-based Mu2e produc
 
 - **[Environment Setup](#environment-setup)** - Required Mu2e environment configuration
 - **[Job Definition Creation](#1-creating-job-definitions)** - Generate job definition tarballs
-- **[FCL Generation](#2-fcl-configuration-generation)** - Create FCL files from jobdefs
+- **[FCL Generation](#2-fcl-configuration-generation)** - Create FCL files from jobdefs or target files
 - **[Mixing Jobs](#3-mixing-job-definitions)** - Complete guide to mixing jobs
 - **[JSON Expansion](#4-json-configuration-expansion)** - Parameter space exploration
 - **[Production Execution](#5-production-job-execution)** - Run production workflows
@@ -47,7 +47,8 @@ This script automatically:
 # Production tools
 json2jobdef --json config.json --index 0
 fcldump --dataset dts.mu2e.RPCExternal.MDC2020az.art
-jobrunner --jobdefs jobdefs.txt --dry-run
+runjobdef --jobdefs jobdefs.txt --dry-run
+runfcl --fcl template.fcl --nevents 1000 --dry-run
 
 # Test tools (run from test/ directory)
 cd test
@@ -61,8 +62,9 @@ cd test
 The `prodtools` package provides implementations of Mu2e production tools:
 
 - `json2jobdef` - Create job definition tarballs from JSON configs
-- `fcldump` - Generate FCL configurations from jobdefs or datasets
-- `jobrunner` - Execute production jobs from job definitions
+- `fcldump` - Generate FCL configurations from jobdefs, datasets, or target files
+- `runjobdef` - Execute production jobs from job definitions
+- `runfcl` - Execute jobs from FCL templates (one-in-one-out processing)
 - `mkidxdef` - Create SAM index definitions
 - `jsonexpander` - Generate parameter combinations from templates
 - `jobdef` - Create job definitions directly (low-level tool)
@@ -98,13 +100,13 @@ Create job definitions using JSON configuration files:
 **Usage:**
 ```bash
 # Create job definition from JSON for 1st entry
-json2jobdef --json Production/data/stage1.json --index 0
+json2jobdef --json data/stage1.json --index 0
 
 # Create job definition from JSON for a pair of desc and dsconf
-json2jobdef --json Production/data/stage1.json --desc POT_Run1_a --dsconf MDC2020ba
+json2jobdef --json data/stage1.json --desc POT_Run1_a --dsconf MDC2020ba
 
 # Create job definitions from JSON for all enrties that match dsconf
-json2jobdef --json Production/data/stage1.json --dsconf MDC2020ba
+json2jobdef --json data/stage1.json --dsconf MDC2020ba
 
 ```
 
@@ -126,7 +128,7 @@ jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020av/setup.sh
 	--include Production/JobConfig/cosmic/ExtractedCRY.fcl
 
 # Resampler example
-json2jobdef --json Production/data/resampler.json --index 0 --verbose # to get a command example
+json2jobdef --json data/resampler.json --index 0 --verbose # to get a command example
 jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ap/setup.sh \
 	--dsconf MDC2020ap --desc RMCFlatGammaStops --dsowner mu2e \
 	--run-number 1202 --events-per-job 1000000 \
@@ -152,16 +154,50 @@ print(fcl_content)
 
 ### B. Quick FCL Generation with `fcldump`
 
-Generate FCL files directly from dataset names:
+Generate FCL files directly from dataset names or specific target files:
 
 ```bash
 # Generate FCL from dataset name - automatically finds and downloads jobdef
 fcldump --dataset dts.mu2e.RPCExternalPhysical.MDC2020az.art
 
+# Generate FCL for a specific output file (finds the job that produces it)
+fcldump --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art
+
+# Generate FCL from local job definition file
+fcldump --local-jobdef cnf.mu2e.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.tar --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art
+
 # This will:
 # 1. Find the corresponding jobdef: cnf.mu2e.RPCExternalPhysical.MDC2020az.0.tar
-# 2. Download it using mdh copy-file
+# 2. Download it using mdh copy-file (unless using --local-jobdef)
 # 3. Generate: cnf.mu2e.RPCExternalPhysical.MDC2020az.0.fcl
+# 4. When using --target, automatically finds the correct job index and input files
+```
+
+### C. Understanding the `--target` Option
+
+The `--target` option allows you to generate FCL configurations for specific output files without knowing the job index. This is particularly useful for:
+
+- **Debugging missing files** - Generate FCL for a specific output to understand what went wrong
+- **Reproducing specific jobs** - Get the exact configuration that produced a particular file
+- **Validation** - Verify that a job definition can produce the expected output
+
+**How it works:**
+1. **Parses the target filename** - Extracts sequencer (e.g., `001202_00000428`) from the target
+2. **Finds the job index** - Maps the sequencer to the corresponding job index in the job definition
+3. **Generates specific FCL** - Creates configuration with the exact input files and settings for that job
+4. **Validates output** - Ensures the target file is actually produced by the found job
+
+**Example with missing file:**
+```bash
+# The file dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art is missing
+# Use fcldump to understand what should have produced it:
+fcldump --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art --proto root --loc tape
+
+# This will:
+# - Find job index 180 (from sequencer 001202_00000428)
+# - Generate FCL with the specific input file: dts.mu2e.DIOtail95.MDC2020at.001202_00000428.art
+# - Include all necessary pileup mixing files
+# - Set correct output filenames with the specific sequencer
 ```
 
 ## 3. Mixing Job Definitions
@@ -205,14 +241,14 @@ Mixing jobs combine signal events with pileup backgrounds from multiple sources:
 
 ```bash
 # 1. Expand the mixing template to individual configurations
-jsonexpander --json $MUSE_WORK_DIR/Production/data/mix.json \
+jsonexpander --json data/mix.json \
 	--output expanded_mix.json
 
 # 2. Generate jobdef for a specific mixing configuration
 json2jobdef.py --json data/mix.json --index 0
 
 # 3. Generate multiple jobdefs for specific dsconf
-json2jobdef.py --json Production/data/mix.json --dsconf MDC2020ba_best_v1_3
+json2jobdef.py --json data/mix.json --dsconf MDC2020ba_best_v1_3
 ```
 
 ### B. Input Template Format
@@ -234,7 +270,29 @@ The input JSON can contain arrays for any parameter to create combinations:
 
 ## 5. Production Job Execution
 
-### A. Basic Execution
+### A. Template-Based Execution (`runfcl`)
+
+Execute jobs directly from FCL templates (one-in-one-out processing):
+
+```bash
+# Basic usage - process a single file with a template
+runfcl --fcl template.fcl --nevents 1000
+
+# With database configuration
+runfcl --fcl template.fcl --release an --dbpurpose best --dbversion v1_3
+
+# Dry run to test
+runfcl --fcl template.fcl --nevents 1000 --dry-run
+```
+
+**What `runfcl` does:**
+1. **Reads input file** from `fname` environment variable
+2. **Generates FCL** from template with database and output configurations
+3. **Runs Mu2e** with the generated FCL
+4. **Handles outputs** and creates `output.txt` for SAM registration
+5. **Runs pushOutput** for file registration
+
+### B. Job Definition Execution (`runjobdef`)
 
 Execute production workflows from job definition files:
 
@@ -244,10 +302,10 @@ Execute production workflows from job definition files:
 export fname=etc.mu2e.index.000.0000000.txt
 
 # Run a production job with dry-run mode
-jobrunner --jobdefs jobdefs_list.json --dry-run --nevts 5
+runjobdef --jobdefs jobdefs_list.json --dry-run --nevts 5
 ```
 
-### B. What `jobrunner.py (jobrunner - bash wrapper)` Does
+### C. What `runjobdef` Does
 
 1. **Token Validation** - Verifies grid authentication
 2. **Job Parsing** - Extracts parameters from jobdefs file using the `fname` index
@@ -256,18 +314,18 @@ jobrunner --jobdefs jobdefs_list.json --dry-run --nevts 5
 5. **Job Execution** - Runs `mu2e` with the generated configuration
 6. **Output Management** - Handles output files and prepares for SAM submission
 
-### C. Command Line Options
+### D. Command Line Options
 
 ```bash
-jobrunner -h
-Usage: jobrunner [options] --jobdefs <jobdefs_file>
+runjobdef -h
+Usage: runjobdef [options] --jobdefs <jobdefs_file>
   --jobdefs   Path to job definitions file (required)
   --copy-input        Copy input files using mdh
   --dry-run          Print commands without actually running pushOutput
   --nevts <n>        Number of events to process (-1 for all events)
 ```
 
-### D. Example jobdefs File Format
+### E. Example jobdefs File Format
 
 ```json
   {

@@ -17,7 +17,7 @@ from utils.jobquery import Mu2eJobPars
 from utils.jobiodetail import Mu2eJobIO
 
 def main():
-    parser = argparse.ArgumentParser(description="Process some inputs.")
+    parser = argparse.ArgumentParser(description="Execute production jobs from job definitions.")
     parser.add_argument("--copy-input", action="store_true", help="Copy input files using mdh")
     parser.add_argument('--dry-run', action='store_true', help='Print commands without actually running pushOutput')
     parser.add_argument('--nevts', type=int, default=-1, help='Number of events to process (-1 for all events, default: -1)')
