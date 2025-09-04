@@ -47,5 +47,12 @@ if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     exit 1
 fi
 
+# Only setup Mu2e environment if not already set up
+if [ -z "$MUSE_WORK_DIR" ]; then
+    source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+    muse setup ops
+    muse setup SimJob
+fi
+
 # Execute the Python script with all arguments
 exec python3 "$PYTHON_SCRIPT" "$@"

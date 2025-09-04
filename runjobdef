@@ -10,6 +10,7 @@ SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 if [ -z "$MUSE_WORK_DIR" ]; then
     source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
     muse setup ops
+    muse setup SimJob
 fi
 
 # Run the Python script with all arguments
