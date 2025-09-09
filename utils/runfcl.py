@@ -102,8 +102,10 @@ def write_fcl_file(input_fname: str, args) -> tuple[str, list[str]]:
         dbversion = m.group("dbversion")  # 'v1_3'
         print("Extracted dbpurpose: %s, and dbversion: %s from a file"%(dbpurpose, dbversion))
 
-    # Update dsconf with args.release
-    dsconf = f"MDC2020{args.release}_{dbpurpose}_{dbversion}"
+    # Update dsconf with args.release if provided, otherwise keep original
+    if args.release:
+        dsconf = f"MDC2020{args.release}_{dbpurpose}_{dbversion}"
+    # else keep the original dsconf from filename
     # Build formatting context
     ctx = {
         'user': args.user,
@@ -147,8 +149,8 @@ def write_fcl_file(input_fname: str, args) -> tuple[str, list[str]]:
     # Derive FCL filename from first output
     print("out_files: %s"%out_files)
     first = out_files[0]
-    cfg_name = Path(first).stem
-    fcl_name = f"cnf.{cfg_name}.fcl"
+    # Replace any file type (nts, mcs, dig, etc.) with 'cnf' in the filename to follow 6-field convention
+    fcl_name = replace_file_fields(first, first_field="cnf", last_field="fcl")
     Path(fcl_name).write_text(fcl_content)
     logging.info(f"Written FCL: {fcl_name}")
     return fcl_name, out_files
@@ -157,10 +159,9 @@ def replace_file_fields(filename: str, first_field: str, last_field: str) -> str
     parts = filename.split('.')
     if len(parts) < 4:
         raise ValueError(f"Expected at least 4 dot-separated fields, got {len(parts)}: {filename!r}")
-    parts[3] = f"{parts[3]}-{parts[0]}"
+    # Replace first and last fields
     parts[0] = first_field
     parts[-1] = last_field
-
     return '.'.join(parts)
 
 def main():
@@ -191,7 +192,9 @@ def main():
         out_content += f'{args.outloc} {f} parents_{in_fname_base}\n'
 
     # In production mode, copy the job submission log file from jsb_tmp to LOGFILE_LOC.
-    LOGFILE_LOC = replace_file_fields(fcl_file, first_field="log", last_field="log")
+    # Generate log filename from the first output file (which includes sequence) instead of FCL file
+    first_output = out_fname_list[0]
+    LOGFILE_LOC = replace_file_fields(first_output, first_field="log", last_field="log")
 
     # Copy the jobsub log if JSB_TMP is defined
     jsb_tmp = os.getenv("JSB_TMP")

@@ -31,8 +31,10 @@ class Mu2eJobFCL(Mu2eJobBase):
         default_owner = os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e')
         self.owner = self.json_data.get('owner', default_owner)
         self.dsconf = self.json_data.get('dsconf', 'unknown')
-    
-
+        
+        # Read sequential_aux setting from job definition, default to False if not specified
+        tbs = self.json_data.get('tbs', {})
+        self.sequential_aux = tbs.get('sequential_aux', False)
     
     def _extract_fcl(self) -> str:
         """Extract mu2e.fcl from tar file."""
@@ -147,21 +149,37 @@ class Mu2eJobFCL(Mu2eJobBase):
             if nreq == 0:
                 nreq = len(infiles)
             
-            # Draw nreq "random" files without repetitions
-            sample = []
-            available_files = infiles.copy()
-            
-            for count in range(nreq):
-                if not available_files:
-                    break
+            if self.sequential_aux:
+                # Sequential selection with rollover (like primary inputs)
+                nf = len(infiles)
+                first = index * nreq
+                last = min(first + nreq - 1, nf - 1)
                 
-                # Deterministic random selection
-                rnd = self._my_random(index, *available_files)
-                file_index = rnd % len(available_files)
-                sample.append(available_files[file_index])
-                available_files.pop(file_index)
-           
-            result[dataset] = sample
+                if first >= nf:
+                    # Roll over: start from the beginning
+                    first = first % nf
+                    last = min(first + nreq - 1, nf - 1)
+                
+                if first > last:
+                    raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
+                
+                result[dataset] = infiles[first:last + 1]
+            else:
+                # Draw nreq "random" files without repetitions (original behavior)
+                sample = []
+                available_files = infiles.copy()
+                
+                for count in range(nreq):
+                    if not available_files:
+                        break
+                    
+                    # Deterministic random selection
+                    rnd = self._my_random(index, *available_files)
+                    file_index = rnd % len(available_files)
+                    sample.append(available_files[file_index])
+                    available_files.pop(file_index)
+               
+                result[dataset] = sample
         
         return result
     

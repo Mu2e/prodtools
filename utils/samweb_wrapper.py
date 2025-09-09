@@ -87,6 +87,19 @@ class SAMWebWrapper:
             print(f"Error listing definition files for {definition_name}: {e}")
             return []
     
+    def list_definitions(self) -> List[str]:
+        """List all definitions (equivalent to samweb list-definitions)."""
+        try:
+            result = self.client.listDefinitions()
+            
+            # Convert filter object to list if needed
+            if hasattr(result, '__iter__') and not isinstance(result, list):
+                return list(result)
+            return result
+        except Exception as e:
+            print(f"Error listing definitions: {e}")
+            return []
+    
     def get_metadata(self, filename: str) -> Dict:
         """Get metadata for a file (equivalent to samweb get-metadata)."""
         try:
@@ -168,6 +181,10 @@ def describe_definition(definition_name: str) -> str:
 def list_definition_files(definition_name: str) -> List[str]:
     """List files in a definition."""
     return get_samweb_wrapper().list_definition_files(definition_name)
+
+def list_definitions() -> List[str]:
+    """List all definitions."""
+    return get_samweb_wrapper().list_definitions()
 
 def get_metadata(filename: str) -> Dict:
     """Get metadata for a file."""

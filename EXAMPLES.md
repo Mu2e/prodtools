@@ -171,6 +171,7 @@ fcldump --local-jobdef cnf.mu2e.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.tar --targ
 # 2. Download it using mdh copy-file (unless using --local-jobdef)
 # 3. Generate: cnf.mu2e.RPCExternalPhysical.MDC2020az.0.fcl
 # 4. When using --target, automatically finds the correct job index and input files
+# 5. Sequential auxiliary input selection is controlled by the job definition (tbs.sequential_aux)
 ```
 
 ### C. Understanding the `--target` Option
@@ -311,6 +312,8 @@ runjobdef --jobdefs jobdefs_list.json --dry-run --nevts 5
 2. **Job Parsing** - Extracts parameters from jobdefs file using the `fname` index
 3. **File Download** - Downloads job definition tarball using `mdh copy-file`
 4. **FCL Generation** - Creates FCL with proper XrootD protocol for input files
+   - **Sequential auxiliary input selection** is controlled by the job definition (`tbs.sequential_aux`)
+   - **MaxEventsToSkip parameter** is automatically added for resampler jobs
 5. **Job Execution** - Runs `mu2e` with the generated configuration
 6. **Output Management** - Handles output files and prepares for SAM submission
 
@@ -341,7 +344,35 @@ Usage: runjobdef [options] --jobdefs <jobdefs_file>
   }
 ```
 
-### B. Custom FCL Overrides
+### B. Sequential Auxiliary Input Selection
+
+For resampler jobs, you can control how auxiliary input files are selected using the `sequential_aux` setting in your JSON configuration:
+
+```json
+{
+    "desc": "FlateMinus",
+    "dsconf": "MDC2025ba",
+    "fcl": "Production/JobConfig/primary/RMCFlatGammaStops.fcl",
+    "tbs": {
+        "auxin": {
+            "dts.mu2e.FlateMinus.MDC2025ba.art": [1, ["file1.art", "file2.art", "file3.art"]]
+        },
+        "sequential_aux": true
+    }
+}
+```
+
+**Sequential vs. Pseudo-Random Selection:**
+
+- **`"sequential_aux": true`** - Files are selected sequentially with rollover (job 0 gets file1, job 1 gets file2, job 2 gets file3, job 3 gets file1, etc.)
+- **`"sequential_aux": false`** (default) - Files are selected using deterministic pseudo-random selection
+
+**Benefits of Sequential Selection:**
+- **Predictable distribution** - Each file is used exactly the same number of times
+- **Better for testing** - Easier to reproduce specific input file combinations
+- **Rollover handling** - When job index exceeds file count, selection wraps around to the beginning
+
+### C. Custom FCL Overrides
 
 Template-based approach handles FCL overrides:
 

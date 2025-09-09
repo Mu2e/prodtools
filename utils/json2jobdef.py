@@ -66,8 +66,15 @@ def build_jobdef(config, job_args, json_output=False):
     # For mixing jobs, template.fcl is already created by build_pileup_args
     # For non-mixing jobs, create the template here
     fcl_path = config['fcl']
-    if 'pbeam' not in config:
+    job_type = determine_job_type(config)
+
+    if job_type != 'mixing':
         write_fcl_template(fcl_path, config.get('fcl_overrides', {}))
+    
+    # Add MaxEventsToSkip parameter for resampler jobs after template is written
+    if job_type == 'resampler':
+        with open('template.fcl', 'a') as f:
+            f.write(f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {config['_max_events_to_skip']}\n")
     
     # Build the Perl commands that would be equivalent (always build for potential display)
     cmd_parts = [
@@ -95,8 +102,7 @@ def build_jobdef(config, job_args, json_output=False):
     if logging.getLogger().level <= logging.DEBUG:
         print(f"🐪 mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
     
-    # Now create jobdef using the template.fcl (which contains analyzable content)
-    # Always create the tarball regardless of json_output setting
+    # Now create jobdef using the template.fcl
     create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=json_output)
     
     # Get the parfile name for both modes
@@ -256,11 +262,14 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     job_type = determine_job_type(config)
     
     if job_type == 'resampler':
-        # Resampler jobs: add MaxEventsToSkip parameter to template
-        nfiles, nevts = get_def_counts(config['input_data'])
-        skip = nevts // nfiles
-        with open('template.fcl', 'a') as f:
-            f.write(f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {skip}\n")
+        # Resampler jobs: calculate MaxEventsToSkip parameter
+        try:
+            nfiles, nevts = get_def_counts(config['input_data'])
+            skip = nevts // nfiles
+            # Store skip value for later addition to template
+            config['_max_events_to_skip'] = skip
+        except Exception as e:
+            print(f"Warning: Could not calculate MaxEventsToSkip for {config['input_data']}: {e}")
         job_args = ['--auxinput', f"{config.get('merge_factor',1)}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
         
     elif job_type == 'merge':

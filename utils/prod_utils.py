@@ -127,12 +127,21 @@ def get_def_counts(dataset, include_empty=False):
 def calculate_merge_factor(fields):
     """Calculate merge factor based on dataset counts and requested merge_events.
     
-    This matches the Perl logic: MERGE_FACTOR = MERGE_EVENTS/npevents + 1
+    If merge_factor is directly specified, use it.
+    Otherwise, calculate using: MERGE_FACTOR = MERGE_EVENTS/npevents + 1
     where npevents = nevts/nfiles (events per file)
     """
+    # If merge_factor is directly specified, use it
+    if 'merge_factor' in fields:
+        return fields['merge_factor']
+    
+    # Otherwise, calculate from merge_events
+    if 'merge_events' not in fields:
+        raise KeyError("Either 'merge_factor' or 'merge_events' must be specified")
+    
     nfiles, nevts = get_def_counts(fields['input_data'])
     if nfiles == 0:
-        return 1
+        raise ValueError(f"Input dataset '{fields['input_data']}' has no files")
     
     # Calculate events per file
     npevents = nevts // nfiles

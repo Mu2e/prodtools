@@ -68,7 +68,9 @@
         "njobs": 500,
         "run": 1202,
         "inloc": "tape",
-        "outloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh",
         "owner": "mu2e"
     },
@@ -163,7 +165,9 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020at/setup.sh",
         "owner": "mu2e",
-        "outloc": "tape"
+        "outloc": {
+            "*.art": "tape"
+        }
     },
     {
         "desc": "IPAMuminusMichel",
@@ -268,7 +272,9 @@
         "events": 25000,
         "run": 1202,
         "inloc": "tape",
-        "outloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
         "owner": "mu2e"
     },
@@ -285,7 +291,9 @@
         "events": 5000000,
         "run": 1202,
         "inloc": "tape",
-        "outloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ay/setup.sh",
         "owner": "mu2e"
     },
@@ -302,7 +310,9 @@
         "events": 25000,
         "run": 1202,
         "inloc": "tape",
-        "outloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
         "owner": "mu2e"
     },
@@ -319,7 +329,9 @@
         "events": 1000000,
         "run": 1202,
         "inloc": "tape",
-        "outloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
         "owner": "mu2e"
     },
@@ -336,7 +348,9 @@
         "events": 500000,
         "run": 1202,
         "inloc": "tape",
-        "outloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
         "owner": "mu2e"
     },
@@ -361,21 +375,43 @@
     },
     {
         "desc": "FlateMinus",
-        "dsconf": "MDC2020av",
+        "dsconf": "MDC2025ab",
         "fcl": "Production/JobConfig/primary/FlateMinus.fcl",
         "fcl_overrides": {
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
-            "physics.producers.generate.startMom": 90,
-            "physics.producers.generate.endMom": 110
+            "physics.producers.generate.startMom": 70,
+            "physics.producers.generate.endMom": 120
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
-        "njobs": 100,
-        "events": 10000,
+        "njobs": 500,
+        "events": 15000,
         "run": 1202,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020av/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
         "owner": "mu2e",
-        "outloc": "tape"
+        "outloc": {
+            "*.art": "tape"
+        }
+    },
+    {
+        "desc": "FlatMuMinus",
+        "dsconf": "MDC2025ab",
+        "fcl": "Production/JobConfig/primary/FlatMuMinus.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "physics.producers.generate.startMom": 70,
+            "physics.producers.generate.endMom": 120
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "njobs": 500,
+        "events": 15000,
+        "run": 1202,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+        "owner": "mu2e",
+        "outloc": {
+            "*.art": "tape"
+        }
     },
     {
         "desc": "FlatePlus",
@@ -393,7 +429,9 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020av/setup.sh",
         "owner": "mu2e",
-        "outloc": "tape"
+        "outloc": {
+            "*.art": "tape"
+        }
     },
     {
         "desc": "PiTargetStops",
@@ -405,11 +443,34 @@
         "resampler_name": "beamResampler",
         "input_data": "sim.mu2e.PiBeamCat.MDC2020aw.art",
         "inloc": "tape",
-        "outloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
         "njobs": 500,
         "events": 160000,
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh",
+        "owner": "mu2e"
+    },
+    {
+        "desc": "CosmicCRYAll",
+        "dsconf": "MDC2025ab",
+        "fcl": "Production/JobConfig/cosmic/S2Resampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.PrimaryOutput.fileName": "dts.owner.CosmicCRYAll.version.sequencer.art"
+        },
+        "resampler_name": "CosmicResampler",
+        "input_data": "sim.mu2e.CosmicDSStopsCRYAll.MDC2025ab.art",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "njobs": 20000,
+        "events": 500000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+        "sequential_aux": true,
         "owner": "mu2e"
     }
     

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Shell wrapper for datasetFileList.py
+# Provides a convenient command-line interface for locating Mu2e dataset files
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Run the Python script with all arguments passed through
+exec python3 "$SCRIPT_DIR/utils/datasetFileList.py" "$@"

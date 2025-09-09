@@ -4,7 +4,73 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
+import subprocess
+import re
 from utils.prod_utils import *
+from utils.samweb_wrapper import list_definitions
+
+def list_jobdefs(dsconf):
+    """List all job definitions for a given dsconf using samweb_wrapper."""
+    pattern_regex = f"cnf\\.mu2e\\..*\\.{dsconf}\\.tar"
+    print(f"Searching for job definitions with pattern: cnf.mu2e.*.{dsconf}.tar")
+    
+    try:
+        all_definitions = list_definitions()
+        definitions = [defn for defn in all_definitions if re.match(pattern_regex, defn)]
+        
+        if not definitions:
+            print(f"No job definitions found for dsconf: {dsconf}")
+            return []
+        
+        print(f"Found {len(definitions)} job definitions:")
+        for definition in definitions:
+            if definition.strip():
+                print(f"  {definition}")
+        
+        return definitions
+        
+    except Exception as e:
+        print(f"Error accessing SAM: {e}")
+        return []
+
+def find_matching_jobdef(jobdefs, desc):
+    """Find the best matching job definition by examining output files."""
+    
+    for jobdef in jobdefs:
+        # Locate the tarball first
+        tarball_path = locate_tarball(jobdef)
+        
+        # Use Mu2eJobIO class to get output files
+        from utils.jobiodetail import Mu2eJobIO
+        job_io = Mu2eJobIO(tarball_path)
+        outputs = job_io.job_outputs(0)
+        
+        # Check if description appears in any output file
+        for output_key, output_file in outputs.items():
+            if desc in output_file:
+                print(f"Found match in output files: {jobdef}")
+                print(f"Output file: {output_file}")
+                return tarball_path
+    
+    return None
+
+def locate_tarball(jobdef):
+    """Locate tarball using our Python dataset filelist class."""
+    print(f"Using dataset filelist to locate: {jobdef}")
+    from utils.datasetFileList import locate_all_dataset_files
+    
+    tarball_paths = locate_all_dataset_files(jobdef)
+    if not tarball_paths:
+        raise RuntimeError(f"Tarball not found for: {jobdef}")
+    
+    # Use the first tarball found
+    tarball_path = tarball_paths[0]
+    if not os.path.exists(tarball_path):
+        raise RuntimeError(f"Tarball not found for: {jobdef}")
+    
+    print(f"Found tarball at: {tarball_path}")
+    return tarball_path
+
 
 def main():
     p = argparse.ArgumentParser(description='Generate FCL from dataset name or target file')
@@ -14,8 +80,14 @@ def main():
     p.add_argument('--index', type=int, default=0)
     p.add_argument('--target', help='Target file (e.g., dts.mu2e.RPCInternalPhysical.MDC2020az.001202_00000296.art)')
     p.add_argument('--local-jobdef', help='Direct path to local job definition file')
+    p.add_argument('--list-dsconf', help='List all job definitions for a given dsconf (e.g., MDC2020ba_best_v1_3)')
     args = p.parse_args()
 
+    # Handle --list-dsconf option
+    if args.list_dsconf:
+        list_jobdefs(args.list_dsconf)
+        return
+    
     # Require either dataset or target, unless using --local-jobdef
     if not args.dataset and not args.target and not args.local_jobdef:
         p.error("Either --dataset or --target must be provided, or use --local-jobdef")
@@ -30,35 +102,30 @@ def main():
         write_fcl(jobdef, args.loc, args.proto, args.index, args.target)
         
     else:
-        # Production mode: use mdh to copy files
         source = args.dataset or args.target
         
-        # Extract fields from dataset name directly
+        # Parse dataset name
         parts = source.split('.')
         if len(parts) < 5:
             p.error(f"Invalid dataset: {source}")
         
-        # Remove "Triggered" or "Triggerable" suffix from the description field (index 2)
-        # ONLY for 'dig' datasets (index 0)
-        if len(parts) >= 3 and parts[0] == 'dig':
-            desc = parts[2]
-            original_desc = desc
-            if desc.endswith('Triggered'):
-                parts[2] = desc[:-9]  # Remove "Triggered"
-            elif desc.endswith('Triggerable'):
-                parts[2] = desc[:-11]  # Remove "Triggerable"
-            
-            # Debug output to show the transformation
-            if parts[2] != original_desc:
-                print(f"Transformed description: '{original_desc}' -> '{parts[2]}' (dig dataset)")
+        dsconf = parts[3]
+        desc = parts[2]
         
-        # Construct job definition filename: owner, desc, dsconf
-        jobdef = f"cnf.{parts[1]}.{parts[2]}.{parts[3]}.0.tar"
+        # Get job definitions and find the match
+        jobdefs = list_jobdefs(dsconf)
+        if not jobdefs:
+            p.error(f"No job definitions found for dsconf: {dsconf}")
         
-        # Copy jobdef to local directory
-        run(f"mdh copy-file -e 3 -o -v -s disk -l local {jobdef}", shell=True)    
-        write_fcl(jobdef, args.loc, args.proto, args.index, args.target)
-        os.remove(jobdef) if os.path.exists(jobdef) else None
+        tarball_path = find_matching_jobdef(jobdefs, desc)
+        if not tarball_path:
+            p.error(f"No matching job definition found for source description: {desc}")
+        
+        # Generate FCL
+        try:
+            write_fcl(tarball_path, args.loc, args.proto, args.index, args.target)
+        except RuntimeError as e:
+            p.error(str(e))
 
 if __name__ == '__main__':
     main()

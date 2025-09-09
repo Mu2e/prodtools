@@ -144,6 +144,17 @@
 	},
 	"merge_factor": 5,
 	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ba/setup.sh"
+    },
+    {
+	"desc": "BeamSplitter",
+	"dsconf": "MDC2025ab",
+	"fcl": "Production/JobConfig/beam/BeamSplitter.fcl",
+	"input_data": "sim.mu2e.Beam.MDC2025ab.art",
+	"inloc": "disk",
+	"outloc": {
+		"*.art": "disk"
+	},
+	"merge_factor": 5,
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh"
     }
-	
 ]
