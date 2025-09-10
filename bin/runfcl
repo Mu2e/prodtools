@@ -29,4 +29,4 @@ source $SETUP_SCRIPT
 setup OfflineOps
 
 # Run the Python script with remaining arguments
-exec python3 "$SCRIPT_DIR/utils/runfcl.py" "${ARGS[@]}"
+exec python3 "$SCRIPT_DIR/../utils/runfcl.py" "${ARGS[@]}"

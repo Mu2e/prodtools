@@ -6,4 +6,4 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Run the Python script with all arguments passed through
-exec python3 "$SCRIPT_DIR/utils/datasetFileList.py" "$@"
+exec python3 "$SCRIPT_DIR/../utils/datasetFileList.py" "$@"
