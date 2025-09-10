@@ -102,3 +102,4 @@ jobdefs_list.txt
 
 # Pileup catalog files (generated during mixing job setup)
 *Cat.txt
+prodtools_cvmfs/

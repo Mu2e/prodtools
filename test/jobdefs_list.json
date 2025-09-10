@@ -1,0 +1,281 @@
+[
+  {
+    "tarball": "cnf.mu2e.ExtractedCRY.MDC2020av.0.tar",
+    "njobs": 20000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.RMCFlatGammaStops.MDC2020ap.0.tar",
+    "njobs": 100,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.WidebandCRV.MDC2020ap_v35.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.WidebandCRVMT.MDC2020bb.0.tar",
+    "njobs": 1000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "mcs.mu2e.*.MDC2020bb.*.art",
+        "location": "tape"
+      },
+      {
+        "dataset": "nts.mu2e.*.MDC2020bb.*.root",
+        "location": "disk"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.PiBeam.MDC2020aw.0.tar",
+    "njobs": 5000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "disk"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.POT.MDC2020av.0.tar",
+    "njobs": 50000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "disk"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.POT_Run1_a.MDC2020ba.0.tar",
+    "njobs": 20000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "disk"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.RMCFlatGammaResampling.MDC2020aq.0.tar",
+    "njobs": 10,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.RMCIPAFlatGammaResampling.MDC2020ap.0.tar",
+    "njobs": 100,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.RMCInternalEndpoint.MDC2020at.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.RMCExternalEndpoint.MDC2020at.0.tar",
+    "njobs": 8000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.RMCInternal.MDC2020at.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.RMCExternal.MDC2020at.0.tar",
+    "njobs": 8000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.IPAMuminusMichel.MDC2020ax.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.CePlusEndpoint.MDC2020at.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.CeEndpoint.MDC2020at.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.CePLeadingLog.MDC2020at.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.CeMLeadingLog.MDC2020at.0.tar",
+    "njobs": 2000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.PbarSTGun.MDC2020ap.0.tar",
+    "njobs": 100,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.ensembleMDS2cMix1BB.MDC2020ba_best_v1_3.0.tar",
+    "njobs": 822,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "dig.mu2e.*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.ensembleMDS2cMix2BB.MDC2020ba_best_v1_3.0.tar",
+    "njobs": 822,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "dig.mu2e.*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.CeEndpointMix1BB.MDC2020aw_best_v1_3.0.tar",
+    "njobs": 1000,
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "dig.mu2e.*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.POT_Run1_a.MDC2025ab.0.tar",
+    "njobs": 25000,
+    "inloc": "none",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "disk"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.CosmicDSStopsCRY.MDC2025ab.0.tar",
+    "njobs": 10000,
+    "inloc": "none",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  },
+  {
+    "tarball": "cnf.mu2e.ExtractedCRY.MDC2025ab.0.tar",
+    "njobs": 20000,
+    "inloc": "none",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ]
+  }
+]
