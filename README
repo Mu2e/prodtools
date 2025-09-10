@@ -1,0 +1,17 @@
+This package contains production tools for creating and managing Mu2e job definitions,
+FCL files, and production workflows. It provides Python-based tools that replace and
+extend the functionality of the original Perl-based mu2ejobtools.
+
+Main tools:
+- json2jobdef: Create job definition tarballs from JSON configurations
+- fcldump: Generate FCL files from job definitions, datasets, or target files
+- runjobdef: Execute production jobs based on job definitions
+- datasetFileList: List files in Mu2e datasets using SAM
+
+Before using these tools, you need to setup the mu2e package and FHICL_FILE_PATH
+environment variable. This is usually accomplished by setting up Mu2e Offline.
+
+Usage:
+  ups setup prodtools
+  # or
+  source /cvmfs/mu2e.opensciencegrid.org/artexternals/prodtools/setup.sh

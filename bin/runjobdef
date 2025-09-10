@@ -11,4 +11,4 @@ muse setup ops
 setup OfflineOps
 
 # Run the Python script with all arguments
-exec python3 "$SCRIPT_DIR/utils/runjobdef.py" "$@"
+exec python3 "$SCRIPT_DIR/../utils/runjobdef.py" "$@"

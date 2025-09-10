@@ -1,23 +1,23 @@
 #!/bin/bash
 
-# Simple shell wrapper for json_expander.py
+# Simple shell wrapper for jobdefs_expander.py
 # Sets up Mu2e environment and calls the Python script
 
 # Check required arguments
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    echo "Usage: jsonexpander [options]"
-    echo "  --json <json_file>     JSON configuration file (required)"
-    echo "  --output <file>        Output file"
-    echo "  --verbose              Enable verbose output"
+    echo "Usage: mkidxdef [options]"
+    echo "  --jobdefs <json_file>  Input jobdef JSON file (required)"
+    echo "  --prod                 Create SAM index definitions"
     echo ""
     echo "Example:"
-    echo "  jsonexpander --json config.json --output expanded_config.json"
+    echo "  mkidxdef --jobdefs jobdefs_list.json"
+    echo "  mkidxdef --jobdefs jobdefs_list.json --prod"
     exit 1
 fi
 
 # Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_SCRIPT="$SCRIPT_DIR/utils/jsonexpander.py"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/mkidxdef.py"
 
 if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     echo "Error: Python script not found at $PYTHON_SCRIPT"

@@ -7,7 +7,7 @@
 if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     # Find and execute the Python script with help
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PYTHON_SCRIPT="$SCRIPT_DIR/utils/json2jobdef.py"
+    PYTHON_SCRIPT="$SCRIPT_DIR/../utils/json2jobdef.py"
     
     if [[ ! -f "$PYTHON_SCRIPT" ]]; then
         echo "Error: Python script not found at $PYTHON_SCRIPT"
@@ -40,7 +40,7 @@ fi
 
 # Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_SCRIPT="$SCRIPT_DIR/utils/json2jobdef.py"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/json2jobdef.py"
 
 if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     echo "Error: Python script not found at $PYTHON_SCRIPT"

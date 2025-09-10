@@ -22,7 +22,7 @@ fi
 
 # Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_SCRIPT="$SCRIPT_DIR/utils/jobdef.py"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/jobdef.py"
  
 if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     echo "Error: Python script not found at $PYTHON_SCRIPT"
