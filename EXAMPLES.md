@@ -344,6 +344,84 @@ Usage: runjobdef [options] --jobdefs <jobdefs_file>
   }
 ```
 
+### F. Multiple Job Definitions and Indexing
+
+When working with multiple job definitions, `runjobdef` automatically handles job indexing across all definitions:
+
+```json
+[
+  {
+    "tarball": "cnf.mu2e.CosmicDSStopsCRY.MDC2025ab.0.tar",
+    "njobs": 20000,
+    "inloc": "none",
+    "outputs": [{"dataset": "*.art", "location": "tape"}]
+  },
+  {
+    "tarball": "cnf.mu2e.POT_Run1_a.MDC2025ab.0.tar", 
+    "njobs": 20000,
+    "inloc": "none",
+    "outputs": [{"dataset": "*.art", "location": "disk"}]
+  },
+  {
+    "tarball": "cnf.mu2e.FlateMinus.MDC2025ab.0.tar",
+    "njobs": 500,
+    "inloc": "none", 
+    "outputs": [{"dataset": "*.art", "location": "tape"}]
+  }
+]
+```
+
+**Job Index Mapping:**
+- **Jobs 0-19999**: Use `CosmicDSStopsCRY` definition (local indices 0-19999)
+- **Jobs 20000-39999**: Use `POT_Run1_a` definition (local indices 0-19999)
+- **Jobs 40000-40499**: Use `FlateMinus` definition (local indices 0-499)
+
+**Example Usage:**
+```bash
+# Job 30020 (global) → POT_Run1_a definition → local index 10020
+export fname=etc.mu2e.index.000.0030020.txt
+runjobdef --jobdefs jobdefs.json --dry-run --nevts 100
+
+# Job 40100 (global) → FlateMinus definition → local index 100  
+export fname=etc.mu2e.index.000.0040100.txt
+runjobdef --jobdefs jobdefs.json --dry-run --nevts 100
+```
+
+**Complete Production Workflow Example:**
+```bash
+# 1. Initialize Mu2e environment
+mu2einit
+muse setup ops
+
+# 2. Set job index environment variable (required for production)
+export fname=etc.mu2e.index.000.0030020.txt
+
+# 3. Source prodtools setup (adds prodtools to PATH)
+source prodtools/setup.sh
+
+# 4. Execute production job with dry-run mode
+runjobdef --jobdefs /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025ab-001.json --dry-run --nevts 100
+```
+
+**Expected Output:**
+```
+Job 30020 uses definition 1
+Global job index: 30020, Local job index within definition: 10020
+Running: mdh copy-file -e 3 -o -v -s disk -l local cnf.mu2e.POT_Run1_a.MDC2025ab.0.tar
+Using remote inputs from none
+FCL file generated: cnf.mu2e.POT_Run1_a.MDC2025ab.10020.fcl
+=== Starting Mu2e execution ===
+[Job execution output...]
+=== Mu2e execution completed successfully ===
+[DRY RUN] Would run: pushOutput output.txt
+```
+
+**Key Features:**
+- **Automatic mapping**: Global job index is automatically mapped to the correct job definition
+- **Local indexing**: Each job definition uses its own local index (0 to njobs-1)
+- **Cumulative counting**: Preceding job definitions are automatically accounted for
+- **Debug output**: Shows both global and local job indices for clarity
+
 ### B. Sequential Auxiliary Input Selection
 
 For resampler jobs, you can control how auxiliary input files are selected using the `sequential_aux` setting in your JSON configuration:

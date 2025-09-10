@@ -152,9 +152,25 @@
 	"input_data": "sim.mu2e.Beam.MDC2025ab.art",
 	"inloc": "disk",
 	"outloc": {
-		"*.art": "disk"
+		"*.art": "tape"
 	},
-	"merge_factor": 5,
+	"merge_factor": 5000,
 	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh"
-    }
+    },
+	{
+		"desc": "NeutralsCat",
+		"dsconf": "MDC2025ab",
+		"input_data": "sim.mu2e.Neutrals.MDC2025ab.art",
+		"fcl": "Production/JobConfig/common/artcat.fcl",	
+		"merge_factor": 500,
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.TriggeredOutput.fileName": "dig.owner.PbarSTGunTriggered.dsconf.seq.art",
+			"outputs.out.fileName": "sim.owner.NeutralsCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh"
+	}
 ]

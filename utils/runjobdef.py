@@ -58,10 +58,12 @@ def main():
         sys.exit(1)
     
     print(f"Job {job_index} uses definition {jobdef_index}")
+    print(f"Global job index: {job_index}, Local job index within definition: {job_index - cumulative_jobs}")
     
     # Extract fields from JSON structure
     tarball = jobdef['tarball']
-    job_index_num = job_index
+    # Calculate local job index within this specific job definition
+    job_index_num = job_index - cumulative_jobs
     inloc = jobdef['inloc']
 
     # Copy jobdef to local directory (environment already set up by shell wrapper)
