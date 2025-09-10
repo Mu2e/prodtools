@@ -1,0 +1,13 @@
+FILE=Table
+Product=prodtools
+
+Flavor=ANY
+Qualifiers=""
+
+Action=setup
+   ProdDir()
+   SetupEnv()
+   SetupRequired( python )
+   SetupRequired( mu2e )
+   pathPrepend(PATH, ${UPS_PROD_DIR}/bin)
+   EnvPrepend(PYTHONPATH, ${UPS_PROD_DIR})
