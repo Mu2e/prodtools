@@ -24,6 +24,7 @@ def setup_logging(verbose: bool) -> None:
 def run(cmd, capture=False, shell=False):
     """
     Run a shell command. If capture=True, return stdout. If shell=True, cmd is a string.
+    Returns the exit code (0 for success) or raises CalledProcessError for failure.
     """
     print(f"Running: {cmd}")
     try:
@@ -32,7 +33,7 @@ def run(cmd, capture=False, shell=False):
         if not capture:
             if res.stdout:
                 print(f"STDOUT: {res.stdout}")
-        return res.stdout.strip() if capture else None
+        return res.stdout.strip() if capture else res.returncode
     except subprocess.CalledProcessError as e:
         print(f"=== COMMAND FAILED ===")
         print(f"Command: {cmd}")

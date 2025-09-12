@@ -18,7 +18,7 @@ This document provides practical examples for using the Python-based Mu2e produc
 ```bash
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
 muse setup ops
-muse setup SimJob
+# Note: muse setup SimJob is optional for most tools
 ```
 
 This setup provides access to:
@@ -33,14 +33,15 @@ For convenience, you can use the included setup script:
 
 ```bash
 cd prodtools
-source setup.sh
+source bin/setup.sh
 ```
 
 This script automatically:
-- Sources the Mu2e environment
-- Sets up muse (`muse setup ops`, `muse setup SimJob`)
-- Adds `prodtools/` to your PATH
+- Adds `prodtools/bin/` to your PATH
+- Adds `prodtools/` to your PYTHONPATH
 - Enables running all commands directly from anywhere
+
+**Note**: You still need to source the Mu2e environment and run `muse setup ops` first.
 
 **After sourcing, you can run commands directly:**
 ```bash
@@ -306,6 +307,11 @@ export fname=etc.mu2e.index.000.0000000.txt
 runjobdef --jobdefs jobdefs_list.json --dry-run --nevts 5
 ```
 
+**Understanding the `fname` format:**
+- `etc.mu2e.index.000.0000000.txt` means job index 0
+- `etc.mu2e.index.001.0000000.txt` means job index 1
+- The job index determines which job definition to use from the jobdefs file
+
 ### C. What `runjobdef` Does
 
 1. **Token Validation** - Verifies grid authentication
@@ -316,6 +322,18 @@ runjobdef --jobdefs jobdefs_list.json --dry-run --nevts 5
    - **MaxEventsToSkip parameter** is automatically added for resampler jobs
 5. **Job Execution** - Runs `mu2e` with the generated configuration
 6. **Output Management** - Handles output files and prepares for SAM submission
+
+**Example successful output:**
+```
+Job 0 uses definition 0
+Global job index: 0, Local job index within definition: 0
+Running: mdh copy-file -e 3 -o -v -s disk -l local cnf.mu2e.NeutralsFlash.MDC2025ab.0.tar
+FCL file generated: cnf.mu2e.NeutralsFlash.MDC2025ab.0.fcl
+Job setup script: /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh
+Mu2e command: mu2e -c cnf.mu2e.NeutralsFlash.MDC2025ab.0.fcl -n 5
+=== Mu2e execution completed successfully ===
+[DRY RUN] Would run: pushOutput output.txt
+```
 
 ### D. Command Line Options
 
