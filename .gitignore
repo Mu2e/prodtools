@@ -99,6 +99,7 @@ Thumbs.db
 *.err
 *.out
 jobdefs_list.txt
+jobdefs_list.json
 
 # Pileup catalog files (generated during mixing job setup)
 *Cat.txt

@@ -35,7 +35,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RMCIPAFlatGammaResampling",
@@ -53,7 +54,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RMCWireFlatGammaResampling",
@@ -72,7 +74,8 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh",
-        "owner": "mu2e"
+        "owner": "mu2e",
+        "sequential_aux": true
     },
     {
         "desc": "RMCInternalEndpoint",
@@ -90,7 +93,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RMCExternalEndpoint",
@@ -108,7 +112,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RMCInternal",
@@ -126,7 +131,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RMCExternal",
@@ -144,7 +150,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "DIOtail95",
@@ -167,7 +174,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "IPAMuminusMichel",
@@ -185,7 +193,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "CePlusEndpoint",
@@ -203,7 +212,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "CeEndpoint",
@@ -221,7 +231,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "CePLeadingLog",
@@ -239,7 +250,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "CeMLeadingLog",
@@ -257,7 +269,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RPCInternal",
@@ -276,7 +289,8 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
-        "owner": "mu2e"
+        "owner": "mu2e",
+        "sequential_aux": true
     },
     {
         "desc": "RPCPhysicalStops",
@@ -295,7 +309,8 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ay/setup.sh",
-        "owner": "mu2e"
+        "owner": "mu2e",
+        "sequential_aux": true
     },
     {
         "desc": "RPCInternalPhysical",
@@ -314,7 +329,8 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
-        "owner": "mu2e"
+        "owner": "mu2e",
+        "sequential_aux": true
     },
     {
         "desc": "RPCExternalPhysical",
@@ -333,7 +349,8 @@
             "*.art": "disk"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
-        "owner": "mu2e"
+        "owner": "mu2e",
+        "sequential_aux": true
     },
     {
         "desc": "RPCExternal",
@@ -352,7 +369,8 @@
             "*.art": "disk"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020az/setup.sh",
-        "owner": "mu2e"
+        "owner": "mu2e",
+        "sequential_aux": true
     },
     {
         "desc": "PbarSTGun",
@@ -369,9 +387,11 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ap/setup.sh",
         "owner": "mu2e",
+        "inloc": "tape",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "FlateMinus",
@@ -389,9 +409,11 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
         "owner": "mu2e",
+        "inloc": "tape",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "FlatMuMinus",
@@ -409,9 +431,11 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
         "owner": "mu2e",
+        "inloc": "tape",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "FlatePlus",
@@ -429,9 +453,11 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020av/setup.sh",
         "owner": "mu2e",
+        "inloc": "tape",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "PiTargetStops",
@@ -450,7 +476,8 @@
         "events": 160000,
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh",
-        "owner": "mu2e"
+        "owner": "mu2e",
+        "sequential_aux": true
     },
     {
         "desc": "CosmicCRYAll",
@@ -489,7 +516,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "disk"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RMCFlatGammaCalo",
@@ -507,7 +535,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "RMCFlatInternal",
@@ -525,7 +554,8 @@
         "owner": "mu2e",
         "outloc": {
             "*.art": "tape"
-        }
+        },
+        "sequential_aux": true
     },
     {
         "desc": "NeutralsFlash",
@@ -534,16 +564,35 @@
         "fcl_overrides": {
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
         },
-        "resampler_name": "NeutralsResampler",
+        "resampler_name": "neutralsResampler",
         "input_data": "sim.mu2e.NeutralsCat.MDC2025ab.art",
-        "njobs": 100000,
-        "events": 500000,
+        "njobs": 40000,
+        "events": 1340000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
         "owner": "mu2e",
         "outloc": {
-            "*.art": "tape"
-        }
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "MuBeamFlash",
+        "dsconf": "MDC2025ab",
+        "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": "sim.mu2e.MuBeamCat.MDC2025ab.art",
+        "njobs": 10000,
+        "events": 400000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+        "owner": "mu2e",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
-    
 ]
