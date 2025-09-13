@@ -493,7 +493,7 @@
         "outloc": {
             "*.art": "tape"
         },
-        "njobs": 20000,
+        "njobs": 50000,
         "events": 500000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
