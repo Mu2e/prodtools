@@ -78,7 +78,7 @@ def main():
         all_files.extend(file_list)
     infiles = " ".join(all_files)
     
-    if args.copy_input and infiles.strip():
+    if args.copy_input and infiles.strip() and inloc != "none":
         # Copy inputs locally
         print(f"Copying input files locally: {infiles}")
         FCL = write_fcl(tarball, f"dir:{os.getcwd()}/indir", 'file', job_index_num)

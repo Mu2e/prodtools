@@ -119,10 +119,11 @@
     },
 	{
 		"desc": "ExtractedCRY",
-		"dsconf": "MDC2025ab",
+		"dsconf": "MDC2025ac",
 		"fcl": "Production/JobConfig/cosmic/ExtractedCRY.fcl",
 		"fcl_overrides": {
-			"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+			"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+			"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
 		},
 		"njobs": 20000,
 		"events": 500000,
@@ -130,7 +131,7 @@
 		"outloc": {
 			"*.art": "tape"
 		},
-		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
 		"owner": "mu2e"
 	}
 	

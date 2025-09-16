@@ -481,10 +481,11 @@
     },
     {
         "desc": "CosmicCRYAll",
-        "dsconf": "MDC2025ab",
+        "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/cosmic/S2Resampler.fcl",
         "fcl_overrides": {
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
             "outputs.PrimaryOutput.fileName": "dts.owner.CosmicCRYAll.version.sequencer.art"
         },
         "resampler_name": "CosmicResampler",
@@ -496,7 +497,7 @@
         "njobs": 50000,
         "events": 500000,
         "run": 1430,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "sequential_aux": true,
         "owner": "mu2e"
     },
@@ -514,6 +515,7 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
         "owner": "mu2e",
+        "inloc": "disk",
         "outloc": {
             "*.art": "disk"
         },
@@ -533,6 +535,7 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
         "owner": "mu2e",
+        "inloc": "disk",
         "outloc": {
             "*.art": "tape"
         },
@@ -552,6 +555,7 @@
         "run": 1202,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
         "owner": "mu2e",
+        "inloc": "disk",
         "outloc": {
             "*.art": "tape"
         },
@@ -559,18 +563,20 @@
     },
     {
         "desc": "NeutralsFlash",
-        "dsconf": "MDC2025ab",
+        "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/NeutralsResampler.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "neutralsResampler",
         "input_data": "sim.mu2e.NeutralsCat.MDC2025ab.art",
         "njobs": 40000,
         "events": 1340000,
         "run": 1430,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
+        "inloc": "tape",
         "outloc": {
             "*.art": "disk"
         },
@@ -578,18 +584,20 @@
     },
     {
         "desc": "MuBeamFlash",
-        "dsconf": "MDC2025ab",
+        "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "beamResampler",
         "input_data": "sim.mu2e.MuBeamCat.MDC2025ab.art",
         "njobs": 10000,
         "events": 400000,
         "run": 1430,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
+        "inloc": "tape",
         "outloc": {
             "*.art": "disk"
         },

@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# Simple shell wrapper for jobfcl.py
+# Sets up Mu2e environment and calls the Python script
+
+# Check required arguments
+if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    echo "Usage: jobfcl [options]"
+    echo "  --jobdef <file>           Job definition file (cnf.tar) (required)"
+    echo "  --index <n>               Job index"
+    echo "  --target <file>            Target output file name"
+    echo "  --source <file>            Source input file name"
+    echo "  --default-location <loc>   Default location for input files (default: tape)"
+    echo "  --default-protocol <proto> Default protocol for input files (default: file)"
+    echo ""
+    echo "Examples:"
+    echo "  jobfcl --jobdef cnf.mu2e.NeutralsFlash.MDC2025ab.0.tar --index 4900"
+    echo "  jobfcl --jobdef jobdef.tar --index 0 --default-proto file --default-loc dir:/path/to/indir/"
+    echo "  jobfcl --jobdef jobdef.tar --target dig.mu2e.*.001202_00000428.art"
+    echo ""
+    echo "Note: Either --index or --target must be provided"
+    exit 1
+fi
+
+# Find and execute the Python script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/jobfcl.py"
+
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+    echo "Error: Python script not found at $PYTHON_SCRIPT"
+    exit 1
+fi
+
+# Execute the Python script with all arguments
+exec python3 "$PYTHON_SCRIPT" "$@"

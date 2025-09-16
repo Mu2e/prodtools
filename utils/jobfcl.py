@@ -14,7 +14,10 @@ from typing import Dict, List, Optional, Union
 import hashlib
 import re
 
-from .job_common import Mu2eFilename, Mu2eJobBase
+# Allow running this file directly: make package root importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utils.job_common import Mu2eFilename, Mu2eJobBase
 
 class Mu2eJobFCL(Mu2eJobBase):
     """Python port of mu2ejobfcl functionality."""
@@ -57,6 +60,15 @@ class Mu2eJobFCL(Mu2eJobBase):
     
     def _locate_file(self, filename: str) -> str:
         """Locate a file using samweb and return its physical path."""
+        # Check if we're using a local directory (dir: prefix)
+        if self.inloc.startswith('dir:'):
+            # Extract the local directory path
+            local_dir = self.inloc[4:]  # Remove 'dir:' prefix
+            # Remove trailing slash if present
+            local_dir = local_dir.rstrip('/')
+            return f"{local_dir}/{filename}"
+        
+        # Use SAM to locate the file
         from .samweb_wrapper import locate_file
         
         location = locate_file(filename)
