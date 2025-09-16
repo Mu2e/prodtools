@@ -104,3 +104,8 @@ jobdefs_list.json
 # Pileup catalog files (generated during mixing job setup)
 *Cat.txt
 prodtools_cvmfs/
+
+# Temporary files
+.data_dispatcher_worker_id
+prodtools-v1.3.1.tar.gz
+indir/
