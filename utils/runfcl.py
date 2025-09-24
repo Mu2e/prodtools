@@ -29,7 +29,7 @@ def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Execute jobs from FCL templates (one-in-one-out processing)')
     parser.add_argument('--release', required=False,
-                        help='Output MDC2020 version (e.g., an)')
+                        help='Output release version (e.g., MDC2020an, MDC2025ab)')
     parser.add_argument('--dbpurpose', required=False,
                         help='db purpose (e.g., best, perfect)')
     parser.add_argument('--dbversion', required=False,
@@ -95,16 +95,25 @@ def write_fcl_file(input_fname: str, args) -> tuple[str, list[str]]:
     dsconf = parts[3]
     sequence = parts[4]
 
-    #Extract dbpurpose and dbversion if available in filename
-    m = re.search(r"MDC2020(?P<release>\w+)_(?P<dbpurpose>[^_]+)_(?P<dbversion>v\d+_\d+)", dsconf)
+    # Extract dbpurpose and dbversion if available in filename
+    dbpurpose = None
+    dbversion = None
+    
+    # Try to match MDC pattern with dbpurpose and dbversion
+    m = re.search(r"MDC\d{4}(?P<release>\w+)_(?P<dbpurpose>[^_]+)_(?P<dbversion>v\d+_\d+)", dsconf)
     if m:
         dbpurpose = m.group("dbpurpose")  # 'best'
         dbversion = m.group("dbversion")  # 'v1_3'
-        print("Extracted dbpurpose: %s, and dbversion: %s from a file"%(dbpurpose, dbversion))
+        print("Extracted dbpurpose: %s, and dbversion: %s from filename"%(dbpurpose, dbversion))
 
-    # Update dsconf with args.release if provided, otherwise keep original
+    # Update dsconf with args.release if provided
     if args.release:
-        dsconf = f"MDC2020{args.release}_{dbpurpose}_{dbversion}"
+        if dbpurpose and dbversion:
+            # If we have dbpurpose and dbversion from filename, use them
+            dsconf = f"{args.release}_{dbpurpose}_{dbversion}"
+        else:
+            # Otherwise just use the release as-is
+            dsconf = args.release
     # else keep the original dsconf from filename
     # Build formatting context
     ctx = {
@@ -173,7 +182,11 @@ def main():
     if not in_fname:
         raise ValueError("fname environment variable not set")
     
-    logging.info(f"Using output MDC2020 version")
+    # Log the release version if specified
+    if args.release:
+        logging.info(f"Using release version: {args.release}")
+    else:
+        logging.info("No release version specified, using defaults")
     
     # Write fcl configuration
     fcl_file, out_fname_list = write_fcl_file(in_fname, args)

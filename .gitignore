@@ -16,8 +16,7 @@ test/*.tar
 test/*.fcl
 test/jobpars.json
 test/template.fcl
-test/inputs.txt
-test/*Cat.txt
+test/*.txt
 test/python/
 test/perl/
 temp_compare/
@@ -107,5 +106,5 @@ prodtools_cvmfs/
 
 # Temporary files
 .data_dispatcher_worker_id
-prodtools-v1.3.1.tar.gz
+*.tar.gz
 indir/
