@@ -123,7 +123,7 @@
 		"fcl": "Production/JobConfig/cosmic/ExtractedCRY.fcl",
 		"fcl_overrides": {
 			"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
-			"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+			"services.GeometryService.inputFile": "Production/JobConfig/cosmic/geom_cosmic_extracted_v02.txt"
 		},
 		"njobs": 20000,
 		"events": 500000,
