@@ -1,6 +1,6 @@
 #!/bin/bash
-# Shell wrapper for datasetFileList.py
-# Provides a convenient command-line interface for locating Mu2e dataset files
+# Exact copy of mu2eDatasetFileList functionality
+# Provides the same interface and behavior as the original Perl script
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

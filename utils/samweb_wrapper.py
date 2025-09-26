@@ -53,6 +53,14 @@ class SAMWebWrapper:
             print(f"Error locating file {filename}: {e}")
             return ""
     
+    def locate_files(self, filenames: List[str]) -> Dict[str, str]:
+        """Locate multiple files in batch (equivalent to samweb locate-files)."""
+        try:
+            return self.client.locateFiles(filenames)
+        except Exception as e:
+            print(f"Error locating files: {e}")
+            return {}
+    
     def create_definition(self, definition_name: str, query: str) -> bool:
         """Create a definition (equivalent to samweb create-definition)."""
         try:
