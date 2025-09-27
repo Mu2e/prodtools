@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--copy-input", action="store_true", help="Copy input files using mdh")
     parser.add_argument('--dry-run', action='store_true', help='Print commands without actually running pushOutput')
     parser.add_argument('--nevts', type=int, default=-1, help='Number of events to process (-1 for all events, default: -1)')
-    parser.add_argument('--extra-options', type=str, default='', help='Extra options to pass to mu2e command (e.g., "--no-timing --debug")')
+    parser.add_argument('--mu2e-options', type=str, default='', help='Extra options to pass to mu2e command (e.g., "--no-timing --debug")')
     parser.add_argument('--jobdefs', required=True, help='Path to the jobdefs_*.json file')
     
     args = parser.parse_args()
@@ -107,8 +107,8 @@ def main():
     mu2e_cmd = f"mu2e -c {FCL}"
     if args.nevts > 0:
         mu2e_cmd += f" -n {args.nevts}"
-    if args.extra_options.strip():
-        mu2e_cmd += f" {args.extra_options.strip()}"
+    if args.mu2e_options.strip():
+        mu2e_cmd += f" {args.mu2e_options.strip()}"
 
     print(f"Setup command: {setup_cmd}")
     print(f"Mu2e command: {mu2e_cmd}")

@@ -150,6 +150,21 @@ class SAMWebWrapper:
         except Exception as e:
             print(f"Error removing file location for {filename}: {e}")
             return False
+    
+    def file_lineage(self, filename: str, lineage_type: str = 'parents') -> List[str]:
+        """Get file lineage using SAM client getFileLineage method.
+        
+        Args:
+            filename: Name of the file to get lineage for
+            lineage_type: Type of lineage ('parents', 'children', 'ancestors', 'descendants', 'rawancestors')
+        """
+        try:
+            result = self.client.getFileLineage(lineage_type, filename)
+            return [item['file_name'] for item in result if 'file_name' in item]
+        except Exception as e:
+            print(f"Error getting file lineage {lineage_type} for {filename}: {e}")
+            return []
+    
 
 # Global instance for easy access
 _samweb_wrapper = None
@@ -213,3 +228,7 @@ def add_file_location(filename: str, location: str) -> bool:
 def remove_file_location(filename: str, location: str) -> bool:
     """Remove file location."""
     return get_samweb_wrapper().remove_file_location(filename, location)
+
+def file_lineage(filename: str, lineage_type: str = 'parents') -> List[str]:
+    """Get file lineage using SAM client getFileLineage method."""
+    return get_samweb_wrapper().file_lineage(filename, lineage_type)
