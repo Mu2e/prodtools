@@ -38,6 +38,12 @@ if [[ $# -eq 0 ]]; then
     exit 1
 fi
 
+# Check if SimJob is set up
+if [[ -z "$MUSE_DIR" ]] || ! command -v mu2e >/dev/null 2>&1; then
+    echo "Error: Mu2e SimJob environment not set up. Run: muse setup SimJob"
+    exit 1
+fi
+
 # Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/../utils/json2jobdef.py"

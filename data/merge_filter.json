@@ -165,12 +165,71 @@
 		"merge_factor": 500,
 		"inloc": "disk",
 		"fcl_overrides": {
-			"outputs.TriggeredOutput.fileName": "dig.owner.PbarSTGunTriggered.dsconf.seq.art",
 			"outputs.out.fileName": "sim.owner.NeutralsCat.version.sequence.art"
 		},
 		"outloc": {
 			"*.art": "tape"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh"
+	},
+	{
+		"desc": "MuBeamFlashCat",
+		"dsconf": "MDC2025ac",
+		"input_data": "dts.mu2e.MuBeamFlash.MDC2025ac.art",
+		"fcl": "Production/JobConfig/common/artcat.fcl",	
+		"merge_factor": 500,
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuBeamFlashCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "EleBeamFlashCat",
+		"dsconf": "MDC2025ac",
+		"input_data": "dts.mu2e.EleBeamFlash.MDC2025ac.art",
+		"fcl": "Production/JobConfig/common/artcat.fcl",	
+		"merge_factor": 500,
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.EleBeamFlashCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "IPAStopsCat",
+		"dsconf": "MDC2025ac",
+		"input_data": "sim.mu2e.IPAStops.MDC2025ac.art",
+		"fcl": "Production/JobConfig/common/artcat.fcl",	
+		"merge_factor": 10000,
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "sim.owner.IPAStopsCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "TargetStopsCat",
+		"dsconf": "MDC2025ac",
+		"input_data": "sim.mu2e.TargetStops.MDC2025ac.art",
+		"fcl": "Production/JobConfig/common/artcat.fcl",	
+		"merge_factor": 2000,
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "sim.owner.TargetStopsCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
 	}
 ]

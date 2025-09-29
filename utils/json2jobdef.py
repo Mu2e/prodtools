@@ -231,14 +231,14 @@ def main():
     # If both desc and dsconf are specified, process single entry
     if args.desc and args.dsconf and args.index is None:
         config = find_json_entry(expanded_configs, args.desc, args.dsconf, None)
-        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs)
+        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=args.no_cleanup, jobdefs_list=args.jobdefs)
     # If dsconf is specified but no desc and no index, process all entries for that dsconf
     elif args.dsconf and args.desc is None and args.index is None:
         process_all_for_dsconf(expanded_configs, args.dsconf, args)
     # If only index is specified, process single entry by index
     elif args.index is not None and args.desc is None and args.dsconf is None:
         config = find_json_entry(expanded_configs, None, None, args.index)
-        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs)
+        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=args.no_cleanup, jobdefs_list=args.jobdefs)
     else:
         # No filtering specified, show usage
         sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")

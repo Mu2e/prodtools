@@ -479,3 +479,77 @@ cd test
 - **Stage1 Jobs**: 5 configurations (cosmic, beam, etc.)
 - **Resampler Jobs**: 23 configurations (various resampling scenarios)
 - **Mixing Jobs**: 32 configurations (different mixing combinations)
+
+## Additional Tools
+
+### Family Tree Visualization (`famtree`)
+
+Trace the parentage chain of files and generate Mermaid diagrams:
+
+```bash
+# Set up environment
+mu2einit 
+muse setup ops
+source /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v1.3.8/bin/setup.sh 
+
+# Generate family tree diagram
+famtree mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001114.art
+
+# Convert to SVG for viewing
+npx -y @mermaid-js/mermaid-cli -i mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md
+firefox mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md-1.svg &
+```
+
+**What `famtree` does:**
+1. **Traces parentage** - Follows the chain of input files that led to the creation of a given output file
+2. **Groups by dataset** - Shows one representative per dataset to avoid clutter
+3. **Generates Mermaid diagram** - Creates a visual family tree showing data lineage
+4. **Filters etc files** - Automatically excludes `etc*.txt` files from the tree
+
+### Log Analysis (`logparser`)
+
+Analyze Mu2e job performance metrics from log files:
+
+```bash
+$ logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
+Processing log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
+{
+  "dataset": "log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log",
+  "CPU [h]": 0.2,
+  "CPU_max [h]": 0.2,
+  "Real [h]": 0.21,
+  "Real_max [h]": 0.21,
+  "VmPeak [GB]": 1.64,
+  "VmPeak_max [GB]": 1.64,
+  "VmHWM [GB]": 1.11,
+  "VmHWM_max [GB]": 1.11
+}
+[INFO] Wrote summary.json
+```
+
+**What `logparser` extracts:**
+- **CPU time** - Total and maximum CPU usage
+- **Real time** - Wall clock time for job execution
+- **Memory usage** - Peak virtual memory (VmPeak) and high water mark (VmHWM)
+- **JSON output** - Machine-readable summary for further analysis
+
+### Dataset File Listing (`datasetFileList`)
+
+Python implementation of file listing with exact parity to Perl version:
+
+```bash
+# List files in a dataset
+$ datasetFileList log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log | head
+/pnfs/mu2e/persistent/datasets/phy-etc/log/mu2e/CeMLeadingLogMix1BBTriggered/MDC2020ba_best_v1_3/log/2f/30/log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00000000-1756219665.log
+...
+
+# List files using SAM definition names (like samListLocations --defname)
+$ datasetFileList --defname log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
+...
+```
+
+**Features:**
+- **Exact Perl parity** - Byte-for-byte identical output to original Perl implementation
+- **SHA256 path generation** - Correctly constructs `/pnfs` paths with hash-based subdirectories
+- **SAM definition support** - Works with both dataset names and SAM definition names
+- **Performance** - Faster execution than the original Perl version
