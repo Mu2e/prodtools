@@ -3,14 +3,10 @@
 # SAM Dataset Parentage Chain Tracker
 #
 # Usage:
-#   samchain <dataset_name>
 #   samchain <file_name>
-#   samchain --files <dataset_name>
 #
 # Examples:
-#   samchain sim.mu2e.TargetStops.MDC2025ac.art
 #   samchain sim.mu2e.TargetStops.MDC2025ac.001430_00004022.art
-#   samchain --files sim.mu2e.TargetStops.MDC2025ac.art
 #
 
 # Get the directory of this script
