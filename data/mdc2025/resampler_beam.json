@@ -1,0 +1,65 @@
+[
+    {
+        "desc": "NeutralsFlash",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/pileup/NeutralsResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "neutralsResampler",
+        "input_data": "sim.mu2e.NeutralsCat.MDC2025ab.art",
+        "njobs": 40000,
+        "events": 1340000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "MuBeamFlash",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": "sim.mu2e.MuBeamCat.MDC2025ab.art",
+        "njobs": 10000,
+        "events": 400000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "EleBeamFlash",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/pileup/EleBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": "sim.mu2e.EleBeamCat.MDC2025ab.art",
+        "njobs": 20000,
+        "events": 1000000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    }
+]
