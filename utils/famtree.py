@@ -3,16 +3,33 @@
 SAM Dataset Family Tree Tracker
 
 Usage:
-    famtree <file_name>
+    famtree <file_name_or_dataset> [--stats] [--max-files N] [--png] [--svg]
 
 Examples:
+    # Individual file
     famtree mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001114.art
-    Then convert it to png or svg using:
-    npx -y @mermaid-js/mermaid-cli -i mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md
+    
+    # Dataset name (uses first file from dataset)
+    famtree sim.mu2e.MuminusStopsCat.MDC2025ac.art
+    
+    # Generate with efficiency statistics
+    famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art --stats
+    
+    # Generate PNG with statistics (sample 5 files per dataset for speed)
+    famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art --stats --max-files 5 --png
+    
+    # Generate both PNG and SVG
+    famtree sim.mu2e.MuminusStopsCat.MDC2025ac.art --png --svg
+    
+    # Manual conversion (if options not used)
+    npx -y @mermaid-js/mermaid-cli -i sim.mu2e.MuminusStopsCat.MDC2025ac.md
 """
 
 import argparse
-from samweb_wrapper import file_lineage
+import os
+import sys
+from samweb_wrapper import file_lineage, list_definition_files, get_samweb_wrapper
+from genFilterEff import process_dataset
 
 def get_parents(file_name):
     """Get parent files using samweb file-lineage parents command, filtering out etc files."""
@@ -22,6 +39,48 @@ def get_parents(file_name):
 def get_dataset_name(file_name):
     """Return dataset name (drop run_subrun part) for 6-field names"""
     return '.'.join(file_name.split('.')[:4] + [file_name.split('.')[-1]])
+
+def get_first_file_from_dataset(dataset_name):
+    """Get the first file from a dataset name (without run/subrun)."""
+    # Use list_definition_files since dataset names are definitions in SAM
+    files = list_definition_files(dataset_name)
+    if files:
+        return files[0]
+    else:
+        print(f"No files found for dataset: {dataset_name}")
+        return None
+
+def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0):
+    """Get efficiency statistics for a dataset using process_dataset from genFilterEff.
+    
+    Args:
+        dataset_name: Dataset name (type.mu2e.process.MDCversion.ext)
+        samweb: SAMWeb wrapper instance
+        max_files: Maximum number of files to sample (default: 10 for speed)
+        verbosity: Verbosity level (0=quiet)
+    
+    Returns:
+        Tuple of (passed_events, generated_events, efficiency, num_files) or None if unavailable
+    """
+    try:
+        # Get total number of files in dataset
+        file_list = samweb.list_files(f"dh.dataset={dataset_name} with availability anylocation")
+        num_files_total = len(file_list)
+        
+        # Use the same process_dataset function from genFilterEff
+        summary = process_dataset(
+            dataset_name,
+            samweb,
+            chunk_size=100,
+            max_files=max_files,
+            verbosity=verbosity
+        )
+        
+        return (summary.passedevents, summary.genevents, summary.efficiency(), num_files_total)
+        
+    except Exception:
+        # Dataset doesn't have gencount or other issue
+        return None
 
 def generate_mermaid_diagram(file_name, node_id=0):
     """Generate Mermaid diagram data for the family tree."""
@@ -56,30 +115,65 @@ def generate_mermaid_diagram(file_name, node_id=0):
 
 def main():
     parser = argparse.ArgumentParser(description='Trace SAM dataset family tree')
-    parser.add_argument('filename', help='File name')
+    parser.add_argument('filename', help='File name or dataset name (without run/subrun)')
+    parser.add_argument('--png', action='store_true', help='Convert Mermaid diagram to PNG using mmdc')
+    parser.add_argument('--svg', action='store_true', help='Convert Mermaid diagram to SVG using mmdc')
+    parser.add_argument('--stats', action='store_true', help='Include efficiency statistics in node labels')
+    parser.add_argument('--max-files', type=int, default=10, help='Max files to sample for stats (default: 10)')
     
     args = parser.parse_args()
     
+    # Check if input is a dataset name (no run/subrun) or individual file
+    parts = args.filename.split('.')
+    
+    if len(parts) == 5:  # Dataset name: sim.mu2e.MuminusStopsCat.MDC2025ac.art
+        print(f"Dataset name detected: {args.filename}")
+        actual_file = get_first_file_from_dataset(args.filename)
+        if not actual_file:
+            return
+        print(f"Using first file: {actual_file}")
+        file_to_process = actual_file
+    elif len(parts) == 6:  # Individual file: sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000000.art
+        file_to_process = args.filename
+    else:
+        print(f"Invalid filename format. Expected 5 fields (dataset) or 6 fields (file), got {len(parts)} fields.")
+        return
+    
     # Generate Mermaid diagram parts
-    _, _, diagram_parts = generate_mermaid_diagram(args.filename)
+    _, _, diagram_parts = generate_mermaid_diagram(file_to_process)
 
     if not diagram_parts:
         print("No family tree found for the given file.")
         return
 
+    # Initialize SAMWeb wrapper if stats are requested
+    samweb = None
+    if args.stats:
+        samweb = get_samweb_wrapper()
+        print("Fetching efficiency statistics...")
+
     # Prepare mermaid lines and extract nodes and connections
     mermaid_lines = []
     mermaid_lines.append("```mermaid")
     # Force bold labels everywhere using HTML labels and loose security
-    mermaid_lines.append("%%{init: { 'theme': 'forest', 'flowchart': { 'htmlLabels': true }, 'securityLevel': 'loose' } }%%")
+    # Set large wrappingWidth to prevent line wrapping
+    mermaid_lines.append("%%{init: { 'theme': 'forest', 'flowchart': { 'htmlLabels': true, 'wrappingWidth': 9999 }, 'securityLevel': 'loose' } }%%")
     mermaid_lines.append("graph TD")
     
-    # Extract nodes and connections
+    # Extract nodes and connections, optionally add stats
     nodes = []
     connections = []
     for part in diagram_parts:
         if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], str):
             nid, lbl = part
+            
+            # Add efficiency stats if requested
+            if args.stats and samweb:
+                stats = get_dataset_efficiency(lbl, samweb, max_files=args.max_files)
+                if stats:
+                    passed, generated, eff, num_files = stats
+                    lbl = f"{lbl}<br/>eff={eff:.4f}, trig: {passed}, gen: {generated}<br/>nfiles={num_files}"
+            
             nodes.append(f'    {nid}["{lbl}"]')
         elif isinstance(part, str):
             connections.append(part)
@@ -105,12 +199,36 @@ def main():
         mermaid_lines.append(f"    class {','.join(all_nodes)} boldLabel")
     mermaid_lines.append("```")
         
+    # Use original input for output filename (dataset name or file name)
     dataset_name = '.'.join(args.filename.split('.')[:4])
     out_path = f"{dataset_name}.md"
     with open(out_path, 'w') as f:
         for line in mermaid_lines:
             f.write(line + '\n')
     print(f"Mermaid diagram saved to {out_path}")
+    
+    # Convert to PNG or SVG if requested
+    if args.png or args.svg:
+        import subprocess
+        
+        def convert_to_format(format_ext):
+            output_path = f"{dataset_name}.{format_ext}"
+            subprocess.run(['mmdc', '-i', out_path, '-o', output_path], check=True)
+            # mmdc creates files with -1 suffix, so rename it
+            actual_file = f"{dataset_name}-1.{format_ext}"
+            if os.path.exists(actual_file):
+                os.rename(actual_file, output_path)
+            print(f"{format_ext.upper()} diagram saved to {output_path}")
+        
+        try:
+            if args.png:
+                convert_to_format('png')
+            if args.svg:
+                convert_to_format('svg')
+        except subprocess.CalledProcessError as e:
+            print(f"Error converting diagram: {e}")
+        except FileNotFoundError:
+            print("Error: mmdc command not found. Install with: npm install -g @mermaid-js/mermaid-cli")
 
 if __name__ == '__main__':
     main()

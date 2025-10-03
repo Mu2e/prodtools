@@ -231,5 +231,17 @@
 			"*.art": "tape"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "MuonStopSelector",
+		"dsconf": "MDC2025ac",
+		"input_data": "sim.mu2e.TargetStopsCat.MDC2025ac.art",
+		"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",	
+		"merge_factor": 5,
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
 	}
 ]

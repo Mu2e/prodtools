@@ -1,0 +1,11 @@
+#!/bin/bash
+# genFilterEff - Compute filter efficiency for Mu2e datasets
+# Usage: genFilterEff --out=output.txt [options] dataset.art [dataset2.art ...]
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRODTOOLS_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Run the Python script
+exec python3 "$PRODTOOLS_DIR/utils/genFilterEff.py" "$@"
+

@@ -10,6 +10,7 @@ This document provides practical examples for using the Python-based Mu2e produc
 - **[Mixing Jobs](#3-mixing-job-definitions)** - Complete guide to mixing jobs
 - **[JSON Expansion](#4-json-configuration-expansion)** - Parameter space exploration
 - **[Production Execution](#5-production-job-execution)** - Run production workflows
+- **[Additional Tools](#additional-tools)** - Family tree visualization, log analysis, filter efficiency
 
 ## Environment Setup
 
@@ -62,6 +63,7 @@ cd test
 
 The `prodtools` package provides implementations of Mu2e production tools:
 
+**Core Production Tools:**
 - `json2jobdef` - Create job definition tarballs from JSON configs
 - `fcldump` - Generate FCL configurations from jobdefs, datasets, or target files
 - `runjobdef` - Execute production jobs from job definitions
@@ -69,6 +71,12 @@ The `prodtools` package provides implementations of Mu2e production tools:
 - `mkidxdef` - Create SAM index definitions
 - `jsonexpander` - Generate parameter combinations from templates
 - `jobdef` - Create job definitions directly (low-level tool)
+
+**Analysis and Diagnostics:**
+- `famtree` - Generate family tree diagrams for data lineage
+- `logparser` - Analyze job performance metrics from log files
+- `genFilterEff` - Calculate generation filter efficiency for datasets
+- `datasetFileList` - List files in datasets with pnfs paths
 
 ## 1. Creating Job Definitions
 
@@ -495,7 +503,13 @@ source /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v1.3.8/bin/setup.sh
 # Generate family tree diagram
 famtree mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001114.art
 
-# Convert to SVG for viewing
+# Generate with efficiency statistics
+famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art --stats
+
+# Generate PNG with statistics (sample 5 files per dataset)
+famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art --stats --max-files 5 --png
+
+# Convert existing diagram to SVG for viewing
 npx -y @mermaid-js/mermaid-cli -i mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md
 firefox mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md-1.svg &
 ```
@@ -505,6 +519,13 @@ firefox mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md-1.svg &
 2. **Groups by dataset** - Shows one representative per dataset to avoid clutter
 3. **Generates Mermaid diagram** - Creates a visual family tree showing data lineage
 4. **Filters etc files** - Automatically excludes `etc*.txt` files from the tree
+5. **Efficiency statistics** - Optionally includes filter efficiency (passed/generated events) for each dataset
+
+**Command-line options:**
+- `--stats` - Include efficiency statistics in node labels (e.g., "eff=0.2316 (3474/15000)")
+- `--max-files N` - Number of files to sample for statistics (default: 10, faster with lower values)
+- `--png` - Automatically convert to PNG using `mmdc`
+- `--svg` - Automatically convert to SVG using `mmdc`
 
 ### Log Analysis (`logparser`)
 
@@ -553,3 +574,59 @@ $ datasetFileList --defname log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best
 - **SHA256 path generation** - Correctly constructs `/pnfs` paths with hash-based subdirectories
 - **SAM definition support** - Works with both dataset names and SAM definition names
 - **Performance** - Faster execution than the original Perl version
+
+### Generation Filter Efficiency (`genFilterEff`)
+
+Calculate overall filter efficiency for simulation datasets - the ratio of passed events to generated events:
+
+```bash
+# Set up environment
+mu2einit
+muse setup ops
+
+# Calculate efficiency for single dataset
+genFilterEff --out=SimEff.txt --chunksize=100 sim.mu2e.Beam.MDC2020p.art
+
+# Calculate for multiple datasets
+genFilterEff --out=SimEff.txt --chunksize=100 \
+  sim.mu2e.MuBeamCat.MDC2025ac.art \
+  sim.mu2e.EleBeamCat.MDC2025ac.art \
+  sim.mu2e.NeutralsCat.MDC2025ac.art
+
+# Process only first 1000 files per dataset
+genFilterEff --out=SimEff.txt --maxFilesToProcess=1000 sim.mu2e.Beam.MDC2020p.art
+
+# Quiet mode (minimal output)
+genFilterEff --out=SimEff.txt --verbosity=0 sim.mu2e.Beam.MDC2020p.art
+```
+
+**Example output:**
+```
+Processing dataset  sim.mu2e.Beam.MDC2020p.art, using 10 out of 50000 files
+        eff = 0.1705 (6820 / 40000) after processing 10 files of sim.mu2e.Beam.MDC2020p.art
+```
+
+**Output file format (Proditions-compatible):**
+```
+TABLE SimEfficiencies2
+Beam,   6820,   40000,  0.1705
+```
+
+**What `genFilterEff` does:**
+1. **Queries SAM metadata** - Retrieves `dh.gencount` (generated events) and `event_count` (passed events)
+2. **Processes in chunks** - Batches SAM queries for efficiency (default: 100 files per request)
+3. **Calculates efficiency** - Computes ratio of passed/generated events
+4. **Proditions format** - Outputs in format compatible with Mu2e Proditions database
+
+**Command-line options:**
+- `--out OUTFILE` - Output file path (required)
+- `--chunksize N` - Number of files to query per SAM transaction (default: 100)
+- `--maxFilesToProcess N` - Limit processing to first N files per dataset
+- `--verbosity LEVEL` - Control output: 0=quiet, 1=minimal, 2=verbose (default: 2)
+- `--writeFullDatasetName` - Use full dataset name instead of description field
+- `--firstLine TEXT` - Custom first line for output (default: "TABLE SimEfficiencies2")
+
+**Python implementation:**
+- Direct replacement for `mu2eGenFilterEff` Perl tool
+- Uses `samweb_wrapper` for SAM queries
+- Follows prodtools design patterns
