@@ -58,27 +58,46 @@ class Mu2eJobIO(Mu2eJobBase):
         if not auxin:
             return {}
         
+        # Read sequential_aux setting from job definition, default to False if not specified
+        sequential_aux = tbs.get('sequential_aux', False)
+        
         result = {}
         for dataset, (nreq, infiles) in auxin.items():
             # Zero means take all files
             if nreq == 0:
                 nreq = len(infiles)
             
-            # Draw nreq "random" files without repetitions
-            sample = []
-            available_files = infiles.copy()
-            
-            for count in range(nreq):
-                if not available_files:
-                    break
+            if sequential_aux:
+                # Sequential selection with rollover (like primary inputs)
+                nf = len(infiles)
+                first = index * nreq
+                last = min(first + nreq - 1, nf - 1)
                 
-                # Deterministic random selection
-                rnd = self._my_random(index, *available_files)
-                file_index = rnd % len(available_files)
-                sample.append(available_files[file_index])
-                available_files.pop(file_index)
-           
-            result[dataset] = sample
+                if first >= nf:
+                    # Roll over: start from the beginning
+                    first = first % nf
+                    last = min(first + nreq - 1, nf - 1)
+                
+                if first > last:
+                    raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
+                
+                result[dataset] = infiles[first:last + 1]
+            else:
+                # Draw nreq "random" files without repetitions
+                sample = []
+                available_files = infiles.copy()
+                
+                for count in range(nreq):
+                    if not available_files:
+                        break
+                    
+                    # Deterministic random selection
+                    rnd = self._my_random(index, *available_files)
+                    file_index = rnd % len(available_files)
+                    sample.append(available_files[file_index])
+                    available_files.pop(file_index)
+               
+                result[dataset] = sample
         
         return result
     

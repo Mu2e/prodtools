@@ -87,10 +87,19 @@ class SAMWebWrapper:
             print(f"Error describing definition {definition_name}: {e}")
             return ""
     
-    def list_definition_files(self, definition_name: str) -> List[str]:
-        """List files in a definition (equivalent to samweb list-definition-files)."""
+    def list_definition_files(self, definition_name: str, availability: str = "anylocation") -> List[str]:
+        """List files in a definition (equivalent to samweb list-definition-files).
+        
+        Args:
+            definition_name: Name of the SAM definition
+            availability: Availability constraint ('anylocation', 'physical', etc.)
+        """
         try:
-            return self.client.listFiles(f"defname: {definition_name}")
+            if availability:
+                query = f"defname: {definition_name} with availability {availability}"
+            else:
+                query = f"defname: {definition_name}"
+            return self.client.listFiles(query)
         except Exception as e:
             print(f"Error listing definition files for {definition_name}: {e}")
             return []
