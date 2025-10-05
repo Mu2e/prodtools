@@ -11,12 +11,12 @@ from utils.samweb_wrapper import list_definitions
 
 def list_jobdefs(dsconf):
     """List all job definitions for a given dsconf using samweb_wrapper."""
-    pattern_regex = f"cnf\\.mu2e\\..*\\.{dsconf}\\.tar"
+    # Use SAMWeb server-side filtering with % wildcard
+    pattern = f"cnf.mu2e.%.{dsconf}.tar"
     print(f"Searching for job definitions with pattern: cnf.mu2e.*.{dsconf}.tar")
     
     try:
-        all_definitions = list_definitions()
-        definitions = [defn for defn in all_definitions if re.match(pattern_regex, defn)]
+        definitions = list_definitions(defname=pattern)
         
         if not definitions:
             print(f"No job definitions found for dsconf: {dsconf}")
