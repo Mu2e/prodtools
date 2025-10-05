@@ -161,11 +161,8 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     stdloc = ['disk', 'tape', 'scratch']
     
     # Get files from SAM
-    try:
-        samweb = get_samweb_wrapper()
-        fns = samweb.list_definition_files(dataset_name)
-    except Exception as e:
-        raise RuntimeError(f"Error querying SAM: {e}")
+    samweb = get_samweb_wrapper()
+    fns = samweb.list_definition_files(dataset_name)
     
     if not fns:
         raise RuntimeError(f"No files with dh.dataset={dataset_name} are registered in SAM.")
@@ -199,13 +196,9 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     file_paths = []
     
     for f in sorted(fns):
-        try:
-            relpath = Mu2eFilename(f).relpathname()
-            full_path = f"{locroot}/{relpath}"
-            file_paths.append(full_path)
-        except Exception:
-            # Skip files that can't be processed
-            continue
+        relpath = Mu2eFilename(f).relpathname()
+        full_path = f"{locroot}/{relpath}"
+        file_paths.append(full_path)
     
     return file_paths
 
