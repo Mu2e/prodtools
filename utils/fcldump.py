@@ -55,21 +55,25 @@ def find_matching_jobdef(jobdefs, desc):
     return None
 
 def locate_tarball(jobdef):
-    """Locate tarball using our Python dataset filelist class."""
+    """Locate tarball using datasetFileList command."""
     print(f"Using dataset filelist to locate: {jobdef}")
-    from utils.datasetFileList import locate_all_dataset_files
     
-    tarball_paths = locate_all_dataset_files(jobdef)
-    if not tarball_paths:
-        raise RuntimeError(f"Tarball not found for: {jobdef}")
-    
-    # Use the first tarball found
-    tarball_path = tarball_paths[0]
-    if not os.path.exists(tarball_path):
-        raise RuntimeError(f"Tarball not found for: {jobdef}")
-    
-    print(f"Found tarball at: {tarball_path}")
-    return tarball_path
+    # Use the existing datasetFileList command
+    try:
+        result = run(f"python3 utils/datasetFileList.py {jobdef}", capture=True, shell=True)
+        if not result:
+            raise RuntimeError(f"Tarball not found for: {jobdef}")
+        
+        # Get the first line (first tarball found)
+        tarball_path = result.split('\n')[0].strip()
+        if not tarball_path or not os.path.exists(tarball_path):
+            raise RuntimeError(f"Tarball not found for: {jobdef}")
+        
+        print(f"Found tarball at: {tarball_path}")
+        return tarball_path
+        
+    except Exception as e:
+        raise RuntimeError(f"Error locating tarball for {jobdef}: {e}")
 
 
 def main():

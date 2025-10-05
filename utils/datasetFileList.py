@@ -254,5 +254,70 @@ def main():
                 # Handle broken pipe gracefully (e.g., when using 'head')
                 break
 
+def locate_all_dataset_files(dataset_name: str) -> List[str]:
+    """
+    Locate all files in a dataset using existing datasetFileList.py functionality.
+    
+    Args:
+        dataset_name: Dataset name to query as metadata (dh.dataset=dataset_name)
+        
+    Returns:
+        List of full paths to all files, or empty list if not found
+    """
+    try:
+        samweb = get_samweb_wrapper()
+        if not samweb:
+            return []
+        
+        # Use metadata query like the original mu2eDatasetFileList
+        # Query: dh.dataset = dataset_name
+        query = f"dh.dataset = {dataset_name}"
+        files = samweb.client.listFiles(query)
+        
+        if not files:
+            return []
+        
+        # Use existing functionality from main() - find the best location
+        ds = Mu2eDSName(dataset_name)
+        stdloc = ['disk', 'tape', 'scratch']
+        
+        # Find the first available location
+        fileloc = None
+        for location in stdloc:
+            try:
+                dir_path = ds.absdsdir(location)
+                if os.path.isdir(dir_path):
+                    fileloc = location
+                    break
+            except Exception:
+                continue
+        
+        if not fileloc:
+            return []
+        
+        # Use existing path construction logic from main()
+        locroot = ds.location_root(fileloc)
+        
+        # Construct full paths using the same logic as main()
+        file_paths = []
+        for f in sorted(files):
+            try:
+                # Use the exact same path construction as main()
+                relpath = Mu2eFilename(f).relpathname()
+                full_path = f"{locroot}/{relpath}"
+                
+                if os.path.exists(full_path):
+                    file_paths.append(full_path)
+                    
+            except Exception as e:
+                print(f"Error constructing path for {f}: {e}")
+                continue
+        
+        return file_paths
+        
+    except Exception as e:
+        print(f"Error locating dataset files for {dataset_name}: {e}")
+        return []
+
 if __name__ == '__main__':
     main()
