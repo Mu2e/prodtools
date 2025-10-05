@@ -254,70 +254,63 @@ def main():
                 # Handle broken pipe gracefully (e.g., when using 'head')
                 break
 
-def locate_all_dataset_files(dataset_name: str) -> List[str]:
+def get_dataset_files(dataset_name: str) -> List[str]:
     """
-    Locate all files in a dataset using existing datasetFileList.py functionality.
+    Get all files in a dataset as a list of full paths.
     
     Args:
-        dataset_name: Dataset name to query as metadata (dh.dataset=dataset_name)
+        dataset_name: Dataset name to query
         
     Returns:
-        List of full paths to all files, or empty list if not found
+        List of full paths to all files in the dataset
+        
+    Raises:
+        RuntimeError: If dataset not found or multiple locations exist
     """
+    # Standard locations (same as main function)
+    stdloc = ['disk', 'tape', 'scratch']
+    
+    # Get files from SAM (same as main function)
     try:
         samweb = get_samweb_wrapper()
-        if not samweb:
-            return []
-        
-        # Use metadata query like the original mu2eDatasetFileList
-        # Query: dh.dataset = dataset_name
-        query = f"dh.dataset = {dataset_name}"
-        files = samweb.client.listFiles(query)
-        
-        if not files:
-            return []
-        
-        # Use existing functionality from main() - find the best location
-        ds = Mu2eDSName(dataset_name)
-        stdloc = ['disk', 'tape', 'scratch']
-        
-        # Find the first available location
-        fileloc = None
-        for location in stdloc:
-            try:
-                dir_path = ds.absdsdir(location)
-                if os.path.isdir(dir_path):
-                    fileloc = location
-                    break
-            except Exception:
-                continue
-        
-        if not fileloc:
-            return []
-        
-        # Use existing path construction logic from main()
-        locroot = ds.location_root(fileloc)
-        
-        # Construct full paths using the same logic as main()
-        file_paths = []
-        for f in sorted(files):
-            try:
-                # Use the exact same path construction as main()
-                relpath = Mu2eFilename(f).relpathname()
-                full_path = f"{locroot}/{relpath}"
-                
-                if os.path.exists(full_path):
-                    file_paths.append(full_path)
-                    
-            except Exception as e:
-                print(f"Error constructing path for {f}: {e}")
-                continue
-        
-        return file_paths
-        
+        fns = samweb.list_definition_files(dataset_name)
     except Exception as e:
-        print(f"Error locating dataset files for {dataset_name}: {e}")
-        return []
+        raise RuntimeError(f"Error querying SAM: {e}")
+    
+    if not fns:
+        raise RuntimeError(f"No files with dh.dataset={dataset_name} are registered in SAM.")
+    
+    # Use same logic as main function
+    ds = Mu2eDSName(dataset_name)
+    
+    # Auto-detect location (same as main function)
+    found = []
+    for loc in stdloc:
+        dir_path = ds.absdsdir(loc)
+        if os.path.isdir(dir_path):
+            found.append(loc)
+    
+    if len(found) == 1:
+        fileloc = found[0]
+    elif len(found) > 1:
+        raise RuntimeError(f"Dataset {dataset_name} exists in multiple locations: {', '.join(found)}")
+    else:
+        raise RuntimeError(f"Dataset {dataset_name} not found in any standard location")
+    
+    # Construct paths (same as main function)
+    locroot = ds.location_root(fileloc)
+    file_paths = []
+    
+    for f in sorted(fns):
+        try:
+            relpath = Mu2eFilename(f).relpathname()
+            full_path = f"{locroot}/{relpath}"
+            file_paths.append(full_path)
+        except Exception as e:
+            # Skip files that can't be processed
+            continue
+    
+    return file_paths
 
 if __name__ == '__main__':
     main()
