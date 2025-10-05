@@ -143,123 +143,13 @@ Options:
         --help               Print this message.
 """)
 
-def main():
-    """Main function that replicates the exact behavior of the Perl script."""
-    args = parse_args()
-    dsname = args.dataset
-    
-    # Standard locations (same as Perl version)
-    stdloc = ['disk', 'tape', 'scratch']
-    
-    # Check if user specified a location and verify it exists
-    fileloc = None
-    if not args.basename:
-        if args.disk:
-            fileloc = 'disk'
-        elif args.tape:
-            fileloc = 'tape'
-        elif args.scratch:
-            fileloc = 'scratch'
-        
-        # If user specified a location, verify it exists
-        if fileloc:
-            ds = Mu2eDSName(dsname)
-            dir_path = ds.absdsdir(fileloc)
-            if not os.path.isdir(dir_path):
-                print(f"Error: dataset {dsname} is not present in the specified location '{fileloc}'", file=sys.stderr)
-                sys.exit(1)
-    
-    # Get files from SAM
-    try:
-        samweb = get_samweb_wrapper()
-        # Use SAM definition (works for both datasets and explicit definitions)
-        fns = samweb.list_definition_files(dsname)
-    except Exception as e:
-        print(f"Error querying SAM: {e}", file=sys.stderr)
-        sys.exit(1)
-    
-    if not fns:
-        print(f"No files with dh.dataset={dsname} are registered in SAM.", file=sys.stderr)
-        sys.exit(1)
-    
-    if args.basename:
-        # Print just the filenames
-        for f in sorted(fns):
-            try:
-                print(f)
-            except BrokenPipeError:
-                # Handle broken pipe gracefully (e.g., when using 'head')
-                break
-    elif args.defname:
-        # For SAM definitions, locate files using samweb wrapper
-        for f in sorted(fns):
-            try:
-                locations = samweb.locate_files([f])
-                if f in locations and locations[f]:
-                    for location_info in locations[f]:
-                        if isinstance(location_info, dict) and 'full_path' in location_info:
-                            full_path = location_info['full_path']
-                            # Remove storage system prefixes
-                            if full_path.startswith('enstore:'):
-                                full_path = full_path[8:]
-                            elif full_path.startswith('dcache:'):
-                                full_path = full_path[7:]
-                            
-                            if full_path.startswith('/'):
-                                # Append filename to directory path
-                                final_path = os.path.join(full_path, f)
-                                print(final_path)
-                                break  # Take first valid location
-            except BrokenPipeError:
-                # Handle broken pipe gracefully (e.g., when using 'head')
-                break
-            except Exception:
-                # Skip files that can't be located
-                continue
-    else:
-        # Print full paths for regular datasets
-        ds = Mu2eDSName(dsname)
-        
-        if fileloc is None:
-            # Figure out what location to print (auto-detect)
-            found = []
-            for loc in stdloc:
-                dir_path = ds.absdsdir(loc)
-                if os.path.isdir(dir_path):
-                    found.append(loc)
-            
-            if len(found) == 1:
-                fileloc = found[0]
-            elif len(found) > 1:
-                print(f"Dataset {dsname} seems to exist in multiple locations: {', '.join(found)}. Please use a command line option to specify which one to use.", file=sys.stderr)
-                sys.exit(1)
-            else:
-                # Files not found in standard locations
-                print(f"Dataset {dsname} does not exist in any of the standard locations {', '.join(stdloc)}. You can use the --basename option to print out just SAM filenames.", file=sys.stderr)
-                print("If this is an 'old' dataset uploaded via FTS, you can try 'setup dhtools; samToPnfs {dsname}' to get a list of files.", file=sys.stderr)
-                sys.exit(1)
-        
-        # Print full paths using the exact same logic as the original Perl script
-        locroot = ds.location_root(fileloc)
-        
-        # Use the same path construction as the Perl version:
-        # $locroot . '/' . Mu2eFilename->parse($f)->relpathname()
-        for f in sorted(fns):
-            try:
-                # Construct path exactly like the Perl version
-                relpath = Mu2eFilename(f).relpathname()
-                full_path = f"{locroot}/{relpath}"
-                print(full_path)
-            except BrokenPipeError:
-                # Handle broken pipe gracefully (e.g., when using 'head')
-                break
-
-def get_dataset_files(dataset_name: str) -> List[str]:
+def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List[str]:
     """
     Get all files in a dataset as a list of full paths.
     
     Args:
         dataset_name: Dataset name to query
+        location: Optional location ('disk', 'tape', 'scratch'). If None, auto-detects.
         
     Returns:
         List of full paths to all files in the dataset
@@ -267,10 +157,10 @@ def get_dataset_files(dataset_name: str) -> List[str]:
     Raises:
         RuntimeError: If dataset not found or multiple locations exist
     """
-    # Standard locations (same as main function)
+    # Standard locations
     stdloc = ['disk', 'tape', 'scratch']
     
-    # Get files from SAM (same as main function)
+    # Get files from SAM
     try:
         samweb = get_samweb_wrapper()
         fns = samweb.list_definition_files(dataset_name)
@@ -280,24 +170,31 @@ def get_dataset_files(dataset_name: str) -> List[str]:
     if not fns:
         raise RuntimeError(f"No files with dh.dataset={dataset_name} are registered in SAM.")
     
-    # Use same logic as main function
     ds = Mu2eDSName(dataset_name)
     
-    # Auto-detect location (same as main function)
-    found = []
-    for loc in stdloc:
-        dir_path = ds.absdsdir(loc)
-        if os.path.isdir(dir_path):
-            found.append(loc)
-    
-    if len(found) == 1:
-        fileloc = found[0]
-    elif len(found) > 1:
-        raise RuntimeError(f"Dataset {dataset_name} exists in multiple locations: {', '.join(found)}")
+    # Determine location
+    if location:
+        # User specified a location - verify it exists
+        dir_path = ds.absdsdir(location)
+        if not os.path.isdir(dir_path):
+            raise RuntimeError(f"Dataset {dataset_name} is not present in location '{location}'")
+        fileloc = location
     else:
-        raise RuntimeError(f"Dataset {dataset_name} not found in any standard location")
+        # Auto-detect location
+        found = []
+        for loc in stdloc:
+            dir_path = ds.absdsdir(loc)
+            if os.path.isdir(dir_path):
+                found.append(loc)
+        
+        if len(found) == 1:
+            fileloc = found[0]
+        elif len(found) > 1:
+            raise RuntimeError(f"Dataset {dataset_name} exists in multiple locations: {', '.join(found)}")
+        else:
+            raise RuntimeError(f"Dataset {dataset_name} not found in any standard location")
     
-    # Construct paths (same as main function)
+    # Construct paths
     locroot = ds.location_root(fileloc)
     file_paths = []
     
@@ -306,11 +203,87 @@ def get_dataset_files(dataset_name: str) -> List[str]:
             relpath = Mu2eFilename(f).relpathname()
             full_path = f"{locroot}/{relpath}"
             file_paths.append(full_path)
-        except Exception as e:
+        except Exception:
             # Skip files that can't be processed
             continue
     
     return file_paths
+
+def main():
+    """Main function that replicates the exact behavior of the Perl script."""
+    args = parse_args()
+    dsname = args.dataset
+    
+    # Handle --basename mode (just print filenames)
+    if args.basename:
+        try:
+            samweb = get_samweb_wrapper()
+            fns = samweb.list_definition_files(dsname)
+            for f in sorted(fns):
+                try:
+                    print(f)
+                except BrokenPipeError:
+                    break
+        except Exception as e:
+            print(f"Error querying SAM: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+    
+    # Handle --defname mode (use samweb.locate_files)
+    if args.defname:
+        try:
+            samweb = get_samweb_wrapper()
+            fns = samweb.list_definition_files(dsname)
+            for f in sorted(fns):
+                try:
+                    locations = samweb.locate_files([f])
+                    if f in locations and locations[f]:
+                        for location_info in locations[f]:
+                            if isinstance(location_info, dict) and 'full_path' in location_info:
+                                full_path = location_info['full_path']
+                                # Remove storage system prefixes
+                                if full_path.startswith('enstore:'):
+                                    full_path = full_path[8:]
+                                elif full_path.startswith('dcache:'):
+                                    full_path = full_path[7:]
+                                
+                                if full_path.startswith('/'):
+                                    final_path = os.path.join(full_path, f)
+                                    print(final_path)
+                                    break
+                except BrokenPipeError:
+                    break
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error querying SAM: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+    
+    # Regular mode - use get_dataset_files()
+    try:
+        # Determine location from command-line args
+        location = None
+        if args.disk:
+            location = 'disk'
+        elif args.tape:
+            location = 'tape'
+        elif args.scratch:
+            location = 'scratch'
+        
+        # Get files using the core function
+        file_paths = get_dataset_files(dsname, location)
+        
+        # Print results
+        for full_path in file_paths:
+            try:
+                print(full_path)
+            except BrokenPipeError:
+                break
+                
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
