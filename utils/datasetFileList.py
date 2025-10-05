@@ -209,48 +209,41 @@ def main():
     
     # Handle --basename mode (just print filenames)
     if args.basename:
-        try:
-            samweb = get_samweb_wrapper()
-            fns = samweb.list_definition_files(dsname)
-            for f in sorted(fns):
-                try:
-                    print(f)
-                except BrokenPipeError:
-                    break
-        except Exception as e:
-            print(f"Error querying SAM: {e}", file=sys.stderr)
-            sys.exit(1)
+        samweb = get_samweb_wrapper()
+        fns = samweb.list_definition_files(dsname)
+        for f in sorted(fns):
+            try:
+                print(f)
+            except BrokenPipeError:
+                break
         return
     
     # Handle --defname mode (use samweb.locate_files)
     if args.defname:
-        try:
-            samweb = get_samweb_wrapper()
-            fns = samweb.list_definition_files(dsname)
-            for f in sorted(fns):
-                try:
-                    locations = samweb.locate_files([f])
-                    if f in locations and locations[f]:
-                        for location_info in locations[f]:
-                            if isinstance(location_info, dict) and 'full_path' in location_info:
-                                full_path = location_info['full_path']
-                                # Remove storage system prefixes
-                                if full_path.startswith('enstore:'):
-                                    full_path = full_path[8:]
-                                elif full_path.startswith('dcache:'):
-                                    full_path = full_path[7:]
-                                
-                                if full_path.startswith('/'):
-                                    final_path = os.path.join(full_path, f)
-                                    print(final_path)
-                                    break
-                except BrokenPipeError:
-                    break
-                except Exception:
-                    continue
-        except Exception as e:
-            print(f"Error querying SAM: {e}", file=sys.stderr)
-            sys.exit(1)
+        samweb = get_samweb_wrapper()
+        fns = samweb.list_definition_files(dsname)
+        for f in sorted(fns):
+            try:
+                locations = samweb.locate_files([f])
+                if f in locations and locations[f]:
+                    for location_info in locations[f]:
+                        if isinstance(location_info, dict) and 'full_path' in location_info:
+                            full_path = location_info['full_path']
+                            # Remove storage system prefixes
+                            if full_path.startswith('enstore:'):
+                                full_path = full_path[8:]
+                            elif full_path.startswith('dcache:'):
+                                full_path = full_path[7:]
+                            
+                            if full_path.startswith('/'):
+                                final_path = os.path.join(full_path, f)
+                                print(final_path)
+                                break
+            except BrokenPipeError:
+                break
+            except Exception:
+                # Skip files that can't be located
+                continue
         return
     
     # Regular mode - use get_dataset_files()
