@@ -7,20 +7,13 @@ import os
 import sys
 from typing import List, Dict, Optional, Union
 
-try:
-    from samweb_client import SAMWebClient
-except ImportError:
-    print("Warning: samweb_client module not available. Please set it up in your environment.")
-    SAMWebClient = None
+from samweb_client import SAMWebClient #type: ignore
 
 class SAMWebWrapper:
     """Wrapper for samweb_client to replace external samweb commands."""
     
     def __init__(self):
         """Initialize the SAMWeb client."""
-        if SAMWebClient is None:
-            raise RuntimeError("samweb_client module not available")
-        
         self.client = SAMWebClient()
     
     def count_files(self, query: str) -> int:
@@ -223,7 +216,6 @@ def list_definition_files(definition_name: str) -> List[str]:
 
 def list_definitions(defname: str = None) -> List[str]:
     """List all definitions.
-    
     Args:
         defname: Optional pattern to filter definitions (supports % wildcard)
     """
