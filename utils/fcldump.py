@@ -34,7 +34,7 @@ def list_jobdefs(dsconf):
         return []
 
 def find_matching_jobdef(jobdefs, desc):
-    """Find the best matching job definition by examining output files."""
+    """Find the matching job definition by examining output files."""
     
     for jobdef in jobdefs:
         # Locate the tarball first
@@ -45,9 +45,10 @@ def find_matching_jobdef(jobdefs, desc):
         job_io = Mu2eJobIO(tarball_path)
         outputs = job_io.job_outputs(0)
         
-        # Check if description appears in any output file
-        for output_key, output_file in outputs.items():
-            if desc in output_file:
+        # Check for exact match: desc should be the third field in output filename
+        for output_file in outputs.values():
+            output_parts = output_file.split('.')
+            if len(output_parts) == 6 and output_parts[2] == desc:
                 print(f"Found match in output files: {jobdef}")
                 print(f"Output file: {output_file}")
                 return tarball_path
@@ -55,10 +56,8 @@ def find_matching_jobdef(jobdefs, desc):
     return None
 
 def locate_tarball(jobdef):
-    """Locate tarball using datasetFileList functionality directly."""
-    print(f"Using dataset filelist to locate: {jobdef}")
-    
-    # Use the datasetFileList function directly
+    print(f"Using datasetFileList to locate: {jobdef}")
+
     try:
         from utils.datasetFileList import get_dataset_files
         file_paths = get_dataset_files(jobdef)
