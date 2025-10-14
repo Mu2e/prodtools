@@ -14,7 +14,10 @@ from typing import Dict, List, Optional, Union
 import hashlib
 import re
 
-from .job_common import Mu2eFilename, Mu2eJobBase
+if __name__ == '__main__':
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from job_common import Mu2eFilename, Mu2eJobBase
 
 class Mu2eJobIO(Mu2eJobBase):
     """Python port of mu2ejobiodetail functionality."""

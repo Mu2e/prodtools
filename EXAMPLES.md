@@ -10,7 +10,7 @@ This document provides practical examples for using the Python-based Mu2e produc
 - **[Mixing Jobs](#3-mixing-job-definitions)** - Complete guide to mixing jobs
 - **[JSON Expansion](#4-json-configuration-expansion)** - Parameter space exploration
 - **[Production Execution](#5-production-job-execution)** - Run production workflows
-- **[Additional Tools](#additional-tools)** - Family tree visualization, log analysis, filter efficiency
+- **[Additional Tools](#additional-tools)** - Family tree visualization, log analysis, filter efficiency, dataset monitoring
 
 ## Environment Setup
 
@@ -356,6 +356,11 @@ Usage: runjobdef [options] --jobdefs <jobdefs_file>
 
 ### E. Example jobdefs File Format
 
+The `inloc` field specifies where input files are located. You can use:
+- `"disk"`, `"tape"`, or `"scratch"` - explicit location
+- `"auto"` - defaults to tape with automatic SAMWeb fallback to available location
+- `"none"` - no input files
+
 ```json
   {
     "tarball": "cnf.mu2e.CeMLeadingLogMix2BB.MDC2020ba_best_v1_3.0.tar",
@@ -554,6 +559,39 @@ Processing log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
 - **Memory usage** - Peak virtual memory (VmPeak) and high water mark (VmHWM)
 - **JSON output** - Machine-readable summary for further analysis
 
+**CSV export for detailed analysis:**
+```bash
+# Save per-file metrics to CSV
+$ logparser log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.log --csv
+[INFO] Wrote log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.csv
+```
+
+The CSV file contains per-file metrics with columns:
+- `file` - Log file basename
+- `date` - Job execution date (extracted from log)
+- `CPU [h]` - CPU time in hours
+- `Real [h]` - Wall clock time in hours
+- `VmPeak [GB]` - Peak virtual memory in GB
+- `VmHWM [GB]` - Memory high water mark in GB
+
+**Visualizing log metrics:**
+```bash
+# Generate plots from CSV data
+$ python3 utils/plot_logs.py log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.csv
+Saved: log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.png
+
+Files: 1234
+CPU:  0.25 ± 0.03 h
+Real: 0.28 ± 0.04 h
+Mem:  1.64 ± 0.12 GB
+```
+
+The visualization script creates:
+- Time series plots for CPU/Real time and Memory usage
+- Mean lines with values in legends
+- Statistics summary printed to console
+- PNG output with same basename as input CSV
+
 ### Dataset File Listing (`datasetFileList`)
 
 Python implementation of file listing with exact parity to Perl version:
@@ -630,3 +668,64 @@ Beam,   6820,   40000,  0.1705
 - Direct replacement for `mu2eGenFilterEff` Perl tool
 - Uses `samweb_wrapper` for SAM queries
 - Follows prodtools design patterns
+
+### List New Datasets (`listNewDatasets`)
+
+Monitor and track recently created datasets in the SAM database with file counts and average sizes:
+
+```bash
+# Set up environment
+mu2einit
+muse setup ops
+
+# List art files from last 7 days (default)
+listNewDatasets
+
+# List log files from last 14 days
+listNewDatasets --filetype log --days 14
+
+# List files for specific user
+listNewDatasets --user oksuzian
+
+# Skip file size calculation for faster execution
+listNewDatasets --no-size
+
+# Use custom SAM query
+listNewDatasets --query "dh.dataset sim.mu2e.%.MDC2025ab%"
+```
+
+**Example output:**
+```
+Checking for art files created after: 2025-10-01 for user: mu2epro
+------------------------------------------------
+Grouped file counts:
+   COUNT DATASET                                                                                              FILE SIZE
+   -----  -------                                                                                              --------
+      15 sim.mu2e.Beam.MDC2025ab.art                                                                            234 MB
+       8 sim.mu2e.Neutrals.MDC2025ab.art                                                                        187 MB
+      23 sim.mu2e.CosmicCRY.MDC2025ab.art                                                                       156 MB
+------------------------------------------------
+```
+
+**What `listNewDatasets` does:**
+1. **Queries SAM database** - Searches for files matching criteria (date, user, format)
+2. **Groups by dataset** - Extracts dataset names and counts files
+3. **Calculates sizes** - Computes average file size per dataset (optional)
+
+**Command-line options:**
+- `--filetype TYPE` - File format to search for: art, log, etc. (default: art)
+- `--days N` - Number of days to look back (default: 7)
+- `--user USERNAME` - Filter by username (default: mu2epro)
+- `--no-size` - Skip file size calculation for faster execution
+- `--query QUERY` - Custom SAM query (overrides all other parameters)
+
+**Dataset name extraction:**
+The tool extracts dataset names from filenames by taking the first 4 dot-separated fields:
+- `sim.mu2e.Beam.MDC2025ab.001430_00000000.art` → `sim.mu2e.Beam.MDC2025ab.art`
+- Groups all files with the same base dataset name together
+
+**Python implementation:**
+- Port of `Production/Scripts/listNewDatasets.sh` bash script
+- Uses `samweb` CLI commands for database queries
+- Follows prodtools design patterns with class-based structure
+- Supports both standalone and module usage

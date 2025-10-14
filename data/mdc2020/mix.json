@@ -1,0 +1,225 @@
+[   {
+        "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art", "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art", "dts.mu2e.FlateMinus.MDC2020ar.art", "dts.mu2e.FlatePlus.MDC2020ar.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020aw_best_v1_3"],
+        "mixconf": [0],
+        "pbeam": ["Mix1BB", "Mix2BB"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "owner": ["mu2e"],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2,
+                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+            }
+        ]
+    },
+    {
+        "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art", "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art", "dts.mu2e.FlateMinus.MDC2020ar.art", "dts.mu2e.FlatePlus.MDC2020ar.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020aw_perfect_v1_3"],
+        "mixconf": [1],
+        "pbeam": ["Mix1BB", "Mix2BB"],
+        "owner": ["mu2e"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_perfect",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2,
+                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+            }
+        ]
+    },
+    {
+        "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art", "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art", "dts.mu2e.FlateMinus.MDC2020ar.art", "dts.mu2e.FlatePlus.MDC2020ar.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020ax_best_v1_3"],
+        "mixconf": [2],
+        "pbeam": ["Mix1BB", "Mix2BB"],
+        "owner": ["mu2e"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ax/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2,
+                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+            }
+        ]
+    },
+    {
+        "input_data": ["dts.mu2e.ensembleMDS2c.MDC2020ba.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020ba_best_v1_3"],
+        "mixconf": [2],
+        "pbeam": ["Mix1BB"],
+        "owner": ["mu2e"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ba/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2,
+                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+                "#include": ["Production/JobConfig/mixing/filters/DIOtail.fcl", "Production/JobConfig/mixing/filters/IPAMuminusMichel.fcl"]
+            }
+        ]
+    },
+    {
+        "input_data": ["dts.mu2e.DIOtail95.MDC2020at.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020ba_best_v1_3"],
+        "mixconf": [2],
+        "pbeam": ["Mix1BB", "Mix2BB"],
+        "owner": ["mu2e"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ba/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2,
+                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+                "#include": ["Production/JobConfig/mixing/filters/DIOtail.fcl"]
+            }
+        ]
+    },
+    {
+        "input_data": ["dts.mu2e.CePLeadingLog.MDC2020at.art", "dts.mu2e.CeMLeadingLog.MDC2020at.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020ba_best_v1_3"],
+        "mixconf": [2],
+        "pbeam": ["Mix1BB", "Mix2BB"],
+        "owner": ["mu2e"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ba/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2,
+                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+            }
+        ]
+    },
+    {
+        "input_data": ["dts.mu2e.FlatGamma.MDC2020bb.art", "dts.mu2e.FlateMinus.MDC2020bb.art", "dts.mu2e.FlatMuMinus.MDC2020bb.art", "dts.mu2e.FlatGammaCalo.MDC2020bb.art", "dts.mu2e.RPCExternalPhysical.MDC2020az.art", "dts.mu2e.RPCInternalPhysical.MDC2020az.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020bc_best_v1_3"],
+        "mixconf": [2],
+        "pbeam": ["Mix1BB", "Mix2BB"],
+        "owner": ["mu2e"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bc/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2
+            }
+        ]
+    },
+    {
+        "input_data": ["dts.mu2e.FlateMinus.MDC2020bb.art"],
+        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
+        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
+        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
+        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
+        "mubeam_count": [1],
+        "elebeam_count": [25],
+        "neutrals_count": [50],
+        "mustop_count": [2],
+        "dsconf": ["MDC2020test_best_v1_3"],
+        "mixconf": [2],
+        "pbeam": ["Mix1BB"],
+        "owner": ["mu2e"],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bc/setup.sh"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "merge_events": [2000],
+        "inloc": ["tape"],
+        "outloc": [{"dig.mu2e.*.art": "tape"}],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "MDC2020_best",
+                "services.DbService.version": "v1_3",
+                "services.DbService.verbose": 2
+            }
+        ]
+    }
+]

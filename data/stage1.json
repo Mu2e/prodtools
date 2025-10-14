@@ -133,23 +133,6 @@
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
 		"owner": "mu2e"
-	},
-    {
-	"desc": "CosmicDSStopsCRY",	
-	"dsconf": "MDC2025ac",
-	"fcl": "Production/JobConfig/cosmic/S1DSStopsCRY.fcl",
-	"fcl_overrides": {
-	    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
-		"outputs.S1LowOutput.fileName": "/dev/null"
-	},
-	"njobs": 20000,
-	"events": 2500000,
-	"run": 1205,
-	"outloc": {
-		"*.art": "tape"
-	},
-	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
-	"owner": "mu2e"
-    }
+	}
 	
 ]

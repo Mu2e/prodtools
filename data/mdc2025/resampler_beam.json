@@ -4,7 +4,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/NeutralsResampler.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "neutralsResampler",
@@ -25,7 +24,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "beamResampler",
@@ -46,7 +44,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/EleBeamResampler.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "beamResampler",
@@ -60,6 +57,23 @@
         "outloc": {
             "*.art": "disk"
         },
+        "sequential_aux": true
+    },
+    {
+        "desc": "PiTargetStops",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/pileup/PiBeamResampler.fcl",
+        "resampler_name": "beamResampler",
+        "input_data": "sim.mu2e.PiBeamCat.MDC2025ac.art",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "njobs": 500,
+        "events": 160000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
         "sequential_aux": true
     }
 ]

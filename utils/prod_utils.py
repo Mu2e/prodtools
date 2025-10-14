@@ -4,6 +4,7 @@ import logging
 import json
 import os
 from pathlib import Path
+from datetime import datetime
 from .jobfcl import Mu2eJobFCL
 from .jobdef import create_jobdef
 
@@ -26,7 +27,8 @@ def run(cmd, capture=False, shell=False):
     Run a shell command. If capture=True, return stdout. If shell=True, cmd is a string.
     Returns the exit code (0 for success) or raises CalledProcessError for failure.
     """
-    print(f"Running: {cmd}")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] Running: {cmd}")
     try:
         # Always capture output to see errors, even when not in capture mode
         res = subprocess.run(cmd, shell=shell, capture_output=True, text=True, check=True)

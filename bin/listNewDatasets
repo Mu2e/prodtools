@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""
+List recently created datasets from SAM database.
+Wrapper script for listNewDatasets utility module.
+"""
+
+import os
+import sys
+
+# Add utils directory to path
+utils_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'utils')
+sys.path.insert(0, utils_dir)
+
+from listNewDatasets import main
+
+if __name__ == '__main__':
+    main()
+

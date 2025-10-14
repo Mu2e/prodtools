@@ -11,12 +11,12 @@ from utils.samweb_wrapper import list_definitions
 
 def list_jobdefs(dsconf):
     """List all job definitions for a given dsconf using samweb_wrapper."""
-    pattern_regex = f"cnf\\.mu2e\\..*\\.{dsconf}\\.tar"
+    # Use SAMWeb server-side filtering with % wildcard
+    pattern = f"cnf.mu2e.%.{dsconf}.tar"
     print(f"Searching for job definitions with pattern: cnf.mu2e.*.{dsconf}.tar")
     
     try:
-        all_definitions = list_definitions()
-        definitions = [defn for defn in all_definitions if re.match(pattern_regex, defn)]
+        definitions = list_definitions(defname=pattern)
         
         if not definitions:
             print(f"No job definitions found for dsconf: {dsconf}")
@@ -34,7 +34,7 @@ def list_jobdefs(dsconf):
         return []
 
 def find_matching_jobdef(jobdefs, desc):
-    """Find the best matching job definition by examining output files."""
+    """Find the matching job definition by examining output files."""
     
     for jobdef in jobdefs:
         # Locate the tarball first
@@ -45,9 +45,10 @@ def find_matching_jobdef(jobdefs, desc):
         job_io = Mu2eJobIO(tarball_path)
         outputs = job_io.job_outputs(0)
         
-        # Check if description appears in any output file
-        for output_key, output_file in outputs.items():
-            if desc in output_file:
+        # Check for exact match: desc should be the third field in output filename
+        for output_file in outputs.values():
+            output_parts = output_file.split('.')
+            if len(output_parts) == 6 and output_parts[2] == desc:
                 print(f"Found match in output files: {jobdef}")
                 print(f"Output file: {output_file}")
                 return tarball_path
@@ -55,21 +56,25 @@ def find_matching_jobdef(jobdefs, desc):
     return None
 
 def locate_tarball(jobdef):
-    """Locate tarball using our Python dataset filelist class."""
-    print(f"Using dataset filelist to locate: {jobdef}")
-    from utils.datasetFileList import locate_all_dataset_files
-    
-    tarball_paths = locate_all_dataset_files(jobdef)
-    if not tarball_paths:
-        raise RuntimeError(f"Tarball not found for: {jobdef}")
-    
-    # Use the first tarball found
-    tarball_path = tarball_paths[0]
-    if not os.path.exists(tarball_path):
-        raise RuntimeError(f"Tarball not found for: {jobdef}")
-    
-    print(f"Found tarball at: {tarball_path}")
-    return tarball_path
+    print(f"Using datasetFileList to locate: {jobdef}")
+
+    try:
+        from utils.datasetFileList import get_dataset_files
+        file_paths = get_dataset_files(jobdef)
+        
+        if not file_paths:
+            raise RuntimeError(f"Tarball not found for: {jobdef}")
+        
+        # Get the first tarball found
+        tarball_path = file_paths[0]
+        if not os.path.exists(tarball_path):
+            raise RuntimeError(f"Tarball not found for: {jobdef}")
+        
+        print(f"Found tarball at: {tarball_path}")
+        return tarball_path
+        
+    except Exception as e:
+        raise RuntimeError(f"Error locating tarball for {jobdef}: {e}")
 
 
 def main():

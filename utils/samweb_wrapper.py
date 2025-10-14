@@ -7,20 +7,13 @@ import os
 import sys
 from typing import List, Dict, Optional, Union
 
-try:
-    from samweb_client import SAMWebClient
-except ImportError:
-    print("Warning: samweb_client module not available. Please set it up in your environment.")
-    SAMWebClient = None
+from samweb_client import SAMWebClient #type: ignore
 
 class SAMWebWrapper:
     """Wrapper for samweb_client to replace external samweb commands."""
     
     def __init__(self):
         """Initialize the SAMWeb client."""
-        if SAMWebClient is None:
-            raise RuntimeError("samweb_client module not available")
-        
         self.client = SAMWebClient()
     
     def count_files(self, query: str) -> int:
@@ -104,10 +97,17 @@ class SAMWebWrapper:
             print(f"Error listing definition files for {definition_name}: {e}")
             return []
     
-    def list_definitions(self) -> List[str]:
-        """List all definitions (equivalent to samweb list-definitions)."""
+    def list_definitions(self, defname: str = None) -> List[str]:
+        """List all definitions (equivalent to samweb list-definitions).
+        
+        Args:
+            defname: Optional pattern to filter definitions (supports % wildcard)
+        """
         try:
-            result = self.client.listDefinitions()
+            if defname:
+                result = self.client.listDefinitions(defname=defname)
+            else:
+                result = self.client.listDefinitions()
             
             # Convert filter object to list if needed
             if hasattr(result, '__iter__') and not isinstance(result, list):
@@ -214,9 +214,12 @@ def list_definition_files(definition_name: str) -> List[str]:
     """List files in a definition."""
     return get_samweb_wrapper().list_definition_files(definition_name)
 
-def list_definitions() -> List[str]:
-    """List all definitions."""
-    return get_samweb_wrapper().list_definitions()
+def list_definitions(defname: str = None) -> List[str]:
+    """List all definitions.
+    Args:
+        defname: Optional pattern to filter definitions (supports % wildcard)
+    """
+    return get_samweb_wrapper().list_definitions(defname)
 
 def get_metadata(filename: str) -> Dict:
     """Get metadata for a file."""

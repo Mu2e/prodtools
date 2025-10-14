@@ -58,7 +58,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -100,7 +100,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -126,7 +126,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -147,7 +147,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -168,7 +168,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -189,7 +189,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },

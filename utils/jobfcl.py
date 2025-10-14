@@ -18,6 +18,7 @@ import re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import Mu2eFilename, Mu2eJobBase
+import samweb_client  # type: ignore
 
 class Mu2eJobFCL(Mu2eJobBase):
     """Python port of mu2ejobfcl functionality."""
@@ -68,26 +69,34 @@ class Mu2eJobFCL(Mu2eJobBase):
             local_dir = local_dir.rstrip('/')
             return f"{local_dir}/{filename}"
         
-        # Use SAM to locate the file
-        from .samweb_wrapper import locate_file
+        # Use SAM to locate the file - get all locations
+        sam = samweb_client.SAMWebClient(experiment='mu2e')
         
-        location = locate_file(filename)
-        if not location:
+        try:
+            locations = sam.locateFile(filename)
+        except Exception as e:
+            raise ValueError(f"Could not locate file: {filename}: {e}")
+        
+        if not locations:
             raise ValueError(f"Could not locate file: {filename}")
         
-        # Handle case where locate_file returns a dict
-        if isinstance(location, dict):
-            path = location.get('location', location.get('path', ''))
-            if not path:
-                raise ValueError(f"Could not determine location for file: {filename}")
-            return path
+        # Filter locations by requested location type (disk/tape)
+        # Each location is a dict with 'location_type' and 'full_path'
+        preferred_locations = [loc for loc in locations if loc.get('location_type') == self.inloc]
         
-        # Handle string location
-        if isinstance(location, str):
-            return location
+        # Use preferred location if available, otherwise fall back to first available
+        if preferred_locations:
+            selected_location = preferred_locations[0]
+        else:
+            # Fallback to any available location
+            selected_location = locations[0]
         
-        # Unexpected location type
-        raise ValueError(f"Unexpected location type for file {filename}: {type(location)}")
+        # Extract the full path
+        path = selected_location.get('full_path', '')
+        if not path:
+            raise ValueError(f"Could not determine path for file: {filename}")
+        
+        return path
     
     def _format_filename(self, filename: str) -> str:
         """Format filename according to protocol."""

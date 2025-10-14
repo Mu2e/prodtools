@@ -1,0 +1,67 @@
+[
+    {
+	"desc": "POT_Run1_a",
+	"dsconf": "MDC2025ac",
+	"fcl": "Production/JobConfig/beam/POT.fcl",
+	"fcl_overrides": {
+		"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+	},
+	"njobs": 20000,
+	"events": 5000,
+	"run": 1430,
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+	"owner": "mu2e"
+    },
+    {
+	"desc": "CosmicDSStopsCRY",	
+	"dsconf": "MDC2025ab",
+	"fcl": "Production/JobConfig/cosmic/S1DSStopsCRY.fcl",
+	"fcl_overrides": {
+		"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+		"outputs.S1LowOutput.fileName": "/dev/null"
+	},
+	"njobs": 20000,
+	"events": 2500000,
+	"run": 1430,
+	"outloc": {
+		"*.art": "tape"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+	"owner": "mu2e"
+    },
+    {
+		"desc": "ExtractedCRY",
+		"dsconf": "MDC2025ad",
+		"fcl": "Production/JobConfig/cosmic/ExtractedCRY.fcl",
+		"fcl_overrides": {
+			"services.GeometryService.inputFile": "Production/JobConfig/cosmic/geom_cosmic_extracted_v02.txt"
+		},
+		"njobs": 20000,
+		"events": 500000,
+		"run": 1400,
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh",
+		"owner": "mu2e"
+	},
+    {
+	"desc": "PiBeam",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/beam/POT_infinitepion.fcl",
+		"fcl_overrides": {
+			"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+		},
+		"njobs": 10000,
+		"events": 200000,
+		"run": 1430,
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+		"owner": "mu2e"
+	}
+]

@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import run, replace_file_extensions, write_fcl
 from utils.jobquery import Mu2eJobPars
 from utils.jobiodetail import Mu2eJobIO
+from samweb_client import SAMWebClient #type: ignore
 
 def main():
     parser = argparse.ArgumentParser(description="Execute production jobs from job definitions.")
@@ -67,7 +68,7 @@ def main():
     job_index_num = job_index - cumulative_jobs
     inloc = jobdef['inloc']
 
-    # Copy jobdef to local directory (environment already set up by shell wrapper)
+    # Copy jobdef to local directory
     run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True)
 
     # List input files
@@ -81,13 +82,25 @@ def main():
     
     if args.copy_input and infiles.strip() and inloc != "none":
         # Copy inputs locally
-        print(f"Copying input files locally: {infiles}")
+        print(f"Copying input files locally from {inloc}: {infiles}")
         FCL = write_fcl(tarball, f"dir:{os.getcwd()}/indir", 'file', job_index_num)
-        run(f"mdh copy-file -e 3 -o -v -s {inloc} -l local {infiles}", shell=True)
+
+        # Copy each file individually, detecting actual location from SAMWeb
+        sam = SAMWebClient(experiment='mu2e')
+        run("echo 'Starting to copy input files locally'", shell=True)
+        for file in all_files:
+            # Detect actual location using SAMWeb for this specific file
+            locations = sam.locateFile(file)
+            if not locations or 'location_type' not in locations[0]:
+                raise RuntimeError(f"Could not detect location for file: {file}")
+            file_inloc = locations[0]['location_type']
+            print(f"Detected location of {file}: {file_inloc}")
+            print(f"Copying {file} from {file_inloc}")
+            run(f"mdh copy-file -e 3 -o -v -s {file_inloc} -l local {file}", shell=True)
         run(f"mkdir indir; mv *.art indir/", shell=True)
     else:
         # Use default settings (no inputs or remote inputs)
-        print(f"Using remote inputs from {inloc}")
+        print(f"Using streaming inputs from {inloc}")
         FCL = write_fcl(tarball, inloc, 'root', job_index_num)
     
     print(f"FCL file generated: {FCL}")

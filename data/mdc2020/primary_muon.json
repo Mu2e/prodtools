@@ -1,0 +1,93 @@
+[
+    {
+    "desc": "FlateMinus",
+    "dsconf": "MDC2020bb",
+    "fcl": "Production/JobConfig/primary/FlateMinus.fcl",
+    "fcl_overrides": {
+        "physics.producers.generate.endMom": 120
+    },
+    "resampler_name": "TargetStopResampler",
+    "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+    "njobs": 500,
+    "events": 15000,
+    "run": 1202,
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bb/setup.sh",
+    "owner": "mu2e",
+    "inloc": "disk",
+    "outloc": {
+        "*.art": "disk"
+    },
+    "sequential_aux": true
+    },
+    {
+        "desc": "RMCFlatGammaCalo",
+        "dsconf": "MDC2020bb",
+        "fcl": "Production/JobConfig/primary/FlatGammaCalo.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "njobs": 200,
+        "events": 75000,
+        "run": 1202,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "RMCFlatGamma",
+        "dsconf": "MDC2020bb",
+        "fcl": "Production/JobConfig/primary/FlatGamma.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "njobs": 2000,
+        "events": 500000,
+        "run": 1202,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    }, 
+    {
+        "desc": "FlatMuMinus",
+        "dsconf": "MDC2020bb",
+        "fcl": "Production/JobConfig/primary/FlatMuMinus.fcl",
+        "fcl_overrides": {
+            "physics.producers.generate.endMom": 120
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "njobs": 500,
+        "events": 15000,
+        "run": 1202,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "RMCFlatInternal",
+        "dsconf": "MDC2020bb",
+        "fcl": "Production/JobConfig/primary/RMCFlatInternal.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "njobs": 200,
+        "events": 75000,
+        "run": 1202,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    }
+]
