@@ -39,45 +39,32 @@ class Mu2eDSName:
     def __init__(self, dsname: str):
         self.dsname = dsname
     
+    def _get_base_path(self) -> str:
+        """Determine the correct base path based on dataset type."""
+        if self.dsname.startswith(('sim.', 'dts.')):
+            return "phy-sim"
+        return "phy-etc"
+    
+    def _build_path(self, location: str) -> str:
+        """Build the full path for a given location."""
+        base_path = self._get_base_path()
+        ds_path = self.dsname.replace('.', '/')
+        
+        location_map = {
+            'disk': f"/pnfs/mu2e/persistent/datasets/{base_path}/{ds_path}",
+            'tape': f"/pnfs/mu2e/tape/{base_path}/{ds_path}",
+            'scratch': f"/pnfs/mu2e/scratch/datasets/{base_path}/{ds_path}"
+        }
+        
+        return location_map.get(location, "")
+    
     def absdsdir(self, location: str) -> str:
         """Get absolute dataset directory for a location."""
-        # Determine the correct base path based on dataset type
-        if self.dsname.startswith('log.'):
-            base_path = "phy-etc"
-        elif self.dsname.startswith('sim.') or self.dsname.startswith('dts.'):
-            base_path = "phy-sim"
-        else:
-            base_path = "phy-etc"  # default
-        
-        # Standard Mu2e dataset locations (tape has different structure)
-        if location == 'disk':
-            return f"/pnfs/mu2e/persistent/datasets/{base_path}/{self.dsname.replace('.', '/')}"
-        elif location == 'tape':
-            return f"/pnfs/mu2e/tape/{base_path}/{self.dsname.replace('.', '/')}"
-        elif location == 'scratch':
-            return f"/pnfs/mu2e/scratch/datasets/{base_path}/{self.dsname.replace('.', '/')}"
-        else:
-            return ""
+        return self._build_path(location)
     
     def location_root(self, location: str) -> str:
-        """Get location root path."""
-        # Determine the correct base path based on dataset type
-        if self.dsname.startswith('log.'):
-            base_path = "phy-etc"
-        elif self.dsname.startswith('sim.') or self.dsname.startswith('dts.'):
-            base_path = "phy-sim"
-        else:
-            base_path = "phy-etc"  # default
-        
-        # Return the full path structure like the original Perl script
-        if location == 'disk':
-            return f"/pnfs/mu2e/persistent/datasets/{base_path}/{self.dsname.replace('.', '/')}"
-        elif location == 'tape':
-            return f"/pnfs/mu2e/tape/{base_path}/{self.dsname.replace('.', '/')}"
-        elif location == 'scratch':
-            return f"/pnfs/mu2e/scratch/datasets/{base_path}/{self.dsname.replace('.', '/')}"
-        else:
-            return ""
+        """Get location root path (same as absdsdir)."""
+        return self._build_path(location)
 
 def parse_args():
     """Parse command line arguments exactly like the Perl version."""
@@ -104,8 +91,7 @@ def parse_args():
         sys.exit(1)
     
     # Check option consistency
-    location_options = [args.disk, args.tape, args.scratch]
-    used_opts = sum(location_options)
+    used_opts = sum([args.disk, args.tape, args.scratch])
     
     if args.basename and used_opts > 0:
         print("Error: inconsistent options: --basename conflicts with location options", file=sys.stderr)
@@ -225,20 +211,33 @@ def main():
         for f in sorted(fns):
             try:
                 locations = samweb.locate_files([f])
-                if f in locations and locations[f]:
-                    for location_info in locations[f]:
-                        if isinstance(location_info, dict) and 'full_path' in location_info:
-                            full_path = location_info['full_path']
-                            # Remove storage system prefixes
-                            if full_path.startswith('enstore:'):
-                                full_path = full_path[8:]
-                            elif full_path.startswith('dcache:'):
-                                full_path = full_path[7:]
-                            
-                            if full_path.startswith('/'):
-                                final_path = os.path.join(full_path, f)
-                                print(final_path)
-                                break
+                
+                # Skip if file not found in locations
+                if f not in locations or not locations[f]:
+                    continue
+                
+                # Process each location
+                for location_info in locations[f]:
+                    # Skip if not a dict or missing full_path
+                    if not isinstance(location_info, dict) or 'full_path' not in location_info:
+                        continue
+                    
+                    full_path = location_info['full_path']
+                    
+                    # Remove storage system prefixes
+                    if full_path.startswith('enstore:'):
+                        full_path = full_path[8:]
+                    elif full_path.startswith('dcache:'):
+                        full_path = full_path[7:]
+                    
+                    # Only print if it's an absolute path
+                    if not full_path.startswith('/'):
+                        continue
+                    
+                    final_path = os.path.join(full_path, f)
+                    print(final_path)
+                    break  # Take first valid location
+                    
             except BrokenPipeError:
                 break
             except Exception:
