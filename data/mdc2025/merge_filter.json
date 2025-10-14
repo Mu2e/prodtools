@@ -1,0 +1,29 @@
+[
+    {
+	"desc": "CosmicCRYSpillSplitter",
+	"dsconf": "MDC2025ac",
+	"fcl": "Production/JobConfig/cosmic/SpillSplitter.fcl",
+	"input_data": "dts.mu2e.CosmicCRYAll.MDC2025ac.art",
+	"merge_factor": 10,
+	"inloc": "tape",
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+    },
+	{
+		"desc": "PiBeamCat",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": "sim.mu2e.PiBeam.MDC2025ac.art",
+		"fcl_overrides": {
+			"outputs.out.fileName": "sim.owner.PiBeamCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"merge_factor": 100,
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	}  
+]
