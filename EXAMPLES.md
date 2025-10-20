@@ -10,7 +10,7 @@ This document provides practical examples for using the Python-based Mu2e produc
 - **[Mixing Jobs](#3-mixing-job-definitions)** - Complete guide to mixing jobs
 - **[JSON Expansion](#4-json-configuration-expansion)** - Parameter space exploration
 - **[Production Execution](#5-production-job-execution)** - Run production workflows
-- **[Additional Tools](#additional-tools)** - Family tree visualization, log analysis, filter efficiency, dataset monitoring
+- **[Additional Tools](#additional-tools)** - Family tree visualization, log analysis, filter efficiency, dataset monitoring, recovery datasets
 
 ## Environment Setup
 
@@ -77,6 +77,9 @@ The `prodtools` package provides implementations of Mu2e production tools:
 - `logparser` - Analyze job performance metrics from log files
 - `genFilterEff` - Calculate generation filter efficiency for datasets
 - `datasetFileList` - List files in datasets with pnfs paths
+- `listNewDatasets` - Monitor recently created datasets
+- `mkrecovery` - Create recovery dataset definitions for missing files
+- `plot_logs` - Visualize log metrics merged with NERSC job counts
 
 ## 1. Creating Job Definitions
 
@@ -574,20 +577,39 @@ The CSV file contains per-file metrics with columns:
 - `VmPeak [GB]` - Peak virtual memory in GB
 - `VmHWM [GB]` - Memory high water mark in GB
 
-**Visualizing log metrics:**
-```bash
-# Generate plots from CSV data
-$ python3 utils/plot_logs.py log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.csv
-Saved: log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.png
+**Visualizing log metrics with NERSC job counts:**
 
-Files: 1234
-CPU:  0.25 ± 0.03 h
-Real: 0.28 ± 0.04 h
-Mem:  1.64 ± 0.12 GB
+The NERSC job counts CSV can be exported from the [Fermilab batch monitoring dashboard](https://fifemon.fnal.gov/monitor/d/000000053/experiment-batch-details?from=now-30d&to=now&var-experiment=mu2e&orgId=1&viewPanel=10) (panel 10: "Running Jobs").
+
+```bash
+# First activate the Python environment with pandas
+$ pyenv ana
+
+# Generate merged plots from log CSV and NERSC job counts CSV
+$ python3 utils/plot_logs.py log.mu2e.PiBeam.MDC2025ac.csv data/nersc_runjobs.csv
+Log data: 5000 points from 2025-10-07 09:41:49 to 2025-10-08 00:59:06
+NERSC data: 920 points from 2025-09-17 17:00:00 to 2025-10-14 01:00:00
+Merged: 5000 points
+
+Saved: log.mu2e.PiBeam.MDC2025ac.png
+
+Files: 5000
+CPU:  0.94 ± 0.13 h
+Real: 1.02 ± 0.26 h
+Mem:  2.25 ± 0.00 GB
+
+Correlations with NERSC-Perlmutter-CPU:
+  CPU [h]:      -0.445
+  Real [h]:     -0.406
+  VmPeak [GB]:  -0.012
+  VmHWM [GB]:   0.153
 ```
 
-The visualization script creates:
-- Time series plots for CPU/Real time and Memory usage
+The visualization script creates a 3-panel plot showing:
+- Running jobs on NERSC-Perlmutter-CPU over time (top)
+- CPU/Real time metrics from job logs (middle)
+- Memory usage (VmPeak/VmHWM) from job logs (bottom)
+- Correlation statistics between job counts and performance metrics
 - Mean lines with values in legends
 - Statistics summary printed to console
 - PNG output with same basename as input CSV
@@ -729,3 +751,44 @@ The tool extracts dataset names from filenames by taking the first 4 dot-separat
 - Uses `samweb` CLI commands for database queries
 - Follows prodtools design patterns with class-based structure
 - Supports both standalone and module usage
+
+### Create Recovery Datasets (`mkrecovery`)
+
+Identify missing files from a production and create a SAM dataset definition for recovery:
+
+```bash
+# Set up environment
+mu2einit
+muse setup ops
+
+# Create recovery dataset for missing files
+mkrecovery /pnfs/mu2e/.../cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar \
+           dts.mu2e.EarlyNeutralsFlash.MDC2025ac.art \
+           40000
+```
+
+**Example output:**
+```
+Missing: 208 of 40000
+Created SAM definition: dts.mu2e.EarlyNeutralsFlash.MDC2025ac-recovery
+```
+
+**What `mkrecovery` does:**
+1. **Reads job definition** - Extracts expected output file pattern from tarball
+2. **Queries SAM dataset** - Gets actual files that were produced
+3. **Identifies missing files** - Compares expected vs actual
+4. **Creates SAM definition** - Recovery dataset with `etc` input files for resubmission
+
+**To use the recovery dataset:**
+```bash
+# List files in the recovery dataset
+samweb list-definition-files dts.mu2e.EarlyNeutralsFlash.MDC2025ac-recovery
+
+# Count files that need recovery
+samweb count-definition-files dts.mu2e.EarlyNeutralsFlash.MDC2025ac-recovery
+
+# Use with job submission (POMS)
+# Reference the recovery definition in your campaign configuration
+```
+
+The recovery definition contains `etc.mu2e.index.000.JJJJJJJ.txt` files that can be used to resubmit only the missing jobs.

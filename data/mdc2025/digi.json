@@ -1,0 +1,17 @@
+[
+    {
+	"desc": "DigiCosmicSignal",
+	"dsconf": "MDC2025ad",
+	"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+	"input_data": "dts.mu2e.CosmicSignal.MDC2025ac.art",
+    "fcl_overrides": {
+        "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+    },
+	"merge_factor": 100,
+	"inloc": "tape",
+	"outloc": {
+		"*.art": "tape"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"
+    }
+]
