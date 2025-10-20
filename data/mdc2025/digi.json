@@ -1,11 +1,12 @@
 [
     {
-	"desc": "DigiCosmicSignal",
-	"dsconf": "MDC2025ad",
+	"desc": "CosmicSignalOnSpill",
+	"dsconf": "MDC2025ad_best_v1_3",
 	"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
 	"input_data": "dts.mu2e.CosmicSignal.MDC2025ac.art",
     "fcl_overrides": {
-        "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+		"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+		"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
     },
 	"merge_factor": 100,
 	"inloc": "tape",
@@ -13,5 +14,85 @@
 		"*.art": "tape"
 	},
 	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"
-    }
+    },
+	{
+		"desc": "CePlusEndpointOnSpill",
+		"dsconf": "MDC2025ad_best_v1_3",
+		"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+		"input_data": "dts.mu2e.CePlusEndpoint.MDC2025ac.art",
+		"fcl_overrides": {
+			"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+			"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
+		},
+		"merge_factor": 10,
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"
+	},
+	{
+		"desc": "CeEndpointOnSpill",
+		"dsconf": "MDC2025ad_best_v1_3",
+		"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+		"input_data": "dts.mu2e.CeEndpoint.MDC2025ac.art",
+		"fcl_overrides": {
+			"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+			"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
+		},
+		"merge_factor": 10,
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"
+	},
+	{
+		"desc": "CePLeadingLogOnSpill",
+		"dsconf": "MDC2025ad_best_v1_3",
+		"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+		"input_data": "dts.mu2e.CePLeadingLog.MDC2025ac.art",
+		"fcl_overrides": {
+			"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+			"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
+		},
+		"merge_factor": 10,
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"
+	},
+	{
+		"desc": "CeMLeadingLogOnSpill",
+		"dsconf": "MDC2025ad_best_v1_3",
+		"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+		"input_data": "dts.mu2e.CeMLeadingLog.MDC2025ac.art",
+		"fcl_overrides": {
+			"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+			"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
+		},
+		"merge_factor": 10,
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"
+	},
+	{
+		"desc": "DIOtail95OnSpill",
+		"dsconf": "MDC2025ad_best_v1_3",
+		"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+		"input_data": "dts.mu2e.DIOtail95.MDC2025ac.art",
+		"fcl_overrides": {
+			"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+			"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
+		},
+		"merge_factor": 100,
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"
+	}
 ]
