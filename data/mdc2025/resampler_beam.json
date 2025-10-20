@@ -75,5 +75,90 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
         "sequential_aux": true
+    },
+    {
+        "desc": "PiMinusFilter",
+        "dsconf": "MDC2025ac",
+        "fcl_overrides": {
+            "physics.filters.PionFilter.simParticles": "TargetPiStopFilter",
+            "services.TFileService.fileName": "/dev/null"
+        },
+        "fcl": "Production/JobConfig/primary/TargetPiStopPreFilter.fcl",
+        "input_data": "sim.mu2e.PiTargetStops.MDC2025ac.art",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "merge_factor": 10,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+    },
+    {
+        "desc": "RPCInternalPhysical",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/primary/RPCInternalPhysical.fcl",
+        "fcl_overrides": {
+            "physics.filters.TargetPiStopResampler.mu2e.products.genParticleMixer.mixingMap": [["beamResampler", ""]],
+            "physics.filters.TargetPiStopResampler.mu2e.products.simParticleMixer.mixingMap": [["TargetPiStopFilter", ""]],
+            "physics.filters.TargetPiStopResampler.mu2e.products.stepPointMCMixer.mixingMap": [["TargetPiStopFilter", "virtualdetector"]],
+            "physics.filters.TargetPiStopResampler.mu2e.products.volumeInfoMixer.srInput": "compressPVTargetPiStops",
+            "physics.filters.StopSelector.stepPointMCs": "TargetPiStopResampler:virtualdetector"
+        },
+        "input_data": "sim.mu2e.PiMinusFilter.MDC2025ac.art",
+        "resampler_name": "TargetPiStopResampler",
+        "njobs": 4000,
+        "events": 25000,
+        "run": 1430,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCExternalPhysical",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/primary/RPCExternalPhysical.fcl",
+        "fcl_overrides": {
+            "physics.filters.TargetPiStopResampler.mu2e.products.genParticleMixer.mixingMap": [["beamResampler", ""]],
+            "physics.filters.TargetPiStopResampler.mu2e.products.simParticleMixer.mixingMap": [["TargetPiStopFilter", ""]],
+            "physics.filters.TargetPiStopResampler.mu2e.products.stepPointMCMixer.mixingMap": [["TargetPiStopFilter", "virtualdetector"]],
+            "physics.filters.TargetPiStopResampler.mu2e.products.volumeInfoMixer.srInput": "compressPVTargetPiStops",
+            "physics.filters.StopSelector.stepPointMCs": "TargetPiStopResampler:virtualdetector"
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": "sim.mu2e.PiMinusFilter.MDC2025ac.art",
+        "njobs": 4000,
+        "events": 1000000,
+        "run": 1430,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCPhysicalStops",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/beam/PhysicalPionStops.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "resampler_name": "StopResampler",
+        "input_data": "sim.mu2e.PiTargetStops.MDC2025ac.art",
+        "njobs": 2000,
+        "events": 5000000,
+        "run": 1430,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
     }
+
 ]
