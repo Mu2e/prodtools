@@ -41,7 +41,7 @@ class Mu2eDSName:
     
     def _get_base_path(self) -> str:
         """Determine the correct base path based on dataset type."""
-        if self.dsname.startswith(('sim.', 'dts.')):
+        if self.dsname.startswith(('sim.', 'dts.', 'dig.', 'mcs.')):
             return "phy-sim"
         return "phy-etc"
     
@@ -148,7 +148,7 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     
     # Get files from SAM
     samweb = get_samweb_wrapper()
-    fns = samweb.list_definition_files(dataset_name)
+    fns = samweb.list_files(f"dh.dataset {dataset_name}")
     
     if not fns:
         raise RuntimeError(f"No files with dh.dataset={dataset_name} are registered in SAM.")
@@ -157,24 +157,15 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     
     # Determine location
     if location:
-        # User specified a location - verify it exists
-        dir_path = ds.absdsdir(location)
-        if not os.path.isdir(dir_path):
-            raise RuntimeError(f"Dataset {dataset_name} is not present in location '{location}'")
         fileloc = location
     else:
-        # Auto-detect location
-        found = []
+        # Auto-detect: check which location directory exists
+        fileloc = None
         for loc in stdloc:
-            dir_path = ds.absdsdir(loc)
-            if os.path.isdir(dir_path):
-                found.append(loc)
-        
-        if len(found) == 1:
-            fileloc = found[0]
-        elif len(found) > 1:
-            raise RuntimeError(f"Dataset {dataset_name} exists in multiple locations: {', '.join(found)}")
-        else:
+            if os.path.isdir(ds.absdsdir(loc)):
+                fileloc = loc
+                break
+        if not fileloc:
             raise RuntimeError(f"Dataset {dataset_name} not found in any standard location")
     
     # Construct paths
@@ -196,7 +187,7 @@ def main():
     # Handle --basename mode (just print filenames)
     if args.basename:
         samweb = get_samweb_wrapper()
-        fns = samweb.list_definition_files(dsname)
+        fns = samweb.list_files(f"dh.dataset {dsname}")
         for f in sorted(fns):
             try:
                 print(f)
