@@ -46,8 +46,25 @@ class SAMWebWrapper:
             print(f"Error locating file {filename}: {e}")
             return ""
     
-    def locate_files(self, filenames: List[str]) -> Dict[str, str]:
-        """Locate multiple files in batch (equivalent to samweb locate-files)."""
+    def locate_file_full(self, filename: str) -> List[Dict]:
+        """Locate a file and return full location details.
+        
+        Returns:
+            List of location dictionaries with keys like 'location_type', 'full_path', etc.
+        """
+        try:
+            return self.client.locateFile(filename)
+        except Exception as e:
+            print(f"Error locating file {filename}: {e}")
+            return []
+    
+    def locate_files(self, filenames: List[str]) -> Dict[str, List[Dict]]:
+        """Locate multiple files in batch (equivalent to samweb locate-files).
+        
+        Returns:
+            Dict mapping filename to list of location dictionaries.
+            Each location dict has keys: 'location_type', 'full_path', 'location', 'date', 'label', 'system'.
+        """
         try:
             return self.client.locateFiles(filenames)
         except Exception as e:
@@ -197,6 +214,10 @@ def list_files(query: str, summary: bool = False) -> List[str]:
 def locate_file(filename: str) -> str:
     """Locate a file."""
     return get_samweb_wrapper().locate_file(filename)
+
+def locate_file_full(filename: str) -> List[Dict]:
+    """Locate a file and return full location details."""
+    return get_samweb_wrapper().locate_file_full(filename)
 
 def create_definition(definition_name: str, query: str) -> bool:
     """Create a definition."""

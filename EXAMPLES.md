@@ -49,7 +49,7 @@ This script automatically:
 # Production tools
 json2jobdef --json config.json --index 0
 fcldump --dataset dts.mu2e.RPCExternal.MDC2020az.art
-runjobdef --jobdefs jobdefs.txt --dry-run
+runjobdef --jobdesc jobdefs_list.json --dry-run
 runfcl --fcl template.fcl --nevents 1000 --dry-run
 
 # Test tools (run from test/ directory)
@@ -66,7 +66,7 @@ The `prodtools` package provides implementations of Mu2e production tools:
 **Core Production Tools:**
 - `json2jobdef` - Create job definition tarballs from JSON configs
 - `fcldump` - Generate FCL configurations from jobdefs, datasets, or target files
-- `runjobdef` - Execute production jobs from job definitions
+- `runmu2e` - Execute production jobs from job definitions
 - `runfcl` - Execute jobs from FCL templates (one-in-one-out processing)
 - `mkidxdef` - Create SAM index definitions
 - `jsonexpander` - Generate parameter combinations from templates
@@ -305,7 +305,7 @@ runfcl --fcl template.fcl --nevents 1000 --dry-run
 4. **Handles outputs** and creates `output.txt` for SAM registration
 5. **Runs pushOutput** for file registration
 
-### B. Job Definition Execution (`runjobdef`)
+### B. Job Definition Execution (`runmu2e`)
 
 Execute production workflows from job definition files:
 
@@ -315,7 +315,7 @@ Execute production workflows from job definition files:
 export fname=etc.mu2e.index.000.0000000.txt
 
 # Run a production job with dry-run mode
-runjobdef --jobdefs jobdefs_list.json --dry-run --nevts 5
+runmu2e --jobdesc jobdefs_list.json --dry-run --nevts 5
 ```
 
 **Understanding the `fname` format:**
@@ -323,7 +323,7 @@ runjobdef --jobdefs jobdefs_list.json --dry-run --nevts 5
 - `etc.mu2e.index.001.0000000.txt` means job index 1
 - The job index determines which job definition to use from the jobdefs file
 
-### C. What `runjobdef` Does
+### C. What `runmu2e` Does
 
 1. **Token Validation** - Verifies grid authentication
 2. **Job Parsing** - Extracts parameters from jobdefs file using the `fname` index
@@ -349,12 +349,12 @@ Mu2e command: mu2e -c cnf.mu2e.NeutralsFlash.MDC2025ab.0.fcl -n 5
 ### D. Command Line Options
 
 ```bash
-runjobdef -h
-Usage: runjobdef [options] --jobdefs <jobdefs_file>
-  --jobdefs   Path to job definitions file (required)
+runmu2e -h
+Usage: runmu2e [options] --jobdesc <jobdesc_file>
+  --jobdesc           Path to job descriptions file (required)
   --copy-input        Copy input files using mdh
-  --dry-run          Print commands without actually running pushOutput
-  --nevts <n>        Number of events to process (-1 for all events)
+  --dry-run           Print commands without actually running pushOutput
+  --nevts <n>         Number of events to process (-1 for all events)
 ```
 
 ### E. Example jobdefs File Format
