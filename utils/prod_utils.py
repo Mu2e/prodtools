@@ -492,6 +492,42 @@ def process_jobdef(jobdesc, fname, args):
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, infiles, outputs
 
+def push_output(output_specs, output_file="output.txt", parents_file="parents_list.txt"):
+    """
+    Generic function to push output files.
+    
+    Args:
+        output_specs: List of tuples (location, filename, parents_file)
+        output_file: Name of the output specification file
+        parents_file: Name of the parents list file (optional)
+    
+    Returns:
+        int: Exit code from pushOutput command
+    """
+    import glob
+    
+    output_lines = []
+    for spec in output_specs:
+        location, pattern, parents = spec
+        # Handle glob patterns
+        matching_files = glob.glob(pattern) if '*' in pattern else [pattern]
+        for filename in matching_files:
+            if Path(filename).exists():
+                output_lines.append(f"{location} {filename} {parents}")
+            else:
+                print(f"Warning: File not found: {filename}")
+    
+    if not output_lines:
+        print(f"Warning: No files to push for {output_file}")
+        return 0
+    
+    Path(output_file).write_text("\n".join(output_lines) + "\n")
+    print(f"Pushing {len(output_lines)} file(s) via {output_file}")
+    result = run(f"pushOutput {output_file}", shell=True)
+    if result != 0:
+        print(f"Warning: pushOutput returned exit code {result}")
+    return result
+
 def push_data(outputs, infiles):
     """Handle data file management and submission using wildcard patterns from JSON outputs.
     
@@ -501,31 +537,21 @@ def push_data(outputs, infiles):
     """
     import glob
     
-    # Write parents list (input files for SAM metadata)
+    # Write parents list
     Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
     
-    output_lines = []
-    
-    # Process only the files specified in the JSON outputs
+    # Build output specifications
+    output_specs = []
     for output in outputs:
         dataset_pattern = output['dataset']
         location = output['location']
-        
-        # Find files that match the pattern (works for both wildcards and exact names)
         matching_files = glob.glob(dataset_pattern)
         print(f"Pattern '{dataset_pattern}' matched {len(matching_files)} files: {matching_files}")
-        
-        # Process each matching file
         for filename in matching_files:
-            print(f"Processing file '{filename}' -> location: {location}")
-            output_lines.append(f"{location} {filename} parents_list.txt")
-
-    Path("output.txt").write_text("\n".join(output_lines) + "\n")
-
-    # Push output using shell command directly (environment already set up by shell wrapper)
-    result = run("pushOutput output.txt", shell=True)
-    if result != 0:
-        print(f"Warning: pushOutput returned exit code {result}")
+            output_specs.append((location, filename, "parents_list.txt"))
+    
+    # Use generic push function
+    return push_output(output_specs, "output.txt", "parents_list.txt")
 
 def push_logs(fcl):
     """Handle log file management and submission.
@@ -536,21 +562,21 @@ def push_logs(fcl):
     import shutil
     
     logfile = replace_file_extensions(fcl, "log", "log")
-
-    # Copy the jobsub log if JSB_TMP is defined
+    
+    # Copy jobsub log if available
     jsb_tmp = os.getenv("JSB_TMP")
     if jsb_tmp:
-        jobsub_log = "JOBSUB_LOG_FILE"
-        src = os.path.join(jsb_tmp, jobsub_log)
+        src = os.path.join(jsb_tmp, "JOBSUB_LOG_FILE")
         print(f"Copying jobsub log from {src} to {logfile}")
-        shutil.copy(src, logfile)
-
-    # Create and push log output if the log file exists
+        try:
+            shutil.copy(src, logfile)
+        except FileNotFoundError:
+            print(f"Warning: Jobsub log not found at {src}")
+    
+    # Push log if it exists
     if Path(logfile).exists():
-        Path("log_output.txt").write_text(f"disk {logfile} parents_list.txt\n")
-        print(f"Pushing log file: {logfile}")
-        result = run("pushOutput log_output.txt", shell=True)
-        if result != 0:
-            print(f"Warning: pushOutput returned exit code {result}")
+        output_specs = [("disk", logfile, "parents_list.txt")]
+        return push_output(output_specs, "log_output.txt", "parents_list.txt")
     else:
         print(f"Warning: Log file {logfile} not found, skipping log push")
+        return 0
