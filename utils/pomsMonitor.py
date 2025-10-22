@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze POMS map JSON files."""
+"""Analyze POMS jobdesc JSON files."""
 
 import os
 import sys
@@ -15,8 +15,8 @@ from jobiodetail import Mu2eJobIO
 from samweb_wrapper import locate_file, list_files, count_files
 
 
-class PomsMapAnalyzer:
-    """Analyze POMS production map files."""
+class PomsMonitor:
+    """Analyze POMS production jobdesc files."""
     
     def __init__(self, pattern: str = "MDC202*"):
         self.pattern = pattern
@@ -54,7 +54,7 @@ class PomsMapAnalyzer:
                     campaigns[campaign] += entry.get('njobs', 0)
         
         print("=" * 60)
-        print("POMS MAP SUMMARY")
+        print("POMS JOBDESC SUMMARY")
         print("=" * 60)
         print(f"Total job definitions: {len(self.data)}")
         print(f"Total jobs planned:    {total_jobs:,}")
@@ -65,7 +65,7 @@ class PomsMapAnalyzer:
         print("=" * 60)
     
     def get_output_location(self, entry: dict) -> str:
-        """Get output location from POMS map entry."""
+        """Get output location from POMS jobdesc entry."""
         outputs = entry.get('outputs', [])
         if outputs and len(outputs) > 0:
             return outputs[0].get('location', 'N/A')
@@ -200,7 +200,7 @@ class PomsMapAnalyzer:
                 print(f"{njobs:>8} {tarball:<60}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Analyze POMS map JSON files")
+    parser = argparse.ArgumentParser(description="Analyze POMS jobdesc JSON files")
     parser.add_argument('--pattern', default='MDC202*', help='File pattern (default: MDC202*)')
     parser.add_argument('--summary', action='store_true', help='Show summary statistics')
     parser.add_argument('--list', action='store_true', help='List all job definitions')
@@ -209,7 +209,7 @@ def main():
     parser.add_argument('--sort', default='njobs', help='Sort by field (default: njobs)')
     args = parser.parse_args()
     
-    analyzer = PomsMapAnalyzer(pattern=args.pattern)
+    analyzer = PomsMonitor(pattern=args.pattern)
     analyzer.load_files()
     
     if args.campaign:

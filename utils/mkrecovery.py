@@ -9,39 +9,43 @@ from samweb_wrapper import list_files, create_definition
 
 if len(sys.argv) != 4:
     print("Usage: mkrecovery <tarball_path> <dataset> <njobs>")
-    print("\nExample:")
-    print("  mkrecovery /pnfs/mu2e/.../cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar \\")
-    print("             dts.mu2e.EarlyNeutralsFlash.MDC2025ac.art \\")
-    print("             40000")
     sys.exit(1)
 
 tarball_path, dataset, njobs = sys.argv[1], sys.argv[2], int(sys.argv[3])
 
-# Get output pattern from tarball
+# Get expected output files from tarball for all job indices
 job_io = Mu2eJobIO(tarball_path)
-output_file = list(job_io.job_outputs(0).values())[0]
-parts = output_file.split('.')
-base_name = f"{parts[0]}.{parts[1]}.{parts[2]}.{parts[3]}"
-run_number = int(parts[4].split('_')[0])
-extension = parts[5]
+all_expected = set()
+for i in range(njobs):
+    outputs = job_io.job_outputs(i)
+    all_expected.update(outputs.values())
+
+# Filter to only files matching the dataset pattern
+dataset_base = dataset.replace('.art', '')
+expected_files = {f for f in all_expected if dataset_base in f}
 
 # Get actual files from SAM
 actual_files = set(list_files(f"dh.dataset {dataset}"))
 
 # Find missing
-expected = {f"{base_name}.{run_number:06d}_{i:08d}.{extension}" for i in range(njobs)}
-missing = expected - actual_files
+missing_files = expected_files - actual_files
 
-print(f"Missing: {len(missing)} of {njobs}")
+print(f"Missing: {len(missing_files)} of {len(expected_files)}")
 
-if not missing:
+if not missing_files:
     print("✅ No missing files!")
     sys.exit(0)
 
-etc_files = []
-for filename in sorted(missing):
-    job_idx = int(filename.split('.')[4].split('_')[1])
-    etc_files.append(f"etc.mu2e.index.000.{job_idx:07d}.txt")
+# Extract job indices from missing files
+missing_indices = set()
+for filename in missing_files:
+    parts = filename.split('.')
+    if len(parts) >= 5 and '_' in parts[4]:
+        job_idx = int(parts[4].split('_')[1])
+        missing_indices.add(job_idx)
+
+# Create etc file list
+etc_files = [f"etc.mu2e.index.000.{idx:07d}.txt" for idx in sorted(missing_indices)]
 
 # Create SAM definition for recovery
 defname = f"{dataset.replace('.art', '')}-recovery"

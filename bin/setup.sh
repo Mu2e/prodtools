@@ -10,4 +10,4 @@ PRODTOOLS_ROOT="$(dirname "$PRODTOOLS_DIR")"
 export PYTHONPATH="$PRODTOOLS_ROOT:$PYTHONPATH"
 
 echo "✅ prodtools environment ready!"
-echo "   - prodtools commands available: json2jobdef, fcldump, runjobdef, etc."
+echo "   - prodtools commands available: json2jobdef, fcldump, runmu2e, etc."

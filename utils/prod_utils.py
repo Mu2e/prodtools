@@ -22,34 +22,28 @@ def setup_logging(verbose: bool) -> None:
         # Suppress samweb_client debug messages
         logging.getLogger("samweb_client").setLevel(logging.WARNING)
 
-def run(cmd, capture=False, shell=False):
+def run(cmd, shell=False):
     """
-    Run a shell command. If capture=True, return stdout. If shell=True, cmd is a string.
+    Run a shell command with real-time output streaming.
+    If shell=True, cmd is a string.
     Returns the exit code (0 for success) or raises CalledProcessError for failure.
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] Running: {cmd}")
-    try:
-        # Always capture output to see errors, even when not in capture mode
-        res = subprocess.run(cmd, shell=shell, capture_output=True, text=True, check=True)
-        if not capture:
-            if res.stdout:
-                print(f"STDOUT: {res.stdout}")
-        return res.stdout.strip() if capture else res.returncode
-    except subprocess.CalledProcessError as e:
-        print(f"=== COMMAND FAILED ===")
-        print(f"Command: {cmd}")
-        print(f"Exit code: {e.returncode}")
-        print(f"Working directory: {os.getcwd()}")
-        print(f"STDOUT length: {len(e.stdout) if e.stdout else 0}")
-        print(f"STDERR length: {len(e.stderr) if e.stderr else 0}")
-        if e.stdout:
-            print(f"STDOUT: {e.stdout}")
-        if e.stderr:
-            print(f"STDERR: {e.stderr}")
-        print(f"=== END ERROR REPORT ===")
-        # Don't exit - let the error propagate naturally to show full traceback
-        raise
+    
+    # Real-time streaming
+    process = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE, 
+                              stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in iter(process.stdout.readline, ''):
+        print(line.rstrip())
+        sys.stdout.flush()
+    
+    process.stdout.close()
+    return_code = process.wait()
+    
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, cmd)
+    return return_code
 
 
 
@@ -236,10 +230,10 @@ def parse_jobdef_fields(jobdefs_file, index=None):
 
 def make_jobdefs_list(input_file):
     """
-    Create a list of individual job definitions from a jobdef map file.
+    Create a list of individual job definitions from a jobdef jobdesc file.
     
     Args:
-        input_file: Path to jobdef map file
+        input_file: Path to jobdef jobdesc file
         
     Returns:
         List of individual job definition strings: parfile job_index inloc outloc
@@ -282,3 +276,307 @@ def create_index_definition(output_index_dataset, job_count, input_index_dataset
     print(f"Creating definition {idx_name}...")
     create_definition(idx_name, f"dh.dataset {input_index_dataset} and dh.sequencer < {idx_format}")
     describe_definition(idx_name)
+
+def validate_jobdesc(jobdesc):
+    """Validate job descriptions list structure and required fields.
+    
+    Args:
+        jobdesc: List of job description dictionaries
+        
+    Returns:
+        bool: True if template mode, False if normal mode
+        
+    Raises:
+        SystemExit: If validation fails
+    """
+    # Validate list is not empty
+    if not jobdesc:
+        print("Error: No job descriptions found in jobdesc file")
+        sys.exit(1)
+    
+    # Check if template mode (has fcl_template field)
+    is_template_mode = 'fcl_template' in jobdesc[0]
+    
+    if is_template_mode:
+        # Template mode validation
+        if len(jobdesc) > 1:
+            print("Error: Template mode (fcl_template) requires exactly one entry in jobdesc list")
+            print(f"Found {len(jobdesc)} entries. Template mode processes one file at a time.")
+            sys.exit(1)
+        
+        entry = jobdesc[0]
+        required_fields = ['fcl_template', 'setup_script', 'inloc', 'outputs']
+        for field in required_fields:
+            if field not in entry:
+                print(f"Error: Template mode requires '{field}' field")
+                sys.exit(1)
+    else:
+        # Normal mode validation
+        for i, entry in enumerate(jobdesc):
+            required_fields = ['tarball', 'njobs', 'inloc', 'outputs']
+            for field in required_fields:
+                if field not in entry:
+                    print(f"Error: Normal mode requires '{field}' field in jobdesc entry {i}")
+                    sys.exit(1)
+    
+    return is_template_mode
+
+def process_template(jobdesc_entry, fname):
+    """Process a job in template mode.
+    
+    Args:
+        jobdesc_entry: Job description dictionary
+        fname: Input filename
+        
+    Returns:
+        tuple: (fcl, simjob_setup)
+    """
+    import re
+    
+    print(f"Template mode: using fcl_template job definition")
+    
+    # Get FCL template path and validate
+    fcl_template_path = jobdesc_entry['fcl_template']
+    if not Path(fcl_template_path).is_file():
+        raise RuntimeError(f"FCL template not found: {fcl_template_path}")
+    print(f"Using FCL template: {fcl_template_path}")
+    
+    # Read FCL template from file
+    with open(fcl_template_path, 'r') as f:
+        fcl_content = f.read()
+    fcl_basename = Path(fcl_template_path).stem
+    
+    # Parse variables from input filename (format: prefix.owner.desc.dsconf.sequencer.ext)
+    # Extract filename from full path and split into parts
+    fname_base = Path(fname).name  # Get just the filename, not the full path
+    parts = fname_base.split('.')  # Split by dots: ['dig', 'mu2e', 'CosmicSignalTriggered', 'MDC2025ad', '001430_00000000', 'art']
+    if len(parts) != 6:
+        raise RuntimeError(f"Invalid filename format: {fname_base}. Expected exactly 6 dot-separated fields (prefix.owner.desc.dsconf.sequencer.ext).")
+    
+    template_vars = {
+        'owner': parts[1],      # mu2e
+        'desc': parts[2],       # CosmicSignalTriggered
+        'dsconf': parts[3],     # MDC2025ad
+        'sequencer': parts[4]   # 001430_00000000
+    }
+    
+    # Allow overriding template variables from jobdesc
+    if 'template_overrides' in jobdesc_entry:
+        template_vars.update(jobdesc_entry['template_overrides'])
+        print(f"Applied template overrides: {jobdesc_entry['template_overrides']}")
+    
+    # Parse output patterns from template
+    output_patterns = {}
+    for line in fcl_content.split('\n'):
+        match = re.match(r'(\S+\.fileName):\s*"([^"]+)"', line)
+        if match and '{' in match.group(2):
+            output_patterns[match.group(1)] = match.group(2)
+    
+    # Write FCL: template + overrides (based on input filename)
+    # Extract base name from input file (e.g., dig.mu2e.CosmicSignalTriggered.MDC2025ad.001430_00000000.art -> dig.mu2e.CosmicSignalTriggered.MDC2025ad.001430_00000000)
+    input_basename = Path(fname).stem  # Remove .art extension
+    fcl = f'{input_basename}.fcl'
+    with open(fcl, 'w') as f:
+        f.write(fcl_content)
+        f.write("\n# Template overrides:\n")
+        f.write(f'source.fileNames: ["{fname}"]\n')
+        for key, pattern in output_patterns.items():
+            # Replace all template variables in the pattern
+            output_filename = pattern.format(**template_vars)
+            f.write(f'{key}: "{output_filename}"\n')
+    
+    print(f"Template vars: {template_vars}")
+    print(f"FCL: {fcl}")
+    
+    # Use setup_script from JSON
+    simjob_setup = jobdesc_entry['setup_script']
+    print(f"Job setup script: {simjob_setup}")
+    
+    return fcl, simjob_setup
+
+def process_jobdef(jobdesc, fname, args):
+    """Process a job in normal mode.
+    
+    Args:
+        jobdesc: List of job descriptions
+        fname: Index filename
+        args: Command line arguments (needs copy_input attribute)
+        
+    Returns:
+        tuple: (fcl, simjob_setup, infiles, outputs)
+    """
+    from .jobiodetail import Mu2eJobIO
+    from .jobquery import Mu2eJobPars
+    from .samweb_wrapper import locate_file_full
+    
+    # Extract job index from filename
+    try:
+        job_index = int(fname.split('.')[4].lstrip('0') or '0')
+    except (IndexError, ValueError) as e:
+        print(f"Error: Unable to extract job index from filename: {e}")
+        sys.exit(1)
+    
+    # Find which job description this job index belongs to
+    cumulative_jobs = 0
+    jobdesc_entry = None
+    jobdesc_index = None
+    
+    for i, entry in enumerate(jobdesc):
+        if job_index < cumulative_jobs + entry['njobs']:
+            jobdesc_entry = entry
+            jobdesc_index = i
+            break
+        cumulative_jobs += entry['njobs']
+    
+    if jobdesc_entry is None:
+        total_jobs = sum(d['njobs'] for d in jobdesc)
+        print(f"Error: Job index {job_index} out of range. Total jobs available: {total_jobs}")
+        sys.exit(1)
+    
+    print(f"Job {job_index} uses definition {jobdesc_index}")
+    print(f"Global job index: {job_index}, Local job index within definition: {job_index - cumulative_jobs}")
+    
+    # Calculate local job index within this specific job definition
+    job_index_num = job_index - cumulative_jobs
+    
+    # Extract fields from JSON structure
+    inloc = jobdesc_entry['inloc']
+    tarball = jobdesc_entry['tarball']
+    
+    # Copy jobdef to local directory if not already local
+    if not Path(tarball).is_file():
+        run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True)
+
+    # List input files
+    job_io = Mu2eJobIO(tarball)
+    inputs = job_io.job_inputs(job_index_num)
+    # Flatten the dictionary values into a single list
+    all_files = []
+    for file_list in inputs.values():
+        all_files.extend(file_list)
+    infiles = " ".join(all_files)
+    
+    # Generate FCL - Normal mode with local input copy
+    if args.copy_input and infiles.strip() and inloc != "none":
+        print(f"Copying input files locally from {inloc}: {infiles}")
+        fcl = write_fcl(tarball, f"dir:{os.getcwd()}/indir", 'file', job_index_num)
+        
+        # Copy each file individually, detecting actual location from SAMWeb
+        run("echo 'Starting to copy input files locally'", shell=True)
+        for file in all_files:
+            locations = locate_file_full(file)
+            if not locations or 'location_type' not in locations[0]:
+                raise RuntimeError(f"Could not detect location for file: {file}")
+            file_inloc = locations[0]['location_type']
+            print(f"Detected location of {file}: {file_inloc}")
+            print(f"Copying {file} from {file_inloc}")
+            run(f"mdh copy-file -e 3 -o -v -s {file_inloc} -l local {file}", shell=True)
+        run(f"mkdir indir; mv *.art indir/", shell=True)
+        print(f"FCL: {fcl}")
+    # Generate FCL - Normal mode with streaming inputs
+    else:
+        print(f"Using streaming inputs from {inloc}")
+        fcl = write_fcl(tarball, inloc, 'root', job_index_num)
+        print(f"FCL: {fcl}")
+    
+    # Extract setup script from tarball
+    try:
+        jp = Mu2eJobPars(tarball)
+        simjob_setup = jp.setup()
+        print(f"Job setup script: {simjob_setup}")
+    except Exception as e:
+        print(f"ERROR: Failed to get job setup information from {tarball}")
+        print(f"Exception: {e}")
+        raise
+    
+    outputs = jobdesc_entry['outputs']
+    return fcl, simjob_setup, infiles, outputs
+
+def push_output(output_specs, output_file="output.txt", parents_file="parents_list.txt"):
+    """
+    Generic function to push output files.
+    
+    Args:
+        output_specs: List of tuples (location, filename, parents_file)
+        output_file: Name of the output specification file
+        parents_file: Name of the parents list file (optional)
+    
+    Returns:
+        int: Exit code from pushOutput command
+    """
+    import glob
+    
+    output_lines = []
+    for spec in output_specs:
+        location, pattern, parents = spec
+        # Handle glob patterns
+        matching_files = glob.glob(pattern) if '*' in pattern else [pattern]
+        for filename in matching_files:
+            if Path(filename).exists():
+                output_lines.append(f"{location} {filename} {parents}")
+            else:
+                print(f"Warning: File not found: {filename}")
+    
+    if not output_lines:
+        print(f"Warning: No files to push for {output_file}")
+        return 0
+    
+    Path(output_file).write_text("\n".join(output_lines) + "\n")
+    print(f"Pushing {len(output_lines)} file(s) via {output_file}")
+    result = run(f"pushOutput {output_file}", shell=True)
+    if result != 0:
+        print(f"Warning: pushOutput returned exit code {result}")
+    return result
+
+def push_data(outputs, infiles):
+    """Handle data file management and submission using wildcard patterns from JSON outputs.
+    
+    Args:
+        outputs: List of output specifications (dataset pattern, location)
+        infiles: Space-separated list of input files (for parents_list.txt)
+    """
+    import glob
+    
+    # Write parents list
+    Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
+    
+    # Build output specifications
+    output_specs = []
+    for output in outputs:
+        dataset_pattern = output['dataset']
+        location = output['location']
+        matching_files = glob.glob(dataset_pattern)
+        print(f"Pattern '{dataset_pattern}' matched {len(matching_files)} files: {matching_files}")
+        for filename in matching_files:
+            output_specs.append((location, filename, "parents_list.txt"))
+    
+    # Use generic push function
+    return push_output(output_specs, "output.txt", "parents_list.txt")
+
+def push_logs(fcl):
+    """Handle log file management and submission.
+    
+    Args:
+        fcl: FCL filename to derive log filename from
+    """
+    import shutil
+    
+    logfile = replace_file_extensions(fcl, "log", "log")
+    
+    # Copy jobsub log if available
+    jsb_tmp = os.getenv("JSB_TMP")
+    if jsb_tmp:
+        src = os.path.join(jsb_tmp, "JOBSUB_LOG_FILE")
+        print(f"Copying jobsub log from {src} to {logfile}")
+        try:
+            shutil.copy(src, logfile)
+        except FileNotFoundError:
+            print(f"Warning: Jobsub log not found at {src}")
+    
+    # Push log if it exists
+    if Path(logfile).exists():
+        output_specs = [("disk", logfile, "parents_list.txt")]
+        return push_output(output_specs, "log_output.txt", "parents_list.txt")
+    else:
+        print(f"Warning: Log file {logfile} not found, skipping log push")
+        return 0

@@ -447,6 +447,10 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                     replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
                     # Also replace 'configuration' literal string like Perl does
                     replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
+                    # Support {var} syntax for any config field
+                    for key, value in config.items():
+                        if isinstance(value, str):
+                            replaced_pattern = replaced_pattern.replace(f'{{{key}}}', value)
                     outfiles[output_key] = replaced_pattern
                 else:
                     # No template pattern found - this shouldn't happen in a properly resolved template

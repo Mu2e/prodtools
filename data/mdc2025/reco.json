@@ -1,0 +1,16 @@
+[
+  {
+    "fcl_template": "fcl/OnSpill.fcl",
+    "setup_script": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh",
+    "inloc": "tape",
+    "outputs": [
+      {
+        "dataset": "*.art",
+        "location": "tape"
+      }
+    ],
+    "template_overrides": {
+      "dsconf": "MDC2025ad_best_v1_3"
+    }
+  }
+]
