@@ -3,8 +3,7 @@
 	"desc": "CosmicCRYSpillSplitter",
 	"dsconf": "MDC2025ac",
 	"fcl": "Production/JobConfig/cosmic/SpillSplitter.fcl",
-	"input_data": "dts.mu2e.CosmicCRYAll.MDC2025ac.art",
-	"merge_factor": 10,
+	"input_data": {"dts.mu2e.CosmicCRYAll.MDC2025ac.art": 10},
 	"inloc": "tape",
 	"outloc": {
 		"*.art": "disk"
@@ -15,7 +14,7 @@
 		"desc": "PiBeamCat",
 		"dsconf": "MDC2025ac",
 		"fcl": "Production/JobConfig/common/artcat.fcl",
-		"input_data": "sim.mu2e.PiBeam.MDC2025ac.art",
+		"input_data": {"sim.mu2e.PiBeam.MDC2025ac.art": 100},
 		"fcl_overrides": {
 			"outputs.out.fileName": "sim.owner.PiBeamCat.version.sequence.art"
 		},
@@ -23,7 +22,60 @@
 		"outloc": {
 			"*.art": "tape"
 		},
-		"merge_factor": 100,
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
-	}  
+	},
+	{
+		"desc": "MuonIPAStopSelector",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/pileup/MuonIPAStopSelector.fcl",
+		"input_data": {"sim.mu2e.IPAStopsCat.MDC2025ac.art": 1},
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "EleBeamFlashCat",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.EleBeamFlash.MDC2025ac.art": 50},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.EleBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "MuBeamFlashCat",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.MuBeamFlash.MDC2025ac.art": 500},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "NeutralsFlashCat",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.NeutralsFlash.MDC2025ac.art": 1000},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	}
+
 ]

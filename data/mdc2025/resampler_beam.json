@@ -7,7 +7,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "neutralsResampler",
-        "input_data": "sim.mu2e.NeutralsCat.MDC2025ab.art",
+        "input_data": {"sim.mu2e.NeutralsCat.MDC2025ab.art": 1},
         "njobs": 40000,
         "events": 1340000,
         "run": 1430,
@@ -27,7 +27,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "beamResampler",
-        "input_data": "sim.mu2e.MuBeamCat.MDC2025ab.art",
+        "input_data": {"sim.mu2e.MuBeamCat.MDC2025ab.art": 1},
         "njobs": 10000,
         "events": 400000,
         "run": 1430,
@@ -47,7 +47,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "beamResampler",
-        "input_data": "sim.mu2e.EleBeamCat.MDC2025ab.art",
+        "input_data": {"sim.mu2e.EleBeamCat.MDC2025ab.art": 1},
         "njobs": 20000,
         "events": 1000000,
         "run": 1430,
@@ -64,7 +64,7 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/PiBeamResampler.fcl",
         "resampler_name": "beamResampler",
-        "input_data": "sim.mu2e.PiBeamCat.MDC2025ac.art",
+        "input_data": {"sim.mu2e.PiBeamCat.MDC2025ac.art": 1},
         "inloc": "tape",
         "outloc": {
             "*.art": "tape"
@@ -84,12 +84,11 @@
             "services.TFileService.fileName": "/dev/null"
         },
         "fcl": "Production/JobConfig/primary/TargetPiStopPreFilter.fcl",
-        "input_data": "sim.mu2e.PiTargetStops.MDC2025ac.art",
+        "input_data": {"sim.mu2e.PiTargetStops.MDC2025ac.art": 10},
         "inloc": "tape",
         "outloc": {
             "*.art": "tape"
         },
-        "merge_factor": 10,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
     },
     {
@@ -103,7 +102,7 @@
             "physics.filters.TargetPiStopResampler.mu2e.products.volumeInfoMixer.srInput": "compressPVTargetPiStops",
             "physics.filters.StopSelector.stepPointMCs": "TargetPiStopResampler:virtualdetector"
         },
-        "input_data": "sim.mu2e.PiMinusFilter.MDC2025ac.art",
+        "input_data": {"sim.mu2e.PiMinusFilter.MDC2025ac.art": 1},
         "resampler_name": "TargetPiStopResampler",
         "njobs": 4000,
         "events": 25000,
@@ -128,7 +127,7 @@
             "physics.filters.StopSelector.stepPointMCs": "TargetPiStopResampler:virtualdetector"
         },
         "resampler_name": "TargetPiStopResampler",
-        "input_data": "sim.mu2e.PiMinusFilter.MDC2025ac.art",
+        "input_data": {"sim.mu2e.PiMinusFilter.MDC2025ac.art": 1},
         "njobs": 4000,
         "events": 1000000,
         "run": 1430,
@@ -148,7 +147,7 @@
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
         },
         "resampler_name": "StopResampler",
-        "input_data": "sim.mu2e.PiTargetStops.MDC2025ac.art",
+        "input_data": {"sim.mu2e.PiTargetStops.MDC2025ac.art": 1},
         "njobs": 2000,
         "events": 5000000,
         "run": 1430,
