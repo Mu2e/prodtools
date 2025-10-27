@@ -122,32 +122,17 @@ def get_def_counts(dataset, include_empty=False):
     return nfiles, nevts
 
 def calculate_merge_factor(fields):
-    """Calculate merge factor based on dataset counts and requested merge_events.
+    """Calculate merge factor from input_data dict.
     
-    If merge_factor is directly specified, use it.
-    Otherwise, calculate using: MERGE_FACTOR = MERGE_EVENTS/npevents + 1
-    where npevents = nevts/nfiles (events per file)
+    The input_data should be a dict mapping dataset names to merge factors.
+    Returns the merge factor from the first dataset in the dict.
     """
-    # If merge_factor is directly specified, use it
-    if 'merge_factor' in fields:
-        return fields['merge_factor']
+    # input_data must be a dict, use the first dataset's merge factor
+    input_data = fields.get('input_data')
+    if not isinstance(input_data, dict):
+        raise ValueError(f"input_data must be a dict, got {type(input_data)}")
     
-    # Otherwise, calculate from merge_events
-    if 'merge_events' not in fields:
-        raise KeyError("Either 'merge_factor' or 'merge_events' must be specified")
-    
-    nfiles, nevts = get_def_counts(fields['input_data'])
-    if nfiles == 0:
-        raise ValueError(f"Input dataset '{fields['input_data']}' has no files")
-    
-    # Calculate events per file
-    npevents = nevts // nfiles
-    
-    # Calculate merge factor: MERGE_EVENTS/npevents + 1
-    # This ensures we get enough files to cover the requested merge_events
-    merge_factor = fields['merge_events'] // npevents + 1
-    
-    return merge_factor
+    return list(input_data.values())[0]
 
 # Removed duplicate find_json_entry; use json2jobdef.load_json + json2jobdef.find_json_entry
 

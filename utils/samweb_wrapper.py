@@ -24,6 +24,7 @@ class SAMWebWrapper:
             print(f"Error counting files: {e}")
             return 0
     
+    
     def list_files(self, query: str, summary: bool = False) -> List[str]:
         """List files matching a query (equivalent to samweb list-files)."""
         try:
@@ -206,6 +207,7 @@ def get_samweb_wrapper() -> SAMWebWrapper:
 def count_files(query: str) -> int:
     """Count files matching a query."""
     return get_samweb_wrapper().count_files(query)
+
 
 def list_files(query: str, summary: bool = False) -> List[str]:
     """List files matching a query."""

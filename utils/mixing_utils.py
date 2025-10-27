@@ -15,10 +15,23 @@ def _get_first_if_list(value):
     return value[0] if isinstance(value, list) and value else value
 
 def _create_pileup_catalog(dataset, filename):
-    """Helper: create pileup catalog file from dataset."""
-    result = list_files(f"dh.dataset={dataset} and event_count>0")
+    """Helper: create pileup catalog file from datasets with merge factors.
+    
+    Args:
+        dataset: dict mapping dataset names to merge factors
+                 e.g., {"dataset1": 100, "dataset2": 10}
+        filename: Output filename for the catalog
+    """
+    if not isinstance(dataset, dict):
+        raise ValueError(f"dataset must be a dict, got {type(dataset)}")
+    
+    all_files = []
+    for ds, merge_factor in dataset.items():
+        files = list_files(f"dh.dataset={ds} and event_count>0")
+        all_files.extend(files)
+    
     with open(filename, 'w') as f:
-        f.write('\n'.join(result))
+        f.write('\n'.join(all_files))
 
 # Pileup mixer configurations
 PILEUP_MIXERS = {
@@ -36,8 +49,33 @@ MIXING_FCL_INCLUDES = {
     "MixSeq": "Production/JobConfig/mixing/NoPrimaryPBISequence.fcl"
 }
 
+def _map_dataset_to_mixer(dataset_name):
+    """Map dataset name to mixer type based on dataset name patterns."""
+    dataset_lower = dataset_name.lower()
+    
+    if 'mubeam' in dataset_lower or 'muonbeam' in dataset_lower:
+        return 'mubeam'
+    elif 'elebeam' in dataset_lower or 'electronbeam' in dataset_lower:
+        return 'elebeam'
+    elif 'neutral' in dataset_lower:
+        return 'neutrals'
+    elif 'mustop' in dataset_lower or 'muonstop' in dataset_lower:
+        return 'mustop'
+    else:
+        raise ValueError(f"Could not determine mixer type for dataset: {dataset_name}")
+
 def build_pileup_args(config):
-    """Build command-line arguments for pileup mixing configuration."""
+    """Build command-line arguments for pileup mixing configuration.
+    
+    Args:
+        config: Configuration dictionary with the following structure:
+            - pileup_datasets: dict mapping dataset names to merge factors
+              e.g., {"dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 100}
+              The merge factor is used for both file merging and pileup counting
+    
+    Returns:
+        List of command-line arguments for mu2ejobdef
+    """
     args = []
     
     # Always create template.fcl fresh for mixing jobs
@@ -46,17 +84,37 @@ def build_pileup_args(config):
         f.write(f'#include "{config["fcl"]}"\n')
         
         # Process pileup datasets
-        for key, mixer in PILEUP_MIXERS.items():
-            ds = config.get(f"{key}_dataset")
-            cnt = config.get(f"{key}_count", 0)
-            if not ds or cnt <= 0:
+        pileup_datasets = config.get('pileup_datasets', {})
+        
+        if not isinstance(pileup_datasets, dict):
+            raise ValueError(f"pileup_datasets must be a dict, got {type(pileup_datasets)}")
+        
+        # Group datasets by mixer type
+        mixer_datasets = {}
+        for dataset, merge_factor in pileup_datasets.items():
+            mixer_type = _map_dataset_to_mixer(dataset)
+            if mixer_type not in mixer_datasets:
+                mixer_datasets[mixer_type] = {}
+            mixer_datasets[mixer_type][dataset] = merge_factor
+        
+        # Process each mixer type
+        for mixer_type, datasets in mixer_datasets.items():
+            mixer = PILEUP_MIXERS.get(mixer_type)
+            if not mixer:
                 continue
-            pileup_list = f"{key}Cat.txt"
-            # Get ALL pileup files from the dataset and write them to the catalog
-            _create_pileup_catalog(ds, pileup_list)
-            nfiles, nevts = get_def_counts(ds)
+            
+            pileup_list = f"{mixer_type}Cat.txt"
+            
+            # Create pileup catalog for this mixer type
+            _create_pileup_catalog(datasets, pileup_list)
+            # Use the first dataset for MaxEventsToSkip calculation
+            first_dataset = list(datasets.keys())[0]
+            nfiles, nevts = get_def_counts(first_dataset)
             skip = nevts // nfiles if nfiles > 0 else 0
             print(f"physics.filters.{mixer}.mu2e.MaxEventsToSkip: {skip}", file=f)
+            
+            # Use the merge factor from the first dataset as the count
+            cnt = list(datasets.values())[0]
             # Use the JSON count parameter - mu2ejobdef will select the first cnt files from the full list
             args += ['--auxinput', f"{cnt}:physics.filters.{mixer}.fileNames:{pileup_list}"]
         
@@ -70,7 +128,10 @@ def build_pileup_args(config):
                     for inc in includes:
                         f.write(f'#include "{inc}"\n')
                 else:
-                    f.write(f'{key}: {json.dumps(val) if isinstance(val, str) else val}\n')
+                    if isinstance(val, str) and not val.startswith('"') and not val.isdigit():
+                        f.write(f'{key}: "{val}"\n')
+                    else:
+                        f.write(f'{key}: {val}\n')
         
         # Add pbeam-specific FCL include based on the pbeam field
         pbeam = _get_first_if_list(config.get('pbeam'))
@@ -98,12 +159,41 @@ def prepare_fields_for_mixing(config):
     
     pbeam = _get_first_if_list(config['pbeam'])
     modified_config['desc'] = dsdesc + pbeam
+
+def prepare_fields_for_job(config, job_type='standard'):
+    """Prepare job configuration by auto-generating desc from input_data and optional pbeam."""
+    # Create a copy of the config to modify
+    modified_config = copy.deepcopy(config)
     
-    # Add pbeam-specific FCL includes
-    if pbeam not in MIXING_FCL_INCLUDES:
-        raise ValueError(f"pbeam value '{pbeam}' is not supported. Supported values: {list(MIXING_FCL_INCLUDES.keys())}")
+    # If desc is already present, don't override it
+    if 'desc' in config and config['desc']:
+        return modified_config
     
-    # Note: pbeam-specific FCL include is now handled in build_pileup_args
+    # Auto-generate desc from input_data
+    input_data = _get_first_if_list(config.get('input_data', ''))
+    if input_data:
+        if isinstance(input_data, dict):
+            # New format: dict with dataset names as keys
+            first_dataset = list(input_data.keys())[0]
+            parts = first_dataset.split('.')
+        else:
+            # Old format: string dataset name
+            parts = input_data.split('.')
+        
+        if len(parts) >= 3:
+            dsdesc = parts[2]  # e.g., "CosmicSignal" from "dts.mu2e.CosmicSignal.MDC2025ac.art"
+        else:
+            dsdesc = "Unknown"
+    else:
+        dsdesc = "Unknown"
+    
+    # For mixing jobs, append pbeam to the desc
+    if job_type == 'mixing':
+        pbeam = _get_first_if_list(config.get('pbeam', ''))
+        modified_config['desc'] = dsdesc + pbeam
+    else:
+        # For standard jobs (digi, reco, ntuple, etc.), just use the dataset name
+        modified_config['desc'] = dsdesc
     
     return modified_config
 
@@ -152,15 +242,13 @@ def expand_configs(configs, mixing=False):
                     if 'fcl_overrides' in job:
                         job['fcl_overrides'] = copy.deepcopy(_get_first_if_list(config.get('fcl_overrides', {})))
                     
-                    # Modify job for mixing if requested
-                    if mixing:
-                        job = prepare_fields_for_mixing(job)
+                    # Auto-generate desc for all job types
+                    job = prepare_fields_for_job(job, 'mixing' if mixing else 'standard')
                     
                     all_jobs.append(job)
             else:
                 # All values are non-list, just add directly
-                if mixing:
-                    config = prepare_fields_for_mixing(config)
+                config = prepare_fields_for_job(config, 'mixing' if mixing else 'standard')
                 all_jobs.append(config)
             continue
         
@@ -177,9 +265,8 @@ def expand_configs(configs, mixing=False):
         for combination in itertools.product(*config.values()):
             # Create job with this combination
             job = dict(zip(param_names, combination))            
-            # Modify job for mixing if requested
-            if mixing:
-                job = prepare_fields_for_mixing(job)
+            # Auto-generate desc for all job types
+            job = prepare_fields_for_job(job, 'mixing' if mixing else 'standard')
             
             all_jobs.append(job)
 
