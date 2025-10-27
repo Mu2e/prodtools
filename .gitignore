@@ -109,3 +109,4 @@ prodtools_cvmfs/
 *.tar.gz
 indir/
 web/mermaid/
+web/*.md

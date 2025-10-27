@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mu2e Production Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; font-size: 1.3em; }
+        .jobs { background: #f8f8f8; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 1.5em; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; font-weight: bold; }
+        td:first-child { text-align: right; } /* NJOBS column */
+        td:nth-child(2) { text-align: right; } /* EVENTS column */
+        td:nth-child(3) { text-align: right; } /* FILE SIZE column */
+        .group-even { background-color: #e8f4f8; }
+        .group-odd { background-color: #f0f0f0; }
+        .group-header { border-top: 2px solid #333; }
+        .output-dataset { color: #0066cc; cursor: pointer; text-decoration: underline; }
+        .output-dataset:hover { color: #004499; }
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        .modal-content { background-color: #fefefe; margin: 5% auto; padding: 20px; border: 1px solid #888; width: 90%; max-width: 1200px; max-height: 80vh; overflow-y: auto; }
+        .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .close:hover { color: black; }
+        .mermaid { text-align: center; }
+        .form-group { margin-bottom: 10px; }
+        .form-control { width: 200px; margin-left: 10px; }
+        .error { color: red; }
+        .warning { color: orange; }
+    </style>
+</head>
+<body>
+    <h1>Mu2e Production Monitor</h1>
+    
+    <div class="jobs">
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="statsToggle"> 
+                Include statistics in dataset lineage
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="datasetFilter">Filter datasets:</label>
+            <input type="text" id="datasetFilter" class="form-control" placeholder="e.g., dts*.art, sim*.art" onkeyup="filterDatasets()">
+            <button onclick="clearFilter()">Clear</button>
+        </div>
+        <div id="jobs-content">Loading...</div>
+    </div>
+
+    <!-- Modal for Mermaid diagrams -->
+    <div id="diagramModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2 id="modalTitle">Dataset Lineage</h2>
+            <div id="modalContent">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+
+        function loadJobs() {
+            fetch('/api/jobs')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    var html = '<table><tr><th>NJOBS</th><th>EVENTS</th><th>FILE SIZE [MB]</th><th>SOURCE</th><th>TARBALL / OUTPUT DATASETS</th></tr>';
+                    for (var i = 0; i < data.length; i++) {
+                        var job = data[i];
+                        var njobs = job.njobs || 0;
+                        var outputs = job.outputs || [];
+                        var groupClass = (i % 2 === 0) ? 'group-even' : 'group-odd';
+                        
+                        // Job header row
+                        html += '<tr class="' + groupClass + ' group-header">';
+                        html += '<td>' + njobs + '</td>';
+                        html += '<td></td>';
+                        html += '<td></td>';
+                        html += '<td>' + (job.source_file || '') + '</td>';
+                        html += '<td>' + (job.tarball || 'N/A') + '</td>';
+                        html += '</tr>';
+                        
+                        // Output dataset rows
+                        for (var j = 0; j < outputs.length; j++) {
+                            var o = outputs[j];
+                            var statusColor = o.status === '✓' ? '#28a745' : (o.status === '✗' ? '#dc3545' : '#ffc107');
+                            
+                            html += '<tr class="' + groupClass + '">';
+                            html += '<td>' + (o.nfiles || 0) + '</td>';
+                            html += '<td>' + (o.nevts ? o.nevts.toExponential(2) : '') + '</td>';
+                            html += '<td>' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
+                            html += '<td></td>';
+                            html += '<td><span class="output-dataset" onclick="showDatasetInfo(\'' + o.name + '\')" style="color: ' + statusColor + ';">' + o.name + '</span></td>';
+                            html += '</tr>';
+                        }
+                    }
+                    html += '</table>';
+                    document.getElementById('jobs-content').innerHTML = html;
+                })
+                .catch(function(error) {
+                    document.getElementById('jobs-content').innerHTML = 'Error: ' + error.message;
+                });
+        }
+
+
+        function filterDatasets() {
+            var filter = document.getElementById('datasetFilter').value.toLowerCase();
+            var rows = document.querySelectorAll('#jobs-content tr');
+            
+            for (var i = 1; i < rows.length; i++) {
+                var cellText = rows[i].cells[4].textContent.toLowerCase();
+                rows[i].style.display = (filter === '' || matchPattern(cellText, filter)) ? '' : 'none';
+            }
+        }
+
+        function matchPattern(text, pattern) {
+            // Convert wildcard pattern to regex
+            var regexPattern = pattern.replace(/\*/g, '.*');
+            var regex = new RegExp(regexPattern);
+            return regex.test(text);
+        }
+
+        function clearFilter() {
+            document.getElementById('datasetFilter').value = '';
+            filterDatasets();
+        }
+
+        function showDatasetInfo(datasetName) {
+            var modal = document.getElementById('diagramModal');
+            var modalTitle = document.getElementById('modalTitle');
+            var modalContent = document.getElementById('modalContent');
+            var statsToggle = document.getElementById('statsToggle');
+            
+            modalTitle.textContent = 'Dataset: ' + datasetName;
+            modalContent.innerHTML = 'Loading...';
+            modal.style.display = 'block';
+            
+            // Build URL with stats parameter
+            var url = '/api/dataset/' + encodeURIComponent(datasetName);
+            if (statsToggle.checked) {
+                url += '?stats=true';
+            }
+            
+            fetch(url)
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        var output = data.output;
+                        
+                        // Check if the API indicates it has Mermaid content
+                        if (data.has_mermaid) {
+                            // Extract Mermaid code from the .md file content
+                            var mermaidMatch = output.match(/```mermaid\n([\s\S]*?)\n```/);
+                            
+                            if (mermaidMatch) {
+                                var mermaidCode = mermaidMatch[1];
+                                
+                                modalContent.innerHTML = '<div class="mermaid">' + mermaidCode + '</div>';
+                                
+                                // Initialize Mermaid with better config
+                                mermaid.initialize({ 
+                                    startOnLoad: false,
+                                    theme: 'forest',
+                                    flowchart: {
+                                        useMaxWidth: true,
+                                        htmlLabels: true,
+                                        wrappingWidth: 9999
+                                    },
+                                    securityLevel: 'loose'
+                                });
+                                
+                                // Render the diagram
+                                setTimeout(function() {
+                                    mermaid.init(undefined, modalContent.querySelector('.mermaid'));
+                                }, 100);
+                            } else {
+                                modalContent.innerHTML = '<h3>Mermaid file content:</h3><pre>' + output + '</pre><p><em>Could not extract Mermaid code</em></p>';
+                            }
+                        } else {
+                            // No Mermaid diagram found, show raw output
+                            modalContent.innerHTML = '<h3>Raw famtree output:</h3><pre>' + output + '</pre>';
+                            if (data.error) {
+                                modalContent.innerHTML += '<p class="warning">Note: ' + data.error + '</p>';
+                            }
+                        }
+                    } else {
+                        modalContent.innerHTML = '<p class="error">Error: ' + data.output + '</p>';
+                    }
+                })
+                .catch(function(error) {
+                    modalContent.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
+                });
+        }
+
+        // Modal close functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            var modal = document.getElementById('diagramModal');
+            var closeBtn = document.getElementsByClassName('close')[0];
+            
+            closeBtn.onclick = function() {
+                modal.style.display = 'none';
+            };
+            
+            window.onclick = function(event) {
+                if (event.target == modal) {
+                    modal.style.display = 'none';
+                }
+            };
+            
+            loadJobs();
+        });
+    </script>
+</body>
+</html>
