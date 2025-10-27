@@ -108,3 +108,4 @@ prodtools_cvmfs/
 .data_dispatcher_worker_id
 *.tar.gz
 indir/
+web/mermaid/
