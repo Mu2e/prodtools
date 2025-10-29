@@ -8,7 +8,11 @@
         .jobs { background: #f8f8f8; padding: 15px; margin: 10px 0; border-radius: 5px; }
         table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 1.5em; }
         th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; font-weight: bold; }
+        th { background-color: #f2f2f2; font-weight: bold; cursor: pointer; }
+        th:hover { background-color: #e0e0e0; }
+        .sortable::after { content: ' ↕'; color: #999; }
+        .sort-asc::after { content: ' ↑'; color: #000; }
+        .sort-desc::after { content: ' ↓'; color: #000; }
         td:first-child { text-align: right; } /* NJOBS column */
         td:nth-child(2) { text-align: right; } /* EVENTS column */
         td:nth-child(3) { text-align: right; } /* FILE SIZE column */
@@ -30,6 +34,12 @@
 </head>
 <body>
     <h1>Mu2e Production Monitor</h1>
+    
+    <div class="nav" style="margin-bottom: 20px;">
+        <a href="/json2jobdef" style="color: #007bff; text-decoration: none; margin-right: 15px;">JobDesc Generator</a>
+        <a href="/json-editor" style="color: #007bff; text-decoration: none; margin-right: 15px;">JSON Editor</a>
+        <a href="/" style="color: #007bff; text-decoration: none;">Home</a>
+    </div>
     
     <div class="jobs">
         <div class="form-group">
@@ -56,47 +66,65 @@
     </div>
 
     <script>
+        var currentData = [];
+        var currentSortColumn = -1;
+        var currentSortDirection = 1; // 1 = asc, -1 = desc
 
         function loadJobs() {
             fetch('/api/jobs')
                 .then(function(response) { return response.json(); })
                 .then(function(data) {
-                    var html = '<table><tr><th>NJOBS</th><th>EVENTS</th><th>FILE SIZE [MB]</th><th>SOURCE</th><th>TARBALL / OUTPUT DATASETS</th></tr>';
-                    for (var i = 0; i < data.length; i++) {
-                        var job = data[i];
-                        var njobs = job.njobs || 0;
-                        var outputs = job.outputs || [];
-                        var groupClass = (i % 2 === 0) ? 'group-even' : 'group-odd';
-                        
-                        // Job header row
-                        html += '<tr class="' + groupClass + ' group-header">';
-                        html += '<td>' + njobs + '</td>';
-                        html += '<td></td>';
-                        html += '<td></td>';
-                        html += '<td>' + (job.source_file || '') + '</td>';
-                        html += '<td>' + (job.tarball || 'N/A') + '</td>';
-                        html += '</tr>';
-                        
-                        // Output dataset rows
-                        for (var j = 0; j < outputs.length; j++) {
-                            var o = outputs[j];
-                            var statusColor = o.status === '✓' ? '#28a745' : (o.status === '✗' ? '#dc3545' : '#ffc107');
-                            
-                            html += '<tr class="' + groupClass + '">';
-                            html += '<td>' + (o.nfiles || 0) + '</td>';
-                            html += '<td>' + (o.nevts ? o.nevts.toExponential(2) : '') + '</td>';
-                            html += '<td>' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
-                            html += '<td></td>';
-                            html += '<td><span class="output-dataset" onclick="showDatasetInfo(\'' + o.name + '\')" style="color: ' + statusColor + ';">' + o.name + '</span></td>';
-                            html += '</tr>';
-                        }
-                    }
-                    html += '</table>';
-                    document.getElementById('jobs-content').innerHTML = html;
+                    currentData = data;
+                    displayJobs(data);
                 })
                 .catch(function(error) {
                     document.getElementById('jobs-content').innerHTML = 'Error: ' + error.message;
                 });
+        }
+
+        function displayJobs(data) {
+            var html = '<table><tr>';
+            var colNames = ['NJOBS', 'EVENTS', 'FILE SIZE [MB]', 'SOURCE', 'TARBALL / OUTPUT DATASETS'];
+            for (var col = 0; col < 5; col++) {
+                var className = 'sortable';
+                if (currentSortColumn === col) {
+                    className += (currentSortDirection > 0) ? ' sort-asc' : ' sort-desc';
+                }
+                html += '<th class="' + className + '" onclick="sortTable(' + col + ')">' + colNames[col] + '</th>';
+            }
+            html += '</tr>';
+            
+            for (var i = 0; i < data.length; i++) {
+                var job = data[i];
+                var njobs = job.njobs || 0;
+                var outputs = job.outputs || [];
+                var groupClass = (i % 2 === 0) ? 'group-even' : 'group-odd';
+                
+                // Job header row
+                html += '<tr class="' + groupClass + ' group-header">';
+                html += '<td>' + njobs + '</td>';
+                html += '<td></td>';
+                html += '<td></td>';
+                html += '<td>' + (job.source_file || '') + '</td>';
+                html += '<td>' + (job.tarball || 'N/A') + '</td>';
+                html += '</tr>';
+                
+                // Output dataset rows
+                for (var j = 0; j < outputs.length; j++) {
+                    var o = outputs[j];
+                    var statusColor = o.status === 'OK' ? '#28a745' : (o.status === 'MISSING' ? '#dc3545' : '#ffc107');
+                    
+                    html += '<tr class="' + groupClass + '">';
+                    html += '<td>' + (o.nfiles || 0) + '</td>';
+                    html += '<td>' + (o.nevts ? o.nevts.toExponential(2) : '') + '</td>';
+                    html += '<td>' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
+                    html += '<td></td>';
+                    html += '<td><span class="output-dataset" onclick="showDatasetInfo(\'' + o.name + '\')" style="color: ' + statusColor + ';">' + o.name + '</span></td>';
+                    html += '</tr>';
+                }
+            }
+            html += '</table>';
+            document.getElementById('jobs-content').innerHTML = html;
         }
 
 
@@ -189,21 +217,32 @@
                 });
         }
 
-        // Modal close functionality
+        function sortTable(columnIndex) {
+            currentSortDirection = (currentSortColumn === columnIndex) ? -currentSortDirection : 1;
+            currentSortColumn = columnIndex;
+            
+            currentData.sort(function(a, b) {
+                var getVal = function(job) {
+                    switch(columnIndex) {
+                        case 0: return job.njobs || 0;
+                        case 1: return (job.outputs || []).reduce(function(s, o) { return s + (o.nevts || 0); }, 0);
+                        case 2: return (job.outputs || []).reduce(function(s, o) { return s + (o.avg_size_mb || 0); }, 0);
+                        case 3: return (job.source_file || '').toLowerCase();
+                        case 4: return (job.tarball || '').toLowerCase();
+                    }
+                };
+                var aVal = getVal(a), bVal = getVal(b);
+                return (typeof aVal === 'number') ? (aVal - bVal) * currentSortDirection : 
+                       aVal.localeCompare(bVal) * currentSortDirection;
+            });
+            displayJobs(currentData);
+        }
+
+        // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             var modal = document.getElementById('diagramModal');
-            var closeBtn = document.getElementsByClassName('close')[0];
-            
-            closeBtn.onclick = function() {
-                modal.style.display = 'none';
-            };
-            
-            window.onclick = function(event) {
-                if (event.target == modal) {
-                    modal.style.display = 'none';
-                }
-            };
-            
+            document.getElementsByClassName('close')[0].onclick = () => modal.style.display = 'none';
+            window.onclick = (e) => { if (e.target == modal) modal.style.display = 'none'; };
             loadJobs();
         });
     </script>

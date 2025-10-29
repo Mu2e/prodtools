@@ -1,16 +1,17 @@
 [
-  {
-    "fcl_template": "fcl/OnSpill.fcl",
-    "setup_script": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh",
-    "inloc": "tape",
-    "outputs": [
-      {
-        "dataset": "*.art",
-        "location": "tape"
-      }
-    ],
-    "template_overrides": {
-      "dsconf": "MDC2025ad_best_v1_3"
+    {
+	"dsconf": ["MDC2025ad_best_v1_3"],
+	"fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+	"input_data": {
+        "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
+        "dig.mu2e.CeMLeadingLogOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
+        "dig.mu2e.CePLeadingLogOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
+        "dig.mu2e.CePlusEndpointOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
+        "dig.mu2e.CosmicSignalOnSpillTriggered.MDC2025ad_best_v1_3.art": 1
+    },
+    "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+	"inloc": ["tape"],
+	"outloc": [{"*.art": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"]
     }
-  }
 ]

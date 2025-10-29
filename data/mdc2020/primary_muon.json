@@ -7,7 +7,7 @@
         "physics.producers.generate.endMom": 120
     },
     "resampler_name": "TargetStopResampler",
-    "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+    "input_data": {"sim.mu2e.MuminusStopsCat.MDC2020p.art": 1},
     "njobs": 500,
     "events": 15000,
     "run": 1202,
@@ -20,11 +20,32 @@
     "sequential_aux": true
     },
     {
+        "desc": "FlatePlus",
+        "dsconf": "MDC2020bb",
+        "fcl": "Production/JobConfig/primary/FlatePlus.fcl",
+        "fcl_overrides": {
+            "physics.producers.generate.startMom": 70,
+            "physics.producers.generate.endMom": 120
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2020p.art": 1},
+        "njobs": 500,
+        "events": 15000,
+        "run": 1202,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
         "desc": "RMCFlatGammaCalo",
         "dsconf": "MDC2020bb",
         "fcl": "Production/JobConfig/primary/FlatGammaCalo.fcl",
         "resampler_name": "TargetStopResampler",
-        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2020p.art": 1},
         "njobs": 200,
         "events": 75000,
         "run": 1202,
@@ -41,7 +62,7 @@
         "dsconf": "MDC2020bb",
         "fcl": "Production/JobConfig/primary/FlatGamma.fcl",
         "resampler_name": "TargetStopResampler",
-        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2020p.art": 1},
         "njobs": 2000,
         "events": 500000,
         "run": 1202,
@@ -61,7 +82,7 @@
             "physics.producers.generate.endMom": 120
         },
         "resampler_name": "TargetStopResampler",
-        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2020p.art": 1},
         "njobs": 500,
         "events": 15000,
         "run": 1202,
@@ -78,7 +99,7 @@
         "dsconf": "MDC2020bb",
         "fcl": "Production/JobConfig/primary/RMCFlatInternal.fcl",
         "resampler_name": "TargetStopResampler",
-        "input_data": "sim.mu2e.MuminusStopsCat.MDC2020p.art",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2020p.art": 1},
         "njobs": 200,
         "events": 75000,
         "run": 1202,

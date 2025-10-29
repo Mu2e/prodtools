@@ -60,6 +60,26 @@
         "sequential_aux": true
     },
     {
+        "desc": "MuStopPileup",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/pileup/MuStopPileup.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
+        "njobs": 5000,
+        "events": 400000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
         "desc": "PiTargetStops",
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/PiBeamResampler.fcl",

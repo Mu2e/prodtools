@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JobDesc Generator</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; font-size: 1.1em; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        .checkbox-group { display: flex; align-items: center; }
+        .checkbox-group input { width: auto; margin-right: 8px; }
+        .output { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa; }
+        .output pre { white-space: pre-wrap; font-family: monospace; font-size: 0.9em; }
+        .success { border-color: #28a745; background: #d4edda; }
+        .error { border-color: #dc3545; background: #f8d7da; }
+        .info { border-color: #17a2b8; background: #d1ecf1; }
+        .nav { margin-bottom: 20px; }
+        .nav a { color: #007bff; text-decoration: none; margin-right: 15px; }
+        .nav a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>JobDesc Generator</h1>
+        
+        <div class="nav">
+            <a href="/monitor">← Back to Monitor</a>
+            <a href="/json-editor">JSON Editor</a>
+            <a href="/">Home</a>
+        </div>
+        
+        <form id="json2jobdefForm">
+            <div class="form-group">
+                <label for="json_file">JSON Configuration File:</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <select id="json_file" name="json_file" required style="flex: 1;">
+                        <option value="">Select JSON file...</option>
+                    </select>
+                    <button type="button" id="editBtn" onclick="openInEditor()" disabled>Open in JSON Editor</button>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="dsconf">Dataset Configuration (optional):</label>
+                <select id="dsconf" name="dsconf">
+                    <option value="">Select dataset configuration...</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="desc">Description (optional):</label>
+                <input type="text" id="desc" name="desc" placeholder="e.g., CosmicSignal">
+            </div>
+            
+            <div class="form-group">
+                <label for="index">Index (optional):</label>
+                <input type="number" id="index" name="index" placeholder="e.g., 0">
+            </div>
+            
+            <div class="form-group">
+                <label for="jobdefs">Custom JobDefs File (optional):</label>
+                <input type="text" id="jobdefs" name="jobdefs" placeholder="e.g., custom_jobdefs.json">
+            </div>
+            
+            <div class="form-group">
+                <label for="simjob_release">SimJob Release (optional):</label>
+                <input type="text" id="simjob_release" name="simjob_release" placeholder="e.g., MDC2025ad">
+            </div>
+            
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="pushout" name="pushout">
+                    <label for="pushout">Enable SAM pushOutput</label>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="verbose" name="verbose">
+                    <label for="verbose">Verbose logging</label>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="run_mkidxdef" name="run_mkidxdef">
+                    <label for="run_mkidxdef">Run mkidxdef on jobdefs output</label>
+                </div>
+            </div>
+            
+            <button type="submit" id="submitBtn">Generate JobDesc</button>
+            <button type="button" onclick="clearForm()">Clear Form</button>
+        </form>
+        
+        <div id="output" class="output" style="display: none;">
+            <h3>Output:</h3>
+            <pre id="outputContent"></pre>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('json2jobdefForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const output = document.getElementById('output');
+            const outputContent = document.getElementById('outputContent');
+            
+            // Disable submit button
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Generating...';
+            
+            // Show output area
+            output.style.display = 'block';
+            output.className = 'output info';
+            outputContent.textContent = 'Running json2jobdef...';
+            
+            // Collect form data (only include non-empty values)
+            const formData = {
+                json_file: document.getElementById('json_file').value,
+                pushout: document.getElementById('pushout').checked,
+                verbose: document.getElementById('verbose').checked,
+                run_mkidxdef: document.getElementById('run_mkidxdef').checked
+            };
+            
+            // Add optional fields if present
+            ['dsconf', 'desc', 'jobdefs', 'simjob_release'].forEach(id => {
+                const val = document.getElementById(id).value;
+                if (val) formData[id] = val;
+            });
+            
+            const indexVal = document.getElementById('index').value;
+            if (indexVal) formData.index = parseInt(indexVal);
+            
+            // Send request
+            fetch('/api/json2jobdef', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    output.className = 'output success';
+                    let outputText = `Command: ${data.command}\n\nSTDOUT:\n${data.stdout}\n\nSTDERR:\n${data.stderr}`;
+                    if (data.mkidxdef_output || data.mkidxdef_error) {
+                        outputText += `\n\nMKIDXDEF OUTPUT:\n${data.mkidxdef_output || 'N/A'}`;
+                        outputText += `\n\nMKIDXDEF ERROR:\n${data.mkidxdef_error || 'N/A'}`;
+                    }
+                    outputContent.textContent = outputText;
+                } else {
+                    output.className = 'output error';
+                    outputContent.textContent = `Error: ${data.error}\n\nSTDOUT:\n${data.stdout || 'N/A'}\n\nSTDERR:\n${data.stderr || 'N/A'}`;
+                }
+            })
+            .catch(error => {
+                output.className = 'output error';
+                outputContent.textContent = `Request failed: ${error.message}`;
+            })
+            .finally(() => {
+                // Re-enable submit button
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Generate JobDesc';
+            });
+        });
+        
+        function clearForm() {
+            document.getElementById('json2jobdefForm').reset();
+            document.getElementById('output').style.display = 'none';
+        }
+        
+        function openInEditor() {
+            const selectedFile = document.getElementById('json_file').value;
+            if (selectedFile) {
+                // Store the selected file in sessionStorage for the JSON editor to pick up
+                sessionStorage.setItem('selectedJsonFile', selectedFile);
+                window.location.href = '/json-editor';
+            }
+        }
+        
+        function loadDatasetConfigurations(jsonFile) {
+            if (!jsonFile) {
+                // Clear dsconf dropdown
+                const dsconfSelect = document.getElementById('dsconf');
+                dsconfSelect.innerHTML = '<option value="">Select dataset configuration...</option>';
+                return;
+            }
+            
+            // Load the JSON file to extract dsconf values
+            fetch('/api/json-file/' + encodeURIComponent(jsonFile))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success && data.content) {
+                        try {
+                            const jsonData = JSON.parse(data.content);
+                            const dsconfValues = new Set();
+                            
+                            // Extract dsconf values from JSON structure
+                            function extractDsconf(obj) {
+                                if (Array.isArray(obj)) {
+                                    obj.forEach(extractDsconf);
+                                } else if (obj && typeof obj === 'object') {
+                                    if (obj.dsconf) {
+                                        if (Array.isArray(obj.dsconf)) {
+                                            obj.dsconf.forEach(dsconf => dsconfValues.add(dsconf));
+                                        } else {
+                                            dsconfValues.add(obj.dsconf);
+                                        }
+                                    }
+                                    Object.values(obj).forEach(extractDsconf);
+                                }
+                            }
+                            
+                            extractDsconf(jsonData);
+                            
+                            // Populate dsconf dropdown
+                            const dsconfSelect = document.getElementById('dsconf');
+                            dsconfSelect.innerHTML = '<option value="">Select dataset configuration...</option>';
+                            
+                            Array.from(dsconfValues).sort().forEach(dsconf => {
+                                const option = document.createElement('option');
+                                option.value = dsconf;
+                                option.textContent = dsconf;
+                                dsconfSelect.appendChild(option);
+                            });
+                        } catch (e) {
+                            console.error('Error parsing JSON:', e);
+                        }
+                    }
+                })
+                .catch(e => console.error('Error loading JSON file:', e));
+        }
+        
+        // Load available JSON files on page load
+        window.addEventListener('load', function() {
+            fetch('/api/json-files')
+                .then(r => r.json())
+                .then(data => {
+                    const select = document.getElementById('json_file');
+                    data.files.forEach(file => {
+                        const option = document.createElement('option');
+                        option.value = file.path;
+                        option.textContent = file.path;
+                        select.appendChild(option);
+                    });
+                })
+                .catch(e => console.error('Error loading JSON files:', e));
+            
+            // Enable/disable edit button and load dsconf based on selection
+            document.getElementById('json_file').addEventListener('change', function() {
+                const editBtn = document.getElementById('editBtn');
+                editBtn.disabled = !this.value;
+                loadDatasetConfigurations(this.value);
+            });
+        });
+        
+    </script>
+</body>
+</html>

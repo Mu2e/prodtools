@@ -4,7 +4,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/primary/RMCFlatGammaStops.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
             "outputs.PrimaryOutput.fileName": "sim.owner.RMCFlatGammaStops.version.sequencer.art"
         },
@@ -25,7 +24,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/primary/RMCInternalEndpoint.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "TargetStopResampler",
@@ -46,7 +44,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/primary/RMCExternalEndpoint.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "TargetStopResampler",
@@ -67,7 +64,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/primary/RMCInternal.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "TargetStopResampler",
@@ -88,7 +84,6 @@
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/primary/RMCExternal.fcl",
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "TargetStopResampler",
@@ -113,7 +108,6 @@
         "events": 5000,
         "njobs": 2000,
         "fcl_overrides": {
-            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
             "physics.producers.generate.decayProducts.spectrum.elow": 95,
             "physics.producers.generate.decayProducts.spectrum.ehi": 1000,

@@ -11,6 +11,7 @@ sys.path.insert(0, parent_dir)
 from flask import Flask, jsonify, request, send_file, redirect
 from utils.pomsMonitor import PomsMonitor
 import subprocess
+import json
 
 app = Flask(__name__, 
             static_folder=os.path.join(parent_dir, 'web', 'static'))
@@ -31,11 +32,24 @@ def index():
     """Main page - redirect to monitor."""
     return redirect('/monitor')
 
+def _serve_html(filename):
+    """Helper to serve HTML files from static folder."""
+    return send_file(os.path.join(parent_dir, 'web', 'static', filename))
+
 @app.route('/monitor')
 def monitor():
     """Main monitor interface."""
-    static_path = os.path.join(parent_dir, 'web', 'static', 'monitor.html')
-    return send_file(static_path)
+    return _serve_html('monitor.html')
+
+@app.route('/json2jobdef')
+def json2jobdef_interface():
+    """JSON to jobdef interface."""
+    return _serve_html('json2jobdef.html')
+
+@app.route('/json-editor')
+def json_editor():
+    """JSON file editor interface."""
+    return _serve_html('json-editor.html')
 
 @app.route('/api/jobs')
 def api_jobs():
@@ -58,7 +72,7 @@ def api_jobs():
                     'nfiles': nfiles,
                     'nevts': nevts,
                     'avg_size_mb': round(avg_size, 2),
-                    'status': '✓' if nfiles >= njobs else '✗'
+                    'status': 'OK' if nfiles >= njobs else 'MISSING'
                 })
         except Exception:
             # Fallback to basic dataset names
@@ -69,7 +83,7 @@ def api_jobs():
                         'nfiles': 0,
                         'nevts': 0,
                         'avg_size_mb': 0,
-                        'status': '?'
+                        'status': 'UNKNOWN'
                     })
         
         jobs.append({
@@ -133,6 +147,125 @@ def api_dataset_info(dataset_name):
     finally:
         os.chdir(original_dir)
 
+@app.route('/api/json2jobdef', methods=['POST'])
+def api_json2jobdef():
+    """API endpoint to run json2jobdef."""
+    try:
+        data = request.get_json()
+        if not data.get('json_file'):
+            return jsonify({'success': False, 'error': 'JSON file path is required'})
+        
+        # Build json2jobdef command with parameters
+        cmd_parts = [f"python3 {os.path.join(parent_dir, 'utils', 'json2jobdef.py')}"]
+        cmd_parts.append(f"--json {data['json_file']}")
+        
+        # Add optional parameters
+        for key, flag in [('dsconf', '--dsconf'), ('desc', '--desc'), 
+                          ('index', '--index'), ('jobdefs', '--jobdefs')]:
+            if data.get(key) is not None:
+                cmd_parts.append(f"{flag} {data[key]}")
+        
+        if data.get('pushout'):
+            cmd_parts.append('--pushout')
+        if data.get('verbose'):
+            cmd_parts.append('--verbose')
+        
+        # Wrap with SimJob setup if needed
+        json2jobdef_cmd = ' '.join(cmd_parts)
+        if data.get('simjob_release'):
+            cmd = ['bash', '-c', f"source /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{data['simjob_release']}/setup.sh && {json2jobdef_cmd}"]
+        else:
+            cmd = ['bash', '-c', json2jobdef_cmd]
+        
+        # Run json2jobdef
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        # Run mkidxdef if requested and json2jobdef succeeded
+        mkidxdef_output = mkidxdef_error = ""
+        if data.get('run_mkidxdef') and result.returncode == 0:
+            try:
+                jobdefs_file = data.get('jobdefs', 'jobdefs_list.txt')
+                mkidxdef_result = subprocess.run(['mkidxdef', '--jobdefs', jobdefs_file, '--prod'],
+                                                capture_output=True, text=True, timeout=30)
+                mkidxdef_output = mkidxdef_result.stdout
+                mkidxdef_error = mkidxdef_result.stderr
+                if mkidxdef_result.returncode != 0:
+                    result.returncode = mkidxdef_result.returncode
+            except (subprocess.TimeoutExpired, Exception) as e:
+                mkidxdef_error = f"mkidxdef error: {str(e)}"
+                result.returncode = 1
+        
+        return jsonify({
+            'success': result.returncode == 0,
+            'stdout': result.stdout,
+            'stderr': result.stderr,
+            'command': ' '.join(cmd),
+            'mkidxdef_output': mkidxdef_output,
+            'mkidxdef_error': mkidxdef_error
+        })
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Command timed out after 60 seconds'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/json-files')
+def api_json_files():
+    """API endpoint to list JSON files."""
+    try:
+        data_dir = os.path.join(parent_dir, 'data')
+        json_files = []
+        
+        for root, dirs, files in os.walk(data_dir):
+            for file in files:
+                if file.endswith('.json'):
+                    rel_path = os.path.relpath(os.path.join(root, file), parent_dir)
+                    json_files.append({
+                        'path': rel_path,
+                        'name': file,
+                        'directory': os.path.dirname(rel_path)
+                    })
+        
+        return jsonify({'success': True, 'files': json_files})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/json-file/<path:file_path>')
+def api_get_json_file(file_path):
+    """API endpoint to get JSON file content."""
+    try:
+        full_path = os.path.join(parent_dir, file_path)
+        if not os.path.exists(full_path):
+            return jsonify({'success': False, 'error': 'File not found'})
+        
+        with open(full_path, 'r') as f:
+            content = f.read()
+        
+        json.loads(content)  # Validate JSON
+        return jsonify({'success': True, 'content': content, 'path': file_path})
+    except json.JSONDecodeError as e:
+        return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/json-file/<path:file_path>', methods=['POST'])
+def api_save_json_file(file_path):
+    """API endpoint to save JSON file content."""
+    try:
+        content = request.get_json().get('content', '')
+        json.loads(content)  # Validate JSON
+        
+        full_path = os.path.join(parent_dir, file_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        
+        with open(full_path, 'w') as f:
+            f.write(content)
+        
+        return jsonify({'success': True, 'message': 'File saved successfully'})
+    except json.JSONDecodeError as e:
+        return jsonify({'success': False, 'error': f'Invalid JSON: {str(e)}'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 def main():
     """Run the Flask development server."""
