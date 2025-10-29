@@ -11,8 +11,8 @@ import json
 import glob
 import argparse
 from collections import defaultdict
-from jobiodetail import Mu2eJobIO
-from samweb_wrapper import locate_file, list_files, count_files
+from .jobiodetail import Mu2eJobIO
+from .samweb_wrapper import locate_file, list_files, count_files
 
 
 class PomsMonitor:
@@ -33,6 +33,26 @@ class PomsMonitor:
                 entries = json.load(f)
                 for entry in entries:
                     entry['source_file'] = json_file.split('/')[-1]
+                    
+                    # For template mode jobs, get njobs from indef dataset
+                    if entry.get('fcl_template') and entry.get('indef') and not entry.get('njobs'):
+                        indef_dataset = entry.get('indef')
+                        try:
+                            # Use defname query to count files in the dataset definition
+                            njobs = count_files(f"defname: {indef_dataset}")
+                            if njobs > 0:
+                                entry['njobs'] = njobs
+                                print(f"  Template mode: {indef_dataset} -> {njobs} files")
+                            else:
+                                # Dataset doesn't exist yet or is empty - this is normal for template mode
+                                entry['njobs'] = 0
+                                entry['template_mode'] = True
+                                print(f"  Template mode: {indef_dataset} -> dataset not found (will process as needed)")
+                        except Exception as e:
+                            print(f"  Warning: Could not count files for {indef_dataset}: {e}")
+                            entry['njobs'] = 0
+                            entry['template_mode'] = True
+                    
                     self.data.append(entry)
         
         print(f"Loaded {len(self.data)} job definitions\n")
@@ -154,7 +174,7 @@ class PomsMonitor:
                 for dataset_name, nfiles, nevts, total_size in outputs:
                     avg_size_str = self.format_avg_size(total_size, nfiles)
                     if nfiles >= njobs:
-                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name} ✓\033[0m")
+                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name}\033[0m")
                     else:
                         print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[91m{dataset_name}\033[0m")
                 print("         " + "-" * 80)
@@ -166,7 +186,16 @@ class PomsMonitor:
     
     def filter_by_campaign(self, campaign: str, show_outputs: bool = False):
         """Filter and display by campaign."""
-        filtered = [e for e in self.data if campaign in e.get('tarball', '')]
+        # Handle both tarball mode and template mode job definitions
+        filtered = []
+        for e in self.data:
+            tarball = e.get('tarball', '')
+            fcl_template = e.get('fcl_template', '')
+            source_file = e.get('source_file', '')
+            # Check campaign in tarball, fcl_template, or source filename
+            if campaign in tarball or campaign in fcl_template or campaign in source_file:
+                filtered.append(e)
+        
         total = sum(e.get('njobs', 0) for e in filtered)
         
         print(f"Campaign: {campaign}")
@@ -183,21 +212,33 @@ class PomsMonitor:
         
         for entry in sorted(filtered, key=lambda x: x.get('njobs', 0), reverse=True):
             tarball = entry.get('tarball', 'N/A')
+            fcl_template = entry.get('fcl_template', 'N/A')
             njobs = entry.get('njobs', 0)
+            
+            # Handle template mode jobs
+            if fcl_template != 'N/A':
+                indef = entry.get('indef', 'N/A')
+                display_name = indef
+            else:
+                # Use tarball for display
+                display_name = tarball
             
             if show_outputs:
                 outloc = self.get_output_location(entry)
-                print(f"{njobs:>8} {'':>10} {'':>14} {'':>6} {tarball}")
-                outputs = self.get_output_datasets_with_counts(tarball)
+                print(f"{njobs:>8} {'':>10} {'':>14} {'':>6} {display_name}")
+                if tarball != 'N/A':
+                    outputs = self.get_output_datasets_with_counts(tarball)
+                else:
+                    outputs = []  # Template mode doesn't have tarball outputs
                 for dataset_name, nfiles, nevts, total_size in outputs:
                     avg_size_str = self.format_avg_size(total_size, nfiles)
                     if nfiles >= njobs:
-                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name} ✓\033[0m")
+                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name}\033[0m")
                     else:
                         print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[91m{dataset_name}\033[0m")
                 print("         " + "-" * 80)
             else:
-                print(f"{njobs:>8} {tarball:<60}")
+                print(f"{njobs:>8} {display_name:<60}")
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze POMS jobdesc JSON files")

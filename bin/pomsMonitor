@@ -4,10 +4,11 @@
 import os
 import sys
 
-utils_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'utils')
-sys.path.insert(0, utils_dir)
+# Add parent directory (prodtools) to path to import as package
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
 
-from pomsMonitor import main
+from utils.pomsMonitor import main
 
 if __name__ == '__main__':
     main()

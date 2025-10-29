@@ -40,23 +40,23 @@ echo "✅ Cleaned up previous test outputs"
 if [ "$RUN_ALL" = true ]; then
     # Run all configurations
     echo "1. Stage1 Jobs..."
-    python3 parity_test.py --json "../data/stage1.json"
+    python3 parity_test.py --json "../data/mdc2025/stage1.json"
 
     echo "2. Resampler Jobs..."
-    python3 parity_test.py --json "../data/resampler.json"
+    python3 parity_test.py --json "../data/mdc2025/resampler_beam.json"
 
     echo "3. Mixing Jobs..."
-    python3 parity_test.py --json "../data/mix.json"
+    python3 parity_test.py --json "../data/mdc2025/mix2.json"
 else
     # Run only index 0 for each type
     echo "1. Stage1 Jobs (index 0)..."
-    python3 parity_test.py --json "../data/stage1.json" --index 0
+    python3 parity_test.py --json "../data/mdc2025/stage1.json" --index 0
 
     echo "2. Resampler Jobs (index 0)..."
-    python3 parity_test.py --json "../data/resampler.json" --index 0
+    python3 parity_test.py --json "../data/mdc2025/resampler_beam.json" --index 0
 
     echo "3. Mixing Jobs (index 0)..."
-    python3 parity_test.py --json "../data/mix.json" --index 0
+    python3 parity_test.py --json "../data/mdc2025/mix2.json" --index 0
 fi
 
 echo "4. Running comparison..."

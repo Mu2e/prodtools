@@ -19,12 +19,25 @@ from utils.mixing_utils import *
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef
 
-def _create_inputs_file(dataset):
-    """Helper: create inputs.txt file from dataset."""
+def _create_inputs_file(input_data):
+    """Helper: create inputs.txt file from datasets with merge factors.
+    
+    Args:
+        input_data: dict mapping dataset names to merge factors
+                  e.g., {"dataset1": 100, "dataset2": 10}
+    """
     from utils.samweb_wrapper import list_files
-    result = list_files(f"dh.dataset={dataset} and event_count>0")
+    
+    if not isinstance(input_data, dict):
+        raise ValueError(f"input_data must be a dict, got {type(input_data)}")
+    
+    all_files = []
+    for dataset, merge_factor in input_data.items():
+        files = list_files(f"dh.dataset={dataset} and event_count>0")
+        all_files.extend(files)
+    
     with open('inputs.txt', 'w') as f:
-        f.write('\n'.join(result))
+        f.write('\n'.join(all_files))
 
 def get_parfile_name(config):
     """Generate consistent parfile name from config."""
@@ -48,16 +61,19 @@ def determine_job_type(config):
     
     Returns:
         'resampler' - Resampling jobs with resampler_name
-        'merge'     - File merging jobs with merge_factor 
+        'merge'     - File merging jobs with input_data dict
         'mixing'    - Pileup mixing jobs with pbeam
         'stage1'    - Primary simulation jobs (cosmic, beam, etc.)
+    
+    Note: Order matters! Resampler jobs with dict input_data must be checked first.
     """
     if 'resampler_name' in config:
         return 'resampler'
-    elif 'merge_factor' in config:
-        return 'merge'
     elif 'pbeam' in config:
         return 'mixing'
+    # If input_data is a dict, treat as merge (extracts merge_factor from dict values)
+    elif isinstance(config.get('input_data'), dict):
+        return 'merge'
     else:
         return 'stage1'
 
@@ -262,15 +278,24 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     job_type = determine_job_type(config)
     
     if job_type == 'resampler':
-        # Resampler jobs: calculate MaxEventsToSkip parameter
+        # Resampler jobs: calculate MaxEventsToSkip parameter and merge factor
         try:
-            nfiles, nevts = get_def_counts(config['input_data'])
+            # input_data should be a dict, use first dataset for calculation
+            input_data = config['input_data']
+            if not isinstance(input_data, dict):
+                raise ValueError(f"input_data must be a dict, got {type(input_data)}")
+            
+            first_dataset = list(input_data.keys())[0]
+            nfiles, nevts = get_def_counts(first_dataset)
             skip = nevts // nfiles
             # Store skip value for later addition to template
             config['_max_events_to_skip'] = skip
         except Exception as e:
-            print(f"Warning: Could not calculate MaxEventsToSkip for {config['input_data']}: {e}")
-        job_args = ['--auxinput', f"{config.get('merge_factor',1)}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
+            print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+        
+        # Get merge_factor from input_data dict
+        merge_factor = calculate_merge_factor(config)
+        job_args = ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
         
     elif job_type == 'merge':
         # Merge jobs: simple file merging
@@ -361,16 +386,18 @@ def load_json(json_path):
     json_text = json_path.read_text()
     configs = json.loads(json_text)
     
-    # Only expand mixing configurations, not stage1 or resampler
+    # Check if expansion is needed
+    if is_already_expanded(configs):
+        return configs
+    
+    # Expand all configurations that have lists
+    from utils.mixing_utils import expand_configs
     if json_path.name == 'mix.json':
         from utils.mixing_utils import expand_mix_config
-        if is_already_expanded(configs):
-            return configs
-        else:
-            return expand_mix_config(json_path)
+        return expand_mix_config(json_path)
     else:
-        # For non-mixing configs, just return as-is
-        return configs
+        # For non-mixing configs, use general expansion
+        return expand_configs(configs, mixing=False)
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):
     """Find a matching JSON entry from configuration list"""

@@ -1,0 +1,17 @@
+[
+    {
+	"dsconf": ["MDC2020bc_best_v1_3"],
+	"fcl": ["Production/JobConfig/digitize/OnSpill.fcl"],
+	"input_data": [
+		{"dts.mu2e.FlatMuMinus.MDC2020bb.art": 10},
+		{"dts.mu2e.FlateMinus.MDC2020bb.art": 10}
+	],
+    "fcl_overrides": {
+		"outputs.TriggeredOutput.fileName": "dig.owner.{desc}OnSpillTriggered.version.sequencer.art",
+		"outputs.TriggerableOutput.fileName": "dig.owner.{desc}OnSpillTriggerable.version.sequencer.art"
+	},
+	"inloc": ["tape"],
+	"outloc": [{"*.art": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bc/setup.sh"]
+    }
+]
