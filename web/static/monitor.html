@@ -38,7 +38,8 @@
     <div class="nav" style="margin-bottom: 20px;">
         <a href="/json2jobdef" style="color: #007bff; text-decoration: none; margin-right: 15px;">JobDesc Generator</a>
         <a href="/json-editor" style="color: #007bff; text-decoration: none; margin-right: 15px;">JSON Editor</a>
-        <a href="/" style="color: #007bff; text-decoration: none;">Home</a>
+        <a href="/" style="color: #007bff; text-decoration: none; margin-right: 15px;">Home</a>
+        <button onclick="reloadData()" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;">Reload Data</button>
     </div>
     
     <div class="jobs">
@@ -79,6 +80,22 @@
                 })
                 .catch(function(error) {
                     document.getElementById('jobs-content').innerHTML = 'Error: ' + error.message;
+                });
+        }
+
+        function reloadData() {
+            document.getElementById('jobs-content').innerHTML = 'Reloading data from MDC JSON files...';
+            fetch('/api/reload', { method: 'POST' })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        loadJobs();
+                    } else {
+                        document.getElementById('jobs-content').innerHTML = 'Error reloading: ' + data.error;
+                    }
+                })
+                .catch(function(error) {
+                    document.getElementById('jobs-content').innerHTML = 'Error reloading: ' + error.message;
                 });
         }
 

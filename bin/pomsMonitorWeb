@@ -27,6 +27,13 @@ def get_analyzer():
         analyzer.load_files()
     return analyzer
 
+def reload_analyzer():
+    """Force reload of the PomsMonitor instance."""
+    global analyzer
+    analyzer = PomsMonitor(pattern='MDC202*')
+    analyzer.load_files()
+    return analyzer
+
 @app.route('/')
 def index():
     """Main page - redirect to monitor."""
@@ -50,6 +57,15 @@ def json2jobdef_interface():
 def json_editor():
     """JSON file editor interface."""
     return _serve_html('json-editor.html')
+
+@app.route('/api/reload', methods=['POST'])
+def api_reload():
+    """API endpoint to reload MDC JSON files."""
+    try:
+        reload_analyzer()
+        return jsonify({'success': True, 'message': 'Data reloaded successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/jobs')
 def api_jobs():
