@@ -122,7 +122,14 @@
                 html += '<td>' + njobs + '</td>';
                 html += '<td></td>';
                 html += '<td></td>';
-                html += '<td>' + (job.source_file || '') + '</td>';
+                // Make source_file a clickable link that opens in JSON editor
+                if (job.source_file) {
+                    // Show just the basename
+                    var displayName = job.source_file.split('/').pop();
+                    html += '<td><a href="#" onclick="openJsonInEditor(\'' + job.source_file.replace(/'/g, "\\'") + '\'); return false;" style="color: #007bff; text-decoration: underline;">' + displayName + '</a></td>';
+                } else {
+                    html += '<td></td>';
+                }
                 html += '<td>' + (job.tarball || 'N/A') + '</td>';
                 html += '</tr>';
                 
@@ -165,6 +172,10 @@
         function clearFilter() {
             document.getElementById('datasetFilter').value = '';
             filterDatasets();
+        }
+
+        function openJsonInEditor(sourceFile) {
+            window.location.href = '/json-editor?file=' + encodeURIComponent(sourceFile);
         }
 
         function showDatasetInfo(datasetName) {

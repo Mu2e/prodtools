@@ -3,12 +3,13 @@
 
 import os
 import sys
+import shlex
 
 # Add parent directory (prodtools) to path to import as package
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
-from flask import Flask, jsonify, request, send_file, redirect
+from flask import Flask, jsonify, request, redirect
 from utils.pomsMonitor import PomsMonitor
 import subprocess
 import json
@@ -30,9 +31,8 @@ def get_analyzer():
 def reload_analyzer():
     """Force reload of the PomsMonitor instance."""
     global analyzer
-    analyzer = PomsMonitor(pattern='MDC202*')
-    analyzer.load_files()
-    return analyzer
+    analyzer = None
+    return get_analyzer()
 
 @app.route('/')
 def index():
@@ -40,8 +40,8 @@ def index():
     return redirect('/monitor')
 
 def _serve_html(filename):
-    """Helper to serve HTML files from static folder."""
-    return send_file(os.path.join(parent_dir, 'web', 'static', filename))
+    """Serve HTML files from the configured static folder."""
+    return app.send_static_file(filename)
 
 @app.route('/monitor')
 def monitor():
@@ -172,76 +172,67 @@ def api_json2jobdef():
             return jsonify({'success': False, 'error': 'JSON file path is required'})
         
         # Build json2jobdef command with parameters
-        cmd_parts = [f"python3 {os.path.join(parent_dir, 'utils', 'json2jobdef.py')}"]
-        cmd_parts.append(f"--json {data['json_file']}")
-        
-        # Add optional parameters
-        for key, flag in [('dsconf', '--dsconf'), ('desc', '--desc'), 
+        cmd_parts = ['python3', os.path.join(parent_dir, 'utils', 'json2jobdef.py'),
+                     '--json', data['json_file']]
+
+        for key, flag in [('dsconf', '--dsconf'), ('desc', '--desc'),
                           ('index', '--index'), ('jobdefs', '--jobdefs')]:
-            if data.get(key) is not None:
-                cmd_parts.append(f"{flag} {data[key]}")
-        
-        if data.get('pushout'):
-            cmd_parts.append('--pushout')
+            value = data.get(key)
+            if value not in (None, ''):
+                cmd_parts.extend([flag, str(value)])
+
+        if data.get('prod'):
+            cmd_parts.append('--prod')
         if data.get('verbose'):
             cmd_parts.append('--verbose')
-        
-        # Wrap with SimJob setup if needed
-        json2jobdef_cmd = ' '.join(cmd_parts)
+
+        json2jobdef_cmd = shlex.join(cmd_parts)
         if data.get('simjob_release'):
             cmd = ['bash', '-c', f"source /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{data['simjob_release']}/setup.sh && {json2jobdef_cmd}"]
         else:
             cmd = ['bash', '-c', json2jobdef_cmd]
         
-        # Run json2jobdef
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        
-        # Run mkidxdef if requested and json2jobdef succeeded
-        mkidxdef_output = mkidxdef_error = ""
-        if data.get('run_mkidxdef') and result.returncode == 0:
-            try:
-                jobdefs_file = data.get('jobdefs', 'jobdefs_list.txt')
-                mkidxdef_result = subprocess.run(['mkidxdef', '--jobdefs', jobdefs_file, '--prod'],
-                                                capture_output=True, text=True, timeout=30)
-                mkidxdef_output = mkidxdef_result.stdout
-                mkidxdef_error = mkidxdef_result.stderr
-                if mkidxdef_result.returncode != 0:
-                    result.returncode = mkidxdef_result.returncode
-            except (subprocess.TimeoutExpired, Exception) as e:
-                mkidxdef_error = f"mkidxdef error: {str(e)}"
-                result.returncode = 1
+        # Run json2jobdef (mkidxdef is now automatically run if --prod is set)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         
         return jsonify({
             'success': result.returncode == 0,
             'stdout': result.stdout,
             'stderr': result.stderr,
-            'command': ' '.join(cmd),
-            'mkidxdef_output': mkidxdef_output,
-            'mkidxdef_error': mkidxdef_error
+            'command': ' '.join(cmd)
         })
         
     except subprocess.TimeoutExpired:
-        return jsonify({'success': False, 'error': 'Command timed out after 60 seconds'})
+        return jsonify({'success': False, 'error': 'Command timed out after 120 seconds'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+
+def _normalize_file_path(file_path):
+    """Helper to normalize file paths (Flask strips leading slashes)."""
+    # Flask's <path:> converter strips leading slash, restore if needed
+    if file_path.startswith(('exp/', 'home/', 'usr/')):
+        file_path = '/' + file_path
+    
+    # Return absolute path or relative to parent_dir
+    return file_path if os.path.isabs(file_path) else os.path.join(parent_dir, file_path)
 
 @app.route('/api/json-files')
 def api_json_files():
     """API endpoint to list JSON files."""
     try:
         data_dir = os.path.join(parent_dir, 'data')
-        json_files = []
-        
-        for root, dirs, files in os.walk(data_dir):
-            for file in files:
-                if file.endswith('.json'):
-                    rel_path = os.path.relpath(os.path.join(root, file), parent_dir)
-                    json_files.append({
-                        'path': rel_path,
-                        'name': file,
-                        'directory': os.path.dirname(rel_path)
-                    })
-        
+        json_files = [
+            {
+                'path': rel_path,
+                'name': filename,
+                'directory': os.path.dirname(rel_path)
+            }
+            for root, _, files in os.walk(data_dir)
+            for filename in files
+            if filename.endswith('.json')
+            for rel_path in [os.path.relpath(os.path.join(root, filename), parent_dir)]
+        ]
+
         return jsonify({'success': True, 'files': json_files})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -250,9 +241,10 @@ def api_json_files():
 def api_get_json_file(file_path):
     """API endpoint to get JSON file content."""
     try:
-        full_path = os.path.join(parent_dir, file_path)
+        full_path = _normalize_file_path(file_path)
+        
         if not os.path.exists(full_path):
-            return jsonify({'success': False, 'error': 'File not found'})
+            return jsonify({'success': False, 'error': f'File not found: {full_path}'})
         
         with open(full_path, 'r') as f:
             content = f.read()
@@ -271,7 +263,7 @@ def api_save_json_file(file_path):
         content = request.get_json().get('content', '')
         json.loads(content)  # Validate JSON
         
-        full_path = os.path.join(parent_dir, file_path)
+        full_path = _normalize_file_path(file_path)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         
         with open(full_path, 'w') as f:

@@ -233,11 +233,16 @@ def main():
     p.add_argument('--dsconf', type=str, help='Dataset configuration')
     p.add_argument('--index', type=int, help='Entry index in JSON list')
     p.add_argument('--pushout', action='store_true', help='Enable SAM pushOutput')
+    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and run mkidxdef after generation')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.txt)')
     p.add_argument('--json-output', action='store_true', help='Output structured JSON instead of human-readable text')
     args = p.parse_args()
+    
+    # If --prod is specified, enable pushout
+    if args.prod:
+        args.pushout = True
 
     setup_logging(args.verbose)
     
@@ -258,6 +263,32 @@ def main():
     else:
         # No filtering specified, show usage
         sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")
+    
+    # If --prod mode, create index definition after generation
+    if args.prod:
+        from utils.prod_utils import create_index_definition
+        
+        jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.txt'
+        print(f"\n{'='*60}")
+        print(f"Creating index definition from {jobdefs_file}")
+        print(f"{'='*60}")
+        
+        # Load jobdefs to calculate total jobs
+        with open(jobdefs_file, 'r') as f:
+            jobdefs = json.load(f)
+        
+        total_jobs = sum(j['njobs'] for j in jobdefs)
+        
+        # Print summary
+        for i, j in enumerate(jobdefs):
+            outputs = ", ".join(f"{o['dataset']}→{o['location']}" for o in j['outputs'])
+            print(f"[{i}] {j['tarball']}: {j['njobs']} jobs, input={j['inloc']}, outputs={outputs}")
+        
+        print(f"\nTotal: {total_jobs} jobs")
+        
+        # Create index definition
+        map_stem = Path(jobdefs_file).stem
+        create_index_definition(map_stem, total_jobs, "etc.mu2e.index.000.txt")
 
 def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None):
     """Process a single configuration entry (original behavior)"""

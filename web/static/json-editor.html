@@ -3,7 +3,6 @@
 <head>
     <title>JSON Editor</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/fold/foldgutter.css">
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
@@ -11,13 +10,6 @@
         .nav a { color: #007bff; text-decoration: none; margin-right: 15px; }
         select { width: 300px; padding: 5px; margin-bottom: 10px; }
         .CodeMirror { border: 1px solid #ddd; height: 400px; font-size: 0.9em; }
-        .CodeMirror .cm-string { color: #a6e22e; }
-        .CodeMirror .cm-number { color: #ae81ff; }
-        .CodeMirror .cm-keyword { color: #f92672; }
-        .CodeMirror .cm-property { color: #66d9ef; }
-        .CodeMirror .cm-bracket { color: #f8f8f2; }
-        .CodeMirror .cm-comma { color: #f8f8f2; }
-        .CodeMirror .cm-colon { color: #f8f8f2; }
         button { background: #007bff; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
         .status { padding: 5px; margin: 5px 0; border-radius: 3px; }
         .success { background: #d4edda; }
@@ -33,14 +25,17 @@
         <a href="/json2jobdef">JobDesc Generator</a>
     </div>
     
-    <select id="fileSelect" onchange="loadFile()">
-        <option>Select JSON file...</option>
+    <select id="fileSelect">
+        <option value="">Select JSON file...</option>
     </select>
     
     <textarea id="editor" placeholder="Select a file to edit..."></textarea>
     
         <div>
-            <button onclick="save()">Save</button>
+            <button id="saveBtn" onclick="save()">Save</button>
+            <span id="readOnlyIndicator" style="display: none; color: #856404; background: #fff3cd; padding: 5px 10px; border-radius: 3px; margin-left: 10px;">
+                Read-only
+            </span>
         </div>
     
     <div id="status"></div>
@@ -58,7 +53,6 @@
         // Initialize CodeMirror
         editor = CodeMirror.fromTextArea(document.getElementById('editor'), {
             mode: 'application/json',
-            theme: 'monokai',
             lineNumbers: true,
             autoCloseBrackets: true,
             matchBrackets: true,
@@ -67,70 +61,110 @@
             foldGutter: true,
             gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
             extraKeys: {
-                'Ctrl-S': function(cm) {
-                    save();
-                },
-                'Ctrl-F': function(cm) {
-                    cm.execCommand('find');
-                }
+                'Ctrl-S': save,
+                'Ctrl-F': function(cm) { cm.execCommand('find'); }
             }
         });
         
+        const params = new URLSearchParams(window.location.search);
+        const initialFile = params.get('file') || '';
+        let filesData = [];
+        let isInitializing = true;
+        
+        function updateQuery(filePath) {
+            const url = new URL(window.location);
+            if (filePath) {
+                url.searchParams.set('file', filePath);
+            } else {
+                url.searchParams.delete('file');
+            }
+            window.history.replaceState({}, '', url);
+        }
+        
+        // Initial load
         fetch('/api/json-files')
             .then(r => r.json())
             .then(data => {
+                filesData = data.files || [];
                 const select = document.getElementById('fileSelect');
-                data.files.forEach(file => {
+                filesData.forEach(file => {
                     const option = document.createElement('option');
                     option.value = file.path;
                     option.textContent = file.path;
                     select.appendChild(option);
                 });
-                // Auto-load the first file if available
-                if (data.files.length > 0) {
-                    // Check if a file was passed from JobDef generator
-                    const selectedFile = sessionStorage.getItem('selectedJsonFile');
-                    if (selectedFile && data.files.some(f => f.path === selectedFile)) {
-                        select.value = selectedFile;
-                        sessionStorage.removeItem('selectedJsonFile'); // Clear after use
-                    } else {
-                        select.value = data.files[0].path;
+                
+                select.addEventListener('change', function() {
+                    if (isInitializing) return; // Ignore during initialization
+                    const selected = this.value;
+                    if (!selected) {
+                        updateQuery('');
+                        editor.setValue('');
+                        setReadOnlyMode(true);
+                        document.getElementById('readOnlyIndicator').style.display = 'none';
+                        showStatus('Select a file to begin editing', 'info');
+                        currentFile = null;
+                        return;
                     }
-                    loadFile();
+                    loadFileByPath(selected, false, true);
+                });
+                
+                const targetFile = initialFile;
+
+                if (targetFile) {
+                    const inDropdown = filesData.some(f => f.path === targetFile);
+                    if (inDropdown) {
+                        select.value = targetFile;
+                        loadFileByPath(targetFile, false, false);
+                    } else {
+                        select.selectedIndex = 0; // Reset dropdown
+                        loadFileByPath(targetFile, true, false);
+                    }
+                } else if (filesData.length > 0) {
+                    const firstFile = filesData[0].path;
+                    select.value = firstFile;
+                    loadFileByPath(firstFile, false, true);
                 }
+                
+                isInitializing = false; // Allow change events now
             });
         
-        function loadFile() {
-            currentFile = document.getElementById('fileSelect').value;
-            if (!currentFile) return;
-            
+        function setReadOnlyMode(isReadOnly) {
+            editor.setOption('readOnly', isReadOnly);
+            document.getElementById('saveBtn').disabled = isReadOnly;
+            document.getElementById('readOnlyIndicator').style.display = isReadOnly ? 'inline' : 'none';
+        }
+        
+        function loadFileByPath(filePath, readOnly = false, updateUrl = true) {
+            if (!filePath) return;
+            if (updateUrl) {
+                updateQuery(filePath);
+            }
+            currentFile = filePath;
             showStatus('Loading...', 'info');
             
-            fetch('/api/json-file/' + encodeURIComponent(currentFile))
+            if (readOnly) {
+                const select = document.getElementById('fileSelect');
+                select.selectedIndex = 0; // Reset to "Select JSON file..."
+            }
+            
+            fetch('/api/json-file/' + encodeURIComponent(filePath))
                 .then(r => {
-                    if (!r.ok) {
-                        throw new Error(`HTTP ${r.status}: ${r.statusText}`);
-                    }
+                    if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
                     return r.json();
                 })
                 .then(data => {
                     if (data.success) {
                         const content = data.content || '';
-                        if (content.trim() === '') {
-                            showStatus('File is empty', 'error');
-                            editor.setValue('');
-                        } else {
-                            editor.setValue(content);
-                            showStatus('Loaded', 'success');
-                        }
+                        editor.setValue(content);
+                        setReadOnlyMode(readOnly);
+                        const status = readOnly ? 'Loaded: ' + filePath.split('/').pop() + ' (read-only)' : 'Loaded';
+                        showStatus(status, 'success');
                     } else {
                         showStatus('Error: ' + data.error, 'error');
                     }
                 })
-                .catch(e => {
-                    showStatus('Error: ' + e.message, 'error');
-                    console.error('Load error:', e);
-                });
+                .catch(e => showStatus('Error: ' + e.message, 'error'));
         }
         
         function save() {

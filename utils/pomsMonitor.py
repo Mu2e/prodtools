@@ -32,7 +32,8 @@ class PomsMonitor:
             with open(json_file, 'r') as f:
                 entries = json.load(f)
                 for entry in entries:
-                    entry['source_file'] = json_file.split('/')[-1]
+                    # Store the full path for the source file
+                    entry['source_file'] = json_file
                     
                     # For template mode jobs, get njobs from indef dataset
                     if entry.get('fcl_template') and entry.get('indef') and not entry.get('njobs'):
@@ -181,7 +182,7 @@ class PomsMonitor:
             else:
                 inloc = entry.get('inloc', 'N/A')
                 outloc = entry.get('outputs', [{}])[0].get('location', 'N/A') if entry.get('outputs') else 'N/A'
-                source_file = entry.get('source_file', 'N/A')
+                source_file = entry.get('source_file', 'N/A').split('/')[-1] if entry.get('source_file') else 'N/A'
                 print(f"{njobs:>8} {inloc:<8} {outloc:<8} {source_file:<25} {tarball:<60}")
     
     def filter_by_campaign(self, campaign: str, show_outputs: bool = False):
