@@ -39,7 +39,7 @@
         <a href="/json2jobdef" style="color: #007bff; text-decoration: none; margin-right: 15px;">JobDesc Generator</a>
         <a href="/json-editor" style="color: #007bff; text-decoration: none; margin-right: 15px;">JSON Editor</a>
         <a href="/" style="color: #007bff; text-decoration: none; margin-right: 15px;">Home</a>
-        <button onclick="reloadData()" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;">Reload Data</button>
+        <button onclick="reloadData()" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;">Reload JOBDESC</button>
     </div>
     
     <div class="jobs">
@@ -50,9 +50,21 @@
             </label>
         </div>
         <div class="form-group">
+            <label for="jobdescFilter">Filter JOBDESC:</label>
+            <input type="text" id="jobdescFilter" class="form-control" placeholder="e.g., MDC2020bc-001.json" onkeyup="filterDatasets()">
+        </div>
+        <div class="form-group">
             <label for="datasetFilter">Filter datasets:</label>
             <input type="text" id="datasetFilter" class="form-control" placeholder="e.g., dts*.art, sim*.art" onkeyup="filterDatasets()">
-            <button onclick="clearFilter()">Clear</button>
+        </div>
+        <div class="form-group">
+            <label for="statusFilter">Status:</label>
+            <select id="statusFilter" class="form-control" onchange="filterDatasets()" style="width: 150px;">
+                <option value="all">All</option>
+                <option value="complete">Complete</option>
+                <option value="incomplete">Incomplete</option>
+            </select>
+            <button onclick="clearFilter()" style="margin-left: 10px;">Clear</button>
         </div>
         <div id="jobs-content">Loading...</div>
     </div>
@@ -84,7 +96,7 @@
         }
 
         function reloadData() {
-            document.getElementById('jobs-content').innerHTML = 'Reloading data from MDC JSON files...';
+            document.getElementById('jobs-content').innerHTML = 'Reloading JOBDESC from MDC JSON files...';
             fetch('/api/reload', { method: 'POST' })
                 .then(function(response) { return response.json(); })
                 .then(function(data) {
@@ -101,11 +113,11 @@
 
         function displayJobs(data) {
             var html = '<table><tr>';
-            var colNames = ['NJOBS', 'EVENTS', 'FILE SIZE [MB]', 'SOURCE', 'TARBALL / OUTPUT DATASETS'];
+            var colNames = ['NJOBS', 'EVENTS', 'FILE SIZE [MB]', 'JOBDESC', 'TARBALL / OUTPUT DATASETS'];
             for (var col = 0; col < 5; col++) {
                 var className = 'sortable';
                 if (currentSortColumn === col) {
-                    className += (currentSortDirection > 0) ? ' sort-asc' : ' sort-desc';
+                    className += (currentSortColumn > 0) ? ' sort-asc' : ' sort-desc';
                 }
                 html += '<th class="' + className + '" onclick="sortTable(' + col + ')">' + colNames[col] + '</th>';
             }
@@ -117,8 +129,10 @@
                 var outputs = job.outputs || [];
                 var groupClass = (i % 2 === 0) ? 'group-even' : 'group-odd';
                 
-                // Job header row
-                html += '<tr class="' + groupClass + ' group-header">';
+                // Job header row - add data-complete and data-source attributes for filtering
+                var isComplete = outputs.length > 0 && outputs.every(function(o) { return o.status === 'OK'; });
+                var sourceName = job.source_file ? job.source_file.split('/').pop() : '';
+                html += '<tr class="' + groupClass + ' group-header" data-complete="' + isComplete + '" data-source="' + sourceName + '">';
                 html += '<td>' + njobs + '</td>';
                 html += '<td></td>';
                 html += '<td></td>';
@@ -138,7 +152,7 @@
                     var o = outputs[j];
                     var statusColor = o.status === 'OK' ? '#28a745' : (o.status === 'MISSING' ? '#dc3545' : '#ffc107');
                     
-                    html += '<tr class="' + groupClass + '">';
+                    html += '<tr class="' + groupClass + '" data-complete="' + isComplete + '" data-source="' + sourceName + '">';
                     html += '<td>' + (o.nfiles || 0) + '</td>';
                     html += '<td>' + (o.nevts ? o.nevts.toExponential(2) : '') + '</td>';
                     html += '<td>' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
@@ -153,12 +167,23 @@
 
 
         function filterDatasets() {
-            var filter = document.getElementById('datasetFilter').value.toLowerCase();
+            var jobdescFilter = document.getElementById('jobdescFilter').value.toLowerCase();
+            var datasetFilter = document.getElementById('datasetFilter').value.toLowerCase();
+            var statusFilter = document.getElementById('statusFilter').value;
             var rows = document.querySelectorAll('#jobs-content tr');
             
             for (var i = 1; i < rows.length; i++) {
+                var sourceName = rows[i].getAttribute('data-source') || '';
                 var cellText = rows[i].cells[4].textContent.toLowerCase();
-                rows[i].style.display = (filter === '' || matchPattern(cellText, filter)) ? '' : 'none';
+                var isComplete = rows[i].getAttribute('data-complete') === 'true';
+                
+                var matchesJobdesc = (jobdescFilter === '' || matchPattern(sourceName.toLowerCase(), jobdescFilter));
+                var matchesDataset = (datasetFilter === '' || matchPattern(cellText, datasetFilter));
+                var matchesStatus = (statusFilter === 'all') || 
+                                   (statusFilter === 'complete' && isComplete) || 
+                                   (statusFilter === 'incomplete' && !isComplete);
+                
+                rows[i].style.display = (matchesJobdesc && matchesDataset && matchesStatus) ? '' : 'none';
             }
         }
 
@@ -170,7 +195,9 @@
         }
 
         function clearFilter() {
+            document.getElementById('jobdescFilter').value = '';
             document.getElementById('datasetFilter').value = '';
+            document.getElementById('statusFilter').value = 'all';
             filterDatasets();
         }
 

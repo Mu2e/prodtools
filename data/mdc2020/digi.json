@@ -4,7 +4,8 @@
 	"fcl": ["Production/JobConfig/digitize/OnSpill.fcl"],
 	"input_data": [
 		{"dts.mu2e.FlatMuMinus.MDC2020bb.art": 10},
-		{"dts.mu2e.FlateMinus.MDC2020bb.art": 10}
+		{"dts.mu2e.FlateMinus.MDC2020bb.art": 10},
+		{"dts.mu2e.FlatePlus.MDC2020bb.art": 10}
 	],
     "fcl_overrides": {
 		"outputs.TriggeredOutput.fileName": "dig.owner.{desc}OnSpillTriggered.version.sequencer.art",

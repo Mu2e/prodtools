@@ -1,0 +1,22 @@
+[
+    {
+	"dsconf": ["MDC2020bc_best_v1_3"],
+	"fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+	"input_data": [
+        {"dig.mu2e.RPCInternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.RPCExternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.RPCExternalPhysicalMix2BBTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.FlateMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.FlatMuMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.FlatGammaMix1BBTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.FlatGammaMix2BBTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.FlatMuMinusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.FlateMinusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"dig.mu2e.FlatePlusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1}
+    ],
+    "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+	"inloc": ["tape"],
+	"outloc": [{"*.art": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bc/setup.sh"]
+    }
+]

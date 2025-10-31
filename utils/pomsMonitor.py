@@ -98,6 +98,15 @@ class PomsMonitor:
             return "0.00"
         return f"{size_bytes/nfiles/1e6:.2f}"
     
+    def is_complete(self, entry: dict) -> bool:
+        """Check if all outputs for an entry are complete."""
+        tarball = entry.get('tarball', 'N/A')
+        njobs = entry.get('njobs', 0)
+        if tarball == 'N/A':
+            return False
+        outputs = self.get_output_datasets_with_counts(tarball)
+        return all(nfiles >= njobs for _, nfiles, _, _ in outputs) if outputs else False
+    
     def get_output_datasets_with_counts(self, tarball: str) -> list:
         """Extract output dataset names with file counts."""
         location = locate_file(tarball)
@@ -153,39 +162,51 @@ class PomsMonitor:
         
         return []
     
-    def list_all(self, sort_by: str = "njobs", show_outputs: bool = False):
+    def list_all(self, sort_by: str = "njobs", show_outputs: bool = False, complete_only: bool = False, incomplete_only: bool = False, datasets_only: bool = False):
         """List all job definitions."""
         sorted_data = sorted(self.data, key=lambda x: x.get(sort_by, 0), reverse=True)
         
-        if show_outputs:
-            print(f"{'NJOBS':>8} {'EVENTS':>10} {'FILE SIZE [MB]':>14} {'LOC':<6} {'TARBALL / OUTPUT DATASETS':<80}")
-            print(f"{'-----':>8} {'------':>10} {'--------------':>14} {'---':<6} {'-------------------------':<80}")
-        else:
-            print(f"{'NJOBS':>8} {'INLOC':<8} {'OUTLOC':<8} {'JSON FILE':<25} {'TARBALL':<60}")
-            print(f"{'-----':>8} {'-----':<8} {'------':<8} {'---------':<25} {'-------':<60}")
+        if not datasets_only:
+            if show_outputs:
+                print(f"{'NJOBS':>8} {'EVENTS':>10} {'FILE SIZE [MB]':>14} {'LOC':<6} {'TARBALL / OUTPUT DATASETS':<80}")
+                print(f"{'-----':>8} {'------':>10} {'--------------':>14} {'---':<6} {'-------------------------':<80}")
+            else:
+                print(f"{'NJOBS':>8} {'INLOC':<8} {'OUTLOC':<8} {'JSON FILE':<25} {'TARBALL':<60}")
+                print(f"{'-----':>8} {'-----':<8} {'------':<8} {'---------':<25} {'-------':<60}")
         
         for entry in sorted_data:
             tarball = entry.get('tarball', 'N/A')
             njobs = entry.get('njobs', 0)
             
+            # Apply completeness filter
+            if show_outputs and (complete_only or incomplete_only):
+                is_complete = self.is_complete(entry)
+                if (complete_only and not is_complete) or (incomplete_only and is_complete):
+                    continue
+            
             if show_outputs:
-                outloc = self.get_output_location(entry)
-                print(f"{njobs:>8} {'':>10} {'':>14} {'':>6} {tarball}")
                 outputs = self.get_output_datasets_with_counts(tarball)
-                for dataset_name, nfiles, nevts, total_size in outputs:
-                    avg_size_str = self.format_avg_size(total_size, nfiles)
-                    if nfiles >= njobs:
-                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name}\033[0m")
-                    else:
-                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[91m{dataset_name}\033[0m")
-                print("         " + "-" * 80)
+                
+                if datasets_only:
+                    for dataset_name, nfiles, nevts, total_size in outputs:
+                        print(dataset_name)
+                else:
+                    outloc = self.get_output_location(entry)
+                    print(f"{njobs:>8} {'':>10} {'':>14} {'':>6} {tarball}")
+                    for dataset_name, nfiles, nevts, total_size in outputs:
+                        avg_size_str = self.format_avg_size(total_size, nfiles)
+                        if nfiles >= njobs:
+                            print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name}\033[0m")
+                        else:
+                            print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[91m{dataset_name}\033[0m")
+                    print("         " + "-" * 80)
             else:
                 inloc = entry.get('inloc', 'N/A')
                 outloc = entry.get('outputs', [{}])[0].get('location', 'N/A') if entry.get('outputs') else 'N/A'
                 source_file = entry.get('source_file', 'N/A').split('/')[-1] if entry.get('source_file') else 'N/A'
                 print(f"{njobs:>8} {inloc:<8} {outloc:<8} {source_file:<25} {tarball:<60}")
     
-    def filter_by_campaign(self, campaign: str, show_outputs: bool = False):
+    def filter_by_campaign(self, campaign: str, show_outputs: bool = False, complete_only: bool = False, incomplete_only: bool = False, datasets_only: bool = False):
         """Filter and display by campaign."""
         # Handle both tarball mode and template mode job definitions
         filtered = []
@@ -199,22 +220,29 @@ class PomsMonitor:
         
         total = sum(e.get('njobs', 0) for e in filtered)
         
-        print(f"Campaign: {campaign}")
-        print(f"Job definitions: {len(filtered)}")
-        print(f"Total jobs: {total:,}")
-        print()
-        
-        if show_outputs:
-            print(f"{'NJOBS':>8} {'EVENTS':>10} {'FILE SIZE [MB]':>14} {'LOC':<6} {'TARBALL / OUTPUT DATASETS':<80}")
-            print(f"{'-----':>8} {'------':>10} {'--------------':>14} {'---':<6} {'-------------------------':<80}")
-        else:
-            print(f"{'NJOBS':>8} {'TARBALL':<60}")
-            print(f"{'-----':>8} {'-------':<60}")
+        if not datasets_only:
+            print(f"Campaign: {campaign}")
+            print(f"Job definitions: {len(filtered)}")
+            print(f"Total jobs: {total:,}")
+            print()
+            
+            if show_outputs:
+                print(f"{'NJOBS':>8} {'EVENTS':>10} {'FILE SIZE [MB]':>14} {'LOC':<6} {'TARBALL / OUTPUT DATASETS':<80}")
+                print(f"{'-----':>8} {'------':>10} {'--------------':>14} {'---':<6} {'-------------------------':<80}")
+            else:
+                print(f"{'NJOBS':>8} {'TARBALL':<60}")
+                print(f"{'-----':>8} {'-------':<60}")
         
         for entry in sorted(filtered, key=lambda x: x.get('njobs', 0), reverse=True):
             tarball = entry.get('tarball', 'N/A')
             fcl_template = entry.get('fcl_template', 'N/A')
             njobs = entry.get('njobs', 0)
+            
+            # Apply completeness filter
+            if show_outputs and (complete_only or incomplete_only):
+                is_complete = self.is_complete(entry)
+                if (complete_only and not is_complete) or (incomplete_only and is_complete):
+                    continue
             
             # Handle template mode jobs
             if fcl_template != 'N/A':
@@ -225,19 +253,24 @@ class PomsMonitor:
                 display_name = tarball
             
             if show_outputs:
-                outloc = self.get_output_location(entry)
-                print(f"{njobs:>8} {'':>10} {'':>14} {'':>6} {display_name}")
                 if tarball != 'N/A':
                     outputs = self.get_output_datasets_with_counts(tarball)
                 else:
                     outputs = []  # Template mode doesn't have tarball outputs
-                for dataset_name, nfiles, nevts, total_size in outputs:
-                    avg_size_str = self.format_avg_size(total_size, nfiles)
-                    if nfiles >= njobs:
-                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name}\033[0m")
-                    else:
-                        print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[91m{dataset_name}\033[0m")
-                print("         " + "-" * 80)
+                
+                if datasets_only:
+                    for dataset_name, nfiles, nevts, total_size in outputs:
+                        print(dataset_name)
+                else:
+                    outloc = self.get_output_location(entry)
+                    print(f"{njobs:>8} {'':>10} {'':>14} {'':>6} {display_name}")
+                    for dataset_name, nfiles, nevts, total_size in outputs:
+                        avg_size_str = self.format_avg_size(total_size, nfiles)
+                        if nfiles >= njobs:
+                            print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[92m{dataset_name}\033[0m")
+                        else:
+                            print(f"{nfiles:>8} {nevts:>10.2e} {avg_size_str:>14} {outloc:<6} \033[91m{dataset_name}\033[0m")
+                    print("         " + "-" * 80)
             else:
                 print(f"{njobs:>8} {display_name:<60}")
 
@@ -249,17 +282,20 @@ def main():
     parser.add_argument('--campaign', help='Filter by campaign (e.g., MDC2025ac)')
     parser.add_argument('--outputs', action='store_true', help='Show output dataset names')
     parser.add_argument('--sort', default='njobs', help='Sort by field (default: njobs)')
+    parser.add_argument('--complete', action='store_true', help='Show only complete datasets')
+    parser.add_argument('--incomplete', action='store_true', help='Show only incomplete datasets')
+    parser.add_argument('--datasets-only', action='store_true', help='Print only dataset names (requires --outputs)')
     args = parser.parse_args()
     
     analyzer = PomsMonitor(pattern=args.pattern)
     analyzer.load_files()
     
     if args.campaign:
-        analyzer.filter_by_campaign(args.campaign, show_outputs=args.outputs)
+        analyzer.filter_by_campaign(args.campaign, show_outputs=args.outputs, complete_only=args.complete, incomplete_only=args.incomplete, datasets_only=args.datasets_only)
     elif args.summary:
         analyzer.summary()
     elif args.list:
-        analyzer.list_all(sort_by=args.sort, show_outputs=args.outputs)
+        analyzer.list_all(sort_by=args.sort, show_outputs=args.outputs, complete_only=args.complete, incomplete_only=args.incomplete, datasets_only=args.datasets_only)
     else:
         analyzer.summary()
 
