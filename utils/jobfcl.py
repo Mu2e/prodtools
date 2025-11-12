@@ -279,10 +279,14 @@ class Mu2eJobFCL(Mu2eJobBase):
                 subrun = index
                 return f"{run:06d}_{subrun:08d}"
             # If event_id exists but no run number, check if job uses inputs.txt
-            # (resampler/artcat jobs with random sampling should generate sequencers from index)
+            # AND explicitly requests index-based sequencers (for backward compatibility)
+            # Old job definitions used sequencer from input files, so we only apply
+            # the new behavior if explicitly enabled via sequencer_from_index flag
             inputs = tbs.get('inputs', {})
-            if inputs:
-                # Job uses inputs.txt - generate sequencer from index using default run number
+            sequencer_from_index = tbs.get('sequencer_from_index', False)
+            if inputs and sequencer_from_index:
+                # Job uses inputs.txt AND explicitly requests index-based sequencers
+                # Generate sequencer from index using default run number
                 # Use a hash of jobname to get a consistent run number
                 jobname = self.json_data.get('jobname', 'unknown')
                 run_hash = int(hashlib.md5(jobname.encode()).hexdigest()[:8], 16) % 1000000

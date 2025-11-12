@@ -523,6 +523,12 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     # Handle sequential_aux setting from config
     if 'sequential_aux' in config:
         tbs['sequential_aux'] = config['sequential_aux']
+    
+    # Handle sequencer_from_index setting from config
+    # When true, generates sequencers from job index instead of input files
+    # This fixes the bug where different indices produce the same output filename
+    if 'sequencer_from_index' in config:
+        tbs['sequencer_from_index'] = config['sequencer_from_index']
 
     # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
     ordered_tbs = {}
