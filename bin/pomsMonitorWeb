@@ -10,29 +10,33 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
 from flask import Flask, jsonify, request, redirect
-from utils.pomsMonitor import PomsMonitor
+from utils.poms_db import get_db_session, Job, DatasetInfo
+from utils.db_analyzer import get_default_db_path
+from utils.db_builder import build_db
 import subprocess
 import json
 
 app = Flask(__name__, 
             static_folder=os.path.join(parent_dir, 'web', 'static'))
 
-# Global analyzer instance
-analyzer = None
+# Global DB session
+db_session = None
 
-def get_analyzer():
-    """Get or create the PomsMonitor instance."""
-    global analyzer
-    if analyzer is None:
-        analyzer = PomsMonitor(pattern='MDC202*')
-        analyzer.load_files()
-    return analyzer
+def _get_session():
+    """Get or refresh database session to pick up any external changes."""
+    global db_session
+    if db_session is not None:
+        try:
+            db_session.close()
+        except Exception:
+            pass
+    db_session = get_db_session(get_default_db_path())
+    return db_session
 
-def reload_analyzer():
-    """Force reload of the PomsMonitor instance."""
-    global analyzer
-    analyzer = None
-    return get_analyzer()
+def _rebuild_db(pattern: str = 'MDC202*'):
+    """Rebuild the persistent DB from POMS JSONs and refresh the session."""
+    build_db(pattern, get_default_db_path())
+    return _get_session()
 
 @app.route('/')
 def index():
@@ -62,51 +66,53 @@ def json_editor():
 def api_reload():
     """API endpoint to reload MDC JSON files."""
     try:
-        reload_analyzer()
-        return jsonify({'success': True, 'message': 'Data reloaded successfully'})
+        _rebuild_db('MDC202*')
+        return jsonify({'success': True, 'message': 'Database rebuilt successfully'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/jobs')
 def api_jobs():
     """API endpoint for all job definitions."""
-    pm = get_analyzer()
-    
+    # Refresh session to pick up any external database changes
+    session = _get_session()
     jobs = []
-    for entry in pm.data:
-        tarball = entry.get('tarball', '')
-        njobs = entry.get('njobs', 0)
-        source_file = entry.get('source_file', '')
-        output_details = []
-        
-        try:
-            dataset_infos = pm.get_output_datasets_with_counts(tarball)
-            for dataset_name, nfiles, nevts, total_size in dataset_infos:
-                avg_size = total_size / nfiles / 1e6 if nfiles > 0 else 0
-                output_details.append({
-                    'name': dataset_name,
-                    'nfiles': nfiles,
-                    'nevts': nevts,
-                    'avg_size_mb': round(avg_size, 2),
-                    'status': 'OK' if nfiles >= njobs else 'MISSING'
-                })
-        except Exception:
-            # Fallback to basic dataset names
-            for o in entry.get('outputs', []):
-                if o.get('dataset'):
-                    output_details.append({
-                        'name': o['dataset'],
-                        'nfiles': 0,
-                        'nevts': 0,
-                        'avg_size_mb': 0,
-                        'status': 'UNKNOWN'
-                    })
+    for job in session.query(Job).all():
+        njobs = job.njobs or 0
+        outputs = []
+        for output in job.outputs:
+            info = session.query(DatasetInfo).filter_by(dataset_name=output.dataset).one_or_none()
+            nfiles = int(info.nfiles or 0) if info else 0
+            nevts = int(info.nevts or 0) if info else 0
+            
+            # Format creation date
+            creation_date_str = None
+            if info and info.creation_date:
+                if isinstance(info.creation_date, str):
+                    creation_date_str = info.creation_date.split('T')[0]
+                else:
+                    creation_date_str = info.creation_date.strftime('%Y-%m-%d')
+            
+            outputs.append({
+                'name': output.dataset,
+                'nfiles': nfiles,
+                'nevts': nevts,
+                'events_per_file': round(nevts / nfiles, 2) if nfiles > 0 else 0.0,
+                'avg_size_mb': round((info.total_size or 0) / nfiles / 1e6, 2) if nfiles else 0.0,
+                'status': 'OK' if nfiles >= njobs else 'MISSING',
+                'has_children': info.has_children if info else False,
+                'creation_date': creation_date_str,
+                'location': (info.location or 'N/A') if info else 'N/A'
+            })
         
         jobs.append({
             'njobs': njobs,
-            'tarball': tarball,
-            'source_file': source_file,
-            'outputs': output_details
+            'tarball': job.tarball or '',
+            'source_file': job.source_file or '',
+            'complete': job.complete or False,
+            'avg_real_h': float(job.avg_real_h) if getattr(job, 'avg_real_h', None) is not None else None,
+            'avg_vmhwm_gb': float(job.avg_vmhwm_gb) if getattr(job, 'avg_vmhwm_gb', None) is not None else None,
+            'outputs': outputs
         })
     
     return jsonify(jobs)
@@ -140,25 +146,19 @@ def api_dataset_info(dataset_name):
         md_filename = f'{base_name}.md'
         
         if os.path.exists(md_filename):
-            try:
-                with open(md_filename, 'r') as f:
-                    md_content = f.read()
-                return jsonify({
-                    'success': True,
-                    'output': md_content,
-                    'has_mermaid': '```mermaid' in md_content
-                })
-            except Exception as e:
-                return jsonify({
-                    'success': True,
-                    'output': result.stdout.strip(),
-                    'error': f'Could not read {md_filename}: {str(e)}'
-                })
+            with open(md_filename, 'r') as f:
+                md_content = f.read()
+            return jsonify({
+                'success': True,
+                'output': md_content,
+                'has_mermaid': '```mermaid' in md_content
+            })
         
+        # Fallback if .md file not found
         return jsonify({
             'success': True,
             'output': result.stdout.strip(),
-            'error': f'No .md file found: {md_filename}'
+            'has_mermaid': False
         })
     finally:
         os.chdir(original_dir)
@@ -175,10 +175,11 @@ def api_json2jobdef():
         cmd_parts = ['python3', os.path.join(parent_dir, 'utils', 'json2jobdef.py'),
                      '--json', data['json_file']]
 
+        # Add optional parameters
         for key, flag in [('dsconf', '--dsconf'), ('desc', '--desc'),
                           ('index', '--index'), ('jobdefs', '--jobdefs')]:
             value = data.get(key)
-            if value not in (None, ''):
+            if value:
                 cmd_parts.extend([flag, str(value)])
 
         if data.get('prod'):
@@ -186,9 +187,12 @@ def api_json2jobdef():
         if data.get('verbose'):
             cmd_parts.append('--verbose')
 
+        # Build final command with optional SimJob setup
         json2jobdef_cmd = shlex.join(cmd_parts)
-        if data.get('simjob_release'):
-            cmd = ['bash', '-c', f"source /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{data['simjob_release']}/setup.sh && {json2jobdef_cmd}"]
+        simjob_release = data.get('simjob_release')
+        if simjob_release:
+            setup_cmd = f"source /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{simjob_release}/setup.sh && {json2jobdef_cmd}"
+            cmd = ['bash', '-c', setup_cmd]
         else:
             cmd = ['bash', '-c', json2jobdef_cmd]
         
@@ -208,12 +212,11 @@ def api_json2jobdef():
         return jsonify({'success': False, 'error': str(e)})
 
 def _normalize_file_path(file_path):
-    """Helper to normalize file paths (Flask strips leading slashes)."""
+    """Normalize file paths - restore leading slash if needed, make absolute."""
     # Flask's <path:> converter strips leading slash, restore if needed
-    if file_path.startswith(('exp/', 'home/', 'usr/')):
+    if not os.path.isabs(file_path) and file_path.startswith(('exp/', 'home/', 'usr/')):
         file_path = '/' + file_path
     
-    # Return absolute path or relative to parent_dir
     return file_path if os.path.isabs(file_path) else os.path.join(parent_dir, file_path)
 
 @app.route('/api/json-files')
