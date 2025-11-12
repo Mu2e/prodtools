@@ -269,6 +269,26 @@ class Mu2eJobFCL(Mu2eJobBase):
     
     def sequencer(self, index: int) -> str:
         """Get sequencer for job index."""
+        tbs = self.json_data.get('tbs', {})
+        
+        # Check for event_id configuration first (preferred for generating sequencers from index)
+        event_id = tbs.get('event_id')
+        if event_id:
+            run = event_id.get('source.firstRun') or event_id.get('source.run')
+            if run:
+                subrun = index
+                return f"{run:06d}_{subrun:08d}"
+            # If event_id exists but no run number, check if job uses inputs.txt
+            # (resampler/artcat jobs with random sampling should generate sequencers from index)
+            inputs = tbs.get('inputs', {})
+            if inputs:
+                # Job uses inputs.txt - generate sequencer from index using default run number
+                # Use a hash of jobname to get a consistent run number
+                jobname = self.json_data.get('jobname', 'unknown')
+                run_hash = int(hashlib.md5(jobname.encode()).hexdigest()[:8], 16) % 1000000
+                return f"{run_hash:06d}_{index:08d}"
+        
+        # Fall back to deriving sequencer from primary input files
         primary_inputs = self.job_primary_inputs(index)
         
         if primary_inputs:
@@ -282,17 +302,6 @@ class Mu2eJobFCL(Mu2eJobBase):
             # Sort and return first
             sequencers.sort()
             return sequencers[0]
-        
-        # Check for event_id configuration
-        tbs = self.json_data.get('tbs', {})
-        event_id = tbs.get('event_id')
-        
-        if event_id:
-            run = event_id.get('source.firstRun') or event_id.get('source.run')
-            if not run:
-                raise ValueError("Error: get_sequencer(): can not get source.firstRun from event_id")
-            subrun = index
-            return f"{run:06d}_{subrun:08d}"
         
         raise ValueError("Error: get_sequencer(): unsupported JSON content")
     
