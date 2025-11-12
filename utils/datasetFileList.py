@@ -12,11 +12,11 @@ from pathlib import Path
 
 # Handle both module and standalone imports
 try:
-    from .samweb_wrapper import get_samweb_wrapper
+    from .job_common import get_samweb_wrapper
 except ImportError:
     # When running as standalone script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from utils.samweb_wrapper import get_samweb_wrapper
+    from utils.job_common import get_samweb_wrapper
 
 class Mu2eFilename:
     """Parse Mu2e filenames to get relative path components."""
@@ -179,6 +179,47 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     
     return file_paths
 
+def get_definition_files(definition_name: str) -> List[str]:
+    """
+    Get file paths for a SAM definition.
+    
+    Args:
+        definition_name: SAM definition name (e.g., log.mu2e.X.Y.log)
+    
+    Returns:
+        List of full file paths
+    """
+    samweb = get_samweb_wrapper()
+    fns = samweb.list_definition_files(definition_name)
+    
+    file_paths = []
+    for f in sorted(fns):
+        try:
+            locations = samweb.locate_files([f])
+            
+            if f not in locations or not locations[f]:
+                continue
+            
+            for location_info in locations[f]:
+                if not isinstance(location_info, dict) or 'full_path' not in location_info:
+                    continue
+                
+                full_path = location_info['full_path']
+                
+                # Remove storage system prefixes
+                from utils.job_common import remove_storage_prefix
+                full_path = remove_storage_prefix(full_path)
+                
+                if full_path.startswith('/'):
+                    final_path = os.path.join(full_path, f)
+                    file_paths.append(final_path)
+                    break  # Take first valid location
+                    
+        except Exception:
+            continue
+    
+    return file_paths
+
 def main():
     """Main function that replicates the exact behavior of the Perl script."""
     args = parse_args()
@@ -195,45 +236,14 @@ def main():
                 break
         return
     
-    # Handle --defname mode (use samweb.locate_files)
+    # Handle --defname mode (use get_definition_files helper)
     if args.defname:
-        samweb = get_samweb_wrapper()
-        fns = samweb.list_definition_files(dsname)
-        for f in sorted(fns):
+        file_paths = get_definition_files(dsname)
+        for final_path in file_paths:
             try:
-                locations = samweb.locate_files([f])
-                
-                # Skip if file not found in locations
-                if f not in locations or not locations[f]:
-                    continue
-                
-                # Process each location
-                for location_info in locations[f]:
-                    # Skip if not a dict or missing full_path
-                    if not isinstance(location_info, dict) or 'full_path' not in location_info:
-                        continue
-                    
-                    full_path = location_info['full_path']
-                    
-                    # Remove storage system prefixes
-                    if full_path.startswith('enstore:'):
-                        full_path = full_path[8:]
-                    elif full_path.startswith('dcache:'):
-                        full_path = full_path[7:]
-                    
-                    # Only print if it's an absolute path
-                    if not full_path.startswith('/'):
-                        continue
-                    
-                    final_path = os.path.join(full_path, f)
                     print(final_path)
-                    break  # Take first valid location
-                    
             except BrokenPipeError:
                 break
-            except Exception:
-                # Skip files that can't be located
-                continue
         return
     
     # Regular mode - use get_dataset_files()
