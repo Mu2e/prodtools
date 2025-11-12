@@ -2,9 +2,10 @@
 """Create recovery dataset definition for missing production files."""
 import sys, os, json, argparse
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from jobiodetail import Mu2eJobIO
-from samweb_wrapper import SAMWebWrapper, list_files, create_definition
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.jobiodetail import Mu2eJobIO
+from utils.samweb_wrapper import SAMWebWrapper, list_files, create_definition
+from utils.job_common import remove_storage_prefix
 
 def find_missing_indices(tarball_path, dataset, njobs):
     """Find job indices for missing files in a dataset."""
@@ -45,13 +46,8 @@ def locate_tarball(sam, tarball):
     if not locs:
         return None
     
-    # Prefer disk location
-    for loc in locs:
-        if loc.get('location_type') == 'disk':
-            return os.path.join(loc.get('full_path', '').replace('dcache:', ''), tarball)
-    
-    # Fallback to first location
-    return os.path.join(locs[0].get('full_path', '').replace('dcache:', ''), tarball)
+    # Use first (and only) location
+    return os.path.join(remove_storage_prefix(locs[0].get('full_path', '')), tarball)
 
 def main():
     p = argparse.ArgumentParser(description='Create recovery dataset for missing files')
