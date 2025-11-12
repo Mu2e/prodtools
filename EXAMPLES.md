@@ -10,7 +10,7 @@ This document provides practical examples for using the Python-based Mu2e produc
 - **[Mixing Jobs](#3-mixing-job-definitions)** - Complete guide to mixing jobs
 - **[JSON Expansion](#4-json-configuration-expansion)** - Parameter space exploration
 - **[Production Execution](#5-production-job-execution)** - Run production workflows
-- **[Additional Tools](#additional-tools)** - Family tree visualization, log analysis, filter efficiency, dataset monitoring, recovery datasets
+- **[Additional Tools](#additional-tools)** - Database monitoring, family tree visualization, log analysis, filter efficiency, dataset monitoring, recovery datasets
 
 ## Environment Setup
 
@@ -73,8 +73,10 @@ The `prodtools` package provides implementations of Mu2e production tools:
 - `jobdef` - Create job definitions directly (low-level tool)
 
 **Analysis and Diagnostics:**
+- `pomsMonitor` - Monitor POMS production jobs using persistent SQLite database
+- `pomsMonitorWeb` - Web interface for job monitoring and JSON editing
 - `famtree` - Generate family tree diagrams for data lineage
-- `logparser` - Analyze job performance metrics from log files
+- `logparser` - Analyze job performance metrics from log files (parallel processing)
 - `genFilterEff` - Calculate generation filter efficiency for datasets
 - `datasetFileList` - List files in datasets with pnfs paths
 - `listNewDatasets` - Monitor recently created datasets
@@ -126,6 +128,47 @@ json2jobdef --json data/stage1.json --dsconf MDC2020ba
 - `cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.tar` (job definition tarball)
 - `jobdefs_list.json` (descriptions of all job definitions to run over)
 - `cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.fcl` (FCL test file)
+
+### A.1. Random Sampling in Input Data
+
+For resampler and artcat jobs, you can use deterministic pseudo-random file selection:
+
+```json
+{
+    "desc": "NeutralsFlashCat",
+    "dsconf": "MDC2025ac",
+    "fcl": "Production/JobConfig/common/artcat.fcl",
+    "input_data": {
+        "sim.mu2e.PiTargetStops.MDC2025ac.art": {
+            "count": 10,
+            "random": true
+        }
+    },
+    "njobs": 1000,
+    "owner": "mu2e"
+}
+```
+
+**Random Sampling Features:**
+- **Deterministic**: Same seed produces same file selection (seed derived from config)
+- **Pseudo-random**: Files are shuffled deterministically before selection
+- **Per-job distribution**: Each job gets a unique subset of files
+- **Avoids JSON bloating**: Uses `inputs.txt` file instead of listing all files in jobpars.json
+
+**How it works:**
+1. All files from the dataset are listed and sorted
+2. Files are shuffled using a deterministic seed (based on owner, desc, dsconf, dataset, count, njobs)
+3. Files are cycled through to select the required count per job
+4. Results in `inputs.txt` file with selected files (similar to resampler jobs)
+
+**Without random sampling** (all files used):
+```json
+{
+    "input_data": {
+        "sim.mu2e.PiTargetStops.MDC2025ac.art": 10
+    }
+}
+```
 
 ### B. Direct Job Definition Creation
 
@@ -221,34 +264,35 @@ Mixing jobs combine signal events with pileup backgrounds from multiple sources:
 
 ```json
 {
-        "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art", "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art", "dts.mu2e.FlateMinus.MDC2020ar.art"],
-        "mubeam_dataset": ["dts.mu2e.MuBeamFlashCat.MDC2020p.art"],
-        "elebeam_dataset": ["dts.mu2e.EleBeamFlashCat.MDC2020p.art"],
-        "neutrals_dataset": ["dts.mu2e.NeutralsFlashCat.MDC2020p.art"],
-        "mustop_dataset": ["dts.mu2e.MuStopPileupCat.MDC2020p.art"],
-        "mubeam_count": [1],
-        "elebeam_count": [25],
-        "neutrals_count": [50],
-        "mustop_count": [2],
-        "dsconf": ["MDC2020aw_best_v1_3"],
-        "mixconf": [0],
-        "pbeam": ["Mix1BB", "Mix2BB"],
-        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh"],
-        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
-        "merge_events": [2000],
-        "inloc": ["tape"],
-        "outloc": [{"dig.mu2e.*.art": "tape"}],
-        "owner": ["mu2e"],
-        "fcl_overrides": [
-            {
-                "services.DbService.purpose": "MDC2020_best",
-                "services.DbService.version": "v1_3",
-                "services.DbService.verbose": 2,
-                "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
-            }
-        ]
-    }
+    "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art", "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art", "dts.mu2e.FlateMinus.MDC2020ar.art"],
+    "pileup_datasets": [{
+        "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+        "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+        "dts.mu2e.NeutralsFlashCat.MDC2025ac.art": 50,
+        "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+    }],
+    "dsconf": ["MDC2020aw_best_v1_3"],
+    "mixconf": [0],
+    "pbeam": ["Mix1BB", "Mix2BB"],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh"],
+    "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+    "merge_events": [2000],
+    "inloc": ["tape"],
+    "outloc": [{"dig.mu2e.*.art": "tape"}],
+    "owner": ["mu2e"],
+    "fcl_overrides": [{
+        "services.DbService.purpose": "MDC2020_best",
+        "services.DbService.version": "v1_3",
+        "services.DbService.verbose": 2,
+        "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+    }]
+}
 ```
+
+**Key Changes:**
+- **`pileup_datasets`**: Now a list containing a dict (was separate `*_dataset` and `*_count` fields)
+- **Count values**: Specify how many files to use from each pileup catalog
+- **Automatic mixer mapping**: Datasets are automatically mapped to mixer types (MuBeamFlashMixer, EleBeamFlashMixer, etc.)
 
 ### B. Generate Mixing Job Definitions
 
@@ -465,7 +509,6 @@ python3 -c "import samweb_client; print('samweb_client is available')"
 **Solution**: Follow the Environment Setup section above.
 
 ## 8. Running Parity Tests
-:
 ### A. Basic Usage
 
 The parity tests should be run from the `test/` directory to ensure all relative paths work correctly:
@@ -497,6 +540,59 @@ cd test
 - **Mixing Jobs**: 32 configurations (different mixing combinations)
 
 ## Additional Tools
+
+### Database-Based Job Monitoring (`pomsMonitor` and `pomsMonitorWeb`)
+
+Monitor POMS production jobs using a persistent SQLite database:
+
+```bash
+# Set up environment
+mu2einit
+muse setup ops
+
+# Build/refresh the database from POMS JSON files
+pomsMonitor --build-db --pattern MDC202*
+
+# List all jobs with outputs
+pomsMonitor --list --outputs
+
+# Filter by campaign
+pomsMonitor --campaign MDC2025ac --outputs
+
+# Show only complete datasets
+pomsMonitor --list --outputs --complete
+
+# Show only incomplete datasets
+pomsMonitor --list --outputs --incomplete
+
+# Print only dataset names
+pomsMonitor --list --outputs --datasets-only
+```
+
+**Web Interface:**
+```bash
+# Start the web server
+pomsMonitorWeb
+
+# Open browser to: http://localhost:5000
+# Features:
+# - Interactive job monitoring dashboard
+# - Dataset status tracking
+# - JSON to jobdef interface
+# - JSON file editor
+# - Reload database from POMS JSONs
+```
+
+**What the database provides:**
+- **Persistent storage**: Database built once, queries are fast
+- **Job definitions**: All jobdefs from POMS JSON files
+- **Dataset information**: File counts, event counts, creation dates
+- **Status tracking**: Complete vs incomplete datasets
+- **Performance metrics**: Average CPU time, memory usage (from logs)
+
+**Database location:**
+- Default: `~/.prodtools/poms_data.db`
+- Can be specified with `--db` option
 
 ### Family Tree Visualization (`famtree`)
 
@@ -537,9 +633,10 @@ firefox mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md-1.svg &
 
 ### Log Analysis (`logparser`)
 
-Analyze Mu2e job performance metrics from log files:
+Analyze Mu2e job performance metrics from log files using parallel processing:
 
 ```bash
+# Analyze single dataset
 $ logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
 Processing log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
 {
@@ -553,29 +650,25 @@ Processing log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
   "VmHWM [GB]": 1.11,
   "VmHWM_max [GB]": 1.11
 }
-[INFO] Wrote summary.json
+
+# Analyze multiple datasets
+$ logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log \
+            log.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
+
+# Limit number of log files processed per dataset
+$ logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log --max-logs 100
 ```
 
 **What `logparser` extracts:**
-- **CPU time** - Total and maximum CPU usage
-- **Real time** - Wall clock time for job execution
-- **Memory usage** - Peak virtual memory (VmPeak) and high water mark (VmHWM)
-- **JSON output** - Machine-readable summary for further analysis
+- **CPU time** - Average and maximum CPU usage across all log files
+- **Real time** - Average and maximum wall clock time for job execution
+- **Memory usage** - Average and maximum peak virtual memory (VmPeak) and high water mark (VmHWM)
+- **JSON output** - Machine-readable summary printed to stdout
 
-**CSV export for detailed analysis:**
-```bash
-# Save per-file metrics to CSV
-$ logparser log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.log --csv
-[INFO] Wrote log.mu2e.RPCExternalPhysicalMix1BB.MDC2020bc_best_v1_3.csv
-```
-
-The CSV file contains per-file metrics with columns:
-- `file` - Log file basename
-- `date` - Job execution date (extracted from log)
-- `CPU [h]` - CPU time in hours
-- `Real [h]` - Wall clock time in hours
-- `VmPeak [GB]` - Peak virtual memory in GB
-- `VmHWM [GB]` - Memory high water mark in GB
+**Performance:**
+- **Parallel processing**: Uses ThreadPoolExecutor (10 workers) for fast log file parsing
+- **Direct database access**: Uses `get_dataset_files()` instead of subprocess calls
+- **Efficient**: Much faster than previous version with subprocess overhead
 
 **Visualizing log metrics with NERSC job counts:**
 
