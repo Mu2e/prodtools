@@ -132,7 +132,16 @@ def calculate_merge_factor(fields):
     if not isinstance(input_data, dict):
         raise ValueError(f"input_data must be a dict, got {type(input_data)}")
     
-    return list(input_data.values())[0]
+    value = list(input_data.values())[0]
+
+    if isinstance(value, dict):
+        if 'count' in value:
+            return int(value['count'])
+        if 'merge_factor' in value:
+            return int(value['merge_factor'])
+        raise ValueError("input_data dict spec must include 'count' or 'merge_factor'")
+
+    return int(value)
 
 # Removed duplicate find_json_entry; use json2jobdef.load_json + json2jobdef.find_json_entry
 
