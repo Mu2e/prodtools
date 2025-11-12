@@ -3,9 +3,13 @@
 anaTimeReport - Analyze Mu2e log performance metrics
 """
 
-import sys, subprocess, argparse, re, json, os, csv
+import sys, argparse, re, json, os
 from pathlib import Path
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Allow running this file directly: make package root importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Regex patterns
 TIMEREPORT_REGEX = re.compile(r"TimeReport CPU = ([0-9]*\.?[0-9]+) Real = ([0-9]*\.?[0-9]+)")
@@ -13,35 +17,28 @@ MEMREPORT_REGEX = re.compile(r"MemReport\s+VmPeak\s*=\s*([0-9]*\.?[0-9]+)\s+VmHW
 JOBSTART_REGEX = re.compile(r"Begin processing the \d+\w+ record.*at (.+)")  # Captures "13-Oct-2025 02:00:59 UTC"
 
 def get_log_files(dataset, max_files=None):
-    """Get log files for a dataset or SAM definition."""
-    script_path = os.path.join(os.path.dirname(__file__), 'datasetFileList.py')
+    """Get log files for a SAM dataset (e.g., log.mu2e.X.Y.log).
     
-    # First try as SAM definition
-    proc = subprocess.run(["python3", script_path, "--defname", dataset], 
-                         capture_output=True, text=True)
+    Args:
+        dataset: SAM dataset name (must be a registered dataset with dh.dataset metadata)
+        max_files: Maximum number of log files to return
     
-    if proc.returncode == 0:
-        # Successfully got files from SAM definition
-        files = [line.strip() for line in proc.stdout.splitlines() if line.startswith('/')]
-        # Filter for log files only
-        log_files = [f for f in files if f.endswith('.log')]
-        return log_files if max_files is None else log_files[:max_files]
-    
-    # If not a SAM definition, try as dataset name
-    # Convert to log dataset (sim.mu2e.X.art -> log.mu2e.X.log)
-    parts = dataset.split('.')
-    parts[0] = 'log'
-    parts[-1] = 'log'
-    log_dataset = '.'.join(parts)
-    
-    # Call datasetFileList for regular dataset
-    proc = subprocess.run(["python3", script_path, log_dataset], capture_output=True, text=True)
-    
-    if proc.returncode != 0:
+    Returns:
+        List of log file paths, or empty list if dataset not found
+    """
+    try:
+        # Use get_dataset_files() which constructs paths directly without locate_files() calls
+        # This is much faster than get_definition_files() which queries SAM for each file
+        from utils.datasetFileList import get_dataset_files
+        
+        log_files = get_dataset_files(dataset)
+        # Limit files if requested
+        if max_files is not None:
+            log_files = log_files[:max_files]
+        return log_files
+        
+    except Exception:
         return []
-    
-    files = [line.strip() for line in proc.stdout.splitlines() if line.startswith('/')]
-    return files if max_files is None else files[:max_files]
 
 def parse_log_file(filepath):
     """Extract CPU, Real, VmPeak, VmHWM, and job start time from log file."""
@@ -67,20 +64,14 @@ def parse_log_file(filepath):
             'VmPeak [GB]': round(vmp, 2) if vmp else None, 
             'VmHWM [GB]': round(vmh, 2) if vmh else None}
 
-def save_csv(file_metrics, output_path):
-    """Save file metrics to CSV."""
-    if not file_metrics:
-        return
+def process_dataset(dataset, max_logs, max_workers=10):
+    """Process one dataset and return metrics.
     
-    fieldnames = ['file', 'date', 'CPU [h]', 'Real [h]', 'VmPeak [GB]', 'VmHWM [GB]']
-    with open(output_path, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(file_metrics)
-    print(f"[INFO] Wrote {output_path}", file=sys.stderr)
-
-def process_dataset(dataset, max_logs, save_csv_files=False):
-    """Process one dataset and return metrics."""
+    Args:
+        dataset: Dataset name to process
+        max_logs: Maximum number of log files to process
+        max_workers: Number of threads for parallel log file parsing (default: 10)
+    """
     print(f"Processing {dataset}", file=sys.stderr)
     
     log_files = get_log_files(dataset, max_logs)
@@ -89,14 +80,31 @@ def process_dataset(dataset, max_logs, save_csv_files=False):
                 'Real [h]': None, 'Real_max [h]': None, 'VmPeak [GB]': None,
                 'VmPeak_max [GB]': None, 'VmHWM [GB]': None, 'VmHWM_max [GB]': None}
     
-    # Parse all log files
-    file_metrics = [parse_log_file(log_file) for log_file in log_files]
-    
-    # Save all metrics to single CSV file if requested
-    if save_csv_files:
-        # Create CSV filename from dataset name
-        csv_name = dataset.replace('.log', '.csv') if dataset.endswith('.log') else f"{dataset}.csv"
-        save_csv(file_metrics, csv_name)
+    # Parse all log files in parallel using thread pool
+    file_metrics = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all parsing tasks
+        future_to_file = {executor.submit(parse_log_file, log_file): log_file 
+                         for log_file in log_files}
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_file):
+            try:
+                result = future.result()
+                file_metrics.append(result)
+            except Exception as e:
+                log_file = future_to_file[future]
+                print(f"Warning: Error parsing {log_file}: {e}", file=sys.stderr)
+                # Add empty result to maintain order
+                file_metrics.append({
+                    'file': os.path.basename(log_file),
+                    'full_path': log_file,
+                    'date': 'N/A',
+                    'CPU [h]': None,
+                    'Real [h]': None,
+                    'VmPeak [GB]': None,
+                    'VmHWM [GB]': None
+                })
     
     # Collect metrics for statistics
     metrics = {'CPU': [], 'Real': [], 'VmPeak': [], 'VmHWM': []}
@@ -121,22 +129,15 @@ def process_dataset(dataset, max_logs, save_csv_files=False):
 def main():
     parser = argparse.ArgumentParser(description="Analyze Mu2e log performance")
     parser.add_argument('datasets', nargs='+', help='Dataset names to analyze')
-    parser.add_argument('-J', '--json-output', default='summary.json', help='Output JSON file')
     parser.add_argument('-n', '--max-logs', type=int, default=None, help='Max logs per dataset (default: all)')
-    parser.add_argument('--csv', action='store_true', help='Save per-file metrics to CSV file')
     args = parser.parse_args()
 
     # Process all datasets
-    results = [process_dataset(dataset, args.max_logs, args.csv) for dataset in args.datasets]
+    results = [process_dataset(dataset, args.max_logs) for dataset in args.datasets]
     
     # Output results
     for result in results:
         print(json.dumps(result, indent=2))
-    
-    with open(args.json_output, 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    print(f"[INFO] Wrote {args.json_output}", file=sys.stderr)
 
 if __name__ == '__main__':
     main()
