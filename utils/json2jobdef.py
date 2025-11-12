@@ -7,6 +7,7 @@ Usage:
   - Direct file: python3 mu2e_poms_util/json2jobdef.py --help
 """
 import os, sys
+import random
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,34 +19,111 @@ from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef
+from utils.samweb_wrapper import list_files, count_files
 
-def _create_inputs_file(input_data):
+
+def _write_random_selection(out_f, query: str, total_needed: int, seed_source: str):
+    """Write deterministic pseudo-random selection of files."""
+    files = list_files(query)
+    if not files:
+        raise ValueError(f"No files returned for query: {query}")
+
+    # Sort before shuffling to make output deterministic independent of SAM order
+    ordered = sorted(files)
+    rng = random.Random(seed_source)
+    rng.shuffle(ordered)
+
+    produced = 0
+    idx = 0
+    count = len(ordered)
+    while produced < total_needed:
+        out_f.write(ordered[idx] + '\n')
+        produced += 1
+        idx = (idx + 1) % count
+
+def _create_inputs_file(config):
     """Helper: create inputs.txt file from datasets with merge factors.
     
-    Args:
-        input_data: dict mapping dataset names to merge factors
-                  e.g., {"dataset1": 100, "dataset2": 10}
+    Supports optional random sampling by allowing input_data values to be
+    dictionaries with the following keys:
+        - count (int): number of files to use (required)
+        - random (bool): if True, choose a deterministic pseudo-random sample
+
+    Example:
+        "input_data": {
+            "sim.mu2e.NeutralsFlash.MDC2025ac.art": {
+                "count": 100,
+                "random": true
+            }
+        }
     """
-    from utils.samweb_wrapper import list_files
-    
+    input_data = config.get('input_data')
     if not isinstance(input_data, dict):
         raise ValueError(f"input_data must be a dict, got {type(input_data)}")
     
-    all_files = []
-    for dataset, merge_factor in input_data.items():
-        files = list_files(f"dh.dataset={dataset} and event_count>0")
-        all_files.extend(files)
+    query_template = "dh.dataset={} and event_count>0"
     
-    with open('inputs.txt', 'w') as f:
-        f.write('\n'.join(all_files))
+    with open('inputs.txt', 'w') as out_f:
+        for dataset, merge_factor in input_data.items():
+            random_spec = {}
+            if isinstance(merge_factor, dict):
+                random_spec = merge_factor
+                merge_factor = merge_factor.get('count') or merge_factor.get('merge_factor')
+                if merge_factor is None:
+                    raise ValueError(f"input_data spec for {dataset} must include 'count' when using dict form")
+
+            query = query_template.format(dataset)
+
+            if random_spec.get('random'):
+                per_job = int(merge_factor)
+                try:
+                    njobs = int(config.get('njobs', 1))
+                except (TypeError, ValueError):
+                    njobs = 1
+
+                if njobs == -1:
+                    available = count_files(query)
+                    njobs = max(1, available // max(per_job, 1))
+
+                total_needed = per_job * max(njobs, 1)
+                seed_source = (
+                    f"{config.get('owner','')}.{config.get('desc','')}.{config.get('dsconf','')}"
+                    f".{dataset}.{per_job}.{njobs}"
+                )
+                _write_random_selection(out_f, query, total_needed, seed_source)
+            else:
+                # Non-random: write all files
+                files = list_files(query)
+                for filepath in files:
+                    out_f.write(filepath + '\n')
+
+def _get_desc_from_output(config):
+    """Extract description from 3rd field in fcl_overrides value if {desc} is present."""
+    fcl_overrides = config.get('fcl_overrides', [])
+    
+    # Handle both list of dicts and single dict (after expansion)
+    if isinstance(fcl_overrides, dict):
+        fcl_overrides = [fcl_overrides]
+    
+    for override in fcl_overrides:
+        if isinstance(override, dict):
+            for value in override.values():
+                if isinstance(value, str):
+                    fields = value.split('.')
+                    if len(fields) >= 3 and '{desc}' in fields[2]:
+                        # Use the entire 3rd field, replacing {desc} with actual desc
+                        return fields[2].replace('{desc}', config['desc'])
+    return None
 
 def get_parfile_name(config):
     """Generate consistent parfile name from config."""
-    return f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.tar"
+    desc = _get_desc_from_output(config) or config['desc']
+    return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.0.tar"
 
 def get_fcl_name(config):
     """Generate consistent FCL filename from config."""
-    return f"cnf.{config['owner']}.{config['desc']}.{config['dsconf']}.0.fcl"
+    desc = _get_desc_from_output(config) or config['desc']
+    return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.0.fcl"
 
 def validate_required_fields(config, required_fields=None):
     """Validate that config has all required fields."""
@@ -302,7 +380,7 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     
     # Create inputs.txt first if needed
     if config.get('input_data'):
-        _create_inputs_file(config['input_data'])
+        _create_inputs_file(config)
     
     job_args = []
     
