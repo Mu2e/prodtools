@@ -47,6 +47,9 @@ if [ "$RUN_ALL" = true ]; then
 
     echo "3. Mixing Jobs..."
     python3 parity_test.py --json "../data/mdc2025/mix2.json"
+
+    echo "4. Merge/Filter Jobs..."
+    python3 parity_test.py --json "../data/mdc2025/merge_filter.json"
 else
     # Run only index 0 for each type
     echo "1. Stage1 Jobs (index 0)..."
@@ -57,9 +60,12 @@ else
 
     echo "3. Mixing Jobs (index 0)..."
     python3 parity_test.py --json "../data/mdc2025/mix2.json" --index 0
+
+    echo "4. Merge/Filter Jobs (index 0)..."
+    python3 parity_test.py --json "../data/mdc2025/merge_filter.json" --index 0
 fi
 
-echo "4. Running comparison..."
+echo "5. Running comparison..."
 ./compare_tarballs.sh
 
 if [ "$RUN_ALL" = true ]; then
