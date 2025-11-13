@@ -25,8 +25,6 @@ from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
-from utils.job_common import Mu2eFilename
-
 # Constants matching Perl mu2ejobdef exactly
 FILENAME_JSON = 'jobpars.json'
 FILENAME_FCL = 'mu2e.fcl'
@@ -48,6 +46,35 @@ def resolve_fhicl_file(templatespec: str) -> str:
                 return full_path
     
     raise FileNotFoundError(f"Error: can not locate template file \"{templatespec}\" relative to FHICL_FILE_PATH={fhicl_path}")
+
+
+def _replace_placeholders(pattern: str, config: Dict) -> str:
+    """Replace placeholders in output filename patterns, matching Perl behavior.
+
+    Handles legacy tokens like `.owner.` and `.version.`, the literal
+    'configuration', and `{var}` placeholders for any string fields in config.
+    """
+    if pattern is None:
+        return pattern
+    replaced_pattern = pattern.strip()
+    # Legacy tokens
+    replaced_pattern = replaced_pattern.replace('.owner.', f'.{config.get("owner", "mu2e")}.')
+    replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
+    # Literal word used in some templates
+    replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
+    # `{var}` placeholders
+    for key, value in config.items():
+        if isinstance(value, str):
+            replaced_pattern = replaced_pattern.replace(f'{{{key}}}', value)
+    return replaced_pattern
+
+
+def _add_outfile(tbs: Dict, key: str, pattern: str, config: Dict) -> None:
+    """Replace placeholders and add an outfile entry to TBS."""
+    replaced = _replace_placeholders(pattern, config)
+    if 'outfiles' not in tbs:
+        tbs['outfiles'] = {}
+    tbs['outfiles'][key] = replaced
 
 
 def _run_fhicl_get(template_path: str, command: str, key: str = "") -> str:
@@ -113,7 +140,12 @@ def _get_output_modules(template_path: str) -> List[str]:
 
     
     # Get all output modules (like Perl's @all_outmods)
-    all_outmods = _run_fhicl_get(template_path, '--names-in', 'outputs').split('\n')
+    # Some FCL files (like EventNtuple) don't have an outputs section - handle gracefully
+    try:
+        all_outmods = _run_fhicl_get(template_path, '--names-in', 'outputs').split('\n')
+    except subprocess.CalledProcessError:
+        # No outputs section - return empty list (e.g., EventNtuple uses TFileService)
+        return []
     
     if not all_outmods:
         return []
@@ -184,10 +216,28 @@ def _validate_fcl_template(template_path: str) -> None:
         raise ValueError(f"FCL template missing required physics sections: {missing_keys}")
 
 
+def _get_desc_from_output(config: Dict) -> Optional[str]:
+    """Extract description from 3rd field in fcl_overrides value if {desc} is present."""
+    fcl_overrides = config.get('fcl_overrides', [])
+    
+    # Handle both list of dicts and single dict (after expansion)
+    if isinstance(fcl_overrides, dict):
+        fcl_overrides = [fcl_overrides]
+    
+    for override in fcl_overrides:
+        if isinstance(override, dict):
+            for value in override.values():
+                if isinstance(value, str):
+                    fields = value.split('.')
+                    if len(fields) >= 3 and '{desc}' in fields[2]:
+                        # Use the entire 3rd field, replacing {desc} with actual desc
+                        return fields[2].replace('{desc}', config['desc'])
+    return None
+
 def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "", template_path: str = "") -> Dict:
     """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
     owner = config.get('owner') or os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e')
-    desc = config['desc']
+    desc = _get_desc_from_output(config) or config['desc']
     dsconf = config['dsconf']
     
     # Build proper jobname like Perl version (cnf.owner.desc.dsconf.0.tar)
@@ -440,18 +490,9 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                 filename_pattern = _get_fcl_value(template_path, output_key)
                 
                 if filename_pattern and filename_pattern.strip():
-                    # Do placeholder replacement like Perl does
-                    # Use more specific replacement to avoid partial matches
-                    replaced_pattern = filename_pattern.strip()
-                    replaced_pattern = replaced_pattern.replace('.owner.', f'.{config.get("owner", "mu2e")}.')
-                    replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
-                    # Also replace 'configuration' literal string like Perl does
-                    replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
-                    # Support {var} syntax for any config field
-                    for key, value in config.items():
-                        if isinstance(value, str):
-                            replaced_pattern = replaced_pattern.replace(f'{{{key}}}', value)
-                    outfiles[output_key] = replaced_pattern
+                    # Use shared helper to add to local outfiles dict
+                    tmp_container = {'outfiles': outfiles}
+                    _add_outfile(tmp_container, output_key, filename_pattern, config)
                 else:
                     # No template pattern found - this shouldn't happen in a properly resolved template
                     # Fail like Perl does when output filename is not defined
@@ -463,17 +504,8 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     try:
         tfileservice_filename = _get_fcl_value(template_path, 'services.TFileService.fileName')
         if tfileservice_filename and tfileservice_filename.strip() and tfileservice_filename.strip() != '/dev/null':
-            # Do placeholder replacement like Perl does
-            replaced_pattern = tfileservice_filename.strip()
-            replaced_pattern = replaced_pattern.replace('.owner.', f'.{config.get("owner", "mu2e")}.')
-            replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
-            # Also replace 'configuration' literal string like Perl does
-            replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
-            
-            # Add to outfiles (Perl adds it to %outtable)
-            if 'outfiles' not in tbs:
-                tbs['outfiles'] = {}
-            tbs['outfiles']['services.TFileService.fileName'] = replaced_pattern
+            # Add via shared helper (Perl adds it to %outtable)
+            _add_outfile(tbs, 'services.TFileService.fileName', tfileservice_filename, config)
     except:
         # If TFileService.fileName is not defined, skip it
         pass
@@ -491,6 +523,12 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     # Handle sequential_aux setting from config
     if 'sequential_aux' in config:
         tbs['sequential_aux'] = config['sequential_aux']
+    
+    # Handle sequencer_from_index setting from config
+    # When true, generates sequencers from job index instead of input files
+    # This fixes the bug where different indices produce the same output filename
+    if 'sequencer_from_index' in config:
+        tbs['sequencer_from_index'] = config['sequencer_from_index']
 
     # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
     ordered_tbs = {}
@@ -590,8 +628,10 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     tbs, _, override_output_description = _parse_job_args(all_args, template_path, config)
     
     # Use provided outdir (simple logic matching Perl version)
+    # Use description from output filename if {desc} is present, otherwise use original desc
+    final_desc = _get_desc_from_output(config) or desc
     final_outdir = Path(outdir) if outdir else None
-    out = final_outdir / f"cnf.{owner}.{desc}.{dsconf}.0.tar" if final_outdir else Path(f"cnf.{owner}.{desc}.{dsconf}.0.tar")
+    out = final_outdir / f"cnf.{owner}.{final_desc}.{dsconf}.0.tar" if final_outdir else Path(f"cnf.{owner}.{final_desc}.{dsconf}.0.tar")
 
     if out.exists():
         out.unlink()
@@ -604,8 +644,10 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     
     # Create jobpars.json
     jobpars_path = Path(FILENAME_JSON)
+    
     jobpars_json = json.dumps(jobpars, indent=3, separators=(', ', ' : ')) + "\n"
     jobpars_path.write_text(jobpars_json)
+    
     temp_files[FILENAME_JSON] = jobpars_path
     
     # Validate and create mu2e.fcl

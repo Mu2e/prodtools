@@ -8,6 +8,7 @@ import subprocess
 import re
 from utils.prod_utils import *
 from utils.samweb_wrapper import list_definitions
+from utils.datasetFileList import get_dataset_files, get_definition_files
 
 def list_jobdefs(dsconf):
     """List all job definitions for a given dsconf using samweb_wrapper."""
@@ -59,8 +60,13 @@ def locate_tarball(jobdef):
     print(f"Using datasetFileList to locate: {jobdef}")
 
     try:
-        from utils.datasetFileList import get_dataset_files
-        file_paths = get_dataset_files(jobdef)
+        try:
+            file_paths = get_dataset_files(jobdef)
+        except RuntimeError as e:
+            if "No files with dh.dataset" in str(e):
+                file_paths = get_definition_files(jobdef)
+            else:
+                raise
         
         if not file_paths:
             raise RuntimeError(f"Tarball not found for: {jobdef}")

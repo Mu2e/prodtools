@@ -50,7 +50,7 @@ def get_first_file_from_dataset(dataset_name):
         print(f"No files found for dataset: {dataset_name}")
         return None
 
-def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0):
+def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extrapolate=True):
     """Get efficiency statistics for a dataset using process_dataset from genFilterEff.
     
     Args:
@@ -58,9 +58,12 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0):
         samweb: SAMWeb wrapper instance
         max_files: Maximum number of files to sample (default: 10 for speed)
         verbosity: Verbosity level (0=quiet)
+        extrapolate: If True, scale sampled stats to full dataset (default: True)
     
     Returns:
-        Tuple of (passed_events, generated_events, efficiency, num_files) or None if unavailable
+        Tuple of (passed_events, generated_events, efficiency, num_files, is_extrapolated) or None if unavailable
+        If extrapolate=True, counts are scaled to full dataset size.
+        is_extrapolated indicates if the stats were extrapolated from a sample.
     """
     try:
         # Get total number of files in dataset
@@ -76,7 +79,16 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0):
             verbosity=verbosity
         )
         
-        return (summary.passedevents, summary.genevents, summary.efficiency(), num_files_total)
+        # If we sampled fewer files than total, extrapolate the counts
+        if extrapolate and summary.nfiles > 0 and summary.nfiles < num_files_total:
+            scale_factor = num_files_total / summary.nfiles
+            extrapolated_passed = int(summary.passedevents * scale_factor)
+            extrapolated_generated = int(summary.genevents * scale_factor)
+            # Efficiency remains the same (ratio doesn't change)
+            eff = summary.efficiency()
+            return (extrapolated_passed, extrapolated_generated, eff, num_files_total, True)
+        else:
+            return (summary.passedevents, summary.genevents, summary.efficiency(), num_files_total, False)
         
     except Exception:
         # Dataset doesn't have gencount or other issue
@@ -171,8 +183,9 @@ def main():
             if args.stats and samweb:
                 stats = get_dataset_efficiency(lbl, samweb, max_files=args.max_files)
                 if stats:
-                    passed, generated, eff, num_files = stats
-                    lbl = f"{lbl}<br/>eff={eff:.4f}, trig: {passed}, gen: {generated}<br/>nfiles={num_files}"
+                    passed, generated, eff, num_files, is_extrapolated = stats
+                    extrapolated_note = " (extrapolated)" if is_extrapolated else ""
+                    lbl = f"{lbl}<br/>eff={eff:.4f}, trig: {passed}, gen: {generated}{extrapolated_note}<br/>nfiles={num_files}"
             
             nodes.append(f'    {nid}["{lbl}"]')
         elif isinstance(part, str):

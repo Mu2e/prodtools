@@ -16,6 +16,7 @@
         td:first-child { text-align: right; } /* NJOBS column */
         td:nth-child(2) { text-align: right; } /* EVENTS column */
         td:nth-child(3) { text-align: right; } /* FILE SIZE column */
+        td:nth-child(4) { text-align: center; } /* DATE column */
         .group-even { background-color: #e8f4f8; }
         .group-odd { background-color: #f0f0f0; }
         .group-header { border-top: 2px solid #333; }
@@ -38,7 +39,8 @@
     <div class="nav" style="margin-bottom: 20px;">
         <a href="/json2jobdef" style="color: #007bff; text-decoration: none; margin-right: 15px;">JobDesc Generator</a>
         <a href="/json-editor" style="color: #007bff; text-decoration: none; margin-right: 15px;">JSON Editor</a>
-        <a href="/" style="color: #007bff; text-decoration: none;">Home</a>
+        <a href="/" style="color: #007bff; text-decoration: none; margin-right: 15px;">Home</a>
+        <button onclick="reloadData()" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;">Rebuild DB</button>
     </div>
     
     <div class="jobs">
@@ -51,7 +53,22 @@
         <div class="form-group">
             <label for="datasetFilter">Filter datasets:</label>
             <input type="text" id="datasetFilter" class="form-control" placeholder="e.g., dts*.art, sim*.art" onkeyup="filterDatasets()">
-            <button onclick="clearFilter()">Clear</button>
+        </div>
+        <div class="form-group">
+            <label for="statusFilter">Status:</label>
+            <select id="statusFilter" class="form-control" onchange="filterDatasets()" style="width: 150px;">
+                <option value="all">All</option>
+                <option value="complete">Complete</option>
+                <option value="incomplete">Incomplete</option>
+                <option value="nochild">No Children</option>
+            </select>
+            <button onclick="clearFilter()" style="margin-left: 10px;">Clear</button>
+        </div>
+        <div class="form-group">
+            <label for="dateFromFilter">Date From:</label>
+            <input type="date" id="dateFromFilter" class="form-control" onchange="filterDatasets()" style="width: 150px; margin-right: 10px;">
+            <label for="dateToFilter">Date To:</label>
+            <input type="date" id="dateToFilter" class="form-control" onchange="filterDatasets()" style="width: 150px;">
         </div>
         <div id="jobs-content">Loading...</div>
     </div>
@@ -70,170 +87,197 @@
         var currentSortColumn = -1;
         var currentSortDirection = 1; // 1 = asc, -1 = desc
 
+        function showError(msg) {
+            document.getElementById('jobs-content').innerHTML = 'Error: ' + msg;
+        }
+
         function loadJobs() {
             fetch('/api/jobs')
-                .then(function(response) { return response.json(); })
-                .then(function(data) {
-                    currentData = data;
-                    displayJobs(data);
-                })
-                .catch(function(error) {
-                    document.getElementById('jobs-content').innerHTML = 'Error: ' + error.message;
-                });
+                .then(r => r.json())
+                .then(data => { currentData = data; displayJobs(data); })
+                .catch(err => showError(err.message));
+        }
+
+        function reloadData() {
+            document.getElementById('jobs-content').innerHTML = 'Rebuilding database from MDC JSON files...';
+            fetch('/api/reload', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => data.success ? loadJobs() : showError('rebuilding: ' + data.error))
+                .catch(err => showError('rebuilding: ' + err.message));
         }
 
         function displayJobs(data) {
+            var colNames = ['NJOBS', 'LOC', '<EVENTS>', '<FILE SIZE [MB]>', 'DATE', 'Real [h]', 'VmHWM [GB]', 'JOBDESC / TARBALL / OUTPUT DATASETS'];
+            var statusColors = {'OK': '#28a745', 'MISSING': '#dc3545'};
             var html = '<table><tr>';
-            var colNames = ['NJOBS', 'EVENTS', 'FILE SIZE [MB]', 'SOURCE', 'TARBALL / OUTPUT DATASETS'];
-            for (var col = 0; col < 5; col++) {
-                var className = 'sortable';
-                if (currentSortColumn === col) {
-                    className += (currentSortDirection > 0) ? ' sort-asc' : ' sort-desc';
-                }
-                html += '<th class="' + className + '" onclick="sortTable(' + col + ')">' + colNames[col] + '</th>';
+            
+            for (var col = 0; col < colNames.length; col++) {
+                var cls = 'sortable' + (currentSortColumn === col ? (col > 0 ? ' sort-asc' : ' sort-desc') : '');
+                var escapedName = colNames[col].replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                html += '<th class="' + cls + '" onclick="sortTable(' + col + ')">' + escapedName + '</th>';
             }
             html += '</tr>';
             
-            for (var i = 0; i < data.length; i++) {
-                var job = data[i];
-                var njobs = job.njobs || 0;
+            data.forEach(function(job, i) {
                 var outputs = job.outputs || [];
-                var groupClass = (i % 2 === 0) ? 'group-even' : 'group-odd';
+                var groupClass = (i % 2 === 0 ? 'group-even' : 'group-odd');
+                var isComplete = outputs.length > 0 && outputs.every(function(o) { return o.status === 'OK'; });
+                var sourceName = job.source_file ? job.source_file.split('/').pop() : '';
+                var sourceLink = job.source_file ? 
+                    '<a href="#" onclick="openJsonInEditor(\'' + job.source_file.replace(/'/g, "\\'") + '\'); return false;" style="color: #007bff; text-decoration: underline;">' + sourceName + '</a>' : '';
                 
-                // Job header row
-                html += '<tr class="' + groupClass + ' group-header">';
-                html += '<td>' + njobs + '</td>';
-                html += '<td></td>';
-                html += '<td></td>';
-                html += '<td>' + (job.source_file || '') + '</td>';
-                html += '<td>' + (job.tarball || 'N/A') + '</td>';
-                html += '</tr>';
-                
-                // Output dataset rows
-                for (var j = 0; j < outputs.length; j++) {
-                    var o = outputs[j];
-                    var statusColor = o.status === 'OK' ? '#28a745' : (o.status === 'MISSING' ? '#dc3545' : '#ffc107');
-                    
-                    html += '<tr class="' + groupClass + '">';
-                    html += '<td>' + (o.nfiles || 0) + '</td>';
-                    html += '<td>' + (o.nevts ? o.nevts.toExponential(2) : '') + '</td>';
-                    html += '<td>' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
-                    html += '<td></td>';
-                    html += '<td><span class="output-dataset" onclick="showDatasetInfo(\'' + o.name + '\')" style="color: ' + statusColor + ';">' + o.name + '</span></td>';
-                    html += '</tr>';
+                // Combine JOBDESC and TARBALL into single cell
+                var jobdescAndTarball = sourceLink;
+                if (job.tarball) {
+                    jobdescAndTarball += (sourceLink ? '<br>' : '') + '<span style="font-weight: bold;">' + (job.tarball || 'N/A') + '</span>';
                 }
-            }
-            html += '</table>';
-            document.getElementById('jobs-content').innerHTML = html;
+                
+                html += '<tr class="' + groupClass + ' group-header" data-complete="' + isComplete + '" data-source="' + sourceName + '">';
+                html += '<td>' + (job.njobs || 0) + '</td>';
+                html += '<td></td>';
+                html += '<td></td>';
+                html += '<td></td>';
+                    html += '<td></td>';
+                html += '<td>' + (job.avg_real_h != null ? job.avg_real_h.toFixed(2) : '') + '</td>';
+                html += '<td>' + (job.avg_vmhwm_gb != null ? job.avg_vmhwm_gb.toFixed(2) : '') + '</td>';
+                html += '<td>' + (jobdescAndTarball || 'N/A') + '</td></tr>';
+                
+                outputs.forEach(function(o) {
+                    var color = statusColors[o.status] || '#ffc107';
+                    var datasetName = o.name || '';
+                    html += '<tr class="' + groupClass + '" data-complete="' + isComplete + '" data-source="' + sourceName + '" data-has-children="' + (o.has_children || false) + '" data-dataset="' + datasetName.toLowerCase() + '">';
+                    html += '<td>' + (o.nfiles || 0) + '</td>';
+                    html += '<td>' + (o.location || '') + '</td>';
+                    html += '<td>' + (o.events_per_file != null && o.events_per_file > 0 ? o.events_per_file.toLocaleString('en-US', {maximumFractionDigits: 2}) : '') + '</td>';
+                    html += '<td>' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
+                    html += '<td>' + (o.creation_date || '') + '</td>';
+                    html += '<td></td><td></td>';
+                    html += '<td><span class="output-dataset" onclick="showDatasetInfo(\'' + datasetName + '\')" style="color: ' + color + ';">' + datasetName + '</span></td></tr>';
+                });
+            });
+            
+            document.getElementById('jobs-content').innerHTML = html + '</table>';
         }
 
 
         function filterDatasets() {
-            var filter = document.getElementById('datasetFilter').value.toLowerCase();
+            var filters = {
+                dataset: document.getElementById('datasetFilter').value.toLowerCase(),
+                status: document.getElementById('statusFilter').value,
+                dateFrom: document.getElementById('dateFromFilter').value,
+                dateTo: document.getElementById('dateToFilter').value
+            };
             var rows = document.querySelectorAll('#jobs-content tr');
             
+            // Filter dataset rows
             for (var i = 1; i < rows.length; i++) {
-                var cellText = rows[i].cells[4].textContent.toLowerCase();
-                rows[i].style.display = (filter === '' || matchPattern(cellText, filter)) ? '' : 'none';
+                if (rows[i].classList.contains('group-header')) continue;
+                
+                var row = rows[i];
+                var matches = true;
+                var datasetAttr = row.getAttribute('data-dataset') || '';
+                matches = matches && (!filters.dataset || matchPattern(datasetAttr, filters.dataset));
+                matches = matches && (filters.status === 'all' || 
+                                    (filters.status === 'complete' && row.getAttribute('data-complete') === 'true') ||
+                                    (filters.status === 'incomplete' && row.getAttribute('data-complete') === 'false') ||
+                                    (filters.status === 'nochild' && row.getAttribute('data-has-children') === 'false'));
+                var dateStr = row.cells[3].textContent.trim();
+                matches = matches && (!filters.dateFrom || !dateStr || dateStr >= filters.dateFrom);
+                matches = matches && (!filters.dateTo || !dateStr || dateStr <= filters.dateTo);
+                row.style.display = matches ? '' : 'none';
+            }
+            
+            // Hide headers with no visible children
+            for (var i = 1; i < rows.length; i++) {
+                if (!rows[i].classList.contains('group-header')) continue;
+                var hasVisible = false;
+                for (var j = i + 1; j < rows.length && !rows[j].classList.contains('group-header'); j++) {
+                    if (rows[j].style.display !== 'none') { hasVisible = true; break; }
+                }
+                rows[i].style.display = hasVisible ? '' : 'none';
             }
         }
 
         function matchPattern(text, pattern) {
-            // Convert wildcard pattern to regex
-            var regexPattern = pattern.replace(/\*/g, '.*');
-            var regex = new RegExp(regexPattern);
-            return regex.test(text);
+            if (!pattern) return true;
+            var normalized = pattern.toLowerCase();
+            var target = (text || '').toLowerCase();
+            if (normalized.indexOf('*') === -1) {
+                return target.indexOf(normalized) !== -1;
+            }
+            var escaped = normalized.replace(/[-/\\^$+?.()|[\]{}]/g, '\\$&');
+            var regexPattern = '^' + escaped.replace(/\*/g, '.*') + '$';
+            try {
+                return new RegExp(regexPattern).test(target);
+            } catch (e) {
+                return target.indexOf(normalized.replace(/\*/g, '')) !== -1;
+            }
         }
 
         function clearFilter() {
-            document.getElementById('datasetFilter').value = '';
+            ['datasetFilter', 'dateFromFilter', 'dateToFilter'].forEach(function(id) {
+                document.getElementById(id).value = '';
+            });
+            document.getElementById('statusFilter').value = 'all';
             filterDatasets();
+        }
+
+        function openJsonInEditor(sourceFile) {
+            window.location.href = '/json-editor?file=' + encodeURIComponent(sourceFile);
         }
 
         function showDatasetInfo(datasetName) {
             var modal = document.getElementById('diagramModal');
             var modalTitle = document.getElementById('modalTitle');
             var modalContent = document.getElementById('modalContent');
-            var statsToggle = document.getElementById('statsToggle');
+            var url = '/api/dataset/' + encodeURIComponent(datasetName);
+            if (document.getElementById('statsToggle').checked) url += '?stats=true';
             
             modalTitle.textContent = 'Dataset: ' + datasetName;
             modalContent.innerHTML = 'Loading...';
             modal.style.display = 'block';
             
-            // Build URL with stats parameter
-            var url = '/api/dataset/' + encodeURIComponent(datasetName);
-            if (statsToggle.checked) {
-                url += '?stats=true';
-            }
-            
             fetch(url)
-                .then(function(response) { return response.json(); })
+                .then(r => r.json())
                 .then(function(data) {
-                    if (data.success) {
-                        var output = data.output;
-                        
-                        // Check if the API indicates it has Mermaid content
+                    if (!data.success) {
+                        modalContent.innerHTML = '<p class="error">Error: ' + data.output + '</p>';
+                        return;
+                    }
+                    
                         if (data.has_mermaid) {
-                            // Extract Mermaid code from the .md file content
-                            var mermaidMatch = output.match(/```mermaid\n([\s\S]*?)\n```/);
-                            
-                            if (mermaidMatch) {
-                                var mermaidCode = mermaidMatch[1];
-                                
-                                modalContent.innerHTML = '<div class="mermaid">' + mermaidCode + '</div>';
-                                
-                                // Initialize Mermaid with better config
-                                mermaid.initialize({ 
-                                    startOnLoad: false,
-                                    theme: 'forest',
-                                    flowchart: {
-                                        useMaxWidth: true,
-                                        htmlLabels: true,
-                                        wrappingWidth: 9999
-                                    },
-                                    securityLevel: 'loose'
-                                });
-                                
-                                // Render the diagram
-                                setTimeout(function() {
-                                    mermaid.init(undefined, modalContent.querySelector('.mermaid'));
-                                }, 100);
-                            } else {
-                                modalContent.innerHTML = '<h3>Mermaid file content:</h3><pre>' + output + '</pre><p><em>Could not extract Mermaid code</em></p>';
-                            }
+                        var match = data.output.match(/```mermaid\n([\s\S]*?)\n```/);
+                        if (match) {
+                            modalContent.innerHTML = '<div class="mermaid">' + match[1] + '</div>';
+                            mermaid.initialize({ startOnLoad: false, theme: 'forest', flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 9999 }, securityLevel: 'loose' });
+                            setTimeout(function() { mermaid.init(undefined, modalContent.querySelector('.mermaid')); }, 100);
                         } else {
-                            // No Mermaid diagram found, show raw output
-                            modalContent.innerHTML = '<h3>Raw famtree output:</h3><pre>' + output + '</pre>';
-                            if (data.error) {
-                                modalContent.innerHTML += '<p class="warning">Note: ' + data.error + '</p>';
-                            }
+                            modalContent.innerHTML = '<h3>Mermaid file content:</h3><pre>' + data.output + '</pre><p><em>Could not extract Mermaid code</em></p>';
                         }
                     } else {
-                        modalContent.innerHTML = '<p class="error">Error: ' + data.output + '</p>';
+                        modalContent.innerHTML = '<h3>Raw famtree output:</h3><pre>' + data.output + '</pre>' + (data.error ? '<p class="warning">Note: ' + data.error + '</p>' : '');
                     }
                 })
-                .catch(function(error) {
-                    modalContent.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
-                });
+                .catch(err => modalContent.innerHTML = '<p class="error">Error: ' + err.message + '</p>');
         }
 
         function sortTable(columnIndex) {
             currentSortDirection = (currentSortColumn === columnIndex) ? -currentSortDirection : 1;
             currentSortColumn = columnIndex;
             
+            var getVal = [function(j) { return j.njobs || 0; },
+                         function(j) { return (j.outputs || []).length ? (j.outputs[0].location || '') : ''; },
+                         function(j) { var evts = (j.outputs || []).map(function(o) { return o.events_per_file || 0; }).filter(function(v) { return v > 0; }); return evts.length ? evts.reduce(function(s, v) { return s + v; }, 0) / evts.length : 0; },
+                         function(j) { return (j.outputs || []).reduce(function(s, o) { return s + (o.avg_size_mb || 0); }, 0); },
+                         function(j) { var dates = (j.outputs || []).map(function(o) { return o.creation_date || ''; }).filter(function(d) { return d; }); return dates.length ? dates[0] : ''; },
+                         function(j) { return j.avg_real_h != null ? j.avg_real_h : -1; },
+                         function(j) { return j.avg_vmhwm_gb != null ? j.avg_vmhwm_gb : -1; },
+                         function(j) { return ((j.source_file || '') + ' ' + (j.tarball || '')).toLowerCase(); }];
+            
             currentData.sort(function(a, b) {
-                var getVal = function(job) {
-                    switch(columnIndex) {
-                        case 0: return job.njobs || 0;
-                        case 1: return (job.outputs || []).reduce(function(s, o) { return s + (o.nevts || 0); }, 0);
-                        case 2: return (job.outputs || []).reduce(function(s, o) { return s + (o.avg_size_mb || 0); }, 0);
-                        case 3: return (job.source_file || '').toLowerCase();
-                        case 4: return (job.tarball || '').toLowerCase();
-                    }
-                };
-                var aVal = getVal(a), bVal = getVal(b);
-                return (typeof aVal === 'number') ? (aVal - bVal) * currentSortDirection : 
-                       aVal.localeCompare(bVal) * currentSortDirection;
+                var aVal = getVal[columnIndex](a), bVal = getVal[columnIndex](b);
+                var diff = (typeof aVal === 'number') ? aVal - bVal : aVal.localeCompare(bVal);
+                return diff * currentSortDirection;
             });
             displayJobs(currentData);
         }

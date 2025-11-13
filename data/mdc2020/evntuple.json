@@ -1,0 +1,49 @@
+[
+  {
+    "dsconf": [
+      "MDC2020-0"
+    ],
+    "fcl": [
+      "EventNtuple/fcl/from_mcs-mockdata.fcl"
+    ],
+    "input_data": [
+      {
+        "mcs.mu2e.RPCInternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
+      },
+      {
+        "mcs.mu2e.RPCExternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
+      },
+      {
+        "mcs.mu2e.RPCExternalPhysicalMix2BBTriggered.MDC2020bc_best_v1_3.art": 1
+      },
+      {
+        "mcs.mu2e.FlateMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
+      },
+      {
+        "mcs.mu2e.FlatMuMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
+      },
+      {
+        "mcs.mu2e.FlatGammaMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
+      },
+      {
+        "mcs.mu2e.FlatGammaMix2BBTriggered.MDC2020bc_best_v1_3.art": 1
+      }
+    ],
+    "fcl_overrides": [
+      {
+        "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+      }
+    ],
+    "inloc": [
+      "tape"
+    ],
+    "outloc": [
+      {
+        "*.art": "tape"
+      }
+    ],
+    "simjob_setup": [
+      "/cvmfs/mu2e.opensciencegrid.org/Musings/EventNtuple/v06_07_00/setup.sh"
+    ]
+  }
+]

@@ -73,8 +73,8 @@
             
             <div class="form-group">
                 <div class="checkbox-group">
-                    <input type="checkbox" id="pushout" name="pushout">
-                    <label for="pushout">Enable SAM pushOutput</label>
+                    <input type="checkbox" id="prod" name="prod">
+                    <label for="prod">Production mode (enable pushout and run mkidxdef)</label>
                 </div>
             </div>
             
@@ -82,13 +82,6 @@
                 <div class="checkbox-group">
                     <input type="checkbox" id="verbose" name="verbose">
                     <label for="verbose">Verbose logging</label>
-                </div>
-            </div>
-            
-            <div class="form-group">
-                <div class="checkbox-group">
-                    <input type="checkbox" id="run_mkidxdef" name="run_mkidxdef">
-                    <label for="run_mkidxdef">Run mkidxdef on jobdefs output</label>
                 </div>
             </div>
             
@@ -122,19 +115,17 @@
             // Collect form data (only include non-empty values)
             const formData = {
                 json_file: document.getElementById('json_file').value,
-                pushout: document.getElementById('pushout').checked,
-                verbose: document.getElementById('verbose').checked,
-                run_mkidxdef: document.getElementById('run_mkidxdef').checked
+                prod: document.getElementById('prod').checked,
+                verbose: document.getElementById('verbose').checked
             };
             
             // Add optional fields if present
-            ['dsconf', 'desc', 'jobdefs', 'simjob_release'].forEach(id => {
+            ['dsconf', 'desc', 'jobdefs', 'simjob_release', 'index'].forEach(id => {
                 const val = document.getElementById(id).value;
-                if (val) formData[id] = val;
+                if (val) {
+                    formData[id] = id === 'index' ? parseInt(val) : val;
+                }
             });
-            
-            const indexVal = document.getElementById('index').value;
-            if (indexVal) formData.index = parseInt(indexVal);
             
             // Send request
             fetch('/api/json2jobdef', {
@@ -146,18 +137,11 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    output.className = 'output success';
-                    let outputText = `Command: ${data.command}\n\nSTDOUT:\n${data.stdout}\n\nSTDERR:\n${data.stderr}`;
-                    if (data.mkidxdef_output || data.mkidxdef_error) {
-                        outputText += `\n\nMKIDXDEF OUTPUT:\n${data.mkidxdef_output || 'N/A'}`;
-                        outputText += `\n\nMKIDXDEF ERROR:\n${data.mkidxdef_error || 'N/A'}`;
-                    }
-                    outputContent.textContent = outputText;
-                } else {
-                    output.className = 'output error';
-                    outputContent.textContent = `Error: ${data.error}\n\nSTDOUT:\n${data.stdout || 'N/A'}\n\nSTDERR:\n${data.stderr || 'N/A'}`;
-                }
+                output.className = data.success ? 'output success' : 'output error';
+                const stderr = data.stderr || 'N/A';
+                outputContent.textContent = data.success 
+                    ? `Command: ${data.command}\n\nSTDOUT:\n${data.stdout}\n\nSTDERR:\n${stderr}`
+                    : `Error: ${data.error}\n\nSTDOUT:\n${data.stdout || 'N/A'}\n\nSTDERR:\n${stderr}`;
             })
             .catch(error => {
                 output.className = 'output error';
@@ -178,9 +162,7 @@
         function openInEditor() {
             const selectedFile = document.getElementById('json_file').value;
             if (selectedFile) {
-                // Store the selected file in sessionStorage for the JSON editor to pick up
-                sessionStorage.setItem('selectedJsonFile', selectedFile);
-                window.location.href = '/json-editor';
+                window.location.href = '/json-editor?file=' + encodeURIComponent(selectedFile);
             }
         }
         

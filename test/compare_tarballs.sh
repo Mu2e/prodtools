@@ -28,6 +28,17 @@ for py_tar in python/*.tar; do
     # Try to get dcache_tar path using mdh print-url with disk location (use base filename)
     dcache_tar=$(mdh print-url -l disk "$base.tar" 2>/dev/null)
     
+    # If not found, try with "mu2e" owner (production files use mu2e owner)
+    if [ -z "$dcache_tar" ] || [ ! -f "$dcache_tar" ]; then
+        # Extract owner from base name (format: cnf.owner.desc.dsconf.0)
+        owner=$(echo "$base" | cut -d. -f2)
+        if [ "$owner" != "mu2e" ]; then
+            # Try with mu2e owner
+            mu2e_base=$(echo "$base" | sed "s/^cnf\.$owner\./cnf.mu2e./")
+            dcache_tar=$(mdh print-url -l disk "$mu2e_base.tar" 2>/dev/null)
+        fi
+    fi
+    
     # Compare against existing dcache_tar if it exists and has matching content
     if [ -n "$dcache_tar" ] && [ -f "$dcache_tar" ]; then
         echo "Python vs DCache_tar FCL identical?" && diff <(tar -xO -f "$py_tar" mu2e.fcl) <(tar -xO -f "$dcache_tar" mu2e.fcl) && echo "✅" || echo "❌"

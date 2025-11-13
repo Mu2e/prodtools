@@ -30,33 +30,33 @@ class Mu2eFilename:
         # Format: tier.owner.description.dsconf.sequencer.extension
         # Example: dts.mu2e.CosmicCRYExtracted.MDC2020av.001205_00000000.art
         parts = self.filename.split('.')
-        if len(parts) >= 6:
-            self.tier = parts[0]
-            self.owner = parts[1]
-            self.description = parts[2]
-            self.dsconf = parts[3]
-            self.sequencer = parts[4]
-            self.extension = parts[5] if len(parts) > 5 else ''
-        else:
-            # Fallback for simpler filenames
-            self.tier = parts[0] if len(parts) > 0 else ''
-            self.owner = parts[1] if len(parts) > 1 else ''
-            self.description = parts[2] if len(parts) > 2 else ''
-            self.dsconf = parts[3] if len(parts) > 3 else ''
-            self.sequencer = parts[4] if len(parts) > 4 else ''
-            self.extension = parts[5] if len(parts) > 5 else ''
+        if len(parts) < 6:
+            raise ValueError(f"Invalid filename format: expected 6+ dot-separated fields, got {len(parts)} in '{self.filename}'")
+        self.tier = parts[0]
+        self.owner = parts[1]
+        self.description = parts[2]
+        self.dsconf = parts[3]
+        self.sequencer = parts[4]
+        self.extension = parts[5] if len(parts) > 5 else ''
     
     def basename(self) -> str:
         """Return the basename of the file."""
         return self.filename
+
+def remove_storage_prefix(path: str) -> str:
+    """Remove storage system prefixes (enstore:, dcache:) from a file path.
     
-    def dataset(self) -> str:
-        """Return the dataset name."""
-        return f"{self.owner}.{self.description}.{self.dsconf}"
+    Args:
+        path: File path that may have storage prefix
     
-    def dsname(self) -> str:
-        """Return the dataset name (alias for dataset)."""
-        return self.dataset()
+    Returns:
+        Path with storage prefix removed
+    """
+    if path.startswith('enstore:'):
+        return path[8:]
+    elif path.startswith('dcache:'):
+        return path[7:]
+    return path
 
 
 class Mu2eJobBase:
@@ -103,12 +103,15 @@ class Mu2eJobBase:
         return int(h.hexdigest()[:8], 16)
 
 
-def setup_script_path():
-    """Standard setup for direct script execution.
+def get_samweb_wrapper():
+    """Get SAM web wrapper instance with consistent import handling.
     
-    Allows running Python files directly by making the package root importable.
-    Consolidates the 4-line boilerplate used in multiple script files.
+    Returns:
+        SAMWebWrapper instance
     """
-    import os
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        from .samweb_wrapper import get_samweb_wrapper as _get_samweb_wrapper
+    except ImportError:
+        from utils.samweb_wrapper import get_samweb_wrapper as _get_samweb_wrapper
+    return _get_samweb_wrapper()
+

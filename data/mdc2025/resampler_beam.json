@@ -167,7 +167,7 @@
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
         },
         "resampler_name": "StopResampler",
-        "input_data": {"sim.mu2e.PiTargetStops.MDC2025ac.art": 1},
+        "input_data": {"sim.mu2e.PiTargetStops.MDC2025ac.art": 10},
         "njobs": 2000,
         "events": 5000000,
         "run": 1430,
@@ -178,6 +178,28 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
         "sequential_aux": true
+    },
+    {
+        "desc": "NeutralsFlashCat",
+        "dsconf": "MDC2025ad",
+        "sequencer_from_index": true,
+        "fcl": "Production/JobConfig/common/artcat.fcl",
+        "input_data": {
+            "dts.mu2e.NeutralsFlash.MDC2025ac.art": {
+                "count": 1000,
+                "random": true
+            }
+        },
+        "njobs": 1000,
+        "inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsFlashCat.version.sequence.art"
+		},
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh",
+        "owner": "mu2e"
     }
 
 ]

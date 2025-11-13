@@ -40,6 +40,25 @@ class Mu2eJobFCL(Mu2eJobBase):
         tbs = self.json_data.get('tbs', {})
         self.sequential_aux = tbs.get('sequential_aux', False)
     
+        # Cache the source type detection
+        self._source_type = None
+    
+    def _get_source_type(self) -> str:
+        """Detect the source module type from the base FCL."""
+        if self._source_type is None:
+            base_fcl = self._extract_fcl()
+            # Look for module_type in source configuration
+            if 'module_type : SamplingInput' in base_fcl or 'module_type: SamplingInput' in base_fcl:
+                self._source_type = 'SamplingInput'
+            elif 'module_type : RootInput' in base_fcl or 'module_type: RootInput' in base_fcl:
+                self._source_type = 'RootInput'
+            elif 'module_type : EmptyEvent' in base_fcl or 'module_type: EmptyEvent' in base_fcl:
+                self._source_type = 'EmptyEvent'
+            else:
+                # Unknown source type - treat as None
+                self._source_type = 'Unknown'
+        return self._source_type
+    
     def _extract_fcl(self) -> str:
         """Extract mu2e.fcl from tar file."""
         with tarfile.open(self.jobdef, 'r') as tar:
@@ -106,15 +125,12 @@ class Mu2eJobFCL(Mu2eJobBase):
         if self.proto != 'root':
             return filename
         
-        # For root protocol, transform to xroot://
+        # For root protocol, get physical path
         physical_path = self._locate_file(filename)
         
         # Clean up location format prefixes
-        clean_path = physical_path
-        if physical_path.startswith('enstore:'):
-            clean_path = physical_path[8:]  # Remove 'enstore:'
-        elif physical_path.startswith('dcache:'):
-            clean_path = physical_path[7:]  # Remove 'dcache:'
+        from utils.job_common import remove_storage_prefix
+        clean_path = remove_storage_prefix(physical_path)
         
         # Remove file location suffix like (2290@fm4794l8) if present
         clean_path = re.sub(r'\([^)]+\)$', '', clean_path)
@@ -123,7 +139,14 @@ class Mu2eJobFCL(Mu2eJobBase):
         if not clean_path.endswith(filename):
             clean_path = clean_path + '/' + filename
         
-        # Apply xroot transformation to /pnfs/ paths
+        # SamplingInput cannot handle xroot:// URLs - use physical paths instead
+        # RootInput can handle xroot:// URLs for remote access
+        source_type = self._get_source_type()
+        if source_type == 'SamplingInput' or source_type == 'Unknown':
+            # Return physical path for SamplingInput
+            return clean_path
+        
+        # Apply xroot transformation to /pnfs/ paths for RootInput
         if clean_path.startswith('/pnfs/'):
             return clean_path.replace(
                 '/pnfs/', 
@@ -246,6 +269,30 @@ class Mu2eJobFCL(Mu2eJobBase):
     
     def sequencer(self, index: int) -> str:
         """Get sequencer for job index."""
+        tbs = self.json_data.get('tbs', {})
+        
+        # Check for event_id configuration first (preferred for generating sequencers from index)
+        event_id = tbs.get('event_id')
+        if event_id:
+            run = event_id.get('source.firstRun') or event_id.get('source.run')
+            if run:
+                subrun = index
+                return f"{run:06d}_{subrun:08d}"
+            # If event_id exists but no run number, check if job uses inputs.txt
+            # AND explicitly requests index-based sequencers (for backward compatibility)
+            # Old job definitions used sequencer from input files, so we only apply
+            # the new behavior if explicitly enabled via sequencer_from_index flag
+            inputs = tbs.get('inputs', {})
+            sequencer_from_index = tbs.get('sequencer_from_index', False)
+            if inputs and sequencer_from_index:
+                # Job uses inputs.txt AND explicitly requests index-based sequencers
+                # Generate sequencer from index using default run number
+                # Use a hash of jobname to get a consistent run number
+                jobname = self.json_data.get('jobname', 'unknown')
+                run_hash = int(hashlib.md5(jobname.encode()).hexdigest()[:8], 16) % 1000000
+                return f"{run_hash:06d}_{index:08d}"
+        
+        # Fall back to deriving sequencer from primary input files
         primary_inputs = self.job_primary_inputs(index)
         
         if primary_inputs:
@@ -259,17 +306,6 @@ class Mu2eJobFCL(Mu2eJobBase):
             # Sort and return first
             sequencers.sort()
             return sequencers[0]
-        
-        # Check for event_id configuration
-        tbs = self.json_data.get('tbs', {})
-        event_id = tbs.get('event_id')
-        
-        if event_id:
-            run = event_id.get('source.firstRun') or event_id.get('source.run')
-            if not run:
-                raise ValueError("Error: get_sequencer(): can not get source.firstRun from event_id")
-            subrun = index
-            return f"{run:06d}_{subrun:08d}"
         
         raise ValueError("Error: get_sequencer(): unsupported JSON content")
     
@@ -443,6 +479,11 @@ class Mu2eJobFCL(Mu2eJobBase):
         event_settings = self.job_event_settings(index)
         for key, value in event_settings.items():
             config_lines.append(f"{key}: {value}")
+        
+        # SamplingInput-specific settings: different sampling seed for each job
+        source_type = self._get_source_type()
+        if source_type == 'SamplingInput':
+            config_lines.append(f"source.samplingSeed: {1 + index}")
         
         # Input files with protocol handling
         inputs = self.job_inputs(index)

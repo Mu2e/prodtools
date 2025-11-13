@@ -69,9 +69,14 @@ def build_pileup_args(config):
     
     Args:
         config: Configuration dictionary with the following structure:
-            - pileup_datasets: dict mapping dataset names to merge factors
-              e.g., {"dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 100}
-              The merge factor is used for both file merging and pileup counting
+            - pileup_datasets: list containing dict mapping dataset names to file counts
+              e.g., [{
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ac.art": 50,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+              }]
+              The count value specifies how many files to use from each pileup catalog.
     
     Returns:
         List of command-line arguments for mu2ejobdef
@@ -83,11 +88,14 @@ def build_pileup_args(config):
         # Write base include directive
         f.write(f'#include "{config["fcl"]}"\n')
         
-        # Process pileup datasets
-        pileup_datasets = config.get('pileup_datasets', {})
+        # Get pileup datasets dict (extract from list if needed)
+        pileup_datasets = _get_first_if_list(config.get('pileup_datasets', [{}]))
         
         if not isinstance(pileup_datasets, dict):
-            raise ValueError(f"pileup_datasets must be a dict, got {type(pileup_datasets)}")
+            raise ValueError(f"pileup_datasets must be a list containing a dict, got {type(config.get('pileup_datasets'))}")
+        
+        if not pileup_datasets:
+            raise ValueError("No mixing component datasets found. Expected pileup_datasets field.")
         
         # Group datasets by mixer type
         mixer_datasets = {}
