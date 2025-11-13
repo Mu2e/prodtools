@@ -31,7 +31,7 @@
     ],
     "fcl_overrides": [
       {
-        "services.TFileService.fileName": "nts.mu2e.{desc}.{dsconf}_%(ntuple)s.{sequencer}.root"
+        "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
       }
     ],
     "inloc": [

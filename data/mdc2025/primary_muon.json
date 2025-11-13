@@ -13,7 +13,7 @@
         "njobs": 100,
         "run": 1430,
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
@@ -35,7 +35,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -48,8 +48,8 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "events": 500000,
-        "njobs": 8000,
+        "events": 2000000,
+        "njobs": 2000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
@@ -75,7 +75,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -88,8 +88,8 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "events": 500000,
-        "njobs": 8000,
+        "events": 2000000,
+        "njobs": 2000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
@@ -204,7 +204,7 @@
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -220,14 +220,14 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "njobs": 500,
-        "events": 15000,
+        "njobs": 1500,
+        "events": 5000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -243,14 +243,14 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "njobs": 500,
-        "events": 15000,
+        "njobs": 1500,
+        "events": 5000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -261,19 +261,19 @@
         "fcl_overrides": {
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
-            "physics.producers.generate.startMom": 90,
-            "physics.producers.generate.endMom": 110
+            "physics.producers.generate.startMom": 70,
+            "physics.producers.generate.endMom": 120
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "njobs": 100,
-        "events": 10000,
+        "njobs": 1500,
+        "events": 5000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -287,8 +287,8 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "njobs": 2000,
-        "events": 500000,
+        "njobs": 500,
+        "events": 2000000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
@@ -308,14 +308,14 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "njobs": 200,
-        "events": 75000,
+        "njobs": 2000,
+        "events": 7500,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     },
@@ -329,14 +329,14 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
-        "njobs": 200,
-        "events": 75000,
+        "njobs": 500,
+        "events": 20000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
-            "*.art": "tape"
+            "*.art": "disk"
         },
         "sequential_aux": true
     }
