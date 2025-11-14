@@ -34,58 +34,57 @@ class Mu2eJobPars(Mu2eJobBase):
         if 'njobs' in self.json_data:
             return self.json_data['njobs']
         
-        # Calculate njobs from inputs like Perl version does
+        # Calculate njobs from inputs 
         tbs = self.json_data.get('tbs', {})
         inputs = tbs.get('inputs', {})
         
-        if not inputs:
-            return 0
-        
         # Get the primary input count (usually source.fileNames)
-        source_files = inputs.get('source.fileNames')
-        if source_files and isinstance(source_files, list) and len(source_files) >= 2:
-            merge_factor, file_list = source_files
-            # Extract merge factor from job definition (like Perl does)
-            # merge_factor is the first element, file_list is the second element
-            if not isinstance(merge_factor, int) or merge_factor <= 0:
-                # Fallback to default if merge_factor is invalid (like Perl does)
-                merge_factor = 1
-            
-            total_files = len(file_list) if file_list else 0
-            if total_files == 0:
-                return 0
-            
-            # Use same calculation logic as Perl calculate_njobs function
-            # njobs = total_files / merge_factor + (remainder ? 1 : 0)
-            njobs = total_files // merge_factor
-            if total_files % merge_factor:
-                njobs += 1
-            
-            return njobs
+        if inputs:
+            source_files = inputs.get('source.fileNames')
+            if source_files and isinstance(source_files, list) and len(source_files) >= 2:
+                merge_factor, file_list = source_files
+                # Extract merge factor from job definition 
+                # merge_factor is the first element, file_list is the second element
+                if not isinstance(merge_factor, int) or merge_factor <= 0:
+                    # Fallback to default if merge_factor is invalid
+                    merge_factor = 1
+                
+                total_files = len(file_list) if file_list else 0
+                if total_files == 0:
+                    return 0
+                
+                # Use same calculation logic as Perl calculate_njobs function
+                # njobs = total_files / merge_factor + (remainder ? 1 : 0)
+                njobs = total_files // merge_factor
+                if total_files % merge_factor:
+                    njobs += 1
+                
+                return njobs
         
-        # Check for samplinginput (like Perl does)
+        # Check for samplinginput
         samplinginput = tbs.get('samplinginput', {})
         if samplinginput:
-            # Get the first samplinginput entry (like Perl does with 'each')
+            # Perl version only processes the FIRST entry (using each(%$sin))
+            # Get the first samplinginput entry
             for key, value in samplinginput.items():
                 if isinstance(value, list) and len(value) >= 2:
-                    merge_factor, file_list = value
-                    # Extract merge factor from job definition
-                    if not isinstance(merge_factor, int) or merge_factor <= 0:
-                        # Fallback to default if merge_factor is invalid (like Perl does)
-                        merge_factor = 1
+                    nreq, file_list = value
+                    # Extract nreq (files per job) from job definition
+                    if not isinstance(nreq, int) or nreq < 0:
+                        # Fallback to default if nreq is invalid
+                        nreq = 1
                     
                     total_files = len(file_list) if file_list else 0
                     if total_files == 0:
                         return 0
                     
-                    # Use same calculation logic as Perl calculate_njobs function
-                    njobs = total_files // merge_factor
-                    if total_files % merge_factor:
+                    # njobs = total_files / nreq + (remainder ? 1 : 0)
+                    njobs = total_files // nreq
+                    if total_files % nreq:
                         njobs += 1
                     
                     return njobs
-                break  # Only process the first entry like Perl does
+                break  # Only process the first entry
         
         return 0
     
@@ -95,7 +94,7 @@ class Mu2eJobPars(Mu2eJobBase):
         if 'input_datasets' in self.json_data:
             return self.json_data['input_datasets']
         
-        # Extract from TBS inputs and auxin sections like Perl does
+        # Extract from TBS inputs and auxin sections
         tbs = self.json_data.get('tbs', {})
         datasets = set()
         

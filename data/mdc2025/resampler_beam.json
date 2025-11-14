@@ -186,7 +186,7 @@
         "fcl": "Production/JobConfig/common/artcat.fcl",
         "input_data": {
             "dts.mu2e.NeutralsFlash.MDC2025ac.art": {
-                "count": 1000,
+                "count": 5000,
                 "random": true
             }
         },
