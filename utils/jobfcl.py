@@ -139,14 +139,7 @@ class Mu2eJobFCL(Mu2eJobBase):
         if not clean_path.endswith(filename):
             clean_path = clean_path + '/' + filename
         
-        # SamplingInput cannot handle xroot:// URLs - use physical paths instead
-        # RootInput can handle xroot:// URLs for remote access
-        source_type = self._get_source_type()
-        if source_type == 'SamplingInput' or source_type == 'Unknown':
-            # Return physical path for SamplingInput
-            return clean_path
-        
-        # Apply xroot transformation to /pnfs/ paths for RootInput
+        # Apply xroot transformation to /pnfs/ paths 
         if clean_path.startswith('/pnfs/'):
             return clean_path.replace(
                 '/pnfs/', 
@@ -154,7 +147,10 @@ class Mu2eJobFCL(Mu2eJobBase):
                 1
             )
         
-        return clean_path
+        # If path doesn't start with /pnfs/, raise error
+        raise ValueError(
+            f"Error: root protocol requested but a file pathname does not start with /pnfs: {clean_path}"
+        )
     
     def job_primary_inputs(self, index: int) -> Dict[str, List[str]]:
         """Get primary input files for job index."""
