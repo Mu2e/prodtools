@@ -11,7 +11,6 @@ import sys
 import tarfile
 from pathlib import Path
 from typing import Dict, List, Optional, Union
-import hashlib
 import re
 
 # Allow running this file directly: make package root importable
@@ -267,43 +266,37 @@ class Mu2eJobFCL(Mu2eJobBase):
         """Get sequencer for job index."""
         tbs = self.json_data.get('tbs', {})
         
-        # Check for event_id configuration first (preferred for generating sequencers from index)
-        event_id = tbs.get('event_id')
-        if event_id:
-            run = event_id.get('source.firstRun') or event_id.get('source.run')
-            if run:
-                subrun = index
-                return f"{run:06d}_{subrun:08d}"
-            # If event_id exists but no run number, check if job uses inputs.txt
-            # AND explicitly requests index-based sequencers (for backward compatibility)
-            # Old job definitions used sequencer from input files, so we only apply
-            # the new behavior if explicitly enabled via sequencer_from_index flag
-            inputs = tbs.get('inputs', {})
-            sequencer_from_index = tbs.get('sequencer_from_index', False)
-            if inputs and sequencer_from_index:
-                # Job uses inputs.txt AND explicitly requests index-based sequencers
-                # Generate sequencer from index using default run number
-                # Use a hash of jobname to get a consistent run number
-                jobname = self.json_data.get('jobname', 'unknown')
-                run_hash = int(hashlib.md5(jobname.encode()).hexdigest()[:8], 16) % 1000000
-                return f"{run_hash:06d}_{index:08d}"
+        # Check for explicit run number in event_id
+        event_id = tbs.get('event_id', {})
+        run = event_id.get('source.firstRun') or event_id.get('source.run')
+        if run:
+            return f"{run:06d}_{index:08d}"
         
-        # Fall back to deriving sequencer from primary input files
+        # Get sequencers from primary input files
         primary_inputs = self.job_primary_inputs(index)
+        if not primary_inputs:
+            raise ValueError("Error: get_sequencer(): unsupported JSON content")
         
-        if primary_inputs:
-            # Get sequencers from primary input files
-            sequencers = []
-            for dataset, files in primary_inputs.items():
-                for filename in files:
-                    fn = Mu2eFilename(filename)
-                    sequencers.append(fn.sequencer)
-            
-            # Sort and return first
-            sequencers.sort()
-            return sequencers[0]
+        sequencers = []
+        for dataset, files in primary_inputs.items():
+            for filename in files:
+                fn = Mu2eFilename(filename)
+                sequencers.append(fn.sequencer)
         
-        raise ValueError("Error: get_sequencer(): unsupported JSON content")
+        if not sequencers:
+            raise ValueError("Error: get_sequencer(): no sequencers found in input files")
+        
+        # Sort and get first sequencer
+        sequencers.sort()
+        parent_sequencer = sequencers[0]
+        
+        # If sequencer_from_index is enabled, extract run number and use index as subrun
+        if tbs.get('sequencer_from_index', False) and '_' in parent_sequencer:
+            parent_run = parent_sequencer.split('_')[0]
+            return f"{parent_run}_{index:08d}"
+        
+        # Otherwise, use the sequencer from input files directly
+        return parent_sequencer
     
     def job_outputs(self, index: int) -> Dict[str, str]:
         """Get output files for job index."""
