@@ -1,17 +1,32 @@
 [
     {
-	"dsconf": ["MDC2025ad_best_v1_3"],
+	"dsconf": ["MDC2025ae_best_v1_3"],
 	"fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
-	"input_data": {
-        "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
-        "dig.mu2e.CeMLeadingLogOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
-        "dig.mu2e.CePLeadingLogOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
-        "dig.mu2e.CePlusEndpointOnSpillTriggered.MDC2025ad_best_v1_3.art": 1,
-        "dig.mu2e.CosmicSignalOnSpillTriggered.MDC2025ad_best_v1_3.art": 1
-    },
+	"input_data": [
+        {"dig.mu2e.CeEndpointOnSpillTriggered.MDC2025ad_best_v1_3.art": 1},
+        {"dig.mu2e.CeMLeadingLogOnSpillTriggered.MDC2025ad_best_v1_3.art": 1},
+        {"dig.mu2e.CePLeadingLogOnSpillTriggered.MDC2025ad_best_v1_3.art": 1},
+        {"dig.mu2e.CePlusEndpointOnSpillTriggered.MDC2025ad_best_v1_3.art": 1},
+        {"dig.mu2e.CosmicSignalOnSpillTriggered.MDC2025ad_best_v1_3.art": 1},
+        {"dig.mu2e.CeEndpointMix1BBTriggered.MDC2025ad_best_v1_3.art": 1},                                          
+        {"dig.mu2e.CePlusEndpointMix1BBTriggered.MDC2025ad_best_v1_3.art": 1},                                      
+        {"dig.mu2e.CosmicSignalMix1BBTriggered.MDC2025ad_best_v1_3.art": 1}
+    ],
     "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
 	"inloc": ["tape"],
 	"outloc": [{"*.art": "tape"}],
-	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh"]
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh"]
+    },
+    {
+        "dsconf": "MDC2025ae_best_v1_3",
+        "desc": "CosmicCRYExtractedTriggeredReco",
+        "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
+        "input_data":
+            {"dig.mu2e.CosmicCRYExtractedTriggered.MDC2025ae_best_v1_3.art": 1},
+        "fcl_overrides":
+            {"outputs.KinematicLineOutput.fileName": "mcs.owner.CosmicCRYExtractedTriggered.version.sequencer.art"},
+        "inloc": "tape",
+        "outloc": {"*.art": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh"
     }
 ]
