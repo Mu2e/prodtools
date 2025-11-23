@@ -1,0 +1,30 @@
+[
+  {
+    "input_data": [
+      {"dts.mu2e.CePlusEndpoint.MDC2025ac.art": 1},
+      {"dts.mu2e.CeEndpoint.MDC2025ac.art": 1},
+      {"dts.mu2e.CosmicSignal.MDC2025ac.art": 1}
+    ],
+    "pileup_datasets": [{
+      "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+      "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+      "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+      "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+    }],
+    "dsconf": ["MDC2025ad_best_v1_3"],
+    "mixconf": [0],
+    "pbeam": ["Mix1BB"],
+    "owner": ["mu2e"],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh"],
+    "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+    "merge_events": [500],
+    "inloc": ["tape"],
+    "outloc": [{"dig.mu2e.*.art": "tape"}],
+    "fcl_overrides": [
+      {
+        "services.DbService.purpose": "MDC2020_best",
+        "services.DbService.version": "v1_3"
+      }
+    ]
+  }
+]

@@ -1,0 +1,7 @@
+#!/bin/bash
+# Python wrapper for jobquery (equivalent to Perl mu2ejobquery)
+
+DIR="$(dirname "$(readlink -f "$0")")"
+python3 "$DIR/../utils/jobquery.py" "$@"
+
+

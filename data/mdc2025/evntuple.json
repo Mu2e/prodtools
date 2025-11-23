@@ -1,0 +1,41 @@
+[
+    {
+	"dsconf": ["MDC2025-000"],
+	"fcl": ["EventNtuple/fcl/from_mcs-mockdata.fcl"],
+    "input_data": [
+        {"mcs.mu2e.CeEndpointMix1BBTriggered.MDC2025ae_best_v1_3.art": 10},
+        {"mcs.mu2e.CeEndpointOnSpillTriggered.MDC2025ae_best_v1_3.art": 4},
+        {"mcs.mu2e.CeMLeadingLogOnSpillTriggered.MDC2025ae_best_v1_3.art": 1},
+        {"mcs.mu2e.CePLeadingLogOnSpillTriggered.MDC2025ae_best_v1_3.art": 1},
+        {"mcs.mu2e.CePlusEndpointMix1BBTriggered.MDC2025ae_best_v1_3.art": 10},
+        {"mcs.mu2e.CePlusEndpointOnSpillTriggered.MDC2025ae_best_v1_3.art": 1},
+        {"mcs.mu2e.CosmicSignalMix1BBTriggered.MDC2025ae_best_v1_3.art": 50},
+        {"mcs.mu2e.CosmicSignalOnSpillTriggered.MDC2025ae_best_v1_3.art": 1}
+    ],
+    "fcl_overrides": [
+        {
+          "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+        }
+      ],
+
+    "inloc": ["tape"],
+	"outloc": [{"*.root": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_00_00/setup.sh"]
+    },
+    {
+        "dsconf": ["MDC2025-000"],
+        "fcl": ["EventNtuple/fcl/from_mcs-extracted.fcl"],
+        "input_data": [
+            {"mcs.mu2e.CosmicCRYExtractedTriggered.MDC2025ae_best_v1_3.art": 10}
+        ],
+        "fcl_overrides": [
+            {
+              "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+            }
+          ],
+    
+        "inloc": ["tape"],
+        "outloc": [{"*.root": "tape"}],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_00_00/setup.sh"]
+        }
+]

@@ -2,6 +2,7 @@
 import os
 import sys
 import argparse
+import subprocess
 
 import json
 from pathlib import Path
@@ -60,15 +61,29 @@ def main():
     print(f"Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
     
     print("=== Starting Mu2e execution ===")
-    run(combined_cmd, shell=True)
-    print("=== Mu2e execution completed successfully ===")
+    job_failed = False
+    try:
+        run(combined_cmd, shell=True)
+        print("=== Mu2e execution completed successfully ===")
+    except subprocess.CalledProcessError as e:
+        job_failed = True
+        print(f"=== Mu2e execution failed with exit code {e.returncode} ===")
+        # Don't re-raise - we still want to upload logs and outputs
     
-    # Handle output files and submission
+    # Handle output files and submission (even if job failed)
     if not args.dry_run:
-        push_data(outputs, infiles)
+        if not job_failed:
+            push_data(outputs, infiles)
+        else:
+            print("Job failed - skipping data file push, but uploading logs")
+        # Always upload logs, even on failure
         push_logs(fcl)
     else:
         print("[DRY RUN] Would run: pushOutput output.txt")
+    
+    # Exit with error code if job failed
+    if job_failed:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -1,49 +1,24 @@
 [
-  {
-    "dsconf": [
-      "MDC2020-0"
-    ],
-    "fcl": [
-      "EventNtuple/fcl/from_mcs-mockdata.fcl"
-    ],
+    {
+	"dsconf": ["MDC2020-000"],
+	"fcl": ["EventNtuple/fcl/from_mcs-mockdata.fcl"],
     "input_data": [
-      {
-        "mcs.mu2e.RPCInternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
-      },
-      {
-        "mcs.mu2e.RPCExternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
-      },
-      {
-        "mcs.mu2e.RPCExternalPhysicalMix2BBTriggered.MDC2020bc_best_v1_3.art": 1
-      },
-      {
-        "mcs.mu2e.FlateMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
-      },
-      {
-        "mcs.mu2e.FlatMuMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
-      },
-      {
-        "mcs.mu2e.FlatGammaMix1BBTriggered.MDC2020bc_best_v1_3.art": 1
-      },
-      {
-        "mcs.mu2e.FlatGammaMix2BBTriggered.MDC2020bc_best_v1_3.art": 1
-      }
+        {"mcs.mu2e.FlatMuMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 5},
+        {"mcs.mu2e.FlatGammaMix2BBTriggered.MDC2020bc_best_v1_3.art": 25},
+        {"mcs.mu2e.FlateMinusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"mcs.mu2e.FlatMuMinusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"mcs.mu2e.FlateMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 5},
+        {"mcs.mu2e.FlatePlusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1},
+        {"mcs.mu2e.FlatGammaMix1BBTriggered.MDC2020bc_best_v1_3.art": 25}
     ],
     "fcl_overrides": [
-      {
-        "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
-      }
-    ],
-    "inloc": [
-      "tape"
-    ],
-    "outloc": [
-      {
-        "*.art": "tape"
-      }
-    ],
-    "simjob_setup": [
-      "/cvmfs/mu2e.opensciencegrid.org/Musings/EventNtuple/v06_07_00/setup.sh"
-    ]
-  }
+        {
+          "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+        }
+      ],
+
+    "inloc": ["tape"],
+	"outloc": [{"*.root": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2020/v01_00_00/setup.sh"]
+    }
 ]

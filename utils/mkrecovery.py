@@ -10,26 +10,24 @@ from utils.job_common import remove_storage_prefix
 def find_missing_indices(tarball_path, dataset, njobs):
     """Find job indices for missing files in a dataset."""
     job_io = Mu2eJobIO(tarball_path)
-    all_expected = set()
-    for i in range(njobs):
-        all_expected.update(job_io.job_outputs(i).values())
-    
     dataset_base = dataset.replace('.art', '')
-    expected_files = {f for f in all_expected if dataset_base in f}
+    
+    # Build mapping from filename to job index
+    file_to_job = {}
+    for job_idx in range(njobs):
+        for filename in job_io.job_outputs(job_idx).values():
+            if dataset_base in filename:
+                file_to_job[filename] = job_idx
+    
+    expected_files = set(file_to_job.keys())
     actual_files = set(list_files(f"dh.dataset {dataset}"))
     missing_files = expected_files - actual_files
     
     if not missing_files:
         return set(), missing_files
     
-    # Find which job index produces each missing file
-    missing_indices = set()
-    for filename in missing_files:
-        for job_idx in range(njobs):
-            if filename in job_io.job_outputs(job_idx).values():
-                missing_indices.add(job_idx)
-                break
-    
+    # Get unique job indices for missing files
+    missing_indices = {file_to_job[f] for f in missing_files}
     return missing_indices, missing_files
 
 def create_recovery_definition(defname, indices):
@@ -45,9 +43,28 @@ def locate_tarball(sam, tarball):
     locs = sam.locate_file_full(tarball)
     if not locs:
         return None
-    
-    # Use first (and only) location
     return os.path.join(remove_storage_prefix(locs[0].get('full_path', '')), tarball)
+
+def extract_datasets_from_tarball(tarball_path, njobs):
+    """Extract output dataset names from job definition tarball."""
+    from utils.jobquery import Mu2eJobPars
+    
+    job_pars = Mu2eJobPars(tarball_path)
+    output_datasets = job_pars.output_datasets()
+    
+    # If output_datasets is empty, extract from actual output files
+    if not output_datasets:
+        job_io = Mu2eJobIO(tarball_path)
+        dataset_set = set()
+        for idx in range(min(10, njobs)):
+            for filename in job_io.job_outputs(idx).values():
+                # Extract dataset name from filename (e.g., dig.mu2e.Beam.MDC2020bc.art)
+                parts = filename.split('.')
+                if len(parts) >= 4:
+                    dataset_set.add('.'.join(parts[:4]) + '.art')
+        output_datasets = list(dataset_set)
+    
+    return output_datasets
 
 def main():
     p = argparse.ArgumentParser(description='Create recovery dataset for missing files')
@@ -59,13 +76,13 @@ def main():
     
     if args.jobdesc:
         # Process jobdesc JSON file
-        from utils.pomsMonitor import PomsMonitor
+        from utils.samweb_wrapper import count_files
         
         with open(args.input) as f:
             entries = json.load(f)
         
         json_basename = os.path.basename(args.input).replace('.json', '')
-        monitor, sam = PomsMonitor(), SAMWebWrapper()
+        sam = SAMWebWrapper()
         all_missing_indices, cumulative = set(), 0
         
         print(f"Processing {len(entries)} entries from {args.input}\n{'='*60}\n")
@@ -81,21 +98,34 @@ def main():
                 cumulative += njobs
                 continue
             
-            # Process each dataset
-            dataset_infos = monitor.get_output_datasets_with_counts(tarball)
-            if not dataset_infos:
-                print(f'  WARNING: Could not extract datasets')
+            # Extract output datasets from job definition
+            try:
+                output_datasets = extract_datasets_from_tarball(tarball_path, njobs)
+            except Exception as e:
+                print(f'  WARNING: Could not extract datasets from tarball: {e}')
                 cumulative += njobs
                 continue
             
-            for dataset_name, nfiles, _, _ in dataset_infos:
+            if not output_datasets:
+                print(f'  WARNING: No output datasets found in job definition')
+                cumulative += njobs
+                continue
+            
+            # Process each dataset
+            for dataset_name in output_datasets:
+                try:
+                    nfiles = count_files(f"dh.dataset {dataset_name}")
+                except Exception as e:
+                    print(f'    {dataset_name}: Could not query SAM ({e})')
+                    nfiles = 0
+                
                 print(f'    {dataset_name}: {nfiles}/{njobs} files')
                 missing_indices, missing_files = find_missing_indices(tarball_path, dataset_name, njobs)
                 
                 if not missing_indices:
                     print(f'      Complete')
                 else:
-                    print(f'      Missing: {len(missing_files)} of {nfiles} files')
+                    print(f'      Missing: {len(missing_files)} files (expected {njobs}, found {nfiles})')
                     all_missing_indices.update(cumulative + idx for idx in missing_indices)
             
             cumulative += njobs

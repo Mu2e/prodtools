@@ -307,8 +307,9 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                     job.avg_vmhwm_gb = round(sum(job_vmhwm_vals) / len(job_vmhwm_vals), 2)
 
             for output_file in outputs.values():
-                # Extract dataset name from filename (skip /dev/null and non-ART files)
-                if output_file == '/dev/null' or not output_file.endswith('.art'):
+                # Extract dataset name from filename (skip /dev/null and non-standard files)
+                # Accept both .art and .root files
+                if output_file == '/dev/null' or not (output_file.endswith('.art') or output_file.endswith('.root')):
                     continue
                 # Format: tier.owner.description.dsconf.sequencer.extension
                 # Dataset: tier.owner.description.dsconf.extension (skip sequencer)

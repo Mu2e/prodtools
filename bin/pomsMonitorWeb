@@ -12,9 +12,11 @@ sys.path.insert(0, parent_dir)
 from flask import Flask, jsonify, request, redirect
 from utils.poms_db import get_db_session, Job, DatasetInfo
 from utils.db_analyzer import get_default_db_path
-from utils.db_builder import build_db
+from utils.db_builder import build_db, locate_file
+from utils.jobquery import Mu2eJobPars
 import subprocess
 import json
+import os
 
 app = Flask(__name__, 
             static_folder=os.path.join(parent_dir, 'web', 'static'))
@@ -105,10 +107,34 @@ def api_jobs():
                 'location': (info.location or 'N/A') if info else 'N/A'
             })
         
+        # Extract setup script from tarball if available
+        setup_script = ''
+        if job.tarball:
+            try:
+                location = locate_file(job.tarball)
+                # Extract file path from location (handle dict or string)
+                if isinstance(location, dict):
+                    file_path = location.get('full_path', '')
+                    file_path = file_path.split(':', 1)[1] if ':' in file_path else file_path
+                elif isinstance(location, str):
+                    file_path = location.split(':', 1)[1] if ':' in location else location
+                else:
+                    file_path = None
+                
+                if file_path:
+                    full_path = os.path.join(file_path, job.tarball)
+                    if os.path.exists(full_path):
+                        jp = Mu2eJobPars(full_path)
+                        setup_script = jp.setup() or ''
+            except Exception:
+                # If extraction fails, leave setup_script empty
+                pass
+        
         jobs.append({
             'njobs': njobs,
             'tarball': job.tarball or '',
             'source_file': job.source_file or '',
+            'setup_script': setup_script,
             'complete': job.complete or False,
             'avg_real_h': float(job.avg_real_h) if getattr(job, 'avg_real_h', None) is not None else None,
             'avg_vmhwm_gb': float(job.avg_vmhwm_gb) if getattr(job, 'avg_vmhwm_gb', None) is not None else None,
@@ -142,7 +168,15 @@ def api_dataset_info(dataset_name):
             return jsonify({'success': False, 'output': result.stderr.strip()})
         
         # Look for the .md file that famtree created
-        base_name = dataset_name.replace('.art', '') if dataset_name.endswith('.art') else dataset_name
+        # famtree uses first 4 parts of dataset name (without extension) for filename
+        # e.g., nts.mu2e.CeEndpointMix1BBTriggered.MDC2025-000.root -> nts.mu2e.CeEndpointMix1BBTriggered.MDC2025-000.md
+        parts = dataset_name.split('.')
+        if len(parts) >= 4:
+            # Take first 4 parts, remove extension if present
+            base_name = '.'.join(parts[:4])
+        else:
+            # Fallback: remove common extensions
+            base_name = dataset_name.replace('.art', '').replace('.root', '')
         md_filename = f'{base_name}.md'
         
         if os.path.exists(md_filename):
