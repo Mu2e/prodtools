@@ -126,10 +126,13 @@
                 var sourceLink = job.source_file ? 
                     '<a href="#" onclick="openJsonInEditor(\'' + job.source_file.replace(/'/g, "\\'") + '\'); return false;" style="color: #007bff; text-decoration: underline;">' + sourceName + '</a>' : '';
                 
-                // Combine JOBDESC and TARBALL into single cell
+                // Combine JOBDESC, TARBALL, and SETUP into single cell
                 var jobdescAndTarball = sourceLink;
                 if (job.tarball) {
                     jobdescAndTarball += (sourceLink ? '<br>' : '') + '<span style="font-weight: bold;">' + (job.tarball || 'N/A') + '</span>';
+                }
+                if (job.setup_script) {
+                    jobdescAndTarball += (jobdescAndTarball ? '<br>' : '') + '<span style="color: #666; font-size: 0.9em;">Setup: ' + job.setup_script + '</span>';
                 }
                 
                 html += '<tr class="' + groupClass + ' group-header" data-complete="' + isComplete + '" data-source="' + sourceName + '">';
@@ -246,7 +249,8 @@
                     }
                     
                         if (data.has_mermaid) {
-                        var match = data.output.match(/```mermaid\n([\s\S]*?)\n```/);
+                        // Extract mermaid code block - handle various newline patterns
+                        var match = data.output.match(/```mermaid\s*\n([\s\S]*?)\n?```/);
                         if (match) {
                             modalContent.innerHTML = '<div class="mermaid">' + match[1] + '</div>';
                             mermaid.initialize({ startOnLoad: false, theme: 'forest', flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 9999 }, securityLevel: 'loose' });
