@@ -182,6 +182,11 @@ class Mu2eJobIO(Mu2eJobBase):
         seq = self.sequencer(index)
         
         for key, template in outfiles.items():
+            # Skip special files like /dev/null
+            if template.startswith('/dev/') or '/' in template:
+                result[key] = template
+                continue
+                
             fn = Mu2eFilename(template)
             # Update sequencer in the filename
             parts = fn.filename.split('.')
