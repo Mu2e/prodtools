@@ -3,14 +3,16 @@
 graph TD
     SPK[Spokespersons:<br/>Bernstein, Miscetti&nbsp;]
     
-    SPK --> AC[Analysis Coordinators:<br/>Oksuzian, Echenard&nbsp;]
+    SPK --> AC[Analysis Coordinators:<br/>Echenard, Oksuzian&nbsp;]
     
     AC --> INFGROUP
     AC --> SIMGROUP
     AC --> RECOGROUP
-    AC --> CALGROUP
     AC --> TOOLSGROUP
-    SPK --> OCGROUP
+    AC --> CALGROUP
+    AC --> TRIGGROUP
+    SPK --> OC[Operations Coordinators:<br/>Rackness&nbsp;]
+    OC --> TRIGGROUP
     
     subgraph INFGROUP[" "]
         INF[Infrastructure:<br/>Culbertson]
@@ -34,13 +36,6 @@ graph TD
         VAL[Validation:<br/>Culbertson]
     end
     
-    subgraph CALGROUP[" "]
-        CAL[Calibration & Alignment:<br/>Bonventre]
-        CALIB[Calibration:<br/>Group]
-        ALIGN[Alignment:<br/>Palo]
-        FMAP[Field Map:<br/>Kampa]
-    end
-    
     subgraph TOOLSGROUP[" "]
         TOOLS[Tools:<br/>Edmonds, Middleton&nbsp;]
         NTUP[Analysis Tuple:<br/>Edmonds]
@@ -49,10 +44,15 @@ graph TD
         REF[Reference Analyses:<br/>Middleton]
     end
     
-    subgraph OCGROUP[" "]
-        OC[Operations Coordinators:<br/>Rackness, Bressler&nbsp;]
+    subgraph CALGROUP[" "]
+        CAL[Calibration & Alignment:<br/>Bonventre]
+        CALIB[Calibration:<br/>Group]
+        ALIGN[Alignment:<br/>Palo]
+        FMAP[Field Map:<br/>Kampa]
+    end
+    
+    subgraph TRIGGROUP[" "]
         TRIG[Trigger:<br/>Demers, MacKinzie&nbsp;]
-        DETOPS[Detector Operations:<br/>]
     end
     
     classDef spokespersons fill:#1E40AF,stroke:#1E3A8A,stroke-width:2px,color:#fff
@@ -69,11 +69,12 @@ graph TD
     classDef calibrationLeader fill:#DC2626,stroke:#991B1B,stroke-width:6px,color:#fff
     classDef toolsLeader fill:#D97706,stroke:#92400E,stroke-width:6px,color:#fff
     classDef operationsLeader fill:#BE185D,stroke:#881337,stroke-width:6px,color:#fff
+    classDef triggerLeader fill:#BE185D,stroke:#881337,stroke-width:6px,color:#fff
     
     class SPK spokespersons
     class AC analysis
-    class OC operationsLeader
-    class TRIG,DETOPS operations
+    class OC operations
+    class TRIG triggerLeader
     class TOOLS toolsLeader
     class NTUP,IFACE,EVD,REF tools
     class INF infrastructureLeader
