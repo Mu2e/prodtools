@@ -1,5 +1,5 @@
 ```mermaid
-%%{init: { 'theme': 'base', 'flowchart': { 'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 30, 'padding': 5, 'useMaxWidth': false, 'curve': 'basis' }, 'securityLevel': 'loose' } }%%
+%%{init: { 'theme': 'base', 'flowchart': { 'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 30, 'padding': 5, 'useMaxWidth': false, 'curve': 'linear' }, 'securityLevel': 'loose' } }%%
 graph TD
     SPK[Spokespersons:<br/>Bernstein, Miscetti&nbsp;]
     
@@ -7,7 +7,6 @@ graph TD
     
     AC --> INFGROUP
     AC --> SIMGROUP
-    AC --> NORMGROUP
     AC --> RECOGROUP
     AC --> CALGROUP
     AC --> TOOLSGROUP
@@ -27,12 +26,6 @@ graph TD
         GEN[Generators:<br/>Borrel]
         GEOM[Geometry:<br/>Tripathy]
         NONG4[Non-G4 Simulations:<br/>Candidate TBC]
-    end
-    
-    subgraph NORMGROUP[" "]
-        NORM[Normalization:<br/>Keshavarzi, Girotti&nbsp;]
-        STM[STM:<br/>Keshavarzi]
-        CAPHRI[CAPHRI:<br/>Girotti]
     end
     
     subgraph RECOGROUP[" "]
@@ -70,8 +63,6 @@ graph TD
     classDef infrastructureLeader fill:#059669,stroke:#065F46,stroke-width:6px,color:#fff
     classDef simulation fill:#0891B2,stroke:#0C5D7A,stroke-width:2px,color:#fff
     classDef simulationLeader fill:#0891B2,stroke:#0C5D7A,stroke-width:6px,color:#fff
-    classDef normalization fill:#C026D3,stroke:#A21CAF,stroke-width:2px,color:#fff
-    classDef normalizationLeader fill:#C026D3,stroke:#86198F,stroke-width:6px,color:#fff
     classDef reconstruction fill:#2563EB,stroke:#1E3A8A,stroke-width:2px,color:#fff
     classDef reconstructionLeader fill:#2563EB,stroke:#1E3A8A,stroke-width:6px,color:#fff
     classDef calibration fill:#DC2626,stroke:#991B1B,stroke-width:2px,color:#fff
@@ -89,8 +80,6 @@ graph TD
     class PROD,CODE,DATA,DB,DQM infrastructure
     class SIM simulationLeader
     class GEN,GEOM,NONG4 simulation
-    class NORM normalizationLeader
-    class STM,CAPHRI normalization
     class RECO reconstructionLeader
     class ALG,VAL reconstruction
     class CAL calibrationLeader
