@@ -105,6 +105,27 @@
 		],
 		"outloc": [{"*.art": "tape"}],
 		"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"]
+	},
+	{
+		"desc": "BeamSplitter",
+		"dsconf": "MDC2025ae",
+		"fcl": "Production/JobConfig/beam/BeamSplitter.fcl",	
+		"input_data": {"sim.mu2e.Beam.MDC2025ae.art": 5000},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh"
+	},
+	{
+		"desc": "BeamSplitter",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/beam/BeamSplitter.fcl",	
+		"input_data": {"sim.mu2e.Beam.MDC2025ac.art": 5000},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
 	}
-
 ]

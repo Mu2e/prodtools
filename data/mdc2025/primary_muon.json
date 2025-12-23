@@ -339,5 +339,105 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "desc": "NoPrimary",
+        "dsconf": "MDC2025af",
+        "fcl": "Production/JobConfig/primary/NoPrimary.fcl",
+        "fcl_overrides": {
+            "physics.producers.compressDetStepMCs.surfaceStepTag" : "FindMCPrimary"
+        },
+        "njobs": 2000,
+        "events": 2000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        }
+    },
+    {
+        "desc": "DIOtail95",
+        "dsconf": "MDC2025af",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
+        "events": 5000,
+        "njobs": 5000,
+        "fcl_overrides": {
+            "physics.producers.generate.decayProducts.spectrum.elow": 95,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "physics.filters.GenFilter.maxr_min": 320,
+            "physics.filters.GenFilter.maxr_max": 500,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail95.version.sequencer.art"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "RMCExternal",
+        "dsconf": "MDC2025af",
+        "fcl": "Production/JobConfig/primary/RMCExternal.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
+        "events": 2000000,
+        "njobs": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "RMCInternal",
+        "dsconf": "MDC2025af",
+        "fcl": "Production/JobConfig/primary/RMCInternal.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
+        "events": 250000,
+        "njobs": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "IPAMuminusMichel",
+        "dsconf": "MDC2025af",
+        "fcl": "Production/JobConfig/primary/IPAMuminusMichel.fcl",
+        "resampler_name": "IPAMuminusStopResampler",
+        "input_data": {"sim.mu2e.IPAMuminusStopsCat.MDC2025ac.art": 1},
+        "events": 10000,
+        "njobs": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
+
+
 ]

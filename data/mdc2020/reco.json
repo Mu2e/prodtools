@@ -18,5 +18,34 @@
 	"inloc": ["tape"],
 	"outloc": [{"*.art": "tape"}],
 	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bc/setup.sh"]
+    },
+    {
+	"dsconf": ["MDC2020bf_best_v1_3"],
+	"fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+	"input_data": [
+        {"dig.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3.art": 1},
+        {"dig.mu2e.CeEndpointMix2BBTriggered.MDC2020aw_best_v1_3.art": 1},
+        {"dig.mu2e.CosmicCRYSignalAllMix1BBTriggered.MDC2020aw_best_v1_3.art": 1},
+        {"dig.mu2e.CosmicCRYSignalAllMix2BBTriggered.MDC2020aw_best_v1_3.art": 1},
+        {"dig.mu2e.CosmicCRYSignalAllOnSpillTriggered.MDC2020au_best_v1_3.art": 2},
+        {"dig.mu2e.CosmicCORSIKASignalAllOnSpillTriggered.MDC2020au_best_v1_3.art": 2}
+    ],
+    "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+	"inloc": ["tape"],
+	"outloc": [{"*.art": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bf/setup.sh"]
+    },
+    {
+	"dsconf": ["MDC2020bf_best_v1_3"],
+	"fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+	"input_data": [
+        {"dig.mu2e.CosmicCRYSignalAllOffSpillTriggered.MDC2020ar_best_v1_3.art": 1}
+    ],
+    "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+	"inloc": ["tape"],
+	"outloc": [{"*.art": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bf/setup.sh"]
     }
+
+
 ]
