@@ -9,7 +9,23 @@
         {"mcs.mu2e.FlatMuMinusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1},
         {"mcs.mu2e.FlateMinusMix1BBTriggered.MDC2020bc_best_v1_3.art": 5},
         {"mcs.mu2e.FlatePlusOnSpillTriggered.MDC2020bc_best_v1_3.art": 1},
-        {"mcs.mu2e.FlatGammaMix1BBTriggered.MDC2020bc_best_v1_3.art": 25}
+        {"mcs.mu2e.FlatGammaMix1BBTriggered.MDC2020bc_best_v1_3.art": 25},
+        {"mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.art": 10},
+        {"mcs.mu2e.CeMLeadingLogMix2BBTriggered.MDC2020ba_best_v1_3.art": 10},
+        {"mcs.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.art": 10},
+        {"mcs.mu2e.DIOtail95Mix2BBTriggered.MDC2020ba_best_v1_3.art": 10},
+        {"mcs.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.art": 10},
+        {"mcs.mu2e.CePLeadingLogMix2BBTriggered.MDC2020ba_best_v1_3.art": 10},
+        {"mcs.mu2e.ensembleMDS2cMix1BBTriggered.MDC2020ba_best_v1_3.art": 5},
+        {"mcs.mu2e.RPCExternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 100},
+        {"mcs.mu2e.RPCInternalPhysicalMix1BBTriggered.MDC2020bc_best_v1_3.art": 50},
+        {"mcs.mu2e.CeEndpointMix1BBTriggered.MDC2020bf_best_v1_3.art": 1},
+        {"mcs.mu2e.CeEndpointMix2BBTriggered.MDC2020bf_best_v1_3.art": 1},
+        {"mcs.mu2e.CosmicCORSIKASignalAllOnSpillTriggered.MDC2020bf_best_v1_3.art": 1},
+        {"mcs.mu2e.CosmicCRYSignalAllMix1BBTriggered.MDC2020bf_best_v1_3.art": 1},
+        {"mcs.mu2e.CosmicCRYSignalAllMix2BBTriggered.MDC2020bf_best_v1_3.art": 1},
+        {"mcs.mu2e.CosmicCRYSignalAllOffSpillTriggered.MDC2020bf_best_v1_3.art": 1},
+        {"mcs.mu2e.CosmicCRYSignalAllOnSpillTriggered.MDC2020bf_best_v1_3.art": 1}
     ],
     "fcl_overrides": [
         {

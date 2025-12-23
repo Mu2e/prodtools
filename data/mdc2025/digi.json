@@ -32,5 +32,20 @@
 			"*.art": "tape"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh"
+	},  
+	{
+		"desc": "CosmicSignalOffSpill",
+		"dsconf": "MDC2025ae_best_v1_3",
+		"fcl": "Production/JobConfig/digitize/OffSpill.fcl",
+		"input_data": {"dts.mu2e.CosmicSignal.MDC2025ac.art": 10},
+		"fcl_overrides": {
+			"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+			"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
+		},
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh"
 	}
 ]

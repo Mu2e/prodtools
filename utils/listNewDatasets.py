@@ -39,10 +39,13 @@ class DatasetLister:
         return query
     
     def extract_dataset_name(self, filename: str) -> str:
-        """Extract dataset name: first 4 dot-separated fields + extension."""
+        """Extract dataset name: first 4 dot-separated fields + extension from actual filename."""
         parts = filename.split('.')
         if len(parts) >= 4:
-            return f"{'.'.join(parts[:4])}{self.ext}"
+            # Use the actual extension from the filename, not self.ext
+            # This handles cases where custom queries search for different file types (e.g., .fcl)
+            actual_ext = '.' + parts[-1] if len(parts) > 1 else ''
+            return f"{'.'.join(parts[:4])}{actual_ext}"
         return filename
     
     def get_average_filesize(self, dataset: str) -> str:

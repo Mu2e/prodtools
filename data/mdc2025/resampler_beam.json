@@ -20,6 +20,30 @@
         "sequential_aux": true
     },
     {
+        "desc": "NeutralsFlash-test",
+        "dsconf": "MDC2025ac",
+        "fcl": "Production/JobConfig/pileup/NeutralsResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "outputs.EarlyFlashOutput.fileProperties.granularity": "SubRun",
+            "outputs.FlashOutput.fileProperties.granularity": "SubRun",
+            "outputs.EarlyFlashOutput.fileName": "dts.mu2e.EarlyNeutralsFlash.MDC2025ac.001430_00000052.art%#",
+            "outputs.FlashOutput.fileName": "dts.mu2e.NeutralsFlash.MDC2025ac.001430_00000052.art%#"
+        },
+        "resampler_name": "neutralsResampler",
+        "input_data": {"sim.mu2e.NeutralsCat.MDC2025ab.art": 1},
+        "njobs": 40000,
+        "events": 1340000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
         "desc": "MuBeamFlash",
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
@@ -113,49 +137,35 @@
     },
     {
         "desc": "RPCInternalPhysical",
-        "dsconf": "MDC2025ac",
+        "dsconf": "MDC2025af",
         "fcl": "Production/JobConfig/primary/RPCInternalPhysical.fcl",
-        "fcl_overrides": {
-            "physics.filters.TargetPiStopResampler.mu2e.products.genParticleMixer.mixingMap": [["beamResampler", ""]],
-            "physics.filters.TargetPiStopResampler.mu2e.products.simParticleMixer.mixingMap": [["TargetPiStopFilter", ""]],
-            "physics.filters.TargetPiStopResampler.mu2e.products.stepPointMCMixer.mixingMap": [["TargetPiStopFilter", "virtualdetector"]],
-            "physics.filters.TargetPiStopResampler.mu2e.products.volumeInfoMixer.srInput": "compressPVTargetPiStops",
-            "physics.filters.StopSelector.stepPointMCs": "TargetPiStopResampler:virtualdetector"
-        },
-        "input_data": {"sim.mu2e.PiMinusFilter.MDC2025ac.art": 1},
+        "input_data": {"sim.mu2e.PhysicalPionStops.MDC2025ac.art": 1},
         "resampler_name": "TargetPiStopResampler",
-        "njobs": 4000,
+        "njobs": 5000,
         "events": 25000,
         "run": 1430,
-        "inloc": "tape",
+        "inloc": "disk",
         "outloc": {
             "*.art": "disk"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
         "owner": "mu2e",
         "sequential_aux": true
     },
     {
         "desc": "RPCExternalPhysical",
-        "dsconf": "MDC2025ac",
+        "dsconf": "MDC2025af",
         "fcl": "Production/JobConfig/primary/RPCExternalPhysical.fcl",
-        "fcl_overrides": {
-            "physics.filters.TargetPiStopResampler.mu2e.products.genParticleMixer.mixingMap": [["beamResampler", ""]],
-            "physics.filters.TargetPiStopResampler.mu2e.products.simParticleMixer.mixingMap": [["TargetPiStopFilter", ""]],
-            "physics.filters.TargetPiStopResampler.mu2e.products.stepPointMCMixer.mixingMap": [["TargetPiStopFilter", "virtualdetector"]],
-            "physics.filters.TargetPiStopResampler.mu2e.products.volumeInfoMixer.srInput": "compressPVTargetPiStops",
-            "physics.filters.StopSelector.stepPointMCs": "TargetPiStopResampler:virtualdetector"
-        },
         "resampler_name": "TargetPiStopResampler",
-        "input_data": {"sim.mu2e.PiMinusFilter.MDC2025ac.art": 1},
-        "njobs": 4000,
+        "input_data": {"sim.mu2e.PhysicalPionStops.MDC2025ac.art": 1},
+        "njobs": 5000,
         "events": 1000000,
         "run": 1430,
-        "inloc": "tape",
+        "inloc": "disk",
         "outloc": {
             "*.art": "disk"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
         "owner": "mu2e",
         "sequential_aux": true
     },
