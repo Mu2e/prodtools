@@ -46,7 +46,7 @@ if [ "$RUN_ALL" = true ]; then
     python3 parity_test.py --json "../data/mdc2025/resampler_beam.json"
 
     echo "3. Mixing Jobs..."
-    python3 parity_test.py --json "../data/mdc2025/mix2.json"
+    python3 parity_test.py --json "../data/mdc2025/mix.json"
 
     echo "4. Merge/Filter Jobs..."
     python3 parity_test.py --json "../data/mdc2025/merge_filter.json"
@@ -59,7 +59,7 @@ else
     python3 parity_test.py --json "../data/mdc2025/resampler_beam.json" --index 0
 
     echo "3. Mixing Jobs (index 0)..."
-    python3 parity_test.py --json "../data/mdc2025/mix2.json" --index 0
+    python3 parity_test.py --json "../data/mdc2025/mix.json" --index 0
 
     echo "4. Merge/Filter Jobs (index 0)..."
     python3 parity_test.py --json "../data/mdc2025/merge_filter.json" --index 0

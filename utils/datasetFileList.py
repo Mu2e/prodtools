@@ -43,6 +43,8 @@ class Mu2eDSName:
         """Determine the correct base path based on dataset type."""
         if self.dsname.startswith(('sim.', 'dts.', 'dig.', 'mcs.')):
             return "phy-sim"
+        elif self.dsname.startswith('nts.'):
+            return "phy-nts"
         return "phy-etc"
     
     def _build_path(self, location: str) -> str:

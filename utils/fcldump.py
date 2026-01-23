@@ -34,8 +34,18 @@ def list_jobdefs(dsconf):
         print(f"Error accessing SAM: {e}")
         return []
 
-def find_matching_jobdef(jobdefs, desc):
-    """Find the matching job definition by examining output files."""
+def find_matching_jobdef(jobdefs, desc, input_type=None):
+    """Find the matching job definition by examining output files.
+    
+    Args:
+        jobdefs: List of job definition names
+        desc: Description to match (third field in filename)
+        input_type: Optional input file type prefix (e.g., 'dig', 'sim') to prioritize matches
+    
+    Returns:
+        Path to matching tarball, or None if no match found
+    """
+    matches = []
     
     for jobdef in jobdefs:
         # Locate the tarball first
@@ -50,10 +60,23 @@ def find_matching_jobdef(jobdefs, desc):
         for output_file in outputs.values():
             output_parts = output_file.split('.')
             if len(output_parts) == 6 and output_parts[2] == desc:
-                print(f"Found match in output files: {jobdef}")
-                print(f"Output file: {output_file}")
-                return tarball_path
+                output_type = output_parts[0]  # e.g., 'dig', 'mcs', 'rec'
+                matches.append((jobdef, tarball_path, output_file, output_type))
     
+    if not matches:
+        return None
+    
+    # Find exact type match - input_type should always be set in normal operation
+    if not input_type:
+        raise ValueError("input_type must be specified")
+    
+    for jobdef, tarball_path, output_file, output_type in matches:
+        if output_type == input_type:
+            print(f"Found match in output files (type priority): {jobdef}")
+            print(f"Output file: {output_file}")
+            return tarball_path
+    
+    # No type match found - this indicates a problem with the dataset/jobdef naming
     return None
 
 def locate_tarball(jobdef):
@@ -120,6 +143,7 @@ def main():
         if len(parts) < 5:
             p.error(f"Invalid dataset: {source}")
         
+        input_type = parts[0]  # e.g., 'dig', 'sim', 'mcs'
         dsconf = parts[3]
         desc = parts[2]
         
@@ -128,7 +152,7 @@ def main():
         if not jobdefs:
             p.error(f"No job definitions found for dsconf: {dsconf}")
         
-        tarball_path = find_matching_jobdef(jobdefs, desc)
+        tarball_path = find_matching_jobdef(jobdefs, desc, input_type)
         if not tarball_path:
             p.error(f"No matching job definition found for source description: {desc}")
         
