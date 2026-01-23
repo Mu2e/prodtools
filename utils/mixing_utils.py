@@ -9,10 +9,7 @@ import sys
 import itertools
 from .prod_utils import *
 from .samweb_wrapper import list_files
-
-def _get_first_if_list(value):
-    """Helper: get first element if value is a list, otherwise return value."""
-    return value[0] if isinstance(value, list) and value else value
+from .config_utils import _get_first_if_list, prepare_fields_for_job, get_tarball_desc
 
 def _create_pileup_catalog(dataset, filename):
     """Helper: create pileup catalog file from datasets with merge factors.
@@ -167,43 +164,6 @@ def prepare_fields_for_mixing(config):
     
     pbeam = _get_first_if_list(config['pbeam'])
     modified_config['desc'] = dsdesc + pbeam
-
-def prepare_fields_for_job(config, job_type='standard'):
-    """Prepare job configuration by auto-generating desc from input_data and optional pbeam."""
-    # Create a copy of the config to modify
-    modified_config = copy.deepcopy(config)
-    
-    # If desc is already present, don't override it
-    if 'desc' in config and config['desc']:
-        return modified_config
-    
-    # Auto-generate desc from input_data
-    input_data = _get_first_if_list(config.get('input_data', ''))
-    if input_data:
-        if isinstance(input_data, dict):
-            # New format: dict with dataset names as keys
-            first_dataset = list(input_data.keys())[0]
-            parts = first_dataset.split('.')
-        else:
-            # Old format: string dataset name
-            parts = input_data.split('.')
-        
-        if len(parts) >= 3:
-            dsdesc = parts[2]  # e.g., "CosmicSignal" from "dts.mu2e.CosmicSignal.MDC2025ac.art"
-        else:
-            dsdesc = "Unknown"
-    else:
-        dsdesc = "Unknown"
-    
-    # For mixing jobs, append pbeam to the desc
-    if job_type == 'mixing':
-        pbeam = _get_first_if_list(config.get('pbeam', ''))
-        modified_config['desc'] = dsdesc + pbeam
-    else:
-        # For standard jobs (digi, reco, ntuple, etc.), just use the dataset name
-        modified_config['desc'] = dsdesc
-    
-    return modified_config
 
 
 

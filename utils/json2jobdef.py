@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
+from utils.config_utils import get_tarball_desc, prepare_fields_for_job
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef
 from utils.samweb_wrapper import list_files, count_files
@@ -97,32 +98,14 @@ def _create_inputs_file(config):
                 for filepath in files:
                     out_f.write(filepath + '\n')
 
-def _get_desc_from_output(config):
-    """Extract description from 3rd field in fcl_overrides value if {desc} is present."""
-    fcl_overrides = config.get('fcl_overrides', [])
-    
-    # Handle both list of dicts and single dict (after expansion)
-    if isinstance(fcl_overrides, dict):
-        fcl_overrides = [fcl_overrides]
-    
-    for override in fcl_overrides:
-        if isinstance(override, dict):
-            for value in override.values():
-                if isinstance(value, str):
-                    fields = value.split('.')
-                    if len(fields) >= 3 and '{desc}' in fields[2]:
-                        # Use the entire 3rd field, replacing {desc} with actual desc
-                        return fields[2].replace('{desc}', config['desc'])
-    return None
-
 def get_parfile_name(config):
     """Generate consistent parfile name from config."""
-    desc = _get_desc_from_output(config) or config['desc']
+    desc = get_tarball_desc(config) or config['desc']
     return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.0.tar"
 
 def get_fcl_name(config):
     """Generate consistent FCL filename from config."""
-    desc = _get_desc_from_output(config) or config['desc']
+    desc = get_tarball_desc(config) or config['desc']
     return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.0.fcl"
 
 def validate_required_fields(config, required_fields=None):
@@ -375,6 +358,11 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     config['inloc'] = config.get('inloc', 'none')
     config['njobs'] = config.get('njobs', -1)
     
+    # Auto-generate desc from input_data if desc is missing
+    # This extracts the 3rd field from dataset name (e.g., "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")
+    if not config.get('desc'):
+        config = prepare_fields_for_job(config, job_type='standard')
+    
     # Store the original FCL path for source type detection
     original_fcl_path = config['fcl']
     
@@ -534,7 +522,13 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
     
     # Process each matching configuration using the existing process_single_entry function
     for i, config in enumerate(matching_configs):
-        print(f"\nProcessing entry {i+1}/{len(matching_configs)}: {config.get('desc', 'Unknown')}")
+        # Get display desc: use get_tarball_desc (handles tarball_append), or existing desc, or extract from input_data
+        display_desc = get_tarball_desc(config) or config.get('desc')
+        if not display_desc:
+            # Fall back to extracting from input_data
+            temp_config = prepare_fields_for_job(config, job_type='standard')
+            display_desc = temp_config.get('desc', 'Unknown')
+        print(f"\nProcessing entry {i+1}/{len(matching_configs)}: {display_desc}")
         
         # Check required fields before calling process_single_entry
         try:

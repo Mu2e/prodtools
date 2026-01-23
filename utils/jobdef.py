@@ -216,28 +216,11 @@ def _validate_fcl_template(template_path: str) -> None:
         raise ValueError(f"FCL template missing required physics sections: {missing_keys}")
 
 
-def _get_desc_from_output(config: Dict) -> Optional[str]:
-    """Extract description from 3rd field in fcl_overrides value if {desc} is present."""
-    fcl_overrides = config.get('fcl_overrides', [])
-    
-    # Handle both list of dicts and single dict (after expansion)
-    if isinstance(fcl_overrides, dict):
-        fcl_overrides = [fcl_overrides]
-    
-    for override in fcl_overrides:
-        if isinstance(override, dict):
-            for value in override.values():
-                if isinstance(value, str):
-                    fields = value.split('.')
-                    if len(fields) >= 3 and '{desc}' in fields[2]:
-                        # Use the entire 3rd field, replacing {desc} with actual desc
-                        return fields[2].replace('{desc}', config['desc'])
-    return None
-
 def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "", template_path: str = "") -> Dict:
     """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
+    from utils.config_utils import get_tarball_desc
     owner = config.get('owner') or os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e')
-    desc = _get_desc_from_output(config) or config['desc']
+    desc = get_tarball_desc(config) or config['desc']
     dsconf = config['dsconf']
     
     # Build proper jobname like Perl version (cnf.owner.desc.dsconf.0.tar)
@@ -628,8 +611,9 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     tbs, _, override_output_description = _parse_job_args(all_args, template_path, config)
     
     # Use provided outdir (simple logic matching Perl version)
-    # Use description from output filename if {desc} is present, otherwise use original desc
-    final_desc = _get_desc_from_output(config) or desc
+    # Use tarball_append if specified, otherwise use original desc
+    from utils.config_utils import get_tarball_desc
+    final_desc = get_tarball_desc(config) or desc
     final_outdir = Path(outdir) if outdir else None
     out = final_outdir / f"cnf.{owner}.{final_desc}.{dsconf}.0.tar" if final_outdir else Path(f"cnf.{owner}.{final_desc}.{dsconf}.0.tar")
 
