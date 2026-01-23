@@ -316,13 +316,15 @@ class Mu2eJobFCL(Mu2eJobBase):
             resolved_template = resolved_template.replace('.owner.', f'.{self.owner}.')
             resolved_template = resolved_template.replace('.version.', f'.{self.dsconf}.')
             resolved_template = resolved_template.replace('.sequencer.', f'.{seq}.')
+            # Also handle {sequencer} format (Python-style placeholder)
+            resolved_template = resolved_template.replace('{sequencer}', seq)
             
             # Skip filenames that don't follow Mu2e naming convention (e.g., /dev/null, relative paths)
-            if not resolved_template.startswith(('dts.', 'dig.', 'sim.', 'rec.', 'nts.', 'cnf.')):
+            if not resolved_template.startswith(('dts.', 'dig.', 'sim.', 'rec.', 'nts.', 'cnf.', 'mcs.')):
                 result[key] = resolved_template
                 continue
             
-            # Update sequencer in the filename
+            # Update sequencer in the filename (fallback: parse and replace 5th field)
             fn = Mu2eFilename(resolved_template)
             parts = fn.filename.split('.')
             if len(parts) >= 5:

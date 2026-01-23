@@ -164,7 +164,9 @@ def write_fcl_template(base, overrides):
                 for inc in includes:
                     f.write(f'#include "{inc}"\n')
             else:
-                f.write(f'{key}: {json.dumps(val) if isinstance(val, str) else val}\n')
+                # Use json.dumps for all values to ensure proper FCL formatting
+                # (strings get quotes, lists get proper syntax with double quotes)
+                f.write(f'{key}: {json.dumps(val)}\n')
 
 def parse_jobdef_fields(jobdefs_file, index=None):
     """

@@ -1,0 +1,26 @@
+[
+    {
+    "tarball_append": "OnSpill",
+	"dsconf": "MDC2025af_best_v1_3",
+	"fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+	"input_data": {"dts.mu2e.ensembleMDS3a.MDC2025af.art": 10},
+	"fcl_overrides": {
+		"outputs.TriggeredOutput.fileName": "dig.owner.{desc}Triggered.version.sequencer.art",
+		"outputs.TriggerableOutput.fileName": "dig.owner.{desc}Triggerable.version.sequencer.art"
+	},
+	"inloc": "disk",
+	"outloc": {"*.art": "tape"},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
+    },
+    {
+        "dsconf": "MDC2025af_best_v1_3",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data":
+            {"dig.mu2e.ensembleMDS3aOnSpillTriggered.MDC2025af_best_v1_3.art": 1},
+        "fcl_overrides":
+            {"outputs.LoopHelixOutput.fileName": "mcs.owner.ensembleMDS3aOnSpillTriggered.version.sequencer.art"},
+        "inloc": "tape",
+        "outloc": {"*.art": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
+    }
+]
