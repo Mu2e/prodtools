@@ -13,6 +13,7 @@ graph TD
     AC --> TRIGGROUP
     SPK --> OC[Operations Coordinators:<br/>Rackness&nbsp;]
     OC --> TRIGGROUP
+    AC -.-> ML[ML/AI:<br/>Corrodi, Campa&nbsp;]
     
     subgraph INFGROUP[" "]
         INF[Infrastructure:<br/>Culbertson]
@@ -27,7 +28,8 @@ graph TD
         SIM[Simulation:<br/>DiFalco]
         GEN[Generators:<br/>Borrel]
         GEOM[Geometry:<br/>Tripathy]
-        NONG4[Non-G4 Simulations:<br/>Candidate TBC]
+        G4[Geant4:<br/>Cao, Tripathy&nbsp;]
+        NONG4[Other MC:<br/>Mueller]
     end
     
     subgraph RECOGROUP[" "]
@@ -54,6 +56,7 @@ graph TD
     subgraph TRIGGROUP[" "]
         TRIG[Trigger:<br/>Demers, MacKinzie&nbsp;]
     end
+    linkStyle 9 stroke:none,stroke-width:0
     
     classDef spokespersons fill:#1E40AF,stroke:#1E3A8A,stroke-width:2px,color:#fff
     classDef analysis fill:#7C3AED,stroke:#6D28D9,stroke-width:2px,color:#fff
@@ -70,17 +73,19 @@ graph TD
     classDef toolsLeader fill:#D97706,stroke:#92400E,stroke-width:6px,color:#fff
     classDef operationsLeader fill:#BE185D,stroke:#881337,stroke-width:6px,color:#fff
     classDef triggerLeader fill:#BE185D,stroke:#881337,stroke-width:6px,color:#fff
+    classDef mlai fill:#374151,stroke:#1F2937,stroke-width:2px,color:#fff
     
     class SPK spokespersons
     class AC analysis
     class OC operations
+    class ML mlai
     class TRIG triggerLeader
     class TOOLS toolsLeader
     class NTUP,IFACE,EVD,REF tools
     class INF infrastructureLeader
     class PROD,CODE,DATA,DB,DQM infrastructure
     class SIM simulationLeader
-    class GEN,GEOM,NONG4 simulation
+    class GEN,GEOM,G4,NONG4 simulation
     class RECO reconstructionLeader
     class ALG,VAL reconstruction
     class CAL calibrationLeader
