@@ -93,11 +93,15 @@ class Mu2eJobFCL(Mu2eJobBase):
             return f"{local_dir}/{filename}"
 
         # Resolve stash path from filename — no SAM involved
+        # If file not found on stash, fall back to SAM-based lookup
         if self.inloc == 'stash':
             fn = Mu2eFilename(filename)
             dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
             ds_path = dataset.replace('.', '/')
-            return f"{STASH_READ_ROOT}/datasets/{ds_path}/{filename}"
+            stash_path = f"{STASH_READ_ROOT}/datasets/{ds_path}/{filename}"
+            if os.path.exists(stash_path):
+                return stash_path
+            # File not on stash — fall through to SAM lookup
 
         # Use SAM to locate the file - get all locations
         sam = samweb_client.SAMWebClient(experiment='mu2e')
@@ -131,17 +135,23 @@ class Mu2eJobFCL(Mu2eJobBase):
     def _format_filename(self, filename: str) -> str:
         """Format filename according to protocol."""
         # Stash paths are always plain CVMFS paths — ignore proto
+        # _locate_file handles stash-with-fallback: if file is on stash,
+        # it returns a CVMFS path; otherwise falls back to SAM (tape/disk)
         if self.inloc == 'stash':
-            return self._locate_file(filename)
-
-        if self.proto == 'file':
+            path = self._locate_file(filename)
+            # If path is a stash CVMFS path, return as-is (no xroot needed)
+            if path.startswith(STASH_READ_ROOT):
+                return path
+            # Fell back to SAM — apply root protocol below
+            physical_path = path
+        elif self.proto == 'file':
             return self._locate_file(filename)
         
-        if self.proto != 'root':
+        elif self.proto != 'root':
             return filename
-        
-        # For root protocol, get physical path
-        physical_path = self._locate_file(filename)
+        else:
+            # For root protocol, get physical path
+            physical_path = self._locate_file(filename)
         
         # Clean up location format prefixes
         from utils.job_common import remove_storage_prefix
@@ -504,7 +514,6 @@ class Mu2eJobFCL(Mu2eJobBase):
                 config_lines.append(f"{key}: [")
                 for i, filename in enumerate(file_list):
                     formatted_filename = self._format_filename(filename)
-                    # Don't add comma for the last element
                     comma = "," if i < len(file_list) - 1 else ""
                     config_lines.append(f'    "{formatted_filename}"{comma}')
                 config_lines.append("]")
@@ -536,7 +545,7 @@ def main():
     parser.add_argument('--target', help='Target output file name')
     parser.add_argument('--source', help='Source input file name')
     parser.add_argument('--default-location', '--default-loc', default='tape', 
-                       help='Default location for input files (default: tape)')
+                       help='Default location for input files (default: tape). Use "stash" to prefer stash with automatic fallback to tape.')
     parser.add_argument('--default-protocol', '--default-proto', default='file',
                        help='Default protocol for input files (default: file)')
     
