@@ -453,7 +453,8 @@ def process_jobdef(jobdesc, fname, args):
     infiles = " ".join(all_files)
     
     # Generate FCL - Normal mode with local input copy
-    if args.copy_input and infiles.strip() and inloc != "none":
+    # Stash files are on CVMFS and need no local copying — always use streaming mode
+    if args.copy_input and infiles.strip() and inloc not in ("none", "stash"):
         print(f"Copying input files locally from {inloc}: {infiles}")
         fcl = write_fcl(tarball, f"dir:{os.getcwd()}/indir", 'file', job_index_num)
         
