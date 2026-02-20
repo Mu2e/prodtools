@@ -85,6 +85,12 @@ def build_pileup_args(config):
         # Write base include directive
         f.write(f'#include "{config["fcl"]}"\n')
         
+        # Add pbeam-specific FCL include right after base FCL (BEFORE overrides)
+        # This allows fcl_overrides to actually override the pbeam settings
+        pbeam = _get_first_if_list(config.get('pbeam'))
+        if pbeam and pbeam in MIXING_FCL_INCLUDES:
+            f.write(f'#include "{MIXING_FCL_INCLUDES[pbeam]}"\n')
+        
         # Get pileup datasets dict (extract from list if needed)
         pileup_datasets = _get_first_if_list(config.get('pileup_datasets', [{}]))
         
@@ -123,7 +129,7 @@ def build_pileup_args(config):
             # Use the JSON count parameter - mu2ejobdef will select the first cnt files from the full list
             args += ['--auxinput', f"{cnt}:physics.filters.{mixer}.fileNames:{pileup_list}"]
         
-        # Add FCL overrides
+        # Add FCL overrides AFTER pbeam include so they can override pbeam settings
         fcl_overrides = _get_first_if_list(config.get('fcl_overrides', {}))
         
         if fcl_overrides:
@@ -137,11 +143,6 @@ def build_pileup_args(config):
                         f.write(f'{key}: "{val}"\n')
                     else:
                         f.write(f'{key}: {val}\n')
-        
-        # Add pbeam-specific FCL include based on the pbeam field
-        pbeam = _get_first_if_list(config.get('pbeam'))
-        if pbeam and pbeam in MIXING_FCL_INCLUDES:
-            f.write(f'#include "{MIXING_FCL_INCLUDES[pbeam]}"\n')
         
         # Add output filename overrides for mixing jobs (after base FCL include)
         # This ensures they override the default values from the base templates
