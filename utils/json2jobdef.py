@@ -487,14 +487,9 @@ def load_json(json_path):
     if is_already_expanded(configs):
         return configs
     
-    # Expand all configurations that have lists
+    # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
     from utils.mixing_utils import expand_configs
-    if json_path.name == 'mix.json':
-        from utils.mixing_utils import expand_mix_config
-        return expand_mix_config(json_path)
-    else:
-        # For non-mixing configs, use general expansion
-        return expand_configs(configs, mixing=False)
+    return expand_configs(configs)
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):
     """Find a matching JSON entry from configuration list"""

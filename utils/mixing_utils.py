@@ -167,75 +167,82 @@ def prepare_fields_for_mixing(config):
 
 
 
+def _job_type_for_config(job):
+    """Determine job type from config content (e.g. mixing if pbeam present)."""
+    return 'mixing' if ('pbeam' in job) else 'standard'
+
+
 def expand_configs(configs, mixing=False):
     """
     Expand configurations into individual job configurations.
+    Job type (mixing vs standard) is determined per config from content (e.g. pbeam),
+    so desc gets pbeam appended for mixing jobs regardless of filename.
     
     Args:
         configs: List of configuration dictionaries
-        mixing: Whether to apply mixing-specific modifications
+        mixing: Deprecated, ignored. Kept for backward compatibility.
         
     Returns:
         List of expanded job configurations
     """
     # Generate jobs for each configuration
     all_jobs = []
-    
+
     for i, config in enumerate(configs):
         # Validate that each config is a dictionary
         if not isinstance(config, dict):
             raise ValueError(f"Configuration at index {i} is not a dictionary: {type(config)} - {config}")
-            
+
         # Check if this config is already expanded (has non-list values)
         has_non_lists = any(not isinstance(value, list) for value in config.values())
-        
+
         if has_non_lists:
             # Config has mixed list and non-list values - need partial expansion
             # Find which fields are lists and need expansion
             list_fields = {k: v for k, v in config.items() if isinstance(v, list)}
             non_list_fields = {k: v for k, v in config.items() if not isinstance(v, list)}
-            
+
             if list_fields:
                 # Generate combinations for list fields, keeping non-list fields constant
                 param_names = list(list_fields.keys())
                 param_values = list(list_fields.values())
-                
+
                 for combination in itertools.product(*param_values):
                     # Create job with this combination
                     job = dict(zip(param_names, combination))
                     # Add the non-list fields (create deep copy to avoid reference issues)
                     job.update(copy.deepcopy(non_list_fields))
-                    
+
                     # Ensure fcl_overrides is completely fresh for each job
                     if 'fcl_overrides' in job:
                         job['fcl_overrides'] = copy.deepcopy(_get_first_if_list(config.get('fcl_overrides', {})))
-                    
-                    # Auto-generate desc for all job types
-                    job = prepare_fields_for_job(job, 'mixing' if mixing else 'standard')
-                    
+
+                    # Auto-generate desc; use mixing if this config has pbeam
+                    job = prepare_fields_for_job(job, _job_type_for_config(job))
+
                     all_jobs.append(job)
             else:
                 # All values are non-list, just add directly
-                config = prepare_fields_for_job(config, 'mixing' if mixing else 'standard')
+                config = prepare_fields_for_job(config, _job_type_for_config(config))
                 all_jobs.append(config)
             continue
-        
+
         # Validate all values are lists for expansion
         for key, value in config.items():
             if not isinstance(value, list):
                 raise ValueError(f"All values must be lists. Found non-list value for key '{key}': {value}")
             if len(value) == 0:
                 raise ValueError(f"List for key '{key}' is empty. All lists must have at least one value.")
-        
+
         # Generate all combinations of list parameters
         param_names = list(config.keys())
-        
+
         for combination in itertools.product(*config.values()):
             # Create job with this combination
-            job = dict(zip(param_names, combination))            
-            # Auto-generate desc for all job types
-            job = prepare_fields_for_job(job, 'mixing' if mixing else 'standard')
-            
+            job = dict(zip(param_names, combination))
+            # Auto-generate desc; use mixing if this config has pbeam
+            job = prepare_fields_for_job(job, _job_type_for_config(job))
+
             all_jobs.append(job)
 
     return all_jobs

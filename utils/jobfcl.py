@@ -19,6 +19,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.job_common import Mu2eFilename, Mu2eJobBase
 import samweb_client  # type: ignore
 
+STASH_READ_ROOT = os.environ.get(
+    "MU2E_STASH_READ",
+    "/cvmfs/mu2e.osgstorage.org/pnfs/fnal.gov/usr/mu2e/persistent/stash"
+)
+
 class Mu2eJobFCL(Mu2eJobBase):
     """Python port of mu2ejobfcl functionality."""
     
@@ -86,7 +91,14 @@ class Mu2eJobFCL(Mu2eJobBase):
             # Remove trailing slash if present
             local_dir = local_dir.rstrip('/')
             return f"{local_dir}/{filename}"
-        
+
+        # Resolve stash path from filename — no SAM involved
+        if self.inloc == 'stash':
+            fn = Mu2eFilename(filename)
+            dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
+            ds_path = dataset.replace('.', '/')
+            return f"{STASH_READ_ROOT}/datasets/{ds_path}/{filename}"
+
         # Use SAM to locate the file - get all locations
         sam = samweb_client.SAMWebClient(experiment='mu2e')
         
@@ -118,6 +130,10 @@ class Mu2eJobFCL(Mu2eJobBase):
     
     def _format_filename(self, filename: str) -> str:
         """Format filename according to protocol."""
+        # Stash paths are always plain CVMFS paths — ignore proto
+        if self.inloc == 'stash':
+            return self._locate_file(filename)
+
         if self.proto == 'file':
             return self._locate_file(filename)
         
