@@ -73,11 +73,11 @@ def main():
     # Handle output files and submission (even if job failed)
     if not args.dry_run:
         if not job_failed:
-            push_data(outputs, infiles)
+            push_data(outputs, infiles, simjob_setup=simjob_setup)
         else:
             print("Job failed - skipping data file push, but uploading logs")
         # Always upload logs, even on failure
-        push_logs(fcl)
+        push_logs(fcl, simjob_setup=simjob_setup)
     else:
         print("[DRY RUN] Would run: pushOutput output.txt")
     

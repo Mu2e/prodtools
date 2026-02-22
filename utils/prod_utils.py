@@ -489,7 +489,7 @@ def process_jobdef(jobdesc, fname, args):
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, infiles, outputs
 
-def push_output(output_specs, output_file="output.txt", parents_file="parents_list.txt"):
+def push_output(output_specs, output_file="output.txt", parents_file="parents_list.txt", simjob_setup=None):
     """
     Generic function to push output files.
     
@@ -497,6 +497,7 @@ def push_output(output_specs, output_file="output.txt", parents_file="parents_li
         output_specs: List of tuples (location, filename, parents_file)
         output_file: Name of the output specification file
         parents_file: Name of the parents list file (optional)
+        simjob_setup: Path to SimJob setup script for art environment
     
     Returns:
         int: Exit code from pushOutput command
@@ -520,17 +521,21 @@ def push_output(output_specs, output_file="output.txt", parents_file="parents_li
     
     Path(output_file).write_text("\n".join(output_lines) + "\n")
     print(f"Pushing {len(output_lines)} file(s) via {output_file}")
-    result = run(f"pushOutput {output_file}", shell=True)
+    push_cmd = f"pushOutput {output_file}"
+    if simjob_setup:
+        push_cmd = f"source {simjob_setup} && {push_cmd}"
+    result = run(push_cmd, shell=True)
     if result != 0:
         print(f"Warning: pushOutput returned exit code {result}")
     return result
 
-def push_data(outputs, infiles):
+def push_data(outputs, infiles, simjob_setup=None):
     """Handle data file management and submission using wildcard patterns from JSON outputs.
     
     Args:
         outputs: List of output specifications (dataset pattern, location)
         infiles: Space-separated list of input files (for parents_list.txt)
+        simjob_setup: Path to SimJob setup script for art environment
     """
     import glob
     
@@ -548,13 +553,14 @@ def push_data(outputs, infiles):
             output_specs.append((location, filename, "parents_list.txt"))
     
     # Use generic push function
-    return push_output(output_specs, "output.txt", "parents_list.txt")
+    return push_output(output_specs, "output.txt", "parents_list.txt", simjob_setup=simjob_setup)
 
-def push_logs(fcl):
+def push_logs(fcl, simjob_setup=None):
     """Handle log file management and submission.
     
     Args:
         fcl: FCL filename to derive log filename from
+        simjob_setup: Path to SimJob setup script for art environment
     """
     import shutil
     
@@ -573,7 +579,7 @@ def push_logs(fcl):
     # Push log if it exists
     if Path(logfile).exists():
         output_specs = [("disk", logfile, "parents_list.txt")]
-        return push_output(output_specs, "log_output.txt", "parents_list.txt")
+        return push_output(output_specs, "log_output.txt", "parents_list.txt", simjob_setup=simjob_setup)
     else:
         print(f"Warning: Log file {logfile} not found, skipping log push")
         return 0
