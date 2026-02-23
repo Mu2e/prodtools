@@ -1,22 +1,45 @@
-[
+[    
+  {
+  "desc": "NeutralsFlash",
+  "dsconf": "Run1Bag",
+  "fcl": "Production/JobConfig/pileup/NeutralsResampler.fcl",
+  "fcl_overrides": {
+    "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
+    "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+  },
+  "resampler_name": "neutralsResampler",
+  "input_data": {"sim.mu2e.Neutrals.MDC2025ae3.art": 1},
+  "njobs": 5000,
+  "events": 50000,
+  "run": 1450,
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
+  "owner": "mu2e",
+  "inloc": "resilient",
+  "outloc": {
+      "*.art": "disk"
+  },
+  "sequential_aux": true
+  },
   {
     "desc": "MuBeamFlash",
-    "dsconf": "Run1Bab",
+    "dsconf": "Run1Bag",
     "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
     "fcl_overrides": {
-      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt",
+      "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
+      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
       "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
     },
     "resampler_name": "beamResampler",
     "input_data": {
       "sim.mu2e.MuBeamCat.Run1Baa.art": 1
     },
-    "njobs": 10000,
+    "njobs": 5000,
     "events": 400000,
-    "run": 1440,
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh",
+    "run": 1450,
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
     "owner": "mu2e",
-    "inloc": "stash",
+    "inloc": "resilient",
     "outloc": {
       "*.art": "disk"
     },
@@ -24,10 +47,11 @@
   },
   {
     "desc": "EleBeamFlash",
-    "dsconf": "Run1Bab",
+    "dsconf": "Run1Bag",
     "fcl": "Production/JobConfig/pileup/EleBeamResampler.fcl",
     "fcl_overrides": {
-      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt",
+      "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
+      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
       "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
     },
     "resampler_name": "beamResampler",
@@ -36,33 +60,34 @@
     },
     "njobs": 5000,
     "events": 1000000,
-    "run": 1440,
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh",
+    "run": 1450,
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
     "owner": "mu2e",
-    "inloc": "disk",
+    "inloc": "resilient",
     "outloc": {
-      "*.art": "tape"
+      "*.art": "disk"
     },
     "sequential_aux": true
   },
   {
     "desc": "MuStopPileup",
-    "dsconf": "Run1Bab",
+    "dsconf": "Run1Bag",
     "fcl": "Production/JobConfig/pileup/MuStopPileup.fcl",
     "fcl_overrides": {
-      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt",
+      "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
+      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
       "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
     },
     "resampler_name": "TargetStopResampler",
     "input_data": {
       "sim.mu2e.MuminusStopsCat.Run1Baa.art": 1
     },
-    "njobs": 10000,
+    "njobs": 5000,
     "events": 400000,
-    "run": 1440,
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh",
+    "run": 1450,
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
     "owner": "mu2e",
-    "inloc": "tape",
+    "inloc": "resilient",
     "outloc": {
       "*.art": "disk"
     },

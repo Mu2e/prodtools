@@ -24,6 +24,11 @@ STASH_READ_ROOT = os.environ.get(
     "/cvmfs/mu2e.osgstorage.org/pnfs/fnal.gov/usr/mu2e/persistent/stash"
 )
 
+RESILIENT_ROOT = os.environ.get(
+    "MU2E_RESILIENT",
+    "/pnfs/mu2e/resilient"
+)
+
 class Mu2eJobFCL(Mu2eJobBase):
     """Python port of mu2ejobfcl functionality."""
     
@@ -103,6 +108,12 @@ class Mu2eJobFCL(Mu2eJobBase):
                 return stash_path
             # File not on stash — fall through to SAM lookup
 
+        if self.inloc == 'resilient':
+            fn = Mu2eFilename(filename)
+            dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
+            ds_path = dataset.replace('.', '/')
+            return f"{RESILIENT_ROOT}/datasets/{ds_path}/{filename}"
+
         # Use SAM to locate the file - get all locations
         sam = samweb_client.SAMWebClient(experiment='mu2e')
         
@@ -144,6 +155,9 @@ class Mu2eJobFCL(Mu2eJobBase):
                 return path
             # Fell back to SAM — apply root protocol below
             physical_path = path
+        elif self.inloc == 'resilient':
+            # Resilient disk has no CVMFS mirror — always use xrootd
+            physical_path = self._locate_file(filename)
         elif self.proto == 'file':
             return self._locate_file(filename)
         
@@ -544,8 +558,8 @@ def main():
     parser.add_argument('--index', type=int, help='Job index')
     parser.add_argument('--target', help='Target output file name')
     parser.add_argument('--source', help='Source input file name')
-    parser.add_argument('--default-location', '--default-loc', default='tape', 
-                       help='Default location for input files (default: tape). Use "stash" to prefer stash with automatic fallback to tape.')
+    parser.add_argument('--default-location', '--default-loc', default='tape',
+                       help='Default location for input files (default: tape). Use "stash" to prefer stash with automatic fallback to tape. Use "resilient" for resilient dCache (xrootd).')
     parser.add_argument('--default-protocol', '--default-proto', default='file',
                        help='Default protocol for input files (default: file)')
     
