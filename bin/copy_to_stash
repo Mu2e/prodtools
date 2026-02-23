@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-copy_to_stash: Copy a Mu2e SAM dataset into the StashCache layout.
+copy_to_stash: Copy a Mu2e SAM dataset into a dCache storage layout.
 
-Files are read from SAM (disk or tape location) and copied with `cp` into:
-    $MU2E_STASH_WRITE/datasets/<tier>/<owner>/<desc>/<dsconf>/<ext>/<filename>
-
-Once present there they are accessible on the grid (CVMFS read path) and can
-be used with `inloc: stash` in job configs.
+Supports two destination storage areas (--dest):
+  stash      Files go to $MU2E_STASH_WRITE/datasets/... and are readable on
+             the grid via CVMFS.  Use `inloc: stash` in job configs.
+  resilient  Files go to $MU2E_RESILIENT/datasets/... and are readable on
+             the grid via xrootd.  Use `inloc: resilient` in job configs.
 
 Usage
 -----
     copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art
+    copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --dest resilient
     copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --source disk --limit 10
     copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --dry-run
     copy_to_stash --list dts.mu2e.CeEndpoint.Run1Bab.art
 
 Environment variables
 ---------------------
-    MU2E_STASH_WRITE  Write root (default: /pnfs/mu2e/persistent/stash)
-    MU2E_STASH_READ   Read root  (default: /cvmfs/mu2e.osgstorage.org/pnfs/fnal.gov/usr/mu2e/persistent/stash)
+    MU2E_STASH_WRITE  Stash write root    (default: /pnfs/mu2e/persistent/stash)
+    MU2E_STASH_READ   Stash read root     (default: /cvmfs/mu2e.osgstorage.org/...)
+    MU2E_RESILIENT    Resilient root      (default: /pnfs/mu2e/resilient)
 """
 
 import argparse
@@ -29,19 +31,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.stash_utils import (
     copy_dataset_to_stash,
+    copy_dataset_to_resilient,
     list_expected_paths,
+    list_resilient_paths,
     stash_read_root,
     stash_write_root,
+    resilient_root,
 )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Copy a Mu2e dataset into the StashCache layout.',
+        description='Copy a Mu2e dataset into a dCache storage layout.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art
+  copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --dest resilient
   copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --source disk --limit 10
   copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --dry-run
   copy_to_stash --list dts.mu2e.CeEndpoint.Run1Bab.art
@@ -50,6 +56,10 @@ Examples:
     parser.add_argument(
         '--dataset', metavar='DATASET',
         help='SAM dataset name to copy (e.g. dts.mu2e.CeEndpoint.Run1Bab.art)'
+    )
+    parser.add_argument(
+        '--dest', metavar='DEST', default='stash', choices=['stash', 'resilient'],
+        help='Destination storage area: stash (CVMFS) or resilient (xrootd). Default: stash'
     )
     parser.add_argument(
         '--source', metavar='LOC', default='disk', choices=['disk', 'tape'],
@@ -65,7 +75,7 @@ Examples:
     )
     parser.add_argument(
         '--list', metavar='DATASET', dest='list_dataset',
-        help='List expected stash read paths for a dataset (no copy)'
+        help='List expected destination paths for a dataset (no copy)'
     )
     parser.add_argument(
         '--quiet', action='store_true',
@@ -76,7 +86,10 @@ Examples:
 
     # --list mode: just print expected paths
     if args.list_dataset:
-        paths = list_expected_paths(args.list_dataset)
+        if args.dest == 'resilient':
+            paths = list_resilient_paths(args.list_dataset)
+        else:
+            paths = list_expected_paths(args.list_dataset)
         for p in paths:
             print(p)
         return 0
@@ -85,22 +98,35 @@ Examples:
         parser.error('--dataset is required (or use --list)')
 
     print(f"Dataset : {args.dataset}")
+    print(f"Dest    : {args.dest}")
     print(f"Source  : {args.source}")
-    print(f"Write to: {stash_write_root()}/datasets/...")
-    print(f"Read at : {stash_read_root()}/datasets/...")
+    if args.dest == 'resilient':
+        print(f"Write to: {resilient_root()}/datasets/...")
+    else:
+        print(f"Write to: {stash_write_root()}/datasets/...")
+        print(f"Read at : {stash_read_root()}/datasets/...")
     if args.limit:
         print(f"Limit   : {args.limit} files")
     if args.dry_run:
         print("Mode    : dry-run (no files will be copied)")
     print()
 
-    n_copied = copy_dataset_to_stash(
-        dataset=args.dataset,
-        source_loc=args.source,
-        limit=args.limit,
-        dry_run=args.dry_run,
-        verbose=not args.quiet,
-    )
+    if args.dest == 'resilient':
+        n_copied = copy_dataset_to_resilient(
+            dataset=args.dataset,
+            source_loc=args.source,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            verbose=not args.quiet,
+        )
+    else:
+        n_copied = copy_dataset_to_stash(
+            dataset=args.dataset,
+            source_loc=args.source,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            verbose=not args.quiet,
+        )
 
     return 0 if n_copied >= 0 else 1
 
