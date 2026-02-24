@@ -223,8 +223,9 @@ def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "", template_path: 
     desc = get_tarball_desc(config) or config['desc']
     dsconf = config['dsconf']
     
-    # Build proper jobname like Perl version (cnf.owner.desc.dsconf.0.tar)
-    jobname = f"cnf.{owner}.{desc}.{dsconf}.0.tar"
+    # Build proper jobname like Perl version (cnf.owner.desc.dsconf.VERSION.tar)
+    version = config.get('version', 0)
+    jobname = f"cnf.{owner}.{desc}.{dsconf}.{version}.tar"
 
     # Reorder TBS fields to match Perl exactly: seed, subrunkey, event_id, outfiles
     # Reorder TBS fields to match Perl exactly: seed, subrunkey, event_id, outfiles
@@ -614,8 +615,9 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     # Use tarball_append if specified, otherwise use original desc
     from utils.config_utils import get_tarball_desc
     final_desc = get_tarball_desc(config) or desc
+    version = config.get('version', 0)
     final_outdir = Path(outdir) if outdir else None
-    out = final_outdir / f"cnf.{owner}.{final_desc}.{dsconf}.0.tar" if final_outdir else Path(f"cnf.{owner}.{final_desc}.{dsconf}.0.tar")
+    out = final_outdir / f"cnf.{owner}.{final_desc}.{dsconf}.{version}.tar" if final_outdir else Path(f"cnf.{owner}.{final_desc}.{dsconf}.{version}.tar")
 
     if out.exists():
         out.unlink()

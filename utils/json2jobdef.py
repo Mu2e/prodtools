@@ -101,12 +101,14 @@ def _create_inputs_file(config):
 def get_parfile_name(config):
     """Generate consistent parfile name from config."""
     desc = get_tarball_desc(config) or config['desc']
-    return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.0.tar"
+    version = config.get('version', 0)
+    return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.{version}.tar"
 
 def get_fcl_name(config):
     """Generate consistent FCL filename from config."""
     desc = get_tarball_desc(config) or config['desc']
-    return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.0.fcl"
+    version = config.get('version', 0)
+    return f"cnf.{config['owner']}.{desc}.{config['dsconf']}.{version}.fcl"
 
 def validate_required_fields(config, required_fields=None):
     """Validate that config has all required fields."""

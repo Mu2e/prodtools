@@ -897,7 +897,7 @@ STASH_WRITE_DEFAULT = "/pnfs/mu2e/persistent/stash"
 
 
 class TestLocateFileStash(unittest.TestCase):
-    """_locate_file with inloc='stash' — no SAM, path derived from filename."""
+    """_locate_file with inloc='stash' — path derived from filename (SAM only as fallback)."""
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
@@ -905,8 +905,12 @@ class TestLocateFileStash(unittest.TestCase):
         jp = _root_input_jobpars(files)
         self.tar = _make_tarball(jp, "module_type : RootInput\n")
         self.Cls = Mu2eJobFCL
+        # Simulate files being present on stash CVMFS
+        self._exists_patch = patch('os.path.exists', return_value=True)
+        self._exists_patch.start()
 
     def tearDown(self):
+        self._exists_patch.stop()
         os.unlink(self.tar)
 
     def test_stash_locate_no_sam_call(self):
@@ -959,8 +963,12 @@ class TestFormatFilenameStash(unittest.TestCase):
         self.tar = _make_tarball(jp, "module_type : RootInput\n")
         self.Cls = Mu2eJobFCL
         self.fname = "dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art"
+        # Simulate files being present on stash CVMFS
+        self._exists_patch = patch('os.path.exists', return_value=True)
+        self._exists_patch.start()
 
     def tearDown(self):
+        self._exists_patch.stop()
         os.unlink(self.tar)
 
     def test_stash_file_proto_returns_cvmfs_path(self):
@@ -1207,6 +1215,166 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
                              "mdh copy-file must not be called for stash inloc")
 
         os.unlink(tar)
+
+
+# ---------------------------------------------------------------------------
+# 15. version field in tarball names
+# ---------------------------------------------------------------------------
+
+class TestVersionField(unittest.TestCase):
+    """version field in config controls the version digit in tarball/FCL names."""
+
+    def _cfg(self, **extra):
+        return {'owner': 'mu2e', 'desc': 'TestDesc', 'dsconf': 'TestConf', **extra}
+
+    # --- get_parfile_name ---
+
+    def test_default_version_is_zero(self):
+        from utils.json2jobdef import get_parfile_name
+        self.assertEqual(get_parfile_name(self._cfg()), 'cnf.mu2e.TestDesc.TestConf.0.tar')
+
+    def test_version_one(self):
+        from utils.json2jobdef import get_parfile_name
+        self.assertEqual(get_parfile_name(self._cfg(version=1)), 'cnf.mu2e.TestDesc.TestConf.1.tar')
+
+    def test_version_five(self):
+        from utils.json2jobdef import get_parfile_name
+        self.assertEqual(get_parfile_name(self._cfg(version=5)), 'cnf.mu2e.TestDesc.TestConf.5.tar')
+
+    # --- get_fcl_name ---
+
+    def test_fcl_name_default_version(self):
+        from utils.json2jobdef import get_fcl_name
+        self.assertEqual(get_fcl_name(self._cfg()), 'cnf.mu2e.TestDesc.TestConf.0.fcl')
+
+    def test_fcl_name_with_version(self):
+        from utils.json2jobdef import get_fcl_name
+        self.assertEqual(get_fcl_name(self._cfg(version=3)), 'cnf.mu2e.TestDesc.TestConf.3.fcl')
+
+    # --- version + tarball_append ---
+
+    def test_version_with_tarball_append(self):
+        """version and tarball_append are independent: append modifies desc, version changes digit."""
+        from utils.json2jobdef import get_parfile_name
+        cfg = self._cfg(version=1, tarball_append='_ext1')
+        self.assertEqual(get_parfile_name(cfg), 'cnf.mu2e.TestDesc_ext1.TestConf.1.tar')
+
+    def test_tarball_append_without_version_stays_zero(self):
+        from utils.json2jobdef import get_parfile_name
+        cfg = self._cfg(tarball_append='_ext1')
+        self.assertEqual(get_parfile_name(cfg), 'cnf.mu2e.TestDesc_ext1.TestConf.0.tar')
+
+
+# ---------------------------------------------------------------------------
+# 16. write_fcl FCL filename derivation
+# ---------------------------------------------------------------------------
+
+class TestWriteFclFilenameDerivation(unittest.TestCase):
+    """write_fcl replaces the tarball version digit with the job index in the FCL filename."""
+
+    def _run_write_fcl(self, tarball_basename, index):
+        """Call write_fcl with a mocked Mu2eJobFCL and return the FCL filename created."""
+        import tempfile
+        from utils.prod_utils import write_fcl
+
+        orig_dir = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            try:
+                tarball_path = os.path.join(tmpdir, tarball_basename)
+                mock_job = MagicMock()
+                mock_job.find_index.return_value = index
+                mock_job.generate_fcl.return_value = "# test fcl"
+                with patch('utils.prod_utils.Mu2eJobFCL', return_value=mock_job):
+                    write_fcl(tarball_path, inloc='tape', index=index)
+                created = [f for f in os.listdir(tmpdir) if f.endswith('.fcl')]
+                return created[0] if created else None
+            finally:
+                os.chdir(orig_dir)
+
+    def test_version_zero_replaced_by_index(self):
+        fcl = self._run_write_fcl("cnf.mu2e.TestDesc.TestConf.0.tar", 7)
+        self.assertEqual(fcl, "cnf.mu2e.TestDesc.TestConf.7.fcl")
+
+    def test_version_two_replaced_by_index(self):
+        """Non-zero version digit is replaced by the job index, not appended."""
+        fcl = self._run_write_fcl("cnf.mu2e.TestDesc.TestConf.2.tar", 7)
+        self.assertEqual(fcl, "cnf.mu2e.TestDesc.TestConf.7.fcl")
+
+    def test_multi_digit_index(self):
+        fcl = self._run_write_fcl("cnf.mu2e.TestDesc.TestConf.1.tar", 12345)
+        self.assertEqual(fcl, "cnf.mu2e.TestDesc.TestConf.12345.fcl")
+
+
+# ---------------------------------------------------------------------------
+# 17. stash SAM-fallback (file not on CVMFS)
+# ---------------------------------------------------------------------------
+
+class TestStashFallback(unittest.TestCase):
+    """When inloc='stash' and the file is not on CVMFS, _locate_file falls back to SAM."""
+
+    _TAPE_DIR = '/pnfs/mu2e/tape/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'
+    _FNAME = 'dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art'
+
+    def setUp(self):
+        from utils.jobfcl import Mu2eJobFCL
+        files = [self._FNAME]
+        jp = _root_input_jobpars(files)
+        self.tar = _make_tarball(jp, "module_type : RootInput\n")
+        self.Cls = Mu2eJobFCL
+        # Simulate file NOT present on stash CVMFS
+        self._exists_patch = patch('os.path.exists', return_value=False)
+        self._exists_patch.start()
+
+    def tearDown(self):
+        self._exists_patch.stop()
+        os.unlink(self.tar)
+
+    def _mock_sam(self, location_type='tape'):
+        mock_sam = MagicMock()
+        mock_sam.locateFile.return_value = [
+            {'location_type': location_type, 'full_path': self._TAPE_DIR}
+        ]
+        return mock_sam
+
+    def test_sam_called_when_stash_file_missing(self):
+        """SAM is contacted as fallback when the stash CVMFS path does not exist."""
+        mock_sam = self._mock_sam()
+        with patch('samweb_client.SAMWebClient', return_value=mock_sam):
+            from utils.jobfcl import Mu2eJobFCL
+            job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
+            job._locate_file(self._FNAME)
+        mock_sam.locateFile.assert_called_once_with(self._FNAME)
+
+    def test_fallback_returns_sam_path(self):
+        """The SAM-provided path is returned when the stash file is absent."""
+        mock_sam = self._mock_sam()
+        with patch('samweb_client.SAMWebClient', return_value=mock_sam):
+            from utils.jobfcl import Mu2eJobFCL
+            job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
+            path = job._locate_file(self._FNAME)
+        self.assertEqual(path, self._TAPE_DIR)
+
+    def test_fallback_raises_when_sam_has_no_locations(self):
+        """ValueError is raised when the file is absent from stash and SAM finds nothing."""
+        mock_sam = MagicMock()
+        mock_sam.locateFile.return_value = []
+        with patch('samweb_client.SAMWebClient', return_value=mock_sam):
+            from utils.jobfcl import Mu2eJobFCL
+            job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
+            with self.assertRaises(ValueError):
+                job._locate_file(self._FNAME)
+
+    def test_fallback_format_filename_applies_xroot(self):
+        """_format_filename with proto='root' converts the SAM tape path to an xroot URL."""
+        mock_sam = self._mock_sam()
+        with patch('samweb_client.SAMWebClient', return_value=mock_sam):
+            from utils.jobfcl import Mu2eJobFCL
+            job = Mu2eJobFCL(self.tar, inloc='stash', proto='root')
+            result = job._format_filename(self._FNAME)
+        self.assertTrue(result.startswith("xroot://"),
+                        f"Expected xroot URL for tape fallback, got: {result}")
+        self.assertIn(self._FNAME, result)
 
 
 # ---------------------------------------------------------------------------
