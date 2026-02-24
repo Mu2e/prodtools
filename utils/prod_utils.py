@@ -3,6 +3,7 @@ import sys
 import logging
 import json
 import os
+import re
 from pathlib import Path
 from datetime import datetime
 from .jobfcl import Mu2eJobFCL
@@ -54,7 +55,7 @@ def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
     """
     # Extract fcl filename from jobdef and write to current directory
     jobdef_name = Path(jobdef).name  # Get just the filename, not the full path
-    fcl = jobdef_name.replace('.0.tar', f'.{index}.fcl')  # cnf.mu2e.RPCInternalPhysical.MDC2020az.{index}.fcl
+    fcl = re.sub(r'\.\d+\.tar$', f'.{index}.fcl', jobdef_name)  # cnf.mu2e.RPCInternalPhysical.MDC2020az.{index}.fcl
     
     # Print Perl equivalent command
     perl_cmd = f"mu2ejobfcl --jobdef {jobdef} --default-location {inloc} --default-protocol {proto}"
