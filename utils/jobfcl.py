@@ -112,7 +112,10 @@ class Mu2eJobFCL(Mu2eJobBase):
             fn = Mu2eFilename(filename)
             dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
             ds_path = dataset.replace('.', '/')
-            return f"{RESILIENT_ROOT}/datasets/{ds_path}/{filename}"
+            resilient_path = f"{RESILIENT_ROOT}/datasets/{ds_path}/{filename}"
+            if os.path.exists(resilient_path):
+                return resilient_path
+            # File not on resilient — fall through to SAM lookup
 
         # Use SAM to locate the file - get all locations
         sam = samweb_client.SAMWebClient(experiment='mu2e')
