@@ -29,6 +29,25 @@ RESILIENT_ROOT = os.environ.get(
     "/pnfs/mu2e/resilient"
 )
 
+
+def _resilient_file_exists(pnfs_path: str) -> bool:
+    """Check if a resilient /pnfs/ file exists via gfal2 xrootd.
+
+    Uses gfal2 Python bindings for reliable xrootd access that works on both
+    interactive nodes and grid worker nodes (no POSIX dCache required).
+    Returns False if gfal2 is unavailable or the stat fails, causing the
+    caller to fall through to SAM lookup.
+    """
+    # Convert /pnfs/... to xrootd URL: root://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/...
+    xroot_url = pnfs_path.replace('/pnfs/', 'root://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/', 1)
+    try:
+        import gfal2
+        ctx = gfal2.creat_context()
+        ctx.stat(xroot_url)
+        return True
+    except Exception:
+        return False
+
 class Mu2eJobFCL(Mu2eJobBase):
     """Python port of mu2ejobfcl functionality."""
     
@@ -112,7 +131,10 @@ class Mu2eJobFCL(Mu2eJobBase):
             fn = Mu2eFilename(filename)
             dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
             ds_path = dataset.replace('.', '/')
-            return f"{RESILIENT_ROOT}/datasets/{ds_path}/{filename}"
+            resilient_path = f"{RESILIENT_ROOT}/datasets/{ds_path}/{filename}"
+            if _resilient_file_exists(resilient_path):
+                return resilient_path
+            # File not on resilient — fall through to SAM lookup
 
         # Use SAM to locate the file - get all locations
         sam = samweb_client.SAMWebClient(experiment='mu2e')
