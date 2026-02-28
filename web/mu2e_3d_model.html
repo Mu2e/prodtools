@@ -1,0 +1,1269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mu2e Experiment — Interactive 3D Model</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #e0e0e0; }
+canvas { display: block; }
+#info-panel {
+  position: absolute; top: 10px; left: 10px; background: rgba(10,10,30,0.85);
+  border: 1px solid #334; border-radius: 8px; padding: 14px 18px; max-width: 320px;
+  font-size: 13px; line-height: 1.5; pointer-events: auto; z-index: 10;
+}
+#info-panel h2 { font-size: 16px; color: #6af; margin-bottom: 6px; }
+#info-panel p { margin-bottom: 4px; }
+#controls {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  background: rgba(10,10,30,0.85); border: 1px solid #334; border-radius: 8px;
+  padding: 10px 18px; display: flex; gap: 10px; align-items: center; z-index: 10;
+}
+#controls button {
+  background: #225; border: 1px solid #448; color: #aaf; padding: 6px 14px;
+  border-radius: 5px; cursor: pointer; font-size: 12px; transition: 0.2s;
+}
+#controls button:hover { background: #337; }
+#controls button.active { background: #448; color: #fff; }
+#legend {
+  position: absolute; top: 10px; right: 10px; background: rgba(10,10,30,0.85);
+  border: 1px solid #334; border-radius: 8px; padding: 14px 18px; z-index: 10; font-size: 12px;
+}
+#legend h3 { font-size: 14px; color: #6af; margin-bottom: 8px; }
+.legend-item { display: flex; align-items: center; margin-bottom: 5px; cursor: pointer; }
+.legend-item:hover { opacity: 0.8; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; margin-right: 8px; border: 1px solid #555; }
+#tooltip {
+  position: absolute; display: none; background: rgba(10,10,30,0.92);
+  border: 1px solid #6af; border-radius: 6px; padding: 10px 14px;
+  font-size: 12px; pointer-events: none; z-index: 20; max-width: 280px;
+}
+#tooltip h4 { color: #6af; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div id="info-panel">
+  <h2>Mu2e Experiment</h2>
+  <p>Muon-to-Electron Conversion Experiment at Fermilab</p>
+  <p style="color:#888;font-size:11px;">Drag to rotate · Scroll to zoom · Click components for details</p>
+</div>
+<div id="legend">
+  <h3>Components</h3>
+  <div class="legend-item" data-group="ps"><div class="legend-swatch" style="background:#e09030;"></div>Production Solenoid</div>
+  <div class="legend-item" data-group="ts"><div class="legend-swatch" style="background:#40a040;"></div>Transport Solenoid</div>
+  <div class="legend-item" data-group="ds"><div class="legend-swatch" style="background:#50b850;"></div>Detector Solenoid</div>
+  <div class="legend-item" data-group="target"><div class="legend-swatch" style="background:#c0c0c0;"></div>Targets</div>
+  <div class="legend-item" data-group="tracker"><div class="legend-swatch" style="background:#d4b830;"></div>Tracker</div>
+  <div class="legend-item" data-group="calorimeter"><div class="legend-swatch" style="background:#e050a0;"></div>Calorimeter</div>
+  <div class="legend-item" data-group="crv"><div class="legend-swatch" style="background:#607080;"></div>Cosmic Ray Veto</div>
+  <div class="legend-item" style="margin-top:8px;border-top:1px solid #334;padding-top:6px;cursor:default;"><div class="legend-swatch" style="background:#ff4488;"></div>Cosmic Ray Muon</div>
+</div>
+<div id="controls">
+  <button id="btn-reset">Reset View</button>
+  <button id="btn-cutaway">Cutaway</button>
+  <button id="btn-explode">Explode</button>
+  <button id="btn-labels">Labels</button>
+  <button id="btn-animate">Animate</button>
+  <button id="btn-side">Side View</button>
+  <button id="btn-top">Top View</button>
+  <button id="btn-particles" style="background:#432;border-color:#864;color:#fda;">Beam On</button>
+  <button id="btn-cosmic" style="background:#322;border-color:#644;color:#f8a;">Cosmic On</button>
+</div>
+<div id="tooltip"><h4 id="tt-title"></h4><p id="tt-desc"></p></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ============== SCENE SETUP ==============
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a1a);
+scene.fog = new THREE.Fog(0x0a0a1a, 50, 100);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(2, 8, 30);
+camera.lookAt(2, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// Lights
+scene.add(new THREE.AmbientLight(0x445566, 0.7));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+dirLight.position.set(10, 20, 15);
+scene.add(dirLight);
+scene.add(new THREE.DirectionalLight(0x4466aa, 0.3).translateX(-10));
+
+// Grid
+scene.add(new THREE.GridHelper(60, 60, 0x1a1a3a, 0x111128));
+
+// ============== COORDINATE SYSTEM ==============
+// X-axis = beam direction (left-to-right)
+// Y-axis = up
+// Z-axis = towards viewer
+// PS and DS axes are horizontal, at the SAME height (Y=0)
+// TS S-curve bends DOWN then back UP in the XY plane
+
+// ============== MATERIALS ==============
+function makeMat(color, opacity = 1, emissiveIntensity = 0.05) {
+  return new THREE.MeshPhongMaterial({
+    color, transparent: opacity < 1, opacity, side: THREE.DoubleSide,
+    emissive: color, emissiveIntensity, shininess: 60,
+    depthWrite: opacity >= 1
+  });
+}
+
+// Colors matched to reference image
+const matPSshell  = makeMat(0x40a040, 0.45);     // green outer shell
+matPSshell.depthWrite = false;
+const matPSinner  = makeMat(0xe09030, 0.65);      // orange inner
+const matTSshell  = makeMat(0x40a040, 0.50);      // green TS pipe
+matTSshell.depthWrite = false;
+const matTSinner  = makeMat(0xb07040, 0.55);      // brown TS interior (collimators)
+const matDSshell  = makeMat(0x50b850, 0.40);      // green DS shell
+matDSshell.depthWrite = false;
+const matTarget   = makeMat(0xc0c0c0, 0.9, 0.1);  // silver targets
+const matTracker  = makeMat(0xd4b830, 0.55);       // yellow/gold tracker
+const matCalo     = makeMat(0xe050a0, 0.65);        // pink/magenta calorimeter
+const matCRV      = makeMat(0x506070, 0.18);       // dark cosmic ray veto
+// Ensure CRV doesn't block inner objects in depth buffer
+matCRV.depthWrite = false;
+matCRV.depthTest = true;
+const matBeam     = makeMat(0xffff40, 0.3, 0.3);
+
+// ============== GROUPS ==============
+const groups = { ps: new THREE.Group(), ts: new THREE.Group(), ds: new THREE.Group(),
+  target: new THREE.Group(), tracker: new THREE.Group(), calorimeter: new THREE.Group(),
+  crv: new THREE.Group(), beam: new THREE.Group() };
+Object.values(groups).forEach(g => scene.add(g));
+
+function registerComponent(mesh, group, title, desc) {
+  mesh.userData = { group, title, desc };
+}
+
+// ============== GEOMETRY HELPERS ==============
+// Hollow cylinder aligned along X-axis, centered at origin
+function makeHollowCylinderX(rOuter, rInner, length, mat, segments) {
+  segments = segments || 48;
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, rOuter, 0, Math.PI * 2, false);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, rInner, 0, Math.PI * 2, true);
+  shape.holes.push(hole);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: length, bevelEnabled: false, curveSegments: segments });
+  // Extruded along +Z. Rotate so axis is along +X, centered.
+  geo.rotateY(Math.PI / 2);
+  geo.translate(-length / 2, 0, 0);
+  return new THREE.Mesh(geo, mat);
+}
+
+// Simple open cylinder along X
+function makeOpenCylinderX(radius, length, mat, segments) {
+  segments = segments || 32;
+  const geo = new THREE.CylinderGeometry(radius, radius, length, segments, 1, true);
+  geo.rotateZ(Math.PI / 2); // Y-axis → X-axis
+  return new THREE.Mesh(geo, mat);
+}
+
+// Disk (ring) perpendicular to X-axis
+function makeDiskX(rInner, rOuter, mat, segments) {
+  segments = segments || 48;
+  const geo = new THREE.RingGeometry(rInner, rOuter, segments);
+  geo.rotateY(Math.PI / 2); // face along X
+  return new THREE.Mesh(geo, mat);
+}
+
+// ============== DIMENSIONS (meters, ~1:1 scale) ==============
+const PS_LENGTH = 4.0;
+const PS_OUTER_R = 1.3;
+const PS_INNER_R = 0.9;
+const PS_CENTER_X = -10.0;
+const PS_CENTER_Y = 0.0;
+
+const DS_LENGTH = 10.9;
+const DS_OUTER_R = 1.35;
+const DS_INNER_R = 0.95;
+
+// TS geometry from GDML: 5-section S-curve in the HORIZONTAL (XZ) plane
+// TS1: straight along +X (beam), 1.075m
+// TS2: 90° bend (rtor=2.929m), turns from +X into +Z direction
+// TS3: straight along +Z (PERPENDICULAR to beam), 1.95m
+// TS4: 90° bend (rtor=2.929m), turns from +Z back to +X direction
+// TS5: straight along +X (beam), 1.25m
+// PS and DS are parallel but offset ~7.8m in Z.
+const TS_RTOR = 2.929;     // major bend radius (from GDML)
+const TS_PIPE_R = 0.55;    // display pipe radius (cryostat outer ~0.81m)
+const TS1_LEN = 1.075;     // TS1 straight length
+const TS3_LEN = 1.95;      // TS3 straight length (perpendicular to beam)
+const TS5_LEN = 1.25;      // TS5 straight length
+const TS_Z_OFFSET = 2 * TS_RTOR + TS3_LEN;  // total lateral offset ≈ 7.808m
+
+// Compute positions along the S-curve path
+const PS_EXIT_X = PS_CENTER_X + PS_LENGTH / 2;                    // -8.0
+const TS1_END_X = PS_EXIT_X + TS1_LEN;                            // -6.925
+// After TS2 bend: advances +rtor in X, +rtor in Z
+const TS3_START_X = TS1_END_X + TS_RTOR;                          // -3.996
+const TS3_START_Z = TS_RTOR;                                       // 2.929
+// TS3 runs along +Z
+const TS3_END_Z = TS3_START_Z + TS3_LEN;                          // 4.879
+// After TS4 bend: advances +rtor in X, +rtor in Z
+const TS5_START_X = TS3_START_X + TS_RTOR;                        // -1.067
+const TS5_START_Z = TS3_END_Z + TS_RTOR;                          // 7.808
+const DS_ENTER_X = TS5_START_X + TS5_LEN;                         // 0.183
+const DS_CENTER_X = DS_ENTER_X + DS_LENGTH / 2;                   // 5.633
+const DS_CENTER_Y = PS_CENTER_Y;                                    // same height
+const DS_CENTER_Z = TS5_START_Z;                                    // 7.808 (offset from PS)
+
+// ============== BUILD PRODUCTION SOLENOID ==============
+// Outer green shell
+const psShell = makeHollowCylinderX(PS_OUTER_R, PS_INNER_R, PS_LENGTH, matPSshell);
+psShell.position.set(PS_CENTER_X, PS_CENTER_Y, 0);
+groups.ps.add(psShell);
+registerComponent(psShell, 'ps', 'Production Solenoid (4.6T)',
+  'Axially graded superconducting solenoid (4.6T peak). 1.8m warm bore, ~4m long. Captures pions/muons from the production target.');
+
+// Inner orange volume (coils/shielding)
+const psInner = makeOpenCylinderX(PS_INNER_R - 0.05, PS_LENGTH * 0.85, matPSinner);
+psInner.position.set(PS_CENTER_X, PS_CENTER_Y, 0);
+groups.ps.add(psInner);
+
+// End caps
+for (const side of [-1, 1]) {
+  const cap = makeDiskX(0.25, PS_OUTER_R, makeMat(0x308030, 0.35));
+  cap.position.set(PS_CENTER_X + side * PS_LENGTH / 2, PS_CENTER_Y, 0);
+  groups.ps.add(cap);
+}
+
+// Production target (tungsten rod)
+const prodTarget = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.08, 0.08, 0.8, 16), matTarget);
+prodTarget.rotation.z = Math.PI / 2; // align along X
+prodTarget.position.set(PS_CENTER_X, PS_CENTER_Y, 0);
+groups.target.add(prodTarget);
+registerComponent(prodTarget, 'target', 'Production Target',
+  'Tungsten target where 8 GeV protons produce pions that decay to muons.');
+
+// ============== BUILD TRANSPORT SOLENOID (5-section S-curve from GDML) ==============
+// Path: TS1(+X) → TS2(bend X→Z) → TS3(+Z) → TS4(bend Z→X) → TS5(+X)
+
+class TSCurve extends THREE.Curve {
+  constructor() {
+    super();
+    this.ts1Len = TS1_LEN;
+    this.arc1Len = (Math.PI / 2) * TS_RTOR;
+    this.ts3Len = TS3_LEN;
+    this.arc2Len = (Math.PI / 2) * TS_RTOR;
+    this.ts5Len = TS5_LEN;
+    this.totalLen = this.ts1Len + this.arc1Len + this.ts3Len + this.arc2Len + this.ts5Len;
+  }
+  getPoint(t) {
+    const d = t * this.totalLen;
+    const Y = PS_CENTER_Y;
+    let accumulated = 0;
+
+    // Segment 1: TS1 straight along +X
+    if (d <= (accumulated + this.ts1Len)) {
+      const frac = (d - accumulated) / this.ts1Len;
+      return new THREE.Vector3(PS_EXIT_X + frac * TS1_LEN, Y, 0);
+    }
+    accumulated += this.ts1Len;
+
+    // Segment 2: TS2 bend — 90° from +X direction to +Z direction
+    // Center of quarter circle at (TS1_END_X, Y, TS_RTOR)
+    if (d <= (accumulated + this.arc1Len)) {
+      const frac = (d - accumulated) / this.arc1Len;
+      const angle = frac * (Math.PI / 2); // 0 → PI/2
+      // Start at (TS1_END_X, Y, 0) = center + (0, 0, -R)
+      // End at (TS1_END_X + R, Y, R) = center + (R, 0, 0)
+      return new THREE.Vector3(
+        TS1_END_X + TS_RTOR * Math.sin(angle),
+        Y,
+        TS_RTOR * (1 - Math.cos(angle))
+      );
+    }
+    accumulated += this.arc1Len;
+
+    // Segment 3: TS3 straight along +Z (perpendicular to beam!)
+    if (d <= (accumulated + this.ts3Len)) {
+      const frac = (d - accumulated) / this.ts3Len;
+      return new THREE.Vector3(TS3_START_X, Y, TS3_START_Z + frac * TS3_LEN);
+    }
+    accumulated += this.ts3Len;
+
+    // Segment 4: TS4 bend — 90° from +Z direction to +X direction
+    // Center at (TS3_START_X + R, Y, TS3_END_Z)
+    if (d <= (accumulated + this.arc2Len)) {
+      const frac = (d - accumulated) / this.arc2Len;
+      const angle = frac * (Math.PI / 2); // 0 → PI/2
+      // Start at (TS3_START_X, Y, TS3_END_Z) = center + (-R, 0, 0)
+      // End at (TS3_START_X + R, Y, TS3_END_Z + R) = center + (0, 0, R)
+      return new THREE.Vector3(
+        TS3_START_X + TS_RTOR * (1 - Math.cos(angle)),
+        Y,
+        TS3_END_Z + TS_RTOR * Math.sin(angle)
+      );
+    }
+    accumulated += this.arc2Len;
+
+    // Segment 5: TS5 straight along +X
+    const frac = Math.min(1, (d - accumulated) / this.ts5Len);
+    return new THREE.Vector3(TS5_START_X + frac * TS5_LEN, Y, TS5_START_Z);
+  }
+}
+
+const tsCurve = new TSCurve();
+const tsTubeGeo = new THREE.TubeGeometry(tsCurve, 200, TS_PIPE_R, 24, false);
+const tsTube = new THREE.Mesh(tsTubeGeo, matTSshell);
+groups.ts.add(tsTube);
+registerComponent(tsTube, 'ts', 'Transport Solenoid (2.5→2.0T)',
+  'S-shaped superconducting transport solenoid. 5 sections: TS1(straight)→TS2(90° bend, rtor=2.929m)→TS3(straight, perpendicular)→TS4(90° bend)→TS5(straight). Total ~12m along curve.');
+
+// ============== BUILD DETECTOR SOLENOID ==============
+// Outer green shell — now offset in Z to match TS S-curve exit
+const dsShell = makeHollowCylinderX(DS_OUTER_R, DS_INNER_R, DS_LENGTH, matDSshell);
+dsShell.position.set(DS_CENTER_X, DS_CENTER_Y, DS_CENTER_Z);
+groups.ds.add(dsShell);
+registerComponent(dsShell, 'ds', 'Detector Solenoid (2.0→1.0T)',
+  'Two-section solenoid (10.9m long, 1.9m bore). Gradient section (2→1T over 4m) + uniform spectrometer (1T, ~6m). Houses the stopping target, tracker, and calorimeter.');
+
+// DS end caps
+for (const side of [-1, 1]) {
+  const cap = makeDiskX(0.2, DS_OUTER_R, makeMat(0x408040, 0.3));
+  cap.position.set(DS_CENTER_X + side * DS_LENGTH / 2, DS_CENTER_Y, DS_CENTER_Z);
+  groups.ds.add(cap);
+}
+
+// Gradient section marker (subtle inner ring)
+const gradientMarker = makeDiskX(DS_INNER_R * 0.3, DS_INNER_R * 0.95, makeMat(0x206020, 0.15));
+gradientMarker.position.set(DS_ENTER_X + 4.0, DS_CENTER_Y, DS_CENTER_Z);
+groups.ds.add(gradientMarker);
+
+// ============== STOPPING TARGET ==============
+// 17 thin aluminum foils in the gradient section, disks perpendicular to X
+const DZ = DS_CENTER_Z; // shorthand for DS Z-offset
+const stopTargetGroup = new THREE.Group();
+for (let i = 0; i < 17; i++) {
+  const foil = makeDiskX(0.0, 0.35, makeMat(0xd0d0e0, 0.6, 0.15));
+  foil.position.set(DS_ENTER_X + 1.0 + i * 0.12, DS_CENTER_Y, DZ);
+  stopTargetGroup.add(foil);
+}
+groups.target.add(stopTargetGroup);
+registerComponent(stopTargetGroup, 'target', 'Stopping Target',
+  '17 thin aluminum foils where muons stop and may convert to electrons with characteristic energy 104.97 MeV.');
+
+// ============== STRAW TUBE TRACKER ==============
+const TRACKER_START = DS_ENTER_X + 4.5;
+const TRACKER_LENGTH = 3.2;
+const TRACKER_CENTER = TRACKER_START + TRACKER_LENGTH / 2;
+
+const trackerShell = makeOpenCylinderX(0.7, TRACKER_LENGTH, matTracker);
+trackerShell.position.set(TRACKER_CENTER, DS_CENTER_Y, DZ);
+groups.tracker.add(trackerShell);
+registerComponent(trackerShell, 'tracker', 'Straw Tube Tracker',
+  'Annular straw tube tracker (~3.2m long). 18 measurement stations track conversion electrons in the 1T field.');
+
+for (let i = 0; i < 18; i++) {
+  const station = new THREE.Mesh(
+    new THREE.TorusGeometry(0.55, 0.015, 8, 48), matTracker);
+  station.rotation.y = Math.PI / 2;
+  station.position.set(TRACKER_START + i * (TRACKER_LENGTH / 17), DS_CENTER_Y, DZ);
+  groups.tracker.add(station);
+}
+
+// ============== ELECTROMAGNETIC CALORIMETER ==============
+const CALO_START = TRACKER_CENTER + TRACKER_LENGTH / 2 + 0.6;
+
+for (let i = 0; i < 2; i++) {
+  const xPos = CALO_START + i * 0.7;
+
+  const disk = makeDiskX(0.25, 0.7, matCalo);
+  disk.position.set(xPos, DS_CENTER_Y, DZ);
+  groups.calorimeter.add(disk);
+
+  const diskBody = makeOpenCylinderX(0.7, 0.2, makeMat(0xe050a0, 0.45));
+  diskBody.position.set(xPos, DS_CENTER_Y, DZ);
+  groups.calorimeter.add(diskBody);
+  registerComponent(diskBody, 'calorimeter', 'Calorimeter Disk ' + (i + 1),
+    'CsI crystal electromagnetic calorimeter. Two annular disks measure electron energy and provide particle ID.');
+
+  const innerRing = makeDiskX(0.0, 0.25, makeMat(0x301030, 0.3));
+  innerRing.position.set(xPos, DS_CENTER_Y, DZ);
+  groups.calorimeter.add(innerRing);
+}
+
+// ============== COSMIC RAY VETO ==============
+const CRV_LENGTH = DS_LENGTH + 2;
+const CRV_W = 4.0, CRV_H = 3.5;
+const crvGeo = new THREE.BoxGeometry(CRV_LENGTH, CRV_H, CRV_W);
+const crvEdges = new THREE.EdgesGeometry(crvGeo);
+const crvWire = new THREE.LineSegments(crvEdges, new THREE.LineBasicMaterial({ color: 0x607080 }));
+crvWire.position.set(DS_CENTER_X, DS_CENTER_Y, DZ);
+groups.crv.add(crvWire);
+const crvMesh = new THREE.Mesh(crvGeo, matCRV);
+crvMesh.position.set(DS_CENTER_X, DS_CENTER_Y, DZ);
+groups.crv.add(crvMesh);
+registerComponent(crvMesh, 'crv', 'Cosmic Ray Veto',
+  'Scintillator-based veto surrounding the DS. 4 layers of extruded scintillator with >99.99% efficiency.');
+
+// ============== FIX TRANSPARENCY RENDER ORDER ==============
+// Outermost → innermost: CRV(0) → DS shell(1) → tracker(2) → calorimeter(3) → targets(4)
+crvMesh.renderOrder = 0;
+crvWire.renderOrder = 0;
+dsShell.renderOrder = 1;
+groups.ds.traverse(obj => { if (obj.isMesh || obj.isLine) obj.renderOrder = 1; });
+groups.tracker.traverse(obj => { if (obj.isMesh || obj.isLine) obj.renderOrder = 2; });
+groups.calorimeter.traverse(obj => { if (obj.isMesh || obj.isLine) obj.renderOrder = 3; });
+groups.target.traverse(obj => { if (obj.isMesh || obj.isLine) obj.renderOrder = 4; });
+groups.ps.traverse(obj => { if (obj.isMesh || obj.isLine) obj.renderOrder = 1; });
+groups.ts.traverse(obj => { if (obj.isMesh || obj.isLine) obj.renderOrder = 1; });
+
+// ============== PROTON BEAM LINE ==============
+// In Mu2e the proton beam enters at an angle from behind (upstream end) of the PS,
+// coming from above-left at ~14° to the solenoid axis, hitting the production target.
+const BEAM_ANGLE = Math.PI * 14 / 180;  // ~14° from the PS axis
+const BEAM_LEN = 6;
+// Proton beam enters from the TS side (+X) of the PS, traveling in -X direction toward target
+const beamEndX = PS_CENTER_X;  // target position
+const beamEndY = PS_CENTER_Y;
+const beamEndZ = 0;
+const beamStartX = beamEndX + BEAM_LEN * Math.cos(BEAM_ANGLE);
+const beamStartY = beamEndY + BEAM_LEN * Math.sin(BEAM_ANGLE);
+const beamStartZ = 0;
+// Midpoint and direction for the cylinder
+const beamMidX = (beamStartX + beamEndX) / 2;
+const beamMidY = (beamStartY + beamEndY) / 2;
+
+const beamLine = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.04, 0.04, BEAM_LEN, 8), matBeam);
+// CylinderGeometry is along Y by default. Rotate to point along beam direction.
+// Beam now goes from +X to -X (down-left towards target)
+beamLine.rotation.z = (Math.PI / 2 + BEAM_ANGLE); // tilt from horizontal, reversed direction
+beamLine.position.set(beamMidX, beamMidY, beamEndZ);
+groups.beam.add(beamLine);
+
+// Arrow at the end (near target) — points in -X direction (toward target)
+const arrowGeo = new THREE.ConeGeometry(0.12, 0.4, 8);
+// Rotate cone to point along beam direction (down-left towards target from +X side)
+arrowGeo.rotateZ((Math.PI / 2 + BEAM_ANGLE));
+const beamArrow = new THREE.Mesh(arrowGeo, makeMat(0xffff40, 0.6, 0.5));
+beamArrow.position.set(beamEndX + 0.5 * Math.cos(BEAM_ANGLE),
+                        beamEndY + 0.5 * Math.sin(BEAM_ANGLE), beamEndZ);
+groups.beam.add(beamArrow);
+
+// ============== HUMAN FIGURE FOR SCALE ==============
+// Simple stick figure near DS (like in the reference)
+const humanGroup = new THREE.Group();
+const headGeo = new THREE.SphereGeometry(0.12, 12, 12);
+const bodyMat = makeMat(0x888888, 0.8);
+const head = new THREE.Mesh(headGeo, bodyMat);
+head.position.set(0, 1.6, 0);
+humanGroup.add(head);
+const bodyGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.8, 8);
+const body = new THREE.Mesh(bodyGeo, bodyMat);
+body.position.set(0, 1.1, 0);
+humanGroup.add(body);
+const legGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.7, 8);
+for (const dz of [-0.1, 0.1]) {
+  const leg = new THREE.Mesh(legGeo, bodyMat);
+  leg.position.set(0, 0.35, dz);
+  humanGroup.add(leg);
+}
+humanGroup.position.set(DS_CENTER_X + 1, DS_CENTER_Y - DS_OUTER_R - 0.1, DZ + DS_OUTER_R + 0.5);
+scene.add(humanGroup);
+
+// ============== LABELS ==============
+const labelSprites = [];
+function makeLabel(text, position, visible) {
+  visible = visible || false;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 512; canvas.height = 64;
+  ctx.fillStyle = 'rgba(10,10,30,0.7)';
+  if (ctx.roundRect) { ctx.roundRect(0, 0, 512, 64, 8); ctx.fill(); }
+  else { ctx.fillRect(0, 0, 512, 64); }
+  ctx.fillStyle = '#ffdd44';
+  ctx.font = 'bold 26px Segoe UI, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, 256, 42);
+  const tex = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sprite.scale.set(4.5, 0.55, 1);
+  sprite.position.copy(position);
+  sprite.visible = visible;
+  scene.add(sprite);
+  labelSprites.push(sprite);
+  return sprite;
+}
+
+makeLabel('Production Solenoid', new THREE.Vector3(PS_CENTER_X, 3.0, 0));
+makeLabel('4.6T', new THREE.Vector3(PS_CENTER_X, 2.4, 0));
+makeLabel('Transport Solenoid', new THREE.Vector3(TS3_START_X, 2.5, (TS3_START_Z + TS3_END_Z) / 2));
+makeLabel('2.5T → 2.0T', new THREE.Vector3(TS3_START_X, 1.8, (TS3_START_Z + TS3_END_Z) / 2));
+makeLabel('Detector Solenoid', new THREE.Vector3(DS_CENTER_X, 3.0, DZ));
+makeLabel('2.0T → 1.0T', new THREE.Vector3(DS_CENTER_X, 2.4, DZ));
+makeLabel('8 GeV Proton Beam', new THREE.Vector3(beamMidX, beamMidY + 1.0, 0));
+makeLabel('Stopping Target', new THREE.Vector3(DS_ENTER_X + 1.5, -2.0, DZ));
+makeLabel('Tracker', new THREE.Vector3(TRACKER_CENTER, -2.0, DZ));
+makeLabel('Calorimeter', new THREE.Vector3(CALO_START + 0.35, -2.0, DZ));
+makeLabel('Cosmic Ray Veto', new THREE.Vector3(DS_CENTER_X, 3.8, DZ));
+
+// ============== ORBIT CONTROLS ==============
+let isDragging = false, prevMouse = { x: 0, y: 0 };
+let spherical = { theta: 0.6, phi: 1.1, radius: 32 };
+const camTarget = new THREE.Vector3(-2, 0, DZ / 2);
+let autoRotate = false;
+
+function updateCamera() {
+  camera.position.x = camTarget.x + spherical.radius * Math.sin(spherical.phi) * Math.sin(spherical.theta);
+  camera.position.y = camTarget.y + spherical.radius * Math.cos(spherical.phi);
+  camera.position.z = camTarget.z + spherical.radius * Math.sin(spherical.phi) * Math.cos(spherical.theta);
+  camera.lookAt(camTarget);
+}
+
+renderer.domElement.addEventListener('mousedown', e => { isDragging = true; prevMouse = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  spherical.theta += (e.clientX - prevMouse.x) * 0.005;
+  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + (e.clientY - prevMouse.y) * 0.005));
+  prevMouse = { x: e.clientX, y: e.clientY };
+});
+window.addEventListener('mouseup', () => isDragging = false);
+renderer.domElement.addEventListener('wheel', e => {
+  spherical.radius = Math.max(5, Math.min(60, spherical.radius + e.deltaY * 0.02));
+});
+
+// Touch
+renderer.domElement.addEventListener('touchstart', e => {
+  if (e.touches.length === 1) { isDragging = true; prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }
+});
+renderer.domElement.addEventListener('touchmove', e => {
+  if (!isDragging || e.touches.length !== 1) return;
+  spherical.theta += (e.touches[0].clientX - prevMouse.x) * 0.005;
+  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + (e.touches[0].clientY - prevMouse.y) * 0.005));
+  prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+});
+renderer.domElement.addEventListener('touchend', () => isDragging = false);
+
+// ============== RAYCASTING ==============
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const tooltip = document.getElementById('tooltip');
+
+renderer.domElement.addEventListener('click', e => {
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const allMeshes = [];
+  scene.traverse(obj => { if (obj.isMesh) allMeshes.push(obj); });
+  const intersects = raycaster.intersectObjects(allMeshes);
+  if (intersects.length > 0) {
+    let obj = intersects[0].object;
+    while (obj && !obj.userData.title) obj = obj.parent;
+    if (obj && obj.userData.title) {
+      document.getElementById('tt-title').textContent = obj.userData.title;
+      document.getElementById('tt-desc').textContent = obj.userData.desc;
+      tooltip.style.display = 'block';
+      tooltip.style.left = Math.min(e.clientX + 15, window.innerWidth - 300) + 'px';
+      tooltip.style.top = Math.min(e.clientY + 15, window.innerHeight - 100) + 'px';
+      setTimeout(() => tooltip.style.display = 'none', 5000);
+    }
+  } else { tooltip.style.display = 'none'; }
+});
+
+// ============== UI CONTROLS ==============
+let cutaway = false, exploded = false, labelsOn = false;
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  spherical = { theta: 0.6, phi: 1.1, radius: 32 };
+  camTarget.set(-2, 0, DZ / 2);
+  exploded = false; cutaway = false; resetExplode(); resetCutaway();
+  document.getElementById('btn-explode').classList.remove('active');
+  document.getElementById('btn-cutaway').classList.remove('active');
+});
+
+document.getElementById('btn-cutaway').addEventListener('click', function() {
+  cutaway = !cutaway; this.classList.toggle('active');
+  if (cutaway) {
+    matPSshell.opacity = 0.12; matTSshell.opacity = 0.12; matDSshell.opacity = 0.12; matCRV.opacity = 0.05;
+    [matPSshell, matTSshell, matDSshell, matCRV].forEach(m => m.needsUpdate = true);
+  } else { resetCutaway(); }
+});
+function resetCutaway() {
+  matPSshell.opacity = 0.45; matTSshell.opacity = 0.50; matDSshell.opacity = 0.40; matCRV.opacity = 0.18;
+  [matPSshell, matTSshell, matDSshell, matCRV].forEach(m => m.needsUpdate = true);
+}
+
+const origPos = {};
+Object.entries(groups).forEach(([k, g]) => origPos[k] = g.position.clone());
+
+document.getElementById('btn-explode').addEventListener('click', function() {
+  exploded = !exploded; this.classList.toggle('active');
+  if (exploded) {
+    groups.ps.position.x -= 4;
+    groups.ds.position.x += 4;
+    groups.crv.position.y += 4;
+    groups.tracker.position.z += 3;
+    groups.calorimeter.position.z -= 3;
+    groups.beam.position.x -= 4;
+    groups.target.position.y -= 2;
+  } else { resetExplode(); }
+});
+function resetExplode() {
+  Object.entries(origPos).forEach(([k, p]) => groups[k].position.copy(p));
+}
+
+document.getElementById('btn-labels').addEventListener('click', function() {
+  labelsOn = !labelsOn; this.classList.toggle('active');
+  labelSprites.forEach(s => s.visible = labelsOn);
+});
+
+document.getElementById('btn-animate').addEventListener('click', function() {
+  autoRotate = !autoRotate; this.classList.toggle('active');
+});
+
+// Side view: camera looks along Z-axis (from the side), seeing PS-TS-DS layout
+document.getElementById('btn-side').addEventListener('click', function() {
+  spherical.theta = 0;          // looking along Z
+  spherical.phi = Math.PI / 2;  // level with horizon
+  spherical.radius = 35;
+  camTarget.set(-2, 0, DZ / 2);
+});
+
+// Top view: camera looks straight down from above
+document.getElementById('btn-top').addEventListener('click', function() {
+  spherical.theta = 0;
+  spherical.phi = 0.05;         // nearly straight down (0 = exact top)
+  spherical.radius = 35;
+  camTarget.set(-2, 0, DZ / 2);
+});
+
+// Legend highlight
+document.querySelectorAll('.legend-item').forEach(item => {
+  item.addEventListener('click', () => {
+    const g = groups[item.dataset.group];
+    if (!g) return;
+    g.traverse(obj => {
+      if (obj.isMesh && obj.material) {
+        const orig = obj.material.emissiveIntensity;
+        obj.material.emissiveIntensity = 0.6;
+        setTimeout(() => { obj.material.emissiveIntensity = orig; }, 800);
+      }
+    });
+  });
+});
+
+// ============== PARTICLE SIMULATION ==============
+// Simulates: proton beam → PS target → pion spray → muons through TS → stop at ST
+// Also: conversion electron from ST → through tracker → calorimeter
+
+let beamOn = false;
+let cosmicOn = false;
+const particles = [];
+const PARTICLE_POOL_SIZE = 200;
+
+// Reuse the TS curve for particle paths
+const tsPathCurve = tsCurve;
+
+// Particle types with colors and behaviors
+const PTYPES = {
+  proton:   { color: 0xffff00, size: 0.06, speed: 0.02, trail: true },
+  pion:     { color: 0xff6600, size: 0.04, speed: 0.01, trail: false },
+  muon:     { color: 0x00ccff, size: 0.05, speed: 0.0075, trail: true },
+  electron: { color: 0x00ff88, size: 0.04, speed: 0.006, trail: true },
+  cosmic:   { color: 0xff4488, size: 0.045, speed: 0.008, trail: true },
+};
+
+// Create reusable particle meshes — always render on top of detector geometry
+function createParticleMesh(ptype) {
+  const geo = new THREE.SphereGeometry(ptype.size, 6, 6);
+  const mat = new THREE.MeshBasicMaterial({ color: ptype.color, transparent: true, opacity: 1.0, depthTest: false });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 10; // always on top
+  mesh.visible = false;
+  scene.add(mesh);
+
+  // Glow sprite
+  const glowCanvas = document.createElement('canvas');
+  glowCanvas.width = 32; glowCanvas.height = 32;
+  const gctx = glowCanvas.getContext('2d');
+  const gradient = gctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  const c = new THREE.Color(ptype.color);
+  gradient.addColorStop(0, 'rgba(' + Math.floor(c.r*255) + ',' + Math.floor(c.g*255) + ',' + Math.floor(c.b*255) + ',1.0)');
+  gradient.addColorStop(0.4, 'rgba(' + Math.floor(c.r*255) + ',' + Math.floor(c.g*255) + ',' + Math.floor(c.b*255) + ',0.5)');
+  gradient.addColorStop(1, 'rgba(' + Math.floor(c.r*255) + ',' + Math.floor(c.g*255) + ',' + Math.floor(c.b*255) + ',0)');
+  gctx.fillStyle = gradient;
+  gctx.fillRect(0, 0, 32, 32);
+  const glowTex = new THREE.CanvasTexture(glowCanvas);
+  const glowSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, depthTest: false }));
+  glowSprite.renderOrder = 11;
+  glowSprite.scale.set(ptype.size * 10, ptype.size * 10, 1);
+  mesh.add(glowSprite);
+
+  return mesh;
+}
+
+// Trail system using line segments
+function createTrail(color, maxPoints) {
+  const positions = new Float32Array(maxPoints * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setDrawRange(0, 0);
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6, depthTest: false });
+  const line = new THREE.Line(geo, mat);
+  line.renderOrder = 9;
+  scene.add(line);
+  return { line, positions, count: 0, maxPoints };
+}
+
+function addTrailPoint(trail, x, y, z) {
+  if (trail.count < trail.maxPoints) {
+    trail.positions[trail.count * 3] = x;
+    trail.positions[trail.count * 3 + 1] = y;
+    trail.positions[trail.count * 3 + 2] = z;
+    trail.count++;
+    trail.line.geometry.setDrawRange(0, trail.count);
+    trail.line.geometry.attributes.position.needsUpdate = true;
+  }
+}
+
+function resetTrail(trail) {
+  trail.count = 0;
+  trail.line.geometry.setDrawRange(0, 0);
+}
+
+// Persistent electron trails — stay visible after electron is gone
+const persistentTrails = [];
+const MAX_PERSISTENT_TRAILS = 12;
+
+function savePersistentTrail(trail, color) {
+  if (trail.count < 5) return; // too short to bother
+  // Copy current trail positions into a new static line
+  const posCopy = new Float32Array(trail.count * 3);
+  for (let i = 0; i < trail.count * 3; i++) posCopy[i] = trail.positions[i];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(posCopy, 3));
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5, depthTest: false });
+  const line = new THREE.Line(geo, mat);
+  line.renderOrder = 8;
+  line._createdAt = Date.now();
+  scene.add(line);
+  persistentTrails.push(line);
+  // Remove oldest if too many
+  while (persistentTrails.length > MAX_PERSISTENT_TRAILS) {
+    const old = persistentTrails.shift();
+    scene.remove(old);
+    old.geometry.dispose();
+    old.material.dispose();
+  }
+}
+
+// Fade persistent trails over time
+function updatePersistentTrails() {
+  const now = Date.now();
+  for (let i = persistentTrails.length - 1; i >= 0; i--) {
+    const trail = persistentTrails[i];
+    const age = (now - trail._createdAt) / 1000; // seconds
+    const fadeTime = 15; // seconds before fully faded
+    trail.material.opacity = Math.max(0, 0.5 * (1 - age / fadeTime));
+    if (trail.material.opacity <= 0) {
+      scene.remove(trail);
+      trail.geometry.dispose();
+      trail.material.dispose();
+      persistentTrails.splice(i, 1);
+    }
+  }
+}
+
+// Particle class
+class Particle {
+  constructor() {
+    this.active = false;
+    this.type = null;
+    this.mesh = null;
+    this.phase = 0;     // 0=proton beam, 1=pion spray, 2=muon in TS, 3=muon stopped, 4=electron
+    this.progress = 0;
+    this.speed = 0;
+    this.lifetime = 0;
+    this.maxLife = 0;
+    this.trail = null;
+    this.trailTimer = 0;
+    this.spreadX = 0;
+    this.spreadY = 0;
+    this.spreadZ = 0;
+    this.meshes = {};
+  }
+
+  init() {
+    this.meshes.proton = createParticleMesh(PTYPES.proton);
+    this.meshes.pion = createParticleMesh(PTYPES.pion);
+    this.meshes.muon = createParticleMesh(PTYPES.muon);
+    this.meshes.electron = createParticleMesh(PTYPES.electron);
+    this.meshes.cosmic = createParticleMesh(PTYPES.cosmic);
+    this.trail = createTrail(0x00ccff, 300);
+    // Cosmic ray muon direction and origin (set on activate)
+    this.cosmicStartX = 0; this.cosmicStartY = 0; this.cosmicStartZ = 0;
+    this.cosmicDirX = 0; this.cosmicDirY = 0; this.cosmicDirZ = 0;
+    this.cosmicHitsCRV = false;
+  }
+
+  hideAll() {
+    Object.values(this.meshes).forEach(m => m.visible = false);
+    this.trail.line.visible = false;
+  }
+
+  activate(phase) {
+    this.active = true;
+    this.phase = phase;
+    this.progress = 0;
+    this.lifetime = 0;
+    this.spreadX = (Math.random() - 0.5) * 0.15;
+    this.spreadY = (Math.random() - 0.5) * 0.15;
+    this.spreadZ = (Math.random() - 0.5) * 0.15;
+    this.trailTimer = 0;
+    this._crvFlashed = false;
+    resetTrail(this.trail);
+
+    if (phase === 0) {
+      // Proton approaching target — tight speed spread so bunch stays together
+      this.speed = PTYPES.proton.speed + Math.random() * 0.002;
+      this.maxLife = 200;
+      this.mesh = this.meshes.proton;
+    } else if (phase === 1) {
+      // Pion spray from target — wide angular spread for dramatic splash
+      this.speed = PTYPES.pion.speed + Math.random() * 0.012;
+      this.maxLife = 140 + Math.random() * 160;
+      this.spreadX = (Math.random() - 0.5) * 2.0;
+      this.spreadY = (Math.random() - 0.5) * 2.0;
+      this.spreadZ = (Math.random() - 0.5) * 2.0;
+      this.mesh = this.meshes.pion;
+    } else if (phase === 2) {
+      // Muon travelling through TS — tight speed spread so bunch stays together
+      this.speed = PTYPES.muon.speed + Math.random() * 0.0008;
+      this.maxLife = 1000;
+      this.mesh = this.meshes.muon;
+      this.trail.line.visible = true;
+      this.trail.line.material.color.set(PTYPES.muon.color);
+      this.trail.line.material.opacity = 0.3;
+    } else if (phase === 4) {
+      // Conversion electron from stopping target through DS
+      this.speed = PTYPES.electron.speed + Math.random() * 0.001;
+      this.maxLife = 800;
+      this.mesh = this.meshes.electron;
+      this.trail.line.visible = true;
+      this.trail.line.material.color.set(PTYPES.electron.color);
+      this.trail.line.material.opacity = 0.35;
+    } else if (phase === 5) {
+      // Cosmic ray muon — random track from above, mostly near DS/CRV region
+      this.speed = PTYPES.cosmic.speed + Math.random() * 0.003;
+      this.maxLife = 800;
+      this.mesh = this.meshes.cosmic;
+      this.trail.line.visible = true;
+      this.trail.line.material.color.set(PTYPES.cosmic.color);
+      this.trail.line.material.opacity = 0.25;
+
+      // Stopping target position in DS
+      const ST_X = DS_ENTER_X + 2.0;
+      const ST_Y = DS_CENTER_Y;
+      const ST_Z = DZ;
+
+      // Start position: high above, aimed to pass through the stopping target
+      this.cosmicStartY = 14 + Math.random() * 4;
+      // Add slight random offset so not every cosmic hits exactly the same spot
+      const aimOffsetX = (Math.random() - 0.5) * 2.0;
+      const aimOffsetZ = (Math.random() - 0.5) * 2.0;
+      const aimX = ST_X + aimOffsetX;
+      const aimZ = ST_Z + aimOffsetZ;
+      // Start position spread around above the target
+      this.cosmicStartX = aimX + (Math.random() - 0.5) * 4;
+      this.cosmicStartZ = aimZ + (Math.random() - 0.5) * 4;
+      // Direction: aim toward the stopping target region
+      const dx = aimX - this.cosmicStartX;
+      const dy = ST_Y - this.cosmicStartY;
+      const dz = aimZ - this.cosmicStartZ;
+      const dLen = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      this.cosmicDirX = dx / dLen;
+      this.cosmicDirY = dy / dLen;
+      this.cosmicDirZ = dz / dLen;
+
+      // These cosmics always pass through the CRV (aimed at DS interior)
+      this.cosmicHitsCRV = true;
+      this._spawnedFakeElectron = false;
+      this._cosmicHitST = false; // track if it reached the stopping target
+    } else if (phase === 6) {
+      // Fake signal electron from cosmic — looks like conversion electron but from cosmic muon
+      this.speed = PTYPES.electron.speed + Math.random() * 0.001;
+      this.maxLife = 800;
+      this.mesh = this.meshes.electron;
+      this.trail.line.visible = true;
+      // Use a slightly different green to distinguish subtly (but looks like signal)
+      this.trail.line.material.color.set(PTYPES.electron.color);
+      this.trail.line.material.opacity = 0.35;
+      this._fakeStartX = 0;
+      this._fakeStartY = 0;
+      this._fakeStartZ = 0;
+    }
+
+    this.hideAll();
+    if (this.mesh) this.mesh.visible = true;
+  }
+
+  update() {
+    if (!this.active) return;
+    this.lifetime++;
+    this.progress += this.speed;
+
+    if (this.phase === 0) {
+      // Proton: travel along angled beam line toward target
+      const t = Math.min(1, this.progress * 0.4);
+      const x = beamStartX + t * (beamEndX - beamStartX) + this.spreadY * 0.05;
+      const y = beamStartY + t * (beamEndY - beamStartY) + this.spreadZ * 0.05;
+      const z = beamEndZ + this.spreadZ * 0.05;
+      this.mesh.position.set(x, y, z);
+
+      // Hit target → massive splash of secondaries + muons
+      if (t >= 1) {
+        this.mesh.visible = false;
+        this.active = false;
+        // First wave: immediate large pion burst
+        for (let j = 0; j < 20; j++) {
+          const p = getInactiveParticle();
+          if (p) p.activate(1);
+        }
+        // Second wave: delayed secondary shower
+        setTimeout(() => {
+          for (let j = 0; j < 10; j++) {
+            const p = getInactiveParticle();
+            if (p) p.activate(1);
+          }
+        }, 120);
+        // Third wave: late stragglers
+        setTimeout(() => {
+          for (let j = 0; j < 6; j++) {
+            const p = getInactiveParticle();
+            if (p) p.activate(1);
+          }
+        }, 300);
+        // Muon bunch — 5 to 10 muons produced together, travelling as a group
+        const nMuons = 5 + Math.floor(Math.random() * 6); // 5-10
+        for (let mi = 0; mi < nMuons; mi++) {
+          const delay = mi * 30; // slight stagger so they separate a bit visually
+          if (delay === 0) {
+            const m = getInactiveParticle();
+            if (m) m.activate(2);
+          } else {
+            setTimeout(() => {
+              const m = getInactiveParticle();
+              if (m) m.activate(2);
+            }, delay);
+          }
+        }
+      }
+    } else if (this.phase === 1) {
+      // Pion spray: radiate outward from target then fade
+      const t = this.progress;
+      const x = PS_CENTER_X + this.spreadX * t * 5;
+      const y = PS_CENTER_Y + this.spreadY * t * 5;
+      const z = this.spreadZ * t * 5;
+      this.mesh.position.set(x, y, z);
+      this.mesh.material.opacity = Math.max(0, 1 - t * 0.5);
+
+      if (this.lifetime > this.maxLife || this.mesh.material.opacity <= 0) {
+        this.mesh.visible = false;
+        this.active = false;
+      }
+    } else if (this.phase === 2) {
+      // Muon through TS S-curve with helical spiral, then into DS to stopping target
+      const tsFrac = Math.min(1, this.progress * 0.35);
+
+      if (tsFrac < 1) {
+        // Travelling through TS — helical spiral around the curve centerline
+        const pt = tsPathCurve.getPoint(tsFrac);
+        // Get local tangent for spiral plane perpendicular to path
+        const tNext = Math.min(1, tsFrac + 0.001);
+        const ptNext = tsPathCurve.getPoint(tNext);
+        const tangent = new THREE.Vector3().subVectors(ptNext, pt).normalize();
+        // Build a local coordinate frame: up = Y, then perp1, perp2
+        const up = new THREE.Vector3(0, 1, 0);
+        const perp1 = new THREE.Vector3().crossVectors(tangent, up).normalize();
+        const perp2 = new THREE.Vector3().crossVectors(tangent, perp1).normalize();
+        // Spiral parameters
+        const spiralR = 0.15 + Math.abs(this.spreadX) * 0.6; // radius varies per muon
+        const spiralFreq = this.lifetime * 0.08;
+        const offPerp1 = spiralR * Math.sin(spiralFreq);
+        const offPerp2 = spiralR * Math.cos(spiralFreq);
+        const sx = pt.x + perp1.x * offPerp1 + perp2.x * offPerp2;
+        const sy = pt.y + perp1.y * offPerp1 + perp2.y * offPerp2;
+        const sz = pt.z + perp1.z * offPerp1 + perp2.z * offPerp2;
+        this.mesh.position.set(sx, sy, sz);
+
+        // Trail
+        this.trailTimer++;
+        if (this.trailTimer % 2 === 0) {
+          addTrailPoint(this.trail, sx, sy, sz);
+        }
+      } else {
+        // Entered DS — spiral towards stopping target
+        const dsFrac = (this.progress * 0.35 - 1) * 2;
+        const stX = DS_ENTER_X + dsFrac * 3;
+        const spiralR = 0.12 * Math.max(0, 1 - dsFrac * 0.5); // spiral decays as muon slows
+        const spiralAngle = this.lifetime * 0.1;
+        const sy = PS_CENTER_Y + spiralR * Math.sin(spiralAngle);
+        const sz = DZ + spiralR * Math.cos(spiralAngle);
+        this.mesh.position.set(stX, sy, sz);
+
+        this.trailTimer++;
+        if (this.trailTimer % 2 === 0) {
+          addTrailPoint(this.trail, stX, sy, sz);
+        }
+
+        // Reached stopping target → stop and maybe spawn electron after a pause
+        if (stX >= DS_ENTER_X + 2.0) {
+          this.mesh.material.opacity = 0;
+          this.active = false;
+          this.mesh.visible = false;
+
+          // Conversion electron after a visible pause (~1.5-2s)
+          if (Math.random() < 0.35) {
+            setTimeout(() => {
+              const e = getInactiveParticle();
+              if (e) e.activate(4);
+            }, 1500 + Math.random() * 500);
+          }
+        }
+      }
+    } else if (this.phase === 4) {
+      // Conversion electron: from stopping target through tracker to calorimeter
+      // Spiral path (helical in magnetic field)
+      const t = this.progress;
+      const startX = DS_ENTER_X + 2.0;
+      const x = startX + t * 8;
+      const spiralR = 0.25 + Math.sin(t * 2) * 0.1;
+      const spiralAngle = t * 25;
+      const y = PS_CENTER_Y + spiralR * Math.sin(spiralAngle);
+      const z = DZ + spiralR * Math.cos(spiralAngle);
+      this.mesh.position.set(x, y, z);
+
+      this.trailTimer++;
+      if (this.trailTimer % 1 === 0) {
+        addTrailPoint(this.trail, x, y, z);
+      }
+
+      // Reached calorimeter
+      if (x >= CALO_START + 1.0 || this.lifetime > this.maxLife) {
+        savePersistentTrail(this.trail, PTYPES.electron.color);
+        this.mesh.visible = false;
+        this.active = false;
+      }
+    } else if (this.phase === 5) {
+      // Cosmic ray muon: straight line from above
+      const t = this.progress;
+      const travelDist = t * 15; // scale distance
+      const x = this.cosmicStartX + travelDist * this.cosmicDirX;
+      const y = this.cosmicStartY + travelDist * this.cosmicDirY;
+      const z = this.cosmicStartZ + travelDist * this.cosmicDirZ;
+      this.mesh.position.set(x, y, z);
+
+      this.trailTimer++;
+      if (this.trailTimer % 2 === 0) {
+        addTrailPoint(this.trail, x, y, z);
+      }
+
+      // CRV veto flash: when the muon crosses CRV top face
+      if (this.cosmicHitsCRV && !this._crvFlashed) {
+        const crvTop = DS_CENTER_Y + CRV_H / 2;
+        if (y <= crvTop) {
+          this._crvFlashed = true;
+          // Flash the CRV panels red briefly
+          const origEmissive = matCRV.emissiveIntensity;
+          const origColor = matCRV.emissive.getHex();
+          matCRV.emissive.setHex(0xff2244);
+          matCRV.emissiveIntensity = 0.8;
+          matCRV.opacity = 0.45;
+          matCRV.needsUpdate = true;
+          setTimeout(() => {
+            matCRV.emissive.setHex(origColor);
+            matCRV.emissiveIntensity = origEmissive;
+            matCRV.opacity = cutaway ? 0.05 : 0.18;
+            matCRV.needsUpdate = true;
+          }, 250);
+        }
+      }
+
+      // When cosmic muon reaches the stopping target region, spawn a fake signal electron
+      if (!this._cosmicHitST) {
+        const stTargetX = DS_ENTER_X + 2.0;
+        const distToST = Math.sqrt(Math.pow(x - stTargetX, 2) + Math.pow(y - DS_CENTER_Y, 2) + Math.pow(z - DZ, 2));
+        if (distToST < 0.6) {
+          this._cosmicHitST = true;
+          // Cosmic muon interacts with stopping target — spawn fake signal electron
+          const fe = getInactiveParticle();
+          if (fe) {
+            fe.activate(6);
+            fe._fakeStartX = stTargetX;
+            fe._fakeStartY = DS_CENTER_Y;
+            fe._fakeStartZ = DZ;
+          }
+        }
+      }
+
+      // Stop when below the floor or lifetime exceeded
+      if (y < -5 || this.lifetime > this.maxLife) {
+        this.mesh.visible = false;
+        this.active = false;
+      }
+    } else if (this.phase === 6) {
+      // Fake signal electron from cosmic muon interaction — mimics conversion electron
+      // Uses electron mesh but with slightly different spiral (looks like signal)
+      const t = this.progress;
+      const startX = this._fakeStartX || (DS_ENTER_X + 3.0);
+      const x = startX + t * 8;
+      const spiralR = 0.28 + Math.sin(t * 1.8) * 0.12;
+      const spiralAngle = t * 22;
+      const baseY = this._fakeStartY || PS_CENTER_Y;
+      const baseZ = this._fakeStartZ || DZ;
+      const y = baseY + spiralR * Math.sin(spiralAngle);
+      const z = baseZ + spiralR * Math.cos(spiralAngle);
+      this.mesh.position.set(x, y, z);
+
+      this.trailTimer++;
+      if (this.trailTimer % 1 === 0) {
+        addTrailPoint(this.trail, x, y, z);
+      }
+
+      // Reached calorimeter or lifetime exceeded
+      if (x >= CALO_START + 1.0 || this.lifetime > this.maxLife) {
+        savePersistentTrail(this.trail, PTYPES.electron.color);
+        this.mesh.visible = false;
+        this.active = false;
+      }
+    }
+  }
+
+  deactivate() {
+    this.active = false;
+    this.hideAll();
+    resetTrail(this.trail);
+  }
+}
+
+// Particle pool
+for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+  const p = new Particle();
+  p.init();
+  particles.push(p);
+}
+
+function getInactiveParticle() {
+  for (const p of particles) {
+    if (!p.active) return p;
+  }
+  return null;
+}
+
+// Proton pulse timer
+let protonTimer = 900; // start at interval so first proton fires immediately
+const PROTON_INTERVAL = 900; // frames between proton pulses (~15s at 60fps)
+
+// Cosmic ray timer (independent of beam)
+let cosmicTimer = 0;
+const COSMIC_INTERVAL = 80; // frames between cosmic muons
+
+function updateParticles() {
+  if (!beamOn && !cosmicOn) return;
+
+  if (beamOn) {
+    protonTimer++;
+    if (protonTimer >= PROTON_INTERVAL) {
+      protonTimer = 0;
+      // Launch a bunch of 5-8 protons together
+      const nProtons = 5 + Math.floor(Math.random() * 4);
+      for (let pi = 0; pi < nProtons; pi++) {
+        const delay = pi * 25;
+        if (delay === 0) {
+          const p = getInactiveParticle();
+          if (p) p.activate(0);
+        } else {
+          setTimeout(() => {
+            const p = getInactiveParticle();
+            if (p) p.activate(0);
+          }, delay);
+        }
+      }
+    }
+  }
+
+  // Spawn cosmic ray muons independently
+  if (cosmicOn) {
+    cosmicTimer++;
+    if (cosmicTimer >= COSMIC_INTERVAL + Math.random() * 40) {
+      cosmicTimer = 0;
+      const c = getInactiveParticle();
+      if (c) c.activate(5);
+    }
+  }
+
+  for (const p of particles) {
+    p.update();
+  }
+}
+
+function clearAllParticles() {
+  for (const p of particles) {
+    p.deactivate();
+  }
+  protonTimer = 900; // reset to fire immediately on next Beam On
+  // Clear persistent trails
+  while (persistentTrails.length > 0) {
+    const t = persistentTrails.pop();
+    scene.remove(t);
+    t.geometry.dispose();
+    t.material.dispose();
+  }
+}
+
+// Beam On/Off button
+document.getElementById('btn-particles').addEventListener('click', function() {
+  beamOn = !beamOn;
+  this.classList.toggle('active');
+  this.textContent = beamOn ? 'Beam Off' : 'Beam On';
+  if (!beamOn) {
+    setTimeout(clearAllParticles, 2000); // let particles finish
+  }
+});
+
+// Cosmic On/Off button
+document.getElementById('btn-cosmic').addEventListener('click', function() {
+  cosmicOn = !cosmicOn;
+  this.classList.toggle('active');
+  this.textContent = cosmicOn ? 'Cosmic Off' : 'Cosmic On';
+  if (!cosmicOn) {
+    // Clear only cosmic particles (phase 5 and 6)
+    setTimeout(() => {
+      for (const p of particles) {
+        if (p.active && (p.phase === 5 || p.phase === 6)) p.deactivate();
+      }
+    }, 2000);
+  }
+});
+
+// ============== ANIMATE ==============
+function animate() {
+  requestAnimationFrame(animate);
+  if (autoRotate && !isDragging) spherical.theta += 0.003;
+  updateParticles();
+  updatePersistentTrails();
+  updateCamera();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
