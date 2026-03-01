@@ -27,13 +27,18 @@ canvas { display: block; }
 #controls button:hover { background: #337; }
 #controls button.active { background: #448; color: #fff; }
 #legend {
-  position: absolute; top: 10px; right: 10px; background: rgba(10,10,30,0.85);
+  position: absolute; top: 10px; right: 10px; background: rgba(10,10,30,0.88);
   border: 1px solid #334; border-radius: 8px; padding: 14px 18px; z-index: 10; font-size: 12px;
+  max-height: 90vh; overflow-y: auto;
 }
-#legend h3 { font-size: 14px; color: #6af; margin-bottom: 8px; }
-.legend-item { display: flex; align-items: center; margin-bottom: 5px; cursor: pointer; }
-.legend-item:hover { opacity: 0.8; }
-.legend-swatch { width: 14px; height: 14px; border-radius: 3px; margin-right: 8px; border: 1px solid #555; }
+#legend h3 { font-size: 14px; color: #6af; margin-bottom: 10px; grid-column: 1 / -1; }
+.legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; }
+.legend-item { display: flex; align-items: flex-start; cursor: pointer; padding: 3px 4px; border-radius: 4px; }
+.legend-item:hover { opacity: 0.8; background: rgba(255,255,255,0.05); }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; margin-right: 8px; border: 1px solid #555; flex-shrink: 0; margin-top: 2px; }
+.legend-title { font-weight: bold; color: #dde; }
+.legend-desc { color: #8899aa; font-size: 10.5px; line-height: 1.3; margin-top: 2px; }
+.legend-sep { grid-column: 1 / -1; border-top: 1px solid #334; margin: 4px 0; }
 #tooltip {
   position: absolute; display: none; background: rgba(10,10,30,0.92);
   border: 1px solid #6af; border-radius: 6px; padding: 10px 14px;
@@ -49,26 +54,30 @@ canvas { display: block; }
   <p style="color:#888;font-size:11px;">Drag to rotate · Scroll to zoom · Click components for details</p>
 </div>
 <div id="legend">
-  <h3>Components</h3>
-  <div class="legend-item" data-group="ps"><div class="legend-swatch" style="background:#e09030;"></div>Production Solenoid</div>
-  <div class="legend-item" data-group="ts"><div class="legend-swatch" style="background:#40a040;"></div>Transport Solenoid</div>
-  <div class="legend-item" data-group="ds"><div class="legend-swatch" style="background:#50b850;"></div>Detector Solenoid</div>
-  <div class="legend-item" data-group="target"><div class="legend-swatch" style="background:#c0c0c0;"></div>Targets</div>
-  <div class="legend-item" data-group="tracker"><div class="legend-swatch" style="background:#d4b830;"></div>Tracker</div>
-  <div class="legend-item" data-group="calorimeter"><div class="legend-swatch" style="background:#e050a0;"></div>Calorimeter</div>
-  <div class="legend-item" data-group="crv"><div class="legend-swatch" style="background:#607080;"></div>Cosmic Ray Veto</div>
-  <div class="legend-item" style="margin-top:8px;border-top:1px solid #334;padding-top:6px;cursor:default;"><div class="legend-swatch" style="background:#ff4488;"></div>Cosmic Ray Muon</div>
+  <h3>Mu2e Components</h3>
+  <div class="legend-grid">
+    <div class="legend-item" data-group="ps"><div class="legend-swatch" style="background:#e09030;"></div><div><div class="legend-title">Production Solenoid (PS)</div><div class="legend-desc">8 kW, 8 GeV protons &rarr; pions &rarr; muons<br>4.6T peak field</div></div></div>
+    <div class="legend-item" data-group="ts"><div class="legend-swatch" style="background:#40a040;"></div><div><div class="legend-title">Transport Solenoid (TS)</div><div class="legend-desc">S-shaped, selects &mu;<sup>&minus;</sup> to stopping target<br>2.5T &rarr; 2.0T gradient</div></div></div>
+    <div class="legend-item" data-group="ds"><div class="legend-swatch" style="background:#50b850;"></div><div><div class="legend-title">Detector Solenoid (DS)</div><div class="legend-desc">Tracker + calorimeter + CRV<br>2.0T &rarr; 1.0T graded field</div></div></div>
+    <div class="legend-item" data-group="target"><div class="legend-swatch" style="background:#c0c0c0;"></div><div><div class="legend-title">Stopping Target</div><div class="legend-desc">17 Al foils, &mu;<sup>&minus;</sup> capture &rarr; e<sup>&minus;</sup> conversion</div></div></div>
+    <div class="legend-item" data-group="tracker"><div class="legend-swatch" style="background:#d4b830;"></div><div><div class="legend-title">Straw Tube Tracker</div><div class="legend-desc">Resolution: 180 keV<br>18 stations, ~3.2m long</div></div></div>
+    <div class="legend-item" data-group="calorimeter"><div class="legend-swatch" style="background:#e050a0;"></div><div><div class="legend-title">Calorimeter</div><div class="legend-desc">CsI crystals, 2 annular disks</div></div></div>
+    <div class="legend-item" data-group="crv"><div class="legend-swatch" style="background:#607080;"></div><div><div class="legend-title">Cosmic Ray Veto (CRV)</div><div class="legend-desc">4 layers scintillator<br>Efficiency: &gt; 99.99%</div></div></div>
+    <div class="legend-sep"></div>
+    <div class="legend-item" style="cursor:default;"><div class="legend-swatch" style="background:#ffff00;"></div><div><div class="legend-title">8 GeV Proton Beam</div><div class="legend-desc">Total POT (design): 3.6 &times; 10<sup>20</sup></div></div></div>
+    <div class="legend-item" style="cursor:default;"><div class="legend-swatch" style="background:#00ccff;"></div><div><div class="legend-title">Muon Rate</div><div class="legend-desc">3 &times; 10<sup>10</sup> &mu;/sec at stopping target</div></div></div>
+  </div>
 </div>
 <div id="controls">
   <button id="btn-reset">Reset View</button>
   <button id="btn-cutaway">Cutaway</button>
   <button id="btn-explode">Explode</button>
-  <button id="btn-labels">Labels</button>
   <button id="btn-animate">Animate</button>
   <button id="btn-side">Side View</button>
   <button id="btn-top">Top View</button>
   <button id="btn-particles" style="background:#432;border-color:#864;color:#fda;">Beam On</button>
   <button id="btn-cosmic" style="background:#322;border-color:#644;color:#f8a;">Cosmic On</button>
+  <button id="btn-fieldoff" style="background:#322;border-color:#c88;color:#ffd;">Field Off</button>
 </div>
 <div id="tooltip"><h4 id="tt-title"></h4><p id="tt-desc"></p></div>
 
@@ -353,6 +362,23 @@ groups.target.add(stopTargetGroup);
 registerComponent(stopTargetGroup, 'target', 'Stopping Target',
   '17 thin aluminum foils where muons stop and may convert to electrons with characteristic energy 104.97 MeV.');
 
+
+//
+// Field-OFF alternate stopping target: single foil at the end of TS (TS→DS interface).
+// This group is toggled ONLY from the Field-Off button handler (no auto-call on load).
+//
+const tsEndFoilGroup = new THREE.Group();
+const tsEndFoil = makeDiskX(0.0, 0.45, makeMat(0xffaa33, 0.9, 0.25));
+// Place at the end of TS, right before DS entrance
+tsEndFoil.position.set(DS_ENTER_X - 0.02, DS_CENTER_Y, TS5_START_Z);
+tsEndFoilGroup.add(tsEndFoil);
+const tsEndFoilEdges = new THREE.EdgesGeometry(tsEndFoil.geometry);
+const tsEndFoilWire = new THREE.LineSegments(tsEndFoilEdges, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }));
+tsEndFoilWire.position.copy(tsEndFoil.position);
+tsEndFoilGroup.add(tsEndFoilWire);
+tsEndFoilGroup.visible = false;
+groups.target.add(tsEndFoilGroup);
+// no registerComponent() here to avoid any selection/raycast edge cases
 // ============== STRAW TUBE TRACKER ==============
 const TRACKER_START = DS_ENTER_X + 4.5;
 const TRACKER_LENGTH = 3.2;
@@ -374,6 +400,22 @@ for (let i = 0; i < 18; i++) {
 
 // ============== ELECTROMAGNETIC CALORIMETER ==============
 const CALO_START = TRACKER_CENTER + TRACKER_LENGTH / 2 + 0.6;
+
+function isCaloHit(x, y, z) {
+  // Geometric acceptance for the two calorimeter disks
+  // Disk centers: x = CALO_START and CALO_START + 0.7
+  // Annulus radii: inner 0.25, outer 0.70 (from makeDiskX calls)
+  const diskXs = [CALO_START, CALO_START + 0.7];
+  const halfThick = 0.25; // loose thickness window in x
+  const dy = y - DS_CENTER_Y;
+  const dz = z - DZ;
+  const r = Math.sqrt(dy*dy + dz*dz);
+  if (r < 0.25 || r > 0.70) return false;
+  for (const xd of diskXs) {
+    if (Math.abs(x - xd) <= halfThick) return true;
+  }
+  return false;
+}
 
 for (let i = 0; i < 2; i++) {
   const xPos = CALO_START + i * 0.7;
@@ -474,90 +516,7 @@ humanGroup.position.set(DS_CENTER_X + 1, DS_CENTER_Y - DS_OUTER_R - 0.1, DZ + DS
 scene.add(humanGroup);
 
 // ============== LABELS ==============
-const labelSprites = [];
-
-// Multi-line label with title + description lines
-function makeLabel(title, lines, position, visible, scaleW, scaleH) {
-  visible = visible || false;
-  scaleW = scaleW || 9;
-  scaleH = scaleH || 1.8;
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  const nLines = lines ? lines.length : 0;
-  canvas.width = 1024;
-  canvas.height = 80 + nLines * 50;
-  // Background
-  ctx.fillStyle = 'rgba(10,10,30,0.75)';
-  if (ctx.roundRect) { ctx.roundRect(0, 0, canvas.width, canvas.height, 12); ctx.fill(); }
-  else { ctx.fillRect(0, 0, canvas.width, canvas.height); }
-  // Title
-  ctx.fillStyle = '#ffdd44';
-  ctx.font = 'bold 46px Segoe UI, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(title, 512, 50);
-  // Description lines
-  if (lines) {
-    ctx.fillStyle = '#bbccdd';
-    ctx.font = '32px Segoe UI, sans-serif';
-    for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], 512, 95 + i * 45);
-    }
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  const aspect = canvas.width / canvas.height;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-  sprite.scale.set(scaleW, scaleH, 1);
-  sprite.position.copy(position);
-  sprite.visible = visible;
-  scene.add(sprite);
-  labelSprites.push(sprite);
-  return sprite;
-}
-
-// Production Solenoid
-makeLabel('Production Solenoid (PS)',
-  ['8 kW 8 GeV protons \u2192 pions \u2192 muons', '4.6T peak field'],
-  new THREE.Vector3(PS_CENTER_X, 3.5, 0));
-
-// Proton Beam
-makeLabel('8 GeV Proton Beam',
-  ['Total POT (design): 3.6 \u00D7 10\u00B2\u2070'],
-  new THREE.Vector3(beamMidX, beamMidY + 1.5, 0), false, 8, 1.4);
-
-// Transport Solenoid
-makeLabel('Transport Solenoid (TS)',
-  ['S-shaped, selects \u03BC\u207B to stopping target', '2.5T \u2192 2.0T gradient'],
-  new THREE.Vector3(TS3_START_X, 3.0, (TS3_START_Z + TS3_END_Z) / 2));
-
-// Muon rate
-makeLabel('Muon rate',
-  ['3 \u00D7 10\u00B9\u2070 \u03BC/sec at stopping target'],
-  new THREE.Vector3(DS_ENTER_X - 1, 3.0, DZ), false, 8, 1.4);
-
-// Detector Solenoid
-makeLabel('Detector Solenoid (DS)',
-  ['tracker + calorimeter + CRV', '2.0T \u2192 1.0T graded field'],
-  new THREE.Vector3(DS_CENTER_X, 3.8, DZ));
-
-// Stopping Target
-makeLabel('Stopping Target',
-  ['17 Al foils, \u03BC\u207B capture \u2192 e\u207B conversion'],
-  new THREE.Vector3(DS_ENTER_X + 1.5, -2.3, DZ), false, 8, 1.4);
-
-// Tracker
-makeLabel('Straw Tube Tracker',
-  ['Resolution: 180 keV', '18 stations, ~3.2m long'],
-  new THREE.Vector3(TRACKER_CENTER, -2.5, DZ));
-
-// Calorimeter
-makeLabel('Calorimeter',
-  ['CsI crystals, 2 annular disks'],
-  new THREE.Vector3(CALO_START + 0.35, -2.3, DZ), false, 7, 1.4);
-
-// Cosmic Ray Veto
-makeLabel('Cosmic Ray Veto (CRV)',
-  ['4 layers scintillator', 'Efficiency: > 99.99%'],
-  new THREE.Vector3(DS_CENTER_X, 4.8, DZ));
+// 3D labels removed — descriptions now in fixed HTML legend panel
 
 // ============== ORBIT CONTROLS ==============
 let isDragging = false, prevMouse = { x: 0, y: 0 };
@@ -623,7 +582,7 @@ renderer.domElement.addEventListener('click', e => {
 });
 
 // ============== UI CONTROLS ==============
-let cutaway = false, exploded = false, labelsOn = false;
+let cutaway = false, exploded = false;
 
 document.getElementById('btn-reset').addEventListener('click', () => {
   spherical = { theta: 0.6, phi: 1.1, radius: 32 };
@@ -664,10 +623,6 @@ function resetExplode() {
   Object.entries(origPos).forEach(([k, p]) => groups[k].position.copy(p));
 }
 
-document.getElementById('btn-labels').addEventListener('click', function() {
-  labelsOn = !labelsOn; this.classList.toggle('active');
-  labelSprites.forEach(s => s.visible = labelsOn);
-});
 
 document.getElementById('btn-animate').addEventListener('click', function() {
   autoRotate = !autoRotate; this.classList.toggle('active');
@@ -705,6 +660,23 @@ document.querySelectorAll('.legend-item').forEach(item => {
 });
 
 // ============== PARTICLE SIMULATION ==============
+
+let FIELD_OFF = false; // when true, beam-like tracks are straight and emitted isotropically
+
+// Initialize Field-Off target visibility
+try {
+  if (typeof stopTargetGroup !== 'undefined') stopTargetGroup.visible = !FIELD_OFF;
+  if (typeof tsEndFoilGroup !== 'undefined') tsEndFoilGroup.visible = FIELD_OFF;
+} catch (e) { /* ignore */ }
+
+const btnFieldOff = document.getElementById('btn-fieldoff');
+if (btnFieldOff) {
+  btnFieldOff.addEventListener('click', () => {
+    FIELD_OFF = !FIELD_OFF;
+    btnFieldOff.classList.toggle('active', FIELD_OFF);
+    btnFieldOff.textContent = FIELD_OFF ? 'Field Off: On' : 'Field Off';
+  });
+}
 // Simulates: proton beam → PS target → pion spray → muons through TS → stop at ST
 // Also: conversion electron from ST → through tracker → calorimeter
 
@@ -768,38 +740,117 @@ function createTrail(color, maxPoints) {
 }
 
 function addTrailPoint(trail, x, y, z) {
+  // Restrict ALL trail/track lines to the tracker volume only
+  // (particles can still move through PS/TS/DS, but the drawn polyline is clipped)
+  const xMin = TRACKER_START;
+  const xMax = TRACKER_START + TRACKER_LENGTH;
+  if (x < xMin || x > xMax) return;
+  // record tracker traversal range
+  if (x < trail.minX) trail.minX = x;
+  if (x > trail.maxX) trail.maxX = x;
   if (trail.count < trail.maxPoints) {
     trail.positions[trail.count * 3] = x;
     trail.positions[trail.count * 3 + 1] = y;
     trail.positions[trail.count * 3 + 2] = z;
     trail.count++;
-    trail.line.geometry.setDrawRange(0, trail.count);
-    trail.line.geometry.attributes.position.needsUpdate = true;
+    // Only draw the polyline after we know it hits the calorimeter
+    if (trail.revealOnCalo) {
+      trail.line.geometry.setDrawRange(0, trail.count);
+      trail.line.geometry.attributes.position.needsUpdate = true;
+    }
   }
 }
 
 function resetTrail(trail) {
   trail.count = 0;
+  trail.revealOnCalo = false;
+  if (trail.line) trail.line.visible = false;
+  trail.minX = 1e9;
+  trail.maxX = -1e9;
   trail.line.geometry.setDrawRange(0, 0);
 }
+function revealTrail(trail) {
+  if (!trail || !trail.line) return;
+  trail.revealOnCalo = true;
+  trail.line.visible = true;
+  trail.line.geometry.setDrawRange(0, trail.count);
+  trail.line.geometry.attributes.position.needsUpdate = true;
+}
+
 
 // Persistent electron trails — stay visible after electron is gone
 const persistentTrails = [];
 const MAX_PERSISTENT_TRAILS = 12;
 
+// Calorimeter hits: small flash markers when a particle reaches the calorimeter
+const caloHits = [];
+const MAX_CALO_HITS = 40;
+
+function addCaloHit(x, y, z, color=0xff9f1a) {
+    const geo = new THREE.IcosahedronGeometry(0.16, 0); // spark-like hit marker
+  const mat = new THREE.MeshBasicMaterial({ color: 0x00d5ff, transparent: true, opacity: 1.0, depthTest: false });
+  const hit = new THREE.Mesh(geo, mat);
+    // small jitter so repeated hits don’t overlap perfectly
+  const j = 0.08;
+  hit.position.set(x + (Math.random()-0.5)*j, y + (Math.random()-0.5)*j, z + (Math.random()-0.5)*j);
+  hit.renderOrder = 12;
+  hit._createdAt = Date.now();
+  scene.add(hit);
+  caloHits.push(hit);
+
+  while (caloHits.length > MAX_CALO_HITS) {
+    const old = caloHits.shift();
+    scene.remove(old);
+    old.geometry.dispose();
+    old.material.dispose();
+  }
+}
+
+function updateCaloHits() {
+  const now = Date.now();
+  for (let i = caloHits.length - 1; i >= 0; i--) {
+    const h = caloHits[i];
+    const age = (now - h._createdAt) / 1000;
+    const fade = 1.2; // seconds (faster)
+    h.material.opacity = Math.max(0, 0.95 * (1 - age / fade));
+    // slight scale pulse
+    const s = 1 + 0.35 * Math.exp(-age * 2.0);
+    h.scale.set(s, s, s);
+    if (h.material.opacity <= 0) {
+      scene.remove(h);
+      h.geometry.dispose();
+      h.material.dispose();
+      caloHits.splice(i, 1);
+    }
+  }
+}
+
 function savePersistentTrail(trail, color) {
-  if (trail.count < 5) return; // too short to bother
-  // Copy current trail positions into a new static line
-  const posCopy = new Float32Array(trail.count * 3);
-  for (let i = 0; i < trail.count * 3; i++) posCopy[i] = trail.positions[i];
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(posCopy, 3));
-  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5, depthTest: false });
-  const line = new THREE.Line(geo, mat);
-  line.renderOrder = 8;
-  line._createdAt = Date.now();
-  scene.add(line);
-  persistentTrails.push(line);
+  if (trail.count < 6) return;
+ // too short to bother
+
+  // Build a thick "tube" track from the stored trail points
+  const pts = [];
+  for (let i = 0; i < trail.count; i++) {
+    const j = i * 3;
+    pts.push(new THREE.Vector3(trail.positions[j], trail.positions[j+1], trail.positions[j+2]));
+  }
+
+  // Smooth curve + tube
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+  const tubularSegments = Math.max(32, Math.min(240, trail.count * 2));
+  const radius = 0.035;          // <<< track thickness (tune here)
+  const radialSegments = 8;
+
+  const geo = new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments, false);
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, depthTest: false });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 8;
+  mesh._createdAt = Date.now();
+
+  scene.add(mesh);
+  persistentTrails.push(mesh);
+
   // Remove oldest if too many
   while (persistentTrails.length > MAX_PERSISTENT_TRAILS) {
     const old = persistentTrails.shift();
@@ -809,13 +860,14 @@ function savePersistentTrail(trail, color) {
   }
 }
 
+
 // Fade persistent trails over time
 function updatePersistentTrails() {
   const now = Date.now();
   for (let i = persistentTrails.length - 1; i >= 0; i--) {
     const trail = persistentTrails[i];
     const age = (now - trail._createdAt) / 1000; // seconds
-    const fadeTime = 15; // seconds before fully faded
+    const fadeTime = 5; // seconds before fully faded (faster)
     trail.material.opacity = Math.max(0, 0.5 * (1 - age / fadeTime));
     if (trail.material.opacity <= 0) {
       scene.remove(trail);
@@ -1087,26 +1139,77 @@ class Particle {
       // Conversion electron: from stopping target through tracker to calorimeter
       // Spiral path (helical in magnetic field)
       const t = this.progress;
+
+      // Start point (near DS entrance into tracker region)
       const startX = DS_ENTER_X + 2.0;
-      const x = startX + t * 8;
-      const spiralR = 0.25 + Math.sin(t * 2) * 0.1;
-      const spiralAngle = t * 25;
-      const y = PS_CENTER_Y + spiralR * Math.sin(spiralAngle);
-      const z = DZ + spiralR * Math.cos(spiralAngle);
+
+      let x, y, z;
+
+      if (FIELD_OFF) {
+        // Field OFF: isotropic straight-line emission
+        if (this._isoDirX === undefined) {
+          // sample isotropic direction on a sphere
+          const u = Math.random();
+          const v = Math.random();
+          const theta = 2 * Math.PI * u;
+          const cosphi = 2 * v - 1;
+          const sinphi = Math.sqrt(Math.max(0, 1 - cosphi * cosphi));
+
+          this._isoDirX = sinphi * Math.cos(theta);
+          this._isoDirY = sinphi * Math.sin(theta);
+          this._isoDirZ = cosphi;
+
+          // bias slightly forward in +x so tracks reach calorimeter more often
+          if (this._isoDirX < 0.15) this._isoDirX = Math.abs(this._isoDirX) + 0.25;
+
+          // normalize
+          const n = Math.sqrt(this._isoDirX*this._isoDirX + this._isoDirY*this._isoDirY + this._isoDirZ*this._isoDirZ);
+          this._isoDirX /= n; this._isoDirY /= n; this._isoDirZ /= n;
+
+          this._isoStartY = this._fakeStartY || PS_CENTER_Y;
+          this._isoStartZ = this._fakeStartZ || DZ;
+        }
+
+        const L = 14.0; // path length scale in DS region
+        x = startX + t * L * this._isoDirX;
+        y = this._isoStartY + t * L * this._isoDirY;
+        z = this._isoStartZ + t * L * this._isoDirZ;
+      } else {
+        // Field ON: spiral (magnetic field)
+        x = startX + t * 8;
+        const spiralR = 0.25 + Math.sin(t * 2) * 0.1;
+        const spiralAngle = t * 25;
+        y = PS_CENTER_Y + spiralR * Math.sin(spiralAngle);
+        z = DZ + spiralR * Math.cos(spiralAngle);
+      }
+
       this.mesh.position.set(x, y, z);
+
 
       this.trailTimer++;
       if (this.trailTimer % 1 === 0) {
         addTrailPoint(this.trail, x, y, z);
       }
-
-      // Reached calorimeter
-      if (x >= CALO_START + 1.0 || this.lifetime > this.maxLife) {
-        savePersistentTrail(this.trail, PTYPES.electron.color);
-        this.mesh.visible = false;
-        this.active = false;
-      }
-    } else if (this.phase === 5) {
+// Calorimeter crossing / end-of-life
+if (x >= CALO_START) {
+  if (isCaloHit(x, y, z)) {
+    // Calorimeter hit marker
+    addCaloHit(x, y, z, 0xff9f1a);
+    // Reveal the tracker-only trace and keep it (persistent)
+    revealTrail(this.trail);
+    savePersistentTrail(this.trail, PTYPES.electron.color);
+  }
+  // Once we've passed the calorimeter region, stop the particle either way
+  if (x >= CALO_START + 1.2) {
+    this.mesh.visible = false;
+    this.active = false;
+  }
+} else if (this.lifetime > this.maxLife) {
+  // Lifetime exceeded before reaching the calorimeter region
+  this.mesh.visible = false;
+  this.active = false;
+}
+} else if (this.phase === 5) {
       // Cosmic ray muon: straight line from above
       const t = this.progress;
       const travelDist = t * 15; // scale distance
@@ -1181,19 +1284,33 @@ class Particle {
       if (this.trailTimer % 1 === 0) {
         addTrailPoint(this.trail, x, y, z);
       }
-
-      // Reached calorimeter or lifetime exceeded
-      if (x >= CALO_START + 1.0 || this.lifetime > this.maxLife) {
-        savePersistentTrail(this.trail, PTYPES.electron.color);
-        this.mesh.visible = false;
-        this.active = false;
-      }
-    }
+// Calorimeter crossing / end-of-life
+if (x >= CALO_START) {
+  if (isCaloHit(x, y, z)) {
+    // Calorimeter hit marker
+    addCaloHit(x, y, z, 0xff9f1a);
+    // Reveal the tracker-only trace and keep it (persistent)
+    revealTrail(this.trail);
+    savePersistentTrail(this.trail, PTYPES.electron.color);
+  }
+  // Once we've passed the calorimeter region, stop the particle either way
+  if (x >= CALO_START + 1.2) {
+    this.mesh.visible = false;
+    this.active = false;
+  }
+} else if (this.lifetime > this.maxLife) {
+  // Lifetime exceeded before reaching the calorimeter region
+  this.mesh.visible = false;
+  this.active = false;
+}
+}
   }
 
   deactivate() {
     this.active = false;
     this.hideAll();
+    this._isoDirX = undefined; this._isoDirY = undefined; this._isoDirZ = undefined;
+    this._isoStartY = undefined; this._isoStartZ = undefined;
     resetTrail(this.trail);
   }
 }
@@ -1304,6 +1421,7 @@ function animate() {
   if (autoRotate && !isDragging) spherical.theta += 0.003;
   updateParticles();
   updatePersistentTrails();
+  updateCaloHits();
   updateCamera();
   renderer.render(scene, camera);
 }
