@@ -23,27 +23,38 @@ def setup_logging(verbose: bool) -> None:
         # Suppress samweb_client debug messages
         logging.getLogger("samweb_client").setLevel(logging.WARNING)
 
-def run(cmd, shell=False):
+def run(cmd, shell=False, retries=0, retry_delay=60):
     """
     Run a shell command with real-time output streaming.
     If shell=True, cmd is a string.
+    retries: number of retry attempts (0 = no retries, just run once)
+    retry_delay: seconds to wait between retries
     Returns the exit code (0 for success) or raises CalledProcessError for failure.
     """
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] Running: {cmd}")
-    
-    # Real-time streaming
-    process = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE, 
-                              stderr=subprocess.STDOUT, text=True, bufsize=1)
-    for line in iter(process.stdout.readline, ''):
-        print(line.rstrip())
-        sys.stdout.flush()
-    
-    process.stdout.close()
-    return_code = process.wait()
-    
-    if return_code != 0:
-        raise subprocess.CalledProcessError(return_code, cmd)
+    import time
+    attempts = retries + 1
+    for attempt in range(1, attempts + 1):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{timestamp}] Running: {cmd}")
+
+        # Real-time streaming
+        process = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in iter(process.stdout.readline, ''):
+            print(line.rstrip())
+            sys.stdout.flush()
+
+        process.stdout.close()
+        return_code = process.wait()
+
+        if return_code == 0:
+            return return_code
+
+        if attempt < attempts:
+            print(f"[{timestamp}] Command failed (attempt {attempt}/{attempts}), retrying in {retry_delay}s...")
+            time.sleep(retry_delay)
+        else:
+            raise subprocess.CalledProcessError(return_code, cmd)
     return return_code
 
 
@@ -442,7 +453,7 @@ def process_jobdef(jobdesc, fname, args):
     
     # Copy jobdef to local directory if not already local
     if not Path(tarball).is_file():
-        run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True)
+        run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True, retries=3, retry_delay=60)
 
     # List input files
     job_io = Mu2eJobIO(tarball)
@@ -468,7 +479,7 @@ def process_jobdef(jobdesc, fname, args):
             file_inloc = locations[0]['location_type']
             print(f"Detected location of {file}: {file_inloc}")
             print(f"Copying {file} from {file_inloc}")
-            run(f"mdh copy-file -e 3 -o -v -s {file_inloc} -l local {file}", shell=True)
+            run(f"mdh copy-file -e 3 -o -v -s {file_inloc} -l local {file}", shell=True, retries=3, retry_delay=60)
         run(f"mkdir indir; mv *.art indir/", shell=True)
         print(f"FCL: {fcl}")
     # Generate FCL - Normal mode with streaming inputs

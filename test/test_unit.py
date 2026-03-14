@@ -17,6 +17,7 @@ import os
 import sys
 import tarfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # Make the package root importable when running from any directory
@@ -1375,6 +1376,233 @@ class TestStashFallback(unittest.TestCase):
         self.assertTrue(result.startswith("xroot://"),
                         f"Expected xroot URL for tape fallback, got: {result}")
         self.assertIn(self._FNAME, result)
+
+
+# ---------------------------------------------------------------------------
+# 18. _create_inputs_file exclude logic (json2jobdef.py)
+# ---------------------------------------------------------------------------
+
+class TestCreateInputsFileExclude(unittest.TestCase):
+    """Verify that _create_inputs_file honours the exclude_files parameter."""
+
+    def setUp(self):
+        import tempfile
+        self._orig_dir = os.getcwd()
+        self._tmpdir = tempfile.mkdtemp()
+        os.chdir(self._tmpdir)
+
+    def tearDown(self):
+        os.chdir(self._orig_dir)
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_no_exclusion_writes_all(self):
+        from utils.json2jobdef import _create_inputs_file
+        all_files = [f"sim.mu2e.Test.TC.00000{i}.art" for i in range(5)]
+        config = {'input_data': {'sim.mu2e.Test.TC.art': 1}}
+        with patch('utils.json2jobdef.list_files', return_value=all_files):
+            _create_inputs_file(config)
+        written = Path('inputs.txt').read_text().strip().split('\n')
+        self.assertEqual(written, all_files)
+
+    def test_exclusion_removes_files(self):
+        from utils.json2jobdef import _create_inputs_file
+        all_files = [f"sim.mu2e.Test.TC.00000{i}.art" for i in range(5)]
+        exclude = {all_files[1], all_files[3]}
+        config = {'input_data': {'sim.mu2e.Test.TC.art': 1}}
+        with patch('utils.json2jobdef.list_files', return_value=all_files):
+            _create_inputs_file(config, exclude_files=exclude)
+        written = Path('inputs.txt').read_text().strip().split('\n')
+        self.assertEqual(len(written), 3)
+        for f in exclude:
+            self.assertNotIn(f, written)
+
+    def test_exclude_all_produces_empty(self):
+        from utils.json2jobdef import _create_inputs_file
+        all_files = ["sim.mu2e.Test.TC.000000.art"]
+        config = {'input_data': {'sim.mu2e.Test.TC.art': 1}}
+        with patch('utils.json2jobdef.list_files', return_value=all_files):
+            _create_inputs_file(config, exclude_files=set(all_files))
+        content = Path('inputs.txt').read_text().strip()
+        self.assertEqual(content, '')
+
+    def test_empty_exclude_set_writes_all(self):
+        from utils.json2jobdef import _create_inputs_file
+        all_files = ["a.art", "b.art"]
+        config = {'input_data': {'sim.mu2e.Test.TC.art': 1}}
+        with patch('utils.json2jobdef.list_files', return_value=all_files):
+            _create_inputs_file(config, exclude_files=set())
+        written = Path('inputs.txt').read_text().strip().split('\n')
+        self.assertEqual(written, all_files)
+
+
+# ---------------------------------------------------------------------------
+# 19. _next_version auto-increment (json2jobdef.py)
+# ---------------------------------------------------------------------------
+
+class TestNextVersion(unittest.TestCase):
+
+    def _cfg(self, **extra):
+        return {'owner': 'mu2e', 'desc': 'TestDesc', 'dsconf': 'TC', **extra}
+
+    def test_no_existing_files_returns_zero(self):
+        from utils.json2jobdef import _next_version
+        with patch('utils.json2jobdef.list_files', return_value=[]):
+            self.assertEqual(_next_version(self._cfg()), 0)
+
+    def test_single_version_zero_returns_one(self):
+        from utils.json2jobdef import _next_version
+        with patch('utils.json2jobdef.list_files',
+                   return_value=['cnf.mu2e.TestDesc.TC.0.tar']):
+            self.assertEqual(_next_version(self._cfg()), 1)
+
+    def test_multiple_versions_returns_next(self):
+        from utils.json2jobdef import _next_version
+        files = ['cnf.mu2e.TestDesc.TC.0.tar',
+                 'cnf.mu2e.TestDesc.TC.1.tar',
+                 'cnf.mu2e.TestDesc.TC.2.tar']
+        with patch('utils.json2jobdef.list_files', return_value=files):
+            self.assertEqual(_next_version(self._cfg()), 3)
+
+    def test_sam_exception_returns_zero(self):
+        from utils.json2jobdef import _next_version
+        with patch('utils.json2jobdef.list_files', side_effect=Exception("SAM down")):
+            self.assertEqual(_next_version(self._cfg()), 0)
+
+    def test_non_sequential_versions(self):
+        from utils.json2jobdef import _next_version
+        files = ['cnf.mu2e.TestDesc.TC.0.tar', 'cnf.mu2e.TestDesc.TC.5.tar']
+        with patch('utils.json2jobdef.list_files', return_value=files):
+            self.assertEqual(_next_version(self._cfg()), 6)
+
+
+# ---------------------------------------------------------------------------
+# 20. _compute_extend_exclusions integration (json2jobdef.py)
+# ---------------------------------------------------------------------------
+
+class TestComputeExtendExclusions(unittest.TestCase):
+    """Test the full extend exclusion logic with mocked SAM and fhicl-get."""
+
+    def _cfg(self, **extra):
+        return {
+            'owner': 'mu2e',
+            'desc': 'TestDesc',
+            'dsconf': 'TC',
+            'fcl': 'Production/JobConfig/test.fcl',
+            'fcl_overrides': {
+                'outputs.Out.fileName': 'mcs.mu2e.{desc}.version.sequencer.art'
+            },
+            **extra,
+        }
+
+    def test_exclusion_set_populated(self):
+        from utils.json2jobdef import _compute_extend_exclusions
+        parents = ['input_a.art', 'input_b.art']
+
+        with patch('utils.json2jobdef.get_output_dataset_names',
+                   return_value=['mcs.mu2e.TestDesc.TC.art']), \
+             patch('utils.json2jobdef.list_files', side_effect=[
+                 parents,            # isparentof query
+                 [],                 # _next_version dataset query
+             ]):
+            cfg = self._cfg()
+            result = _compute_extend_exclusions(cfg)
+
+        self.assertEqual(result, set(parents))
+        self.assertEqual(cfg['version'], 0)
+
+    def test_version_incremented(self):
+        from utils.json2jobdef import _compute_extend_exclusions
+
+        with patch('utils.json2jobdef.get_output_dataset_names',
+                   return_value=['mcs.mu2e.TestDesc.TC.art']), \
+             patch('utils.json2jobdef.list_files', side_effect=[
+                 ['parent.art'],                      # isparentof
+                 ['cnf.mu2e.TestDesc.TC.0.tar'],      # _next_version
+             ]):
+            cfg = self._cfg()
+            _compute_extend_exclusions(cfg)
+
+        self.assertEqual(cfg['version'], 1)
+
+    def test_no_output_datasets_exits(self):
+        from utils.json2jobdef import _compute_extend_exclusions
+
+        with patch('utils.json2jobdef.get_output_dataset_names',
+                   return_value=[]):
+            with self.assertRaises(SystemExit):
+                _compute_extend_exclusions(self._cfg())
+
+    def test_multiple_output_datasets_union(self):
+        from utils.json2jobdef import _compute_extend_exclusions
+
+        with patch('utils.json2jobdef.get_output_dataset_names',
+                   return_value=['ds1.art', 'ds2.art']), \
+             patch('utils.json2jobdef.list_files', side_effect=[
+                 ['a.art', 'b.art'],     # parents of ds1
+                 ['b.art', 'c.art'],     # parents of ds2
+                 [],                     # _next_version
+             ]):
+            cfg = self._cfg()
+            result = _compute_extend_exclusions(cfg)
+
+        self.assertEqual(result, {'a.art', 'b.art', 'c.art'})
+
+
+# ---------------------------------------------------------------------------
+# 21. get_output_dataset_names (jobdef.py) - mocked fhicl-get
+# ---------------------------------------------------------------------------
+
+class TestGetOutputDatasetNames(unittest.TestCase):
+
+    def _cfg(self, **extra):
+        return {
+            'owner': 'mu2e',
+            'desc': 'TestDesc',
+            'dsconf': 'TC',
+            'fcl': 'base.fcl',
+            'fcl_overrides': {},
+            **extra,
+        }
+
+    def test_single_output_module(self):
+        from utils.jobdef import get_output_dataset_names
+
+        def mock_fhicl_get(path, cmd, key=''):
+            if cmd == '--names-in' and key == 'outputs':
+                return 'Out'
+            if cmd == '--sequence-of' and key == 'physics.end_paths':
+                return 'output_stream'
+            if cmd == '--sequence-of' and key == 'physics.output_stream':
+                return 'Out'
+            if cmd == '--atom-as' and key == 'outputs.Out.fileName':
+                return 'mcs.mu2e.{desc}.version.sequencer.art'
+            return ''
+
+        with patch('utils.jobdef._run_fhicl_get', side_effect=mock_fhicl_get), \
+             patch('utils.prod_utils.write_fcl_template'), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'):
+            result = get_output_dataset_names(self._cfg())
+
+        self.assertEqual(result, ['mcs.mu2e.TestDesc.TC.art'])
+
+    def test_no_outputs_section(self):
+        from utils.jobdef import get_output_dataset_names
+        import subprocess as sp
+
+        def mock_fhicl_get(path, cmd, key=''):
+            if cmd == '--names-in' and key == 'outputs':
+                raise sp.CalledProcessError(1, 'fhicl-get')
+            return ''
+
+        with patch('utils.jobdef._run_fhicl_get', side_effect=mock_fhicl_get), \
+             patch('utils.prod_utils.write_fcl_template'), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'):
+            result = get_output_dataset_names(self._cfg())
+
+        self.assertEqual(result, [])
 
 
 # ---------------------------------------------------------------------------

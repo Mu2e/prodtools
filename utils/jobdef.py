@@ -530,6 +530,45 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     return ordered_tbs, None, args_state['override_output_description']
 
 
+def get_output_dataset_names(config: Dict) -> List[str]:
+    """Extract output dataset names by parsing the FCL template.
+
+    Creates a temporary template.fcl, uses fhicl-get to extract output module
+    filenames, resolves placeholders, and derives SAM dataset names.
+
+    Returns:
+        List of dataset name strings
+        (e.g. ['mcs.mu2e.DIOtail0_60Mix1BB-KL.Run1Bah_best_v1_4-001.art'])
+    """
+    from utils.prod_utils import write_fcl_template
+
+    fcl_path = config['fcl']
+    write_fcl_template(fcl_path, config.get('fcl_overrides', {}))
+
+    template_path = 'template.fcl'
+    datasets = []
+
+    try:
+        output_mods = _get_output_modules(template_path)
+        for mod in output_mods:
+            try:
+                pattern = _run_fhicl_get(
+                    template_path, '--atom-as', f'outputs.{mod}.fileName')
+                resolved = _replace_placeholders(pattern, config)
+                parts = resolved.split('.')
+                if len(parts) >= 6:
+                    dataset = (f"{parts[0]}.{parts[1]}.{parts[2]}"
+                               f".{parts[3]}.{parts[5]}")
+                    datasets.append(dataset)
+            except subprocess.CalledProcessError:
+                continue
+    finally:
+        if os.path.exists(template_path):
+            os.unlink(template_path)
+
+    return datasets
+
+
 def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[str] = None, embed: bool = True, outdir: Optional[Path] = None, quiet: bool = False) -> Path:
     """
     Create a jobdef tarball (cnf.owner.desc.dsconf.0.tar) with complete Perl parity.
