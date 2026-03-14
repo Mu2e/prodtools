@@ -19,7 +19,7 @@ from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import get_tarball_desc, prepare_fields_for_job
 from utils.jobquery import Mu2eJobPars
-from utils.jobdef import create_jobdef
+from utils.jobdef import create_jobdef, get_output_dataset_names
 from utils.samweb_wrapper import list_files, count_files
 
 
@@ -42,13 +42,17 @@ def _write_random_selection(out_f, query: str, total_needed: int, seed_source: s
         produced += 1
         idx = (idx + 1) % count
 
-def _create_inputs_file(config):
+def _create_inputs_file(config, exclude_files=None):
     """Helper: create inputs.txt file from datasets with merge factors.
     
     Supports optional random sampling by allowing input_data values to be
     dictionaries with the following keys:
         - count (int): number of files to use (required)
         - random (bool): if True, choose a deterministic pseudo-random sample
+
+    Args:
+        config: Job configuration dictionary.
+        exclude_files: Optional set of filenames to omit (used by --extend).
 
     Example:
         "input_data": {
@@ -62,7 +66,13 @@ def _create_inputs_file(config):
     if not isinstance(input_data, dict):
         raise ValueError(f"input_data must be a dict, got {type(input_data)}")
     
-    query_template = "dh.dataset={} and event_count>0"
+    # By default, include all files in the dataset. Older behavior applied an
+    # event_count>0 filter; that is now controlled by an explicit flag so that
+    # zero-event files are not silently dropped.
+    event_count_positive = bool(config.get('_event_count_positive'))
+    query_template = "dh.dataset={}"
+    if event_count_positive:
+        query_template += " and event_count>0"
     
     with open('inputs.txt', 'w') as out_f:
         for dataset, merge_factor in input_data.items():
@@ -93,10 +103,65 @@ def _create_inputs_file(config):
                 )
                 _write_random_selection(out_f, query, total_needed, seed_source)
             else:
-                # Non-random: write all files
                 files = list_files(query)
                 for filepath in files:
+                    if exclude_files and filepath in exclude_files:
+                        continue
                     out_f.write(filepath + '\n')
+
+def _next_version(config):
+    """Find the next available version number for this job definition tarball.
+
+    Queries SAM for existing files in the tarball dataset and returns
+    max(existing versions) + 1, or 0 if none exist.
+    """
+    desc = get_tarball_desc(config) or config['desc']
+    dataset = f"cnf.{config['owner']}.{desc}.{config['dsconf']}.tar"
+
+    try:
+        files = list_files(f"dh.dataset={dataset}")
+    except Exception:
+        return 0
+
+    if not files:
+        return 0
+
+    max_version = -1
+    for fname in files:
+        parts = fname.split('.')
+        try:
+            version = int(parts[-2])
+            max_version = max(max_version, version)
+        except (ValueError, IndexError):
+            continue
+
+    return max_version + 1
+
+
+def _compute_extend_exclusions(config):
+    """Derive output datasets, query SAM for already-processed parents,
+    auto-increment the tarball version, and return the set of files to
+    exclude from inputs.txt.
+
+    Side-effect: updates config['version'] to the next available number.
+    """
+    output_datasets = get_output_dataset_names(config)
+    if not output_datasets:
+        sys.exit("--extend: could not determine output dataset names from FCL")
+
+    exclude_files = set()
+    for ds in output_datasets:
+        query = f"isparentof: (dh.dataset {ds})"
+        parents = list_files(query)
+        exclude_files.update(parents)
+        print(f"  Output dataset {ds}: {len(parents)} already-processed input files")
+
+    new_version = _next_version(config)
+    config['version'] = new_version
+    print(f"  Auto-incremented version to {new_version}")
+
+    return exclude_files
+
 
 def get_parfile_name(config):
     """Generate consistent parfile name from config."""
@@ -301,6 +366,14 @@ def main():
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.txt)')
     p.add_argument('--json-output', action='store_true', help='Output structured JSON instead of human-readable text')
+    p.add_argument('--extend', action='store_true',
+                   help='Create delta job definition excluding already-processed inputs. '
+                        'Auto-increments tarball version.')
+    p.add_argument('--event-count-positive', action='store_true',
+                   help='When building inputs.txt, require event_count>0 in SAM queries '
+                        '(legacy behavior). Default is to include all files.')
+    p.add_argument('--ignore-empty', action='store_true',
+                   help='Skip entries whose input datasets have no files instead of failing')
     args = p.parse_args()
     
     # If --prod is specified, enable pushout
@@ -315,14 +388,32 @@ def main():
     # If both desc and dsconf are specified, process single entry
     if args.desc and args.dsconf and args.index is None:
         config = find_json_entry(expanded_configs, args.desc, args.dsconf, None)
-        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=args.no_cleanup, jobdefs_list=args.jobdefs)
+        config['_event_count_positive'] = args.event_count_positive
+        process_single_entry(
+            config,
+            json_output=True,
+            pushout=args.pushout,
+            no_cleanup=args.no_cleanup,
+            jobdefs_list=args.jobdefs,
+            extend=args.extend,
+            ignore_empty=args.ignore_empty,
+        )
     # If dsconf is specified but no desc and no index, process all entries for that dsconf
     elif args.dsconf and args.desc is None and args.index is None:
         process_all_for_dsconf(expanded_configs, args.dsconf, args)
     # If only index is specified, process single entry by index
     elif args.index is not None and args.desc is None and args.dsconf is None:
         config = find_json_entry(expanded_configs, None, None, args.index)
-        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=args.no_cleanup, jobdefs_list=args.jobdefs)
+        config['_event_count_positive'] = args.event_count_positive
+        process_single_entry(
+            config,
+            json_output=True,
+            pushout=args.pushout,
+            no_cleanup=args.no_cleanup,
+            jobdefs_list=args.jobdefs,
+            extend=args.extend,
+            ignore_empty=args.ignore_empty,
+        )
     else:
         # No filtering specified, show usage
         sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")
@@ -353,7 +444,8 @@ def main():
         map_stem = Path(jobdefs_file).stem
         create_index_definition(map_stem, total_jobs, "etc.mu2e.index.000.txt")
 
-def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True, jobdefs_list=None):
+def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True,
+                         jobdefs_list=None, extend=False, ignore_empty=False):
     """Process a single configuration entry (original behavior)"""
     validate_required_fields(config)
     config['owner'] = config.get('owner', os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e'))
@@ -368,9 +460,30 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     # Store the original FCL path for source type detection
     original_fcl_path = config['fcl']
     
+    # Extend mode: exclude already-processed input files and auto-increment version
+    exclude_files = None
+    if extend:
+        exclude_files = _compute_extend_exclusions(config)
+    
     # Create inputs.txt first if needed
     if config.get('input_data'):
-        _create_inputs_file(config)
+        _create_inputs_file(config, exclude_files=exclude_files)
+
+    # Check for empty inputs
+    if Path('inputs.txt').exists():
+        remaining = sum(1 for _ in open('inputs.txt'))
+        if remaining == 0:
+            if extend:
+                print(f"  Extend summary: {len(exclude_files)} excluded, 0 remaining input files")
+            if ignore_empty:
+                print(f"  Skipping {config.get('desc', 'unknown')}: no input files available")
+                return None
+            elif extend:
+                sys.exit("--extend: no new input files to process")
+
+    if extend and exclude_files is not None:
+        remaining = sum(1 for _ in open('inputs.txt')) if Path('inputs.txt').exists() else 0
+        print(f"  Extend summary: {len(exclude_files)} excluded, {remaining} remaining input files")
     
     job_args = []
     
@@ -534,8 +647,18 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             print(f"Warning: {e}, skipping entry")
             continue
         
+        # Propagate CLI options that affect input selection onto the config
+        config['_event_count_positive'] = args.event_count_positive
+
         # Use the existing process_single_entry function
-        process_single_entry(config, json_output=True, pushout=args.pushout, no_cleanup=True, jobdefs_list=args.jobdefs)
+        process_single_entry(
+            config,
+            json_output=True,
+            pushout=args.pushout,
+            no_cleanup=True,
+            jobdefs_list=args.jobdefs,
+            ignore_empty=args.ignore_empty,
+        )
         
         # Clean up template.fcl for next iteration (since process_single_entry cleans up)
         if Path('template.fcl').exists():
