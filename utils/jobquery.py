@@ -128,6 +128,18 @@ class Mu2eJobPars(Mu2eJobBase):
         
         return list(datasets)
     
+    def input_files(self):
+        """Get list of all input files across inputs, samplinginput, and auxin"""
+        tbs = self.json_data.get('tbs', {})
+        files = []
+        for section in ('inputs', 'samplinginput', 'auxin'):
+            for key, value in tbs.get(section, {}).items():
+                if isinstance(value, list) and len(value) >= 2:
+                    file_list = value[1]
+                    if isinstance(file_list, list):
+                        files.extend(file_list)
+        return files
+    
     def output_datasets(self):
         """Get list of output datasets"""
         return self.json_data.get('output_datasets', [])
@@ -189,6 +201,7 @@ file cnf.tar. The possible queries are:
     --jobname     The name of the job set.
     --njobs       The number of jobs in the set, zero means unlimited.
     --input-datasets    List of all datasets used by the job set.
+    --input-files       List of all input files used by the job set.
     --output-datasets   List of all datasets created by the job set.
     --output-files <dsname>[:listsize]
         List of output files belonging to the given dataset.
@@ -204,6 +217,7 @@ def main():
     parser.add_argument('--jobname', action='store_true', help='Get job name')
     parser.add_argument('--njobs', action='store_true', help='Get number of jobs')
     parser.add_argument('--input-datasets', action='store_true', help='List input datasets')
+    parser.add_argument('--input-files', action='store_true', help='List all input files')
     parser.add_argument('--output-datasets', action='store_true', help='List output datasets')
     parser.add_argument('--output-files', help='List output files for dataset (format: dataset[:size])')
     parser.add_argument('--codesize', action='store_true', help='Get code size')
@@ -214,8 +228,9 @@ def main():
     args = parser.parse_args()
     
     # Check that exactly one query is specified
-    queries = [args.jobname, args.njobs, args.input_datasets, args.output_datasets, 
-               args.output_files is not None, args.codesize, args.extract_code, args.setup]
+    queries = [args.jobname, args.njobs, args.input_datasets, args.input_files,
+               args.output_datasets, args.output_files is not None,
+               args.codesize, args.extract_code, args.setup]
     
     if sum(queries) != 1:
         print("Error: Exactly one query must be specified")
@@ -235,6 +250,8 @@ def main():
         perl_cmd += " --njobs"
     elif args.input_datasets:
         perl_cmd += " --input-datasets"
+    elif args.input_files:
+        perl_cmd += " --input-files"
     elif args.output_datasets:
         perl_cmd += " --output-datasets"
     elif args.output_files:
@@ -262,6 +279,10 @@ def main():
         elif args.input_datasets:
             for dataset in jp.input_datasets():
                 print(dataset)
+        
+        elif args.input_files:
+            for f in jp.input_files():
+                print(f)
         
         elif args.output_datasets:
             for dataset in jp.output_datasets():
