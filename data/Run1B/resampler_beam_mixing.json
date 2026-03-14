@@ -6,7 +6,8 @@
   "fcl_overrides": {
     "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
     "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
-    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+    "physics.producers.compressDetStepMCs.compressionOptions.keepNGenerations": -1
   },
   "resampler_name": "neutralsResampler",
   "input_data": {"sim.mu2e.Neutrals.MDC2025ae3.art": 1},
@@ -28,7 +29,8 @@
     "fcl_overrides": {
       "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
       "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
-      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+      "physics.producers.compressDetStepMCs.compressionOptions.keepNGenerations": -1
     },
     "resampler_name": "beamResampler",
     "input_data": {
@@ -36,7 +38,8 @@
     },
     "njobs": 5000,
     "events": 400000,
-    "run": 1450,
+    "run": 1451,
+    "version": 1,
     "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
     "owner": "mu2e",
     "inloc": "resilient",
@@ -52,7 +55,8 @@
     "fcl_overrides": {
       "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
       "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
-      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+      "physics.producers.compressDetStepMCs.compressionOptions.keepNGenerations": -1
     },
     "resampler_name": "beamResampler",
     "input_data": {
@@ -60,7 +64,8 @@
     },
     "njobs": 5000,
     "events": 1000000,
-    "run": 1450,
+    "run": 1451,
+    "version": 1,
     "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
     "owner": "mu2e",
     "inloc": "resilient",
@@ -76,7 +81,8 @@
     "fcl_overrides": {
       "#include": "Production/JobConfig/pileup/epilog_1b.fcl",
       "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
-      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+      "physics.producers.compressDetStepMCs.compressionOptions.keepNGenerations": -1
     },
     "resampler_name": "TargetStopResampler",
     "input_data": {
