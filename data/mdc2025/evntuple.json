@@ -37,5 +37,6 @@
         "inloc": ["tape"],
         "outloc": [{"*.root": "tape"}],
         "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_00_00/setup.sh"]
-        }
+    }
+
 ]
