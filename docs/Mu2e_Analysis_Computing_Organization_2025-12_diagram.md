@@ -11,7 +11,7 @@ graph TD
     AC --> TOOLSGROUP
     AC --> CALGROUP
     AC --> TRIGGROUP
-    SPK --> OC[Operations Coordinators:<br/>Rackness&nbsp;]
+    SPK --> OC[Operations Coordinators:<br/>Rackness, Grant&nbsp;]
     OC --> TRIGGROUP
     AC -.-> ML[ML/AI:<br/>Corrodi, Campa&nbsp;]
     
