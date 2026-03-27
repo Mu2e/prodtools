@@ -279,18 +279,18 @@
     },
     {
         "desc": "RMCFlatGamma",
-        "dsconf": "MDC2025ac",
+        "dsconf": "MDC2025ag",
         "fcl": "Production/JobConfig/primary/FlatGamma.fcl",
         "fcl_overrides": {
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "TargetStopResampler",
-        "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
         "njobs": 500,
         "events": 2000000,
         "run": 1430,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ag/setup.sh",
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
@@ -300,18 +300,18 @@
     },
     {
         "desc": "RMCFlatGammaCalo",
-        "dsconf": "MDC2025ac",
+        "dsconf": "MDC2025ag",
         "fcl": "Production/JobConfig/primary/FlatGammaCalo.fcl",
         "fcl_overrides": {
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "TargetStopResampler",
-        "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
         "njobs": 2000,
         "events": 7500,
         "run": 1430,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ag/setup.sh",
         "owner": "mu2e",
         "inloc": "disk",
         "outloc": {
@@ -328,7 +328,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
         },
         "resampler_name": "TargetStopResampler",
-        "input_data": "sim.mu2e.MuminusStopsCat.MDC2025ac.art",
+        "input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
         "njobs": 500,
         "events": 20000,
         "run": 1430,

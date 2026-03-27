@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only analysis utilities over the prodtools SQLite database."""
+"""Analysis utilities over the prodtools SQLite database."""
 
 import os
 import sys
@@ -117,6 +117,8 @@ def list_jobs(
     complete_only: bool = False,
     incomplete_only: bool = False,
     datasets_only: bool = False,
+    since=None,
+    needs_processing: bool = False,
 ) -> None:
     jobs = _collect_jobs(session, pattern)
 
@@ -128,6 +130,34 @@ def list_jobs(
             or (job.fcl_template and campaign in job.fcl_template)
             or (job.source_file and campaign in job.source_file)
         ]
+
+    if since is not None:
+        # Keep job if at least one output dataset was created after `since`
+        def _job_has_recent_output(job):
+            for output in job.outputs:
+                if not output.dataset:
+                    continue
+                info = session.query(DatasetInfo).filter_by(dataset_name=output.dataset).one_or_none()
+                if info and info.creation_date and info.creation_date >= since:
+                    return True
+            return False
+        jobs = [job for job in jobs if _job_has_recent_output(job)]
+
+    if needs_processing:
+        # Keep jobs that have at least one complete output with no children
+        # and that is not a terminal product (nts.*)
+        def _has_unprocessed_output(job):
+            njobs = job.njobs or 0
+            for output in job.outputs:
+                if not output.dataset:
+                    continue
+                if output.dataset.startswith('nts.'):
+                    continue
+                info = session.query(DatasetInfo).filter_by(dataset_name=output.dataset).one_or_none()
+                if info and info.nfiles and info.nfiles >= njobs and not info.has_children and not info.ignored:
+                    return True
+            return False
+        jobs = [job for job in jobs if _has_unprocessed_output(job)]
 
     if sort_by == "njobs":
         jobs.sort(key=lambda j: j.njobs or 0, reverse=True)
@@ -177,7 +207,24 @@ def list_jobs(
                 print(f"{job.njobs or 0:>8} {'':>10} {'':>14} {'':>6}    {display_name:<80}")
                 for dataset_name, nfiles, nevts, total_size, location in outputs:
                     avg_size_mb = (total_size / nfiles / 1e6) if nfiles else 0
-                    color = '\033[92m' if nfiles >= (job.njobs or 0) else '\033[91m'
+                    is_complete_out = nfiles >= (job.njobs or 0)
+                    info = info_map.get(dataset_name)
+                    is_ignored = info is not None and info.ignored
+                    is_unprocessed = (
+                        is_complete_out
+                        and not dataset_name.startswith('nts.')
+                        and info is not None
+                        and not info.has_children
+                        and not is_ignored
+                    )
+                    if is_ignored:
+                        color = '\033[90m'  # dark grey = ignored
+                    elif is_unprocessed:
+                        color = '\033[93m'  # yellow = complete but no children
+                    elif is_complete_out:
+                        color = '\033[92m'  # green = complete
+                    else:
+                        color = '\033[91m'  # red = incomplete
                     reset = '\033[0m'
                     padded_dataset = f"  {dataset_name}"
                     print(
@@ -189,4 +236,43 @@ def list_jobs(
             source_file = os.path.basename(job.source_file) if job.source_file else 'N/A'
             print(f"{job.njobs or 0:>8} {job.inloc or 'N/A':<8} {first_location:<8} {source_file:<25} {display_name:<80}")
 
+
+def ignore_dataset(session, dataset_name: str, reason: str = None) -> bool:
+    """Mark a dataset as ignored for needs-processing checks.
+
+    Creates a DatasetInfo stub if the dataset is not yet in the DB.
+    Returns True if the dataset was found/created, False on error.
+    """
+    info = session.query(DatasetInfo).filter_by(dataset_name=dataset_name).one_or_none()
+    if info is None:
+        info = DatasetInfo(dataset_name=dataset_name, nfiles=0, nevts=0, total_size=0)
+        session.add(info)
+    info.ignored = True
+    if reason:
+        info.ignore_reason = reason
+    session.commit()
+    return True
+
+
+def unignore_dataset(session, dataset_name: str) -> bool:
+    """Remove the ignored flag from a dataset. Returns False if not found."""
+    info = session.query(DatasetInfo).filter_by(dataset_name=dataset_name).one_or_none()
+    if info is None:
+        return False
+    info.ignored = False
+    info.ignore_reason = None
+    session.commit()
+    return True
+
+
+def list_ignored(session) -> None:
+    """Print all datasets currently marked as ignored."""
+    rows = session.query(DatasetInfo).filter_by(ignored=True).order_by(DatasetInfo.dataset_name).all()
+    if not rows:
+        print("No datasets are currently ignored.")
+        return
+    print(f"{'DATASET':<80} {'REASON'}")
+    print(f"{'-'*80} {'------'}")
+    for row in rows:
+        print(f"{row.dataset_name:<80} {row.ignore_reason or ''}")
 

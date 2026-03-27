@@ -59,8 +59,8 @@
   },
   {
     "input_data": [
-      {"dts.mu2e.FlatGamma.MDC2025ac.art": 1},
-      {"dts.mu2e.FlatGammaCalo.MDC2025ac.art": 1}
+      {"dts.mu2e.FlatGamma.MDC2025ag.art": 1},
+      {"dts.mu2e.FlatGammaCalo.MDC2025ag.art": 1}
     ],
     "pileup_datasets": [{
       "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
@@ -68,20 +68,22 @@
       "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
       "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
     }],
-    "dsconf": ["MDC2025af_best_v1_1"],
+    "dsconf": ["MDC2025ag_best_v1_3"],
     "mixconf": [2],
     "pbeam": ["Mix1BB"],
     "owner": ["mu2e"],
-    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ag/setup.sh"],
     "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
     "merge_events": [500],
-    "inloc": ["tape"],
+    "inloc": ["resilient"],
     "outloc": [{"dig.mu2e.*.art": "tape"}],
     "fcl_overrides": [
       {
         "services.DbService.purpose": "Sim_best",
-        "services.DbService.version": "v1_1",
-        "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+        "services.DbService.version": "v1_3",
+        "#include": "Production/JobConfig/mixing/NoPrimary.fcl",
+        "outputs.Output.fileName": "dig.mu2e.{desc}.{dsconf}.sequence.art"
+
       }
     ]
   }

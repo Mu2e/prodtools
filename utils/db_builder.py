@@ -167,18 +167,27 @@ def _is_output_complete(session, output, njobs):
     return info and info.nfiles and info.nfiles >= njobs
 
 
-def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map", limit: int = None) -> None:
+def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map", limit: int = None, since=None) -> None:
     """Create and populate the SQLite DB from POMS JSONs matching pattern.
 
     - Creates DB and tables if missing
     - Updates existing jobs or creates new ones from JSON files
     - Preserves existing metrics (avg_real_h, avg_vmhwm_gb) when updating
     - Resolves template-mode njobs via `defname:` when needed
+    - If `since` (datetime) is given, only re-processes JSON files modified after that cutoff
     """
     session = get_db_session(db_path)
 
-    json_files = sorted(glob.glob(f"{poms_dir}/{pattern}.json"))
-    print(f"Loading {len(json_files)} JSON files...")
+    all_json_files = sorted(glob.glob(f"{poms_dir}/{pattern}.json"))
+    if since is not None:
+        import time
+        cutoff = since.timestamp()
+        json_files = [f for f in all_json_files if os.path.getmtime(f) >= cutoff]
+        print(f"Loading {len(json_files)} JSON files modified since {since.strftime('%Y-%m-%d')} "
+              f"(skipping {len(all_json_files) - len(json_files)} unchanged)...")
+    else:
+        json_files = all_json_files
+        print(f"Loading {len(json_files)} JSON files...")
 
     # Track tarballs we see in JSON files (to remove jobs that no longer exist)
     seen_tarballs = set()
@@ -252,7 +261,9 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
             count += 1
 
     # Remove jobs that are no longer in JSON files (cascade deletes JobOutputs automatically)
-    if seen_tarballs:
+    # When using --since, only remove jobs from the files we actually processed
+    # (don't touch jobs from files we skipped)
+    if seen_tarballs and since is None:
         removed = session.query(Job).filter(~Job.tarball.in_(seen_tarballs)).delete(synchronize_session=False)
         if removed > 0:
             print(f"Removed {removed} jobs no longer in JSON files")

@@ -622,8 +622,8 @@ def find_json_entry(configs, desc=None, dsconf=None, index=None):
 def process_all_for_dsconf(expanded_configs, dsconf, args):
     """Process all entries matching the specified dsconf and generate job definitions for all permutations"""
     
-    # Filter to only entries matching the specified dsconf (partial match)
-    matching_configs = [config for config in expanded_configs if config.get('dsconf', '').startswith(dsconf)]
+    # Filter to only entries matching the specified dsconf (exact match)
+    matching_configs = [config for config in expanded_configs if config.get('dsconf', '') == dsconf]
     
     if not matching_configs:
         sys.exit(f"No entries found matching dsconf: {dsconf}")

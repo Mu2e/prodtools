@@ -46,16 +46,25 @@ def find_matching_jobdef(jobdefs, desc, input_type=None):
         Path to matching tarball, or None if no match found
     """
     matches = []
-    
+
     for jobdef in jobdefs:
-        # Locate the tarball first
-        tarball_path = locate_tarball(jobdef)
-        
+        # Quick name-based pre-filter: jobdef description field (parts[2]) must match desc
+        jobdef_parts = jobdef.split('.')
+        if len(jobdef_parts) >= 3 and jobdef_parts[2] != desc:
+            continue
+
+        # Locate the tarball, skip if not available
+        try:
+            tarball_path = locate_tarball(jobdef)
+        except RuntimeError as e:
+            print(f"Skipping {jobdef}: {e}")
+            continue
+
         # Use Mu2eJobIO class to get output files
         from utils.jobiodetail import Mu2eJobIO
         job_io = Mu2eJobIO(tarball_path)
         outputs = job_io.job_outputs(0)
-        
+
         # Check for exact match: desc should be the third field in output filename
         for output_file in outputs.values():
             output_parts = output_file.split('.')
