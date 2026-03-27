@@ -67,6 +67,8 @@ class DatasetInfo(Base):
     location = Column(String)
     has_children = Column(Boolean, default=False)  # True if any file in dataset has child files
     creation_date = Column(DateTime)  # Creation date from SAM definition
+    ignored = Column(Boolean, default=False)  # True if dataset should be excluded from needs-processing
+    ignore_reason = Column(String)            # Optional note explaining why it's ignored
     # Performance metrics (averages from job logs)
     avg_real_h = Column(Float)      # Average wall time in hours
     avg_vmhwm_gb = Column(Float)    # Average high-water-mark memory in GB
@@ -97,6 +99,10 @@ def get_db_session(db_path=None):
             columns = [row[1] for row in result]
             if 'location' not in columns:
                 conn.exec_driver_sql("ALTER TABLE dataset_info ADD COLUMN location TEXT")
+            if 'ignored' not in columns:
+                conn.exec_driver_sql("ALTER TABLE dataset_info ADD COLUMN ignored INTEGER DEFAULT 0")
+            if 'ignore_reason' not in columns:
+                conn.exec_driver_sql("ALTER TABLE dataset_info ADD COLUMN ignore_reason TEXT")
         except Exception:
             pass
     Session = sessionmaker(bind=engine)
