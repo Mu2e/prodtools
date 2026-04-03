@@ -534,8 +534,8 @@ function updateCamera() {
 renderer.domElement.addEventListener('mousedown', e => { isDragging = true; prevMouse = { x: e.clientX, y: e.clientY }; });
 renderer.domElement.addEventListener('mousemove', e => {
   if (!isDragging) return;
-  spherical.theta += (e.clientX - prevMouse.x) * 0.005;
-  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + (e.clientY - prevMouse.y) * 0.005));
+  spherical.theta -= (e.clientX - prevMouse.x) * 0.005;
+  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi - (e.clientY - prevMouse.y) * 0.005));
   prevMouse = { x: e.clientX, y: e.clientY };
 });
 window.addEventListener('mouseup', () => isDragging = false);
@@ -549,8 +549,8 @@ renderer.domElement.addEventListener('touchstart', e => {
 });
 renderer.domElement.addEventListener('touchmove', e => {
   if (!isDragging || e.touches.length !== 1) return;
-  spherical.theta += (e.touches[0].clientX - prevMouse.x) * 0.005;
-  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + (e.touches[0].clientY - prevMouse.y) * 0.005));
+  spherical.theta -= (e.touches[0].clientX - prevMouse.x) * 0.005;
+  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi - (e.touches[0].clientY - prevMouse.y) * 0.005));
   prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
 });
 renderer.domElement.addEventListener('touchend', () => isDragging = false);
