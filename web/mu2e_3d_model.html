@@ -1138,8 +1138,8 @@ class Particle {
       this.trail.line.material.color.set(PTYPES.cosmic.color);
       this.trail.line.material.opacity = 0.6;
 
-      // Stopping target position in DS
-      const ST_X = DS_ENTER_X + 2.0;
+      // Stopping target position in DS (TS-end foil when field is off)
+      const ST_X = FIELD_OFF ? (DS_ENTER_X - 0.02) : (DS_ENTER_X + 2.0);
       const ST_Y = DS_CENTER_Y;
       const ST_Z = DZ;
 
@@ -1533,7 +1533,7 @@ if (x >= CALO_START) {
 
       // When cosmic muon reaches the stopping target region, spawn a fake signal electron
       if (!this._cosmicHitST) {
-        const stTargetX = DS_ENTER_X + 2.0;
+        const stTargetX = FIELD_OFF ? (DS_ENTER_X - 0.02) : (DS_ENTER_X + 2.0);
         const distToST = Math.sqrt(Math.pow(x - stTargetX, 2) + Math.pow(y - DS_CENTER_Y, 2) + Math.pow(z - DZ, 2));
         if (distToST < 0.6) {
           this._cosmicHitST = true;
@@ -1555,16 +1555,39 @@ if (x >= CALO_START) {
       }
     } else if (this.phase === 6) {
       // Fake signal electron from cosmic muon interaction — mimics conversion electron
-      // Uses electron mesh but with slightly different spiral (looks like signal)
       const t = this.progress;
       const startX = this._fakeStartX || (DS_ENTER_X + 3.0);
-      const x = startX + t * 8;
-      const spiralR = 0.45 + Math.sin(t * 1.8) * 0.12; // radius 0.33–0.57, inside calo annulus
-      const spiralAngle = t * 22;
       const baseY = this._fakeStartY || PS_CENTER_Y;
       const baseZ = this._fakeStartZ || DZ;
-      const y = baseY + spiralR * Math.sin(spiralAngle);
-      const z = baseZ + spiralR * Math.cos(spiralAngle);
+      let x, y, z;
+
+      if (FIELD_OFF) {
+        // Field OFF: isotropic straight-line emission
+        if (this._isoDirX === undefined) {
+          this._isoStartY = baseY;
+          this._isoStartZ = baseZ;
+          const u = Math.random(), v = Math.random();
+          const theta = 2 * Math.PI * u;
+          const cosphi = 2 * v - 1;
+          const sinphi = Math.sqrt(Math.max(0, 1 - cosphi * cosphi));
+          this._isoDirX = sinphi * Math.cos(theta);
+          this._isoDirY = sinphi * Math.sin(theta);
+          this._isoDirZ = cosphi;
+          const n = Math.sqrt(this._isoDirX*this._isoDirX + this._isoDirY*this._isoDirY + this._isoDirZ*this._isoDirZ);
+          this._isoDirX /= n; this._isoDirY /= n; this._isoDirZ /= n;
+        }
+        const L = 14.0;
+        x = startX + t * L * this._isoDirX;
+        y = this._isoStartY + t * L * this._isoDirY;
+        z = this._isoStartZ + t * L * this._isoDirZ;
+      } else {
+        // Field ON: spiral (magnetic field)
+        x = startX + t * 8;
+        const spiralR = 0.45 + Math.sin(t * 1.8) * 0.12;
+        const spiralAngle = t * 22;
+        y = baseY + spiralR * Math.sin(spiralAngle);
+        z = baseZ + spiralR * Math.cos(spiralAngle);
+      }
       this.mesh.position.set(x, y, z);
 
       this.trailTimer++;
