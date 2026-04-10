@@ -26,6 +26,8 @@ canvas { display: block; }
 }
 #controls button:hover { background: #337; }
 #controls button.active { background: #448; color: #fff; }
+#controls label { color: #99b; font-size: 11px; display: flex; align-items: center; gap: 6px; }
+#controls input[type="range"] { width: 90px; accent-color: #6af; }
 #legend {
   position: absolute; top: 10px; right: 10px; background: rgba(10,10,30,0.88);
   border: 1px solid #334; border-radius: 8px; padding: 14px 18px; z-index: 10; font-size: 12px;
@@ -45,6 +47,18 @@ canvas { display: block; }
   font-size: 12px; pointer-events: none; z-index: 20; max-width: 280px;
 }
 #tooltip h4 { color: #6af; margin-bottom: 4px; }
+#histogram-panel {
+  position: absolute; top: 50%; left: 10px; transform: translateY(-50%); background: rgba(10,10,30,0.92);
+  border: 1px solid #334; border-radius: 8px; padding: 10px; z-index: 10;
+}
+#histogram-panel canvas { display: block; border-radius: 4px; }
+#hist-controls { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
+#hist-controls button {
+  background: #225; border: 1px solid #448; color: #aaf; padding: 4px 10px;
+  border-radius: 4px; cursor: pointer; font-size: 11px;
+}
+#hist-controls button:hover { background: #337; }
+#hist-count { color: #889; font-size: 10px; }
 </style>
 </head>
 <body>
@@ -78,8 +92,16 @@ canvas { display: block; }
   <button id="btn-particles" style="background:#432;border-color:#864;color:#fda;">Beam On</button>
   <button id="btn-cosmic" style="background:#322;border-color:#644;color:#f8a;">Cosmic On</button>
   <button id="btn-fieldoff" style="background:#322;border-color:#c88;color:#ffd;">Field On</button>
+  <label>Speed <input type="range" id="slider-intensity" min="1" max="10" value="1"> <span id="intensity-val">1x</span></label>
 </div>
 <div id="tooltip"><h4 id="tt-title"></h4><p id="tt-desc"></p></div>
+<div id="histogram-panel">
+  <canvas id="hist-canvas" width="600" height="360"></canvas>
+  <div id="hist-controls">
+    <button id="btn-hist-clear">Clear</button>
+    <span id="hist-count"></span>
+  </div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -677,8 +699,148 @@ if (btnFieldOff) {
     btnFieldOff.textContent = FIELD_OFF ? 'Field Off' : 'Field On';
     stopTargetGroup.visible = !FIELD_OFF;
     tsEndFoilGroup.visible = FIELD_OFF;
+    drawHistogram();
   });
 }
+
+// ============== HISTOGRAM ==============
+const HIST = {
+  nBins: 40, xMin: 95, xMax: 115,
+  bins: { signal: new Float32Array(40), dio: new Float32Array(40), cosmic: new Float32Array(40) },
+  totalSignal: 0, totalDIO: 0, totalCosmic: 0,
+  canvas: document.getElementById('hist-canvas'), ctx: null
+};
+HIST.ctx = HIST.canvas.getContext('2d');
+
+function histBin(p) {
+  return Math.max(0, Math.min(HIST.nBins - 1,
+    Math.floor((p - HIST.xMin) / (HIST.xMax - HIST.xMin) * HIST.nBins)));
+}
+
+function gaussRandom(mean, sigma) {
+  const u1 = Math.random(), u2 = Math.random();
+  return mean + sigma * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+// DIO spectrum: dN/dE ~ (Emax - E)^5 near endpoint
+function sampleDIO() {
+  const Emax = 104.97, Emin = HIST.xMin, R = Emax - Emin;
+  return Emax - R * Math.pow(1 - Math.random(), 1 / 6);
+}
+
+function fillHist(p, type) {
+  if (p < HIST.xMin || p > HIST.xMax) return;
+  HIST.bins[type][histBin(p)]++;
+  if (type === 'signal') HIST.totalSignal++;
+  else if (type === 'dio') HIST.totalDIO++;
+  else HIST.totalCosmic++;
+}
+
+function clearHist() {
+  HIST.bins.signal.fill(0);
+  HIST.bins.dio.fill(0);
+  HIST.bins.cosmic.fill(0);
+  HIST.totalSignal = HIST.totalDIO = HIST.totalCosmic = 0;
+  drawHistogram();
+}
+
+function drawHistogram() {
+  const ctx = HIST.ctx, w = HIST.canvas.width, h = HIST.canvas.height;
+  const pad = { top: 28, bottom: 32, left: 38, right: 10 };
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(5,5,20,1)';
+  ctx.fillRect(0, 0, w, h);
+
+  if (FIELD_OFF) {
+    ctx.fillStyle = '#664';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('B-field OFF', w / 2, h / 2 - 10);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#887';
+    ctx.fillText('No momentum measurement', w / 2, h / 2 + 10);
+  }
+
+  let maxBin = 1;
+  for (let i = 0; i < HIST.nBins; i++) {
+    const total = HIST.bins.dio[i] + HIST.bins.signal[i] + HIST.bins.cosmic[i];
+    if (total > maxBin) maxBin = total;
+  }
+
+  const binW = plotW / HIST.nBins;
+
+  if (!FIELD_OFF) {
+    for (let i = 0; i < HIST.nBins; i++) {
+      const x = pad.left + i * binW;
+      let y0 = pad.top + plotH;
+      const dioH = (HIST.bins.dio[i] / maxBin) * plotH;
+      if (dioH > 0.5) { ctx.fillStyle = '#3366cc'; ctx.fillRect(x, y0 - dioH, binW - 1, dioH); y0 -= dioH; }
+      const cosH = (HIST.bins.cosmic[i] / maxBin) * plotH;
+      if (cosH > 0.5) { ctx.fillStyle = '#dd2222'; ctx.fillRect(x, y0 - cosH, binW - 1, cosH); y0 -= cosH; }
+      const sigH = (HIST.bins.signal[i] / maxBin) * plotH;
+      if (sigH > 0.5) { ctx.fillStyle = '#00dd77'; ctx.fillRect(x, y0 - sigH, binW - 1, sigH); }
+    }
+  }
+
+  // Axes
+  ctx.strokeStyle = '#556';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, pad.top + plotH);
+  ctx.lineTo(pad.left + plotW, pad.top + plotH);
+  ctx.stroke();
+
+  // Y ticks
+  ctx.fillStyle = '#778';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  for (let i = 1; i <= 4; i++) {
+    const val = Math.round(maxBin * i / 4);
+    const y = pad.top + plotH - (i / 4) * plotH;
+    ctx.fillText(val.toString(), pad.left - 4, y + 3);
+    ctx.strokeStyle = 'rgba(60,60,90,0.4)';
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+  }
+
+  // X labels
+  ctx.fillStyle = '#99a';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  for (let p = 96; p <= 114; p += 2) {
+    const x = pad.left + ((p - HIST.xMin) / (HIST.xMax - HIST.xMin)) * plotW;
+    ctx.fillText(p.toString(), x, pad.top + plotH + 13);
+  }
+  ctx.fillStyle = '#889';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('Reconstructed Momentum (MeV/c)', pad.left + plotW / 2, pad.top + plotH + 27);
+
+  // Title
+  ctx.fillStyle = '#6af';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('Momentum Spectrum', pad.left, 14);
+
+  // Legend
+  const lx = pad.left + plotW - 110;
+  ctx.font = '9px sans-serif';
+  ctx.fillStyle = '#00dd77'; ctx.fillRect(lx, 4, 8, 8);
+  ctx.fillStyle = '#aab'; ctx.fillText('CE', lx + 11, 12);
+  ctx.fillStyle = '#3366cc'; ctx.fillRect(lx + 30, 4, 8, 8);
+  ctx.fillStyle = '#aab'; ctx.fillText('DIO', lx + 41, 12);
+  ctx.fillStyle = '#dd2222'; ctx.fillRect(lx + 66, 4, 8, 8);
+  ctx.fillStyle = '#aab'; ctx.fillText('Cosmic', lx + 77, 12);
+
+  document.getElementById('hist-count').textContent =
+    'CE: ' + HIST.totalSignal + '  DIO: ' + HIST.totalDIO + '  Cosmic: ' + HIST.totalCosmic;
+}
+
+document.getElementById('btn-hist-clear').addEventListener('click', clearHist);
+drawHistogram();
+
 // Simulates: proton beam → PS target → pion spray → muons through TS → stop at ST
 // Also: conversion electron from ST → through tracker → calorimeter
 
@@ -696,7 +858,8 @@ const PTYPES = {
   pion:     { color: 0xff6600, size: 0.04, speed: 0.01, trail: false },
   muon:     { color: 0x00ccff, size: 0.05, speed: 0.0075, trail: true },
   electron: { color: 0x00ff88, size: 0.04, speed: 0.006, trail: true },
-  cosmic:   { color: 0xff4488, size: 0.045, speed: 0.008, trail: true },
+  cosmic:   { color: 0xff2222, size: 0.045, speed: 0.016, trail: true },
+  dio:      { color: 0x4488ff, size: 0.04, speed: 0.006, trail: true },
 };
 
 // Create reusable particle meshes — always render on top of detector geometry
@@ -742,12 +905,13 @@ function createTrail(color, maxPoints) {
 }
 
 function addTrailPoint(trail, x, y, z) {
-  // Restrict ALL trail/track lines to the tracker volume only
-  // (particles can still move through PS/TS/DS, but the drawn polyline is clipped)
-  const xMin = TRACKER_START;
-  const xMax = TRACKER_START + TRACKER_LENGTH;
-  if (x < xMin || x > xMax) return;
-  // record tracker traversal range
+  // For most particles, clip trail to tracker volume only
+  // Cosmic trails (liveUpdate) draw the full path unclipped
+  if (!trail.liveUpdate) {
+    const xMin = TRACKER_START;
+    const xMax = TRACKER_START + TRACKER_LENGTH;
+    if (x < xMin || x > xMax) return;
+  }
   if (x < trail.minX) trail.minX = x;
   if (x > trail.maxX) trail.maxX = x;
   if (trail.count < trail.maxPoints) {
@@ -755,8 +919,7 @@ function addTrailPoint(trail, x, y, z) {
     trail.positions[trail.count * 3 + 1] = y;
     trail.positions[trail.count * 3 + 2] = z;
     trail.count++;
-    // Only draw the polyline after we know it hits the calorimeter
-    if (trail.revealOnCalo) {
+    if (trail.revealOnCalo || trail.liveUpdate) {
       trail.line.geometry.setDrawRange(0, trail.count);
       trail.line.geometry.attributes.position.needsUpdate = true;
     }
@@ -766,6 +929,7 @@ function addTrailPoint(trail, x, y, z) {
 function resetTrail(trail) {
   trail.count = 0;
   trail.revealOnCalo = false;
+  trail.liveUpdate = false;
   if (trail.line) trail.line.visible = false;
   trail.minX = 1e9;
   trail.maxX = -1e9;
@@ -905,6 +1069,7 @@ class Particle {
     this.meshes.muon = createParticleMesh(PTYPES.muon);
     this.meshes.electron = createParticleMesh(PTYPES.electron);
     this.meshes.cosmic = createParticleMesh(PTYPES.cosmic);
+    this.meshes.dio = createParticleMesh(PTYPES.dio);
     this.trail = createTrail(0x00ccff, 300);
     // Cosmic ray muon direction and origin (set on activate)
     this.cosmicStartX = 0; this.cosmicStartY = 0; this.cosmicStartZ = 0;
@@ -969,8 +1134,9 @@ class Particle {
       this.maxLife = 800;
       this.mesh = this.meshes.cosmic;
       this.trail.line.visible = true;
+      this.trail.liveUpdate = true;
       this.trail.line.material.color.set(PTYPES.cosmic.color);
-      this.trail.line.material.opacity = 0.25;
+      this.trail.line.material.opacity = 0.6;
 
       // Stopping target position in DS
       const ST_X = DS_ENTER_X + 2.0;
@@ -1012,6 +1178,15 @@ class Particle {
       this._fakeStartX = 0;
       this._fakeStartY = 0;
       this._fakeStartZ = 0;
+    } else if (phase === 7) {
+      // DIO electron — decay-in-orbit, continuous momentum spectrum
+      this._dioMomentum = sampleDIO();
+      this.speed = PTYPES.dio.speed + Math.random() * 0.001;
+      this.maxLife = 800;
+      this.mesh = this.meshes.dio;
+      this.trail.line.visible = true;
+      this.trail.line.material.color.set(PTYPES.dio.color);
+      this.trail.line.material.opacity = 0.35;
     }
 
     this.hideAll();
@@ -1038,9 +1213,11 @@ class Particle {
         // Only the FIRST proton in each bunch triggers splash + muon production
         // (prevents pool exhaustion from 5-8 protons each spawning 36 pions)
         const now = performance.now();
-        if (now - lastMuonScheduled > 2000) {
+        const guardMs = 2000 / beamIntensity;
+        if (now - lastMuonScheduled > guardMs) {
           lastMuonScheduled = now;
-          window._fieldOffCaloHitQueued = false; // reset so one electron per pulse hits calo
+          window._fieldOffCaloHitQueued = false;
+          const timeScale = 1 / beamIntensity;
           // Pion splash — single burst from the interaction event
           for (let j = 0; j < 20; j++) {
             const p = getInactiveParticle();
@@ -1051,21 +1228,21 @@ class Particle {
               const p = getInactiveParticle();
               if (p) p.activate(1);
             }
-          }, 120);
+          }, 120 * timeScale);
           setTimeout(() => {
             for (let j = 0; j < 6; j++) {
               const p = getInactiveParticle();
               if (p) p.activate(1);
             }
-          }, 300);
+          }, 300 * timeScale);
           // Muon bunch — after pion splash is visible
-          const nMuons = 5 + Math.floor(Math.random() * 6); // 5-10
-          const MUON_BASE_DELAY = 500; // ms after impact
+          const nMuons = 5 + Math.floor(Math.random() * 6);
+          const MUON_BASE_DELAY = 500 * timeScale;
           for (let mi = 0; mi < nMuons; mi++) {
             setTimeout(() => {
               const m = getInactiveParticle();
               if (m) m.activate(2);
-            }, MUON_BASE_DELAY + mi * 30);
+            }, MUON_BASE_DELAY + mi * 30 * timeScale);
           }
         }
       }
@@ -1135,22 +1312,31 @@ class Particle {
           this.active = false;
           this.mesh.visible = false;
 
-          // Conversion electron after a visible pause (~1.5-2s)
-          if (Math.random() < 0.35) {
-            const emitX = stopX; // electron starts where muon stopped
+          // Muon captured — roll for CE vs DIO vs nothing
+          const roll = Math.random();
+          const emitX = stopX;
+          if (roll < 0.08) {
+            // Conversion electron — rare! (~1.5-2s delay)
             setTimeout(() => {
               const e = getInactiveParticle();
               if (e) {
-                // Tell electron where to start from
                 e._fieldOffEmitX = FIELD_OFF ? emitX : undefined;
-                // In Field Off mode, guarantee the first electron per pulse hits calo
                 if (FIELD_OFF && !window._fieldOffCaloHitQueued) {
                   e._forceCaloHit = true;
                   window._fieldOffCaloHitQueued = true;
                 }
                 e.activate(4);
               }
-            }, 1500 + Math.random() * 500);
+            }, (1500 + Math.random() * 500) / beamIntensity);
+          } else if (roll < 0.75) {
+            // DIO electron — decay-in-orbit (common)
+            setTimeout(() => {
+              const d = getInactiveParticle();
+              if (d) {
+                d._fieldOffEmitX = FIELD_OFF ? emitX : undefined;
+                d.activate(7);
+              }
+            }, (800 + Math.random() * 400) / beamIntensity);
           }
         }
       }
@@ -1234,6 +1420,10 @@ if (x >= CALO_START) {
   if (x >= diskX) {
     // Snap marker to the disk face at electron's current y,z
     addCaloHit(diskX, y, z, 0xff9f1a);
+    if (!FIELD_OFF) {
+      fillHist(gaussRandom(104.97, 0.5), 'signal');
+      drawHistogram();
+    }
     revealTrail(this.trail);
     savePersistentTrail(this.trail, PTYPES.electron.color);
     this.mesh.visible = false;
@@ -1241,6 +1431,67 @@ if (x >= CALO_START) {
   }
 } else if (this.lifetime > this.maxLife) {
   // Expired without hitting calorimeter — hide trail (don't persist it)
+  this.mesh.visible = false;
+  this.trail.line.visible = false;
+  this.active = false;
+}
+} else if (this.phase === 7) {
+      // DIO electron: decay-in-orbit, variable momentum → variable spiral radius
+      const t = this.progress;
+      const startX = (FIELD_OFF && this._fieldOffEmitX !== undefined)
+        ? this._fieldOffEmitX : (DS_ENTER_X + 2.0);
+      let x, y, z;
+
+      if (FIELD_OFF) {
+        if (this._isoDirX === undefined) {
+          this._isoStartY = PS_CENTER_Y;
+          this._isoStartZ = DZ;
+          const u = Math.random(), v = Math.random();
+          const theta = 2 * Math.PI * u;
+          const cosphi = 2 * v - 1;
+          const sinphi = Math.sqrt(Math.max(0, 1 - cosphi * cosphi));
+          this._isoDirX = sinphi * Math.cos(theta);
+          this._isoDirY = sinphi * Math.sin(theta);
+          this._isoDirZ = cosphi;
+        }
+        const L = 14.0;
+        x = startX + t * L * this._isoDirX;
+        y = this._isoStartY + t * L * this._isoDirY;
+        z = this._isoStartZ + t * L * this._isoDirZ;
+      } else {
+        // Spiral radius scales with momentum: r ~ p/qB
+        const pFrac = this._dioMomentum / 104.97;
+        x = startX + t * 8;
+        const spiralR = (0.45 * pFrac) + Math.sin(t * 2) * (0.12 * pFrac);
+        const spiralAngle = t * 25;
+        y = PS_CENTER_Y + spiralR * Math.sin(spiralAngle);
+        z = DZ + spiralR * Math.cos(spiralAngle);
+      }
+
+      this.mesh.position.set(x, y, z);
+
+      this.trailTimer++;
+      if (this.trailTimer % 1 === 0) {
+        addTrailPoint(this.trail, x, y, z);
+      }
+// DIO calorimeter hit
+if (x >= CALO_START) {
+  if (this._caloDisk === undefined) {
+    this._caloDisk = Math.random() < 0.5 ? 0 : 1;
+  }
+  const diskX = CALO_START + this._caloDisk * 0.7;
+  if (x >= diskX) {
+    addCaloHit(diskX, y, z, 0x4488ff);
+    if (!FIELD_OFF) {
+      fillHist(this._dioMomentum, 'dio');
+      drawHistogram();
+    }
+    revealTrail(this.trail);
+    savePersistentTrail(this.trail, PTYPES.dio.color);
+    this.mesh.visible = false;
+    this.active = false;
+  }
+} else if (this.lifetime > this.maxLife) {
   this.mesh.visible = false;
   this.trail.line.visible = false;
   this.active = false;
@@ -1328,6 +1579,10 @@ if (x >= CALO_START) {
   const diskX = CALO_START + this._caloDisk * 0.7;
   if (x >= diskX) {
     addCaloHit(diskX, y, z, 0xff9f1a);
+    if (!FIELD_OFF) {
+      fillHist(95 + Math.random() * 20, 'cosmic');
+      drawHistogram();
+    }
     revealTrail(this.trail);
     savePersistentTrail(this.trail, PTYPES.electron.color);
     this.mesh.visible = false;
@@ -1347,6 +1602,7 @@ if (x >= CALO_START) {
     this._isoStartY = undefined; this._isoStartZ = undefined;
     this._caloDisk = undefined; this._caloMarked = false;
     this._fieldOffEmitX = undefined; this._forceCaloHit = false;
+    this._dioMomentum = undefined;
     resetTrail(this.trail);
   }
 }
@@ -1368,9 +1624,17 @@ function getInactiveParticle() {
 // Guard so only the first proton in a bunch schedules muons (not all 5-8)
 let lastMuonScheduled = -Infinity;
 
-// Proton pulse timer
-let protonTimer = 900; // start at interval so first proton fires immediately
-const PROTON_INTERVAL = 900; // frames between proton pulses (~15s at 60fps)
+// Proton pulse timer — adjustable via intensity slider
+let protonTimer = 900;
+let PROTON_INTERVAL = 900; // frames between proton pulses (~15s at 60fps), scales with intensity
+const BASE_PROTON_INTERVAL = 900;
+let beamIntensity = 1;
+
+document.getElementById('slider-intensity').addEventListener('input', function() {
+  beamIntensity = parseInt(this.value);
+  PROTON_INTERVAL = Math.round(BASE_PROTON_INTERVAL / beamIntensity);
+  document.getElementById('intensity-val').textContent = beamIntensity + 'x';
+});
 
 // Cosmic ray timer (independent of beam)
 let cosmicTimer = 0;
