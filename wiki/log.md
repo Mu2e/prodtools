@@ -42,6 +42,24 @@ Reason: three-part extension to support cvmfs-resident inputs without SAM or sta
 Reason: added auto-detection by absolute-path key in json2jobdef — `"input_data": {"/cvmfs/.../f.txt": 1}` is now the canonical literal shape. The explicit `{"literal": true}` form remains accepted for backward compat / clarity. Rule: a key starting with "/" triggers literal mode; SAM dataset names never start with "/" so the disambiguation is unambiguous. Mixing literal and non-literal keys in one input_data raises an explicit error.
 Source: in-session refactor 2026-04-21, verified with unit tests (160/160) and end-to-end run in /tmp/pbi_short.*
 
+## [2026-04-22] update | chunk_mode hardening (post-review)
+Reason: code review of the chunk_mode abstraction surfaced four issues. All addressed: (1) `sed` extraction in prod_utils.process_jobdef now uses shlex.quote for paths (cvmfs-safe today, but future configs could contain shell-unsafe chars); (2) json2jobdef._configure_chunk_mode rejects chunk_lines < 1 with a clear error; (3) PBISequence branch in jobdef.py now requires inputs OR chunk_mode — prevents submit-time misconfig from surfacing as fileNames:@nil at mu2e time; (4) new TestConfigureChunkMode class in test/test_unit.py, 9 tests. Also fixed defensive isinstance(chunk_mode, dict) check so pre-existing stash test's MagicMock mocking pattern doesn't trip the new code path. Unit suite now 181/181.
+Updated: input-data-chunk-mode.
+
+## [2026-04-22] ingest | chunk_mode (on-the-fly chunking at grid)
+Pages written: input-data-chunk-mode
+Pages updated: pbi-sequence-workflow (chunk_mode is now canonical; dir: + split_lines relegated to alternatives), index.md
+Reason: new input_data shape `{<cvmfs-path>: {"chunk_lines": N}}`. At submit, json2jobdef counts lines, sets njobs=ceil(lines/N), stores `tbs.chunk_mode={source,lines,local_filename}` in jobpars. At grid runtime, runmu2e reads chunk_mode, runs sed to extract the per-job slice to `chunk.txt`, mu2e reads it. No chunk staging, full N-way parallelism. Verified end-to-end locally: job index 5 extracted lines 5001-6000, produced dts.mu2e.PBINormal_33344.MDC2025ai.001430_00000005.art with 1000 events, art exit 0. Unit tests 172/172 pass. Implementation: json2jobdef._configure_chunk_mode helper + new 'chunk' job_type in determine_job_type (skip --inputs / --merge-factor), jobdef.py tbs pass-through, prod_utils.process_jobdef runtime sed extraction. PBISequence validation_rules relaxed: inputs+merge_factor now allowed not required. fname index gotcha documented: field [4] is job index (e.g. `etc.mu2e.index.000.0000005.txt` → index 5).
+Source: in-session implementation + test 2026-04-22 in /tmp/pbi_chunk_run.*
+
+## [2026-04-22] update | push_data API: `track_parents` bool instead of `inloc` string
+Reason: initial fix passed `inloc` kwarg through push_data and checked `inloc.startswith('dir:')` inside. Cleaner: push_data takes `track_parents: bool`; runmu2e computes the policy from inloc at the call site. Keeps push_data reusable and free of inloc-specific knowledge. 172/172 unit tests still pass. input-data-dir-shape updated to reflect the new API.
+Source: post-review refactor 2026-04-22
+
+## [2026-04-22] update | push_data handles dir: inloc parent tracking
+Reason: first real POMS grid run against iMDC2025-025 (v1.8.0 on cvmfs) succeeded in mu2e execution (25,438 events, art file produced) but pushOutput failed with `printJson --parents parents_list.txt <art> returned non-zero exit status 25` → `KeyError: 'checksum'` in pushOutput.copyFile. Root cause: for `inloc: dir:<path>` jobs, infiles are cvmfs paths that aren't SAM-registered; `printJson --parents` can't resolve them; metadata dict never gets 'checksum' populated. Fix: prod_utils.process_jobdef now returns inloc as 5th tuple element; push_data accepts inloc kwarg and writes `none` in output.txt third column (instead of `parents_list.txt`) when inloc starts with `dir:`. runmu2e updated to unpack and pass inloc through. Verified: 172/172 unit tests still pass. Wiki page input-data-dir-shape updated with a new "Output parent tracking" section.
+Source: in-session fix 2026-04-22 diagnosing grid job `27819857.0@jobsub05.fnal.gov` stderr
+
 ## [2026-04-21] update | pbi-sequence-workflow (production push via POMS map 025)
 Reason: first real --prod invocation landing in the production manager's poms_map/ directory. Pushed cnf.mu2e.PBINormal_33344.MDC2025ai.0.tar + cnf.mu2e.PBIPathological_33344.MDC2025ai.0.tar to /pnfs/mu2e/persistent/..., wrote /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-025.json (2-entry map), mkidxdef --prod created SAM index definition iMDC2025-025. POMS will discover iMDC2025-025 on its next scan and dispatch both PBI Normal + Pathological jobs using the dir:/cvmfs/.../DataFiles/PBI/ inloc. Also confirmed: --prod handles "already-exists" tarball gracefully (pushes without error when SAM already has that filename).
 Source: in-session --prod run 2026-04-21 in /tmp/mu2epro_run.*
@@ -60,3 +78,7 @@ Pages written: input-data-dir-shape
 Pages updated: pbi-sequence-workflow, index.md
 Reason: in review it became clear that jobfcl's pre-existing `dir:<path>` inloc already handles our case (cvmfs-resident inputs). The `literal` mode I added duplicated functionality without earning its keep — the only case it won (inputs from multiple distinct directories in one input_data) has no real use today. Removed: `inloc: "literal"` branch in jobfcl._locate_file, absolute-path detection in json2jobdef._create_inputs_file, `{"literal": true}` handling in calculate_merge_factor. Replaced: a small dispatch in json2jobdef that writes input_data keys verbatim when `inloc.startswith('dir:')`. Kept: the `source.runNumber` sequencer short-circuit in jobfcl (orthogonal fix, still needed for PBISequence). PBI config now uses `"inloc": "dir:/cvmfs/.../PBI/"` + basename keys. End-to-end verified: 25,438 events, exit 0, correct output filename. Unit tests 160/160 pass.
 Source: in-session revert 2026-04-21 in /tmp/pbi_dir.*
+
+## [2026-04-22] lint | 0 errors, 2 warnings, 3 info
+Report: [[lint-2026-04-22]]
+Fixed: (A) dropped two stale Open Questions from overview.md + refreshed Current Understanding to reflect chunk_mode as canonical; (C) added [[input-data-chunk-mode]] cross-link in input-data-dir-shape.md Related section. Deferred: (B) raw-slug ambiguity — left as convention debate; (D) index annotation — ADR entry still accurate for the decision recorded.

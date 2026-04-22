@@ -21,13 +21,13 @@ Text files on cvmfs:
 Each ~25,439 lines. Frozen since Oct 2021. DocDB 33344 is the only
 PBI set currently.
 
-## JSON config shape — current default: `dir:` inloc (one job, no split)
+## JSON config shape — current default: `chunk_mode` (N jobs, on-the-fly)
 
-CVMFS is already grid-readable, and our PBI source file is on cvmfs.
-The canonical path is to read it directly, no splitting, no staging —
-by pointing `inloc` at the containing directory (see
-[[input-data-dir-shape]]). One job, ~50s wallclock, one art file with
-all 25,438 events.
+The PBI source file on cvmfs is already grid-readable. The canonical
+path is `chunk_lines` (see [[input-data-chunk-mode]]) — each grid
+worker extracts its own slice from cvmfs at job start. No
+pre-splitting, no staging, N-way parallelism for downstream mixing
+fan-out.
 
 ```json
 {
@@ -35,11 +35,13 @@ all 25,438 events.
   "dsconf": "MDC2025ai",
   "fcl": "Production/JobConfig/primary/NoPrimaryPBISequence.fcl",
   "input_data": {
-    "PBI_Normal_33344.txt": 1
+    "/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/PBI_Normal_33344.txt": {
+      "chunk_lines": 1000
+    }
   },
   "run": 1430,
   "owner": "mu2e",
-  "inloc": "dir:/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/",
+  "inloc": "none",
   "outloc": {"*.art": "tape"},
   "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
   "fcl_overrides": {
@@ -49,11 +51,29 @@ all 25,438 events.
 }
 ```
 
-`json2jobdef` sees `inloc.startswith('dir:')` and writes the basename
-keys to `inputs.txt` verbatim. At runtime, `jobfcl` prepends the
-directory prefix (existing `dir:` behavior — no new mechanism).
+Produces 26 jobs per entry (25,438 lines / 1000 per chunk). Each job
+processes 1000 events from its own slice of the source file.
 
-### Alternative: split_lines (many jobs, local chunks)
+**Submit-time effect:**
+- `njobs: 26` in the jobdefs_list entry
+- `tbs.chunk_mode = {source, lines, local_filename: "chunk.txt"}` in
+  jobpars
+- `fcl_overrides["source.fileNames"] = ["chunk.txt"]` auto-injected
+  so every job's FCL references the local slice
+- No `inputs.txt`, no `tbs.inputs`
+
+**Grid-time effect per job:** `runmu2e` sees `tbs.chunk_mode`, runs
+`sed -n "start,end p" <cvmfs-source> > chunk.txt`, FCL points at
+`chunk.txt`, mu2e reads the slice.
+
+### Alternative: `dir:<path>` inloc (one job, no chunking)
+
+If you want a single job reading the entire file (~50s wall clock),
+see [[input-data-dir-shape]]. Less parallelism, but simpler tbs shape.
+
+### Alternative: `split_lines` (pre-split at submit)
+
+### Alternative: `split_lines` (many jobs, pre-split at submit, chunks on stash)
 
 If you need a SAM dataset of many PBI art files (e.g. for mixing
 parallelism over the dataset), use the `split_lines` shape instead:
