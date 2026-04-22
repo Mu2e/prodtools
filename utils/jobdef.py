@@ -293,8 +293,12 @@ def _validate_options_for_source_type(source_type: str, args_state: Dict) -> Non
             'allowed': []
         },
         'PBISequence': {
-            'required': ['inputs', 'merge_factor', 'run_number'],
-            'allowed': ['description', 'auto_description', 'events_per_job']
+            # inputs + merge_factor are used by `dir:` inloc workflows;
+            # chunk_mode workflows skip them entirely (per-job slice is
+            # materialized at runtime, no SAM-tracked inputs). Both valid.
+            'required': ['run_number'],
+            'allowed': ['description', 'auto_description', 'events_per_job',
+                        'inputs', 'merge_factor']
         }
     }
     
@@ -476,7 +480,17 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         # Sequencer uniqueness comes from the input chunk basename (e.g. the
         # ".00" slot in dts.mu2e.PBINormal_33344.MDC2025ac.00.txt) — no
         # subrunkey needed.
-        if args_state['inputs_list']:
+        has_inputs = bool(args_state.get('inputs_list'))
+        has_chunk_mode = bool(config and config.get('chunk_mode'))
+        if not (has_inputs or has_chunk_mode):
+            raise ValueError(
+                "PBISequence source requires either 'inputs' + 'merge_factor' "
+                "(for SAM-tracked or dir:-mode inputs) or 'chunk_mode' "
+                "(for on-the-fly grid chunking) in the config."
+            )
+        if args_state.get('run_number') is None:
+            raise ValueError("PBISequence source requires 'run' in the config.")
+        if has_inputs:
             tbs['inputs'] = {'source.fileNames': [args_state['merge_factor'], args_state['inputs_list']]}
         tbs['event_id'] = {
             'source.runNumber': args_state['run_number'],
@@ -552,6 +566,15 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     # across chunks, but generic — any key that takes an integer works.
     if 'event_id_per_index' in config:
         tbs['event_id_per_index'] = config['event_id_per_index']
+
+    # Handle chunk_mode — on-the-fly chunking at grid.
+    # Shape: {"source": "/cvmfs/.../file.txt", "lines": 1000,
+    #         "local_filename": "chunk.txt"}
+    # runmu2e reads this from jobpars at grid time, extracts the per-job
+    # slice, and writes it to local_filename before mu2e runs. The FCL
+    # points at local_filename via fcl_overrides (set by json2jobdef).
+    if 'chunk_mode' in config:
+        tbs['chunk_mode'] = config['chunk_mode']
 
     # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
     ordered_tbs = {}

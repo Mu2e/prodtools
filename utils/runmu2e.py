@@ -43,6 +43,7 @@ def main():
         sys.exit(1)
 
     # Process job based on mode
+    inloc = None  # populated by process_jobdef; None for template/direct_input
     if mode == 'template':
         fcl, simjob_setup = process_template(jobdesc[0], fname)
         infiles = fname
@@ -50,7 +51,13 @@ def main():
     elif mode == 'direct_input':
         fcl, simjob_setup, infiles, outputs = process_direct_input(jobdesc, fname, args)
     else:
-        fcl, simjob_setup, infiles, outputs = process_jobdef(jobdesc, fname, args)
+        fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(jobdesc, fname, args)
+
+    # dir:<path> inloc means inputs are on a locally-mounted filesystem
+    # (typically cvmfs) and aren't SAM-registered — skip parent tracking
+    # on the push. All other cases (including None for template / direct
+    # input) default to tracking parents.
+    track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
     
     setup_cmd = f"source {simjob_setup}"
     mu2e_cmd = f"mu2e -c {fcl}"
@@ -76,7 +83,7 @@ def main():
     # Handle output files and submission (even if job failed)
     if not args.dry_run:
         if not job_failed:
-            push_data(outputs, infiles, simjob_setup=simjob_setup)
+            push_data(outputs, infiles, simjob_setup=simjob_setup, track_parents=track_parents)
         else:
             print("Job failed - skipping data file push, but uploading logs")
         # Always upload logs, even on failure

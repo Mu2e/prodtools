@@ -28,6 +28,29 @@ relative to that directory.
 - `json2jobdef` detects `inloc.startswith('dir:')` and writes the keys
   to `inputs.txt` verbatim (no SAM lookup).
 
+## Output parent tracking
+
+For jobs consuming non-SAM inputs (cvmfs files under `dir:<path>`),
+`push_data` writes `none` in the third column of `output.txt`
+instead of pointing at a `parents_list.txt` file. `printJson --parents`
+can only resolve SAM-registered parents — if it gets a cvmfs path it
+exits 25, which cascades to `KeyError: 'checksum'` inside
+`pushOutput.copyFile` (metadata dict never populated).
+
+Implementation:
+
+- `prod_utils.process_jobdef` returns `inloc` as a 5th tuple element.
+- `prod_utils.push_data(..., track_parents: bool)` — when False, writes
+  `none` in `output.txt` and skips `parents_list.txt` entirely. `push_data`
+  itself is policy-free: the caller decides whether parents are
+  trackable.
+- `runmu2e` computes `track_parents = not inloc.startswith('dir:')` and
+  passes it to `push_data`. Other modes (`template`, `direct_input`)
+  default to `track_parents=True`.
+
+Verified by fixing a grid-job failure on 2026-04-22 where PBI outputs
+failed to register in SAM with the `KeyError: 'checksum'` cascade.
+
 ## Runtime path resolution
 
 `runmu2e` passes the jobdefs entry's `inloc` string to `jobfcl`. When
@@ -87,4 +110,6 @@ placeholders per-job.
 
 ## Related
 - [[pbi-sequence-workflow]] — primary consumer
+- [[input-data-chunk-mode]] — on-the-fly chunking alternative when
+  a single large text file should fan out to N parallel jobs
 - [[2026-04-21-fold-pbi-into-json2jobdef]] — the split_lines complement

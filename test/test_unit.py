@@ -2164,6 +2164,109 @@ class TestEventIdPerIndex(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# N+3. json2jobdef._configure_chunk_mode — chunk-on-grid submit-side logic
+# ---------------------------------------------------------------------------
+
+class TestConfigureChunkMode(unittest.TestCase):
+    """Submit-side logic for `input_data = {<path>: {"chunk_lines": N}}`.
+
+    Counts lines, computes njobs=ceil(lines/N), records chunk_mode
+    metadata in config, and auto-injects the `source.fileNames`
+    fcl_override so every job's FCL references the (per-worker-local)
+    chunk file.
+    """
+
+    def _make_source(self, nlines):
+        import tempfile
+        f = tempfile.NamedTemporaryFile('w', delete=False, suffix='.txt')
+        for i in range(nlines):
+            f.write(f"{i}\n")
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def _base_config(self, src, chunk_lines):
+        return {
+            "desc": "TestDesc",
+            "dsconf": "TestConf",
+            "owner": "mu2e",
+            "input_data": {src: {"chunk_lines": chunk_lines}},
+        }
+
+    def test_computes_njobs_exactly_divisible(self):
+        from utils.json2jobdef import _configure_chunk_mode
+        src = self._make_source(nlines=5000)
+        cfg = self._base_config(src, chunk_lines=1000)
+        _configure_chunk_mode(cfg)
+        self.assertEqual(cfg['njobs'], 5)
+
+    def test_computes_njobs_with_remainder(self):
+        # 25438 / 1000 = 25 full chunks + 1 short → 26 jobs
+        from utils.json2jobdef import _configure_chunk_mode
+        src = self._make_source(nlines=25438)
+        cfg = self._base_config(src, chunk_lines=1000)
+        _configure_chunk_mode(cfg)
+        self.assertEqual(cfg['njobs'], 26)
+
+    def test_records_chunk_mode_metadata(self):
+        from utils.json2jobdef import _configure_chunk_mode
+        src = self._make_source(nlines=100)
+        cfg = self._base_config(src, chunk_lines=40)
+        _configure_chunk_mode(cfg)
+        cm = cfg['chunk_mode']
+        self.assertEqual(cm['source'], src)
+        self.assertEqual(cm['lines'], 40)
+        self.assertEqual(cm['local_filename'], 'chunk.txt')
+
+    def test_auto_injects_source_filenames_override(self):
+        from utils.json2jobdef import _configure_chunk_mode
+        src = self._make_source(nlines=100)
+        cfg = self._base_config(src, chunk_lines=50)
+        _configure_chunk_mode(cfg)
+        self.assertEqual(cfg['fcl_overrides']['source.fileNames'], ['chunk.txt'])
+
+    def test_does_not_clobber_existing_source_filenames_override(self):
+        # setdefault: if user set source.fileNames already, respect it.
+        from utils.json2jobdef import _configure_chunk_mode
+        src = self._make_source(nlines=100)
+        cfg = self._base_config(src, chunk_lines=50)
+        cfg['fcl_overrides'] = {'source.fileNames': ['user_chunk.txt']}
+        _configure_chunk_mode(cfg)
+        self.assertEqual(cfg['fcl_overrides']['source.fileNames'], ['user_chunk.txt'])
+
+    def test_rejects_zero_chunk_lines(self):
+        from utils.json2jobdef import _configure_chunk_mode
+        src = self._make_source(nlines=100)
+        cfg = self._base_config(src, chunk_lines=0)
+        with self.assertRaises(ValueError):
+            _configure_chunk_mode(cfg)
+
+    def test_rejects_negative_chunk_lines(self):
+        from utils.json2jobdef import _configure_chunk_mode
+        src = self._make_source(nlines=100)
+        cfg = self._base_config(src, chunk_lines=-5)
+        with self.assertRaises(ValueError):
+            _configure_chunk_mode(cfg)
+
+    def test_rejects_missing_source_file(self):
+        from utils.json2jobdef import _configure_chunk_mode
+        cfg = self._base_config("/nonexistent/path/foo.txt", chunk_lines=100)
+        with self.assertRaises(ValueError):
+            _configure_chunk_mode(cfg)
+
+    def test_rejects_multiple_sources(self):
+        from utils.json2jobdef import _configure_chunk_mode
+        src1 = self._make_source(nlines=10)
+        src2 = self._make_source(nlines=20)
+        cfg = {
+            "desc": "TestDesc", "dsconf": "TestConf", "owner": "mu2e",
+            "input_data": {src1: {"chunk_lines": 5}, src2: {"chunk_lines": 5}},
+        }
+        with self.assertRaises(ValueError):
+            _configure_chunk_mode(cfg)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

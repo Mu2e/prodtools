@@ -42,6 +42,48 @@ def _write_random_selection(out_f, query: str, total_needed: int, seed_source: s
         produced += 1
         idx = (idx + 1) % count
 
+def _configure_chunk_mode(config):
+    """Handle `input_data = {"<path>": {"chunk_lines": N}}`.
+
+    Doesn't pre-split. Records the source path + chunk size in
+    `config['chunk_mode']` so the tarball carries it into jobpars;
+    at grid runtime, `runmu2e` extracts the per-job slice from the
+    cvmfs source before invoking mu2e. njobs = ceil(lines/chunk_lines)
+    is computed here and written into the jobdefs_list.json entry.
+
+    Every job's FCL points at the same local filename (default:
+    `chunk.txt`) via fcl_overrides; the per-job content is created
+    fresh on the grid worker.
+    """
+    input_data = config['input_data']
+    if len(input_data) != 1:
+        raise ValueError("chunk_lines input_data must have exactly one source file")
+
+    src_str, spec = next(iter(input_data.items()))
+    src = Path(src_str)
+    if not src.is_file():
+        raise ValueError(f"chunk_lines source file not found: {src}")
+
+    chunk_lines = int(spec['chunk_lines'])
+    if chunk_lines < 1:
+        raise ValueError(f"chunk_lines must be >= 1, got {chunk_lines}")
+    with src.open() as f:
+        line_count = sum(1 for _ in f)
+    njobs = (line_count + chunk_lines - 1) // chunk_lines
+
+    local_chunk = 'chunk.txt'
+    config['njobs'] = njobs
+    config.setdefault('fcl_overrides', {})
+    config['fcl_overrides'].setdefault('source.fileNames', [local_chunk])
+    config['chunk_mode'] = {
+        'source': str(src),
+        'lines': chunk_lines,
+        'local_filename': local_chunk,
+    }
+    # No inputs.txt — there are no SAM-tracked inputs; runmu2e materializes
+    # the per-job chunk directly from cvmfs at job time.
+
+
 def _split_text_file_input(config):
     """Handle `input_data = {"<path>": {"split_lines": N}}`.
 
@@ -125,8 +167,15 @@ def _create_inputs_file(config, exclude_files=None):
     if not isinstance(input_data, dict):
         raise ValueError(f"input_data must be a dict, got {type(input_data)}")
 
-    # Text-file split shape — distinct from the SAM-based flow below.
     first_value = next(iter(input_data.values()), None)
+
+    # Chunk-on-grid shape: {"<path>": {"chunk_lines": N}}. No pre-split,
+    # no inputs.txt — runmu2e extracts each job's slice at runtime.
+    if isinstance(first_value, dict) and 'chunk_lines' in first_value:
+        _configure_chunk_mode(config)
+        return
+
+    # Text-file split shape: pre-split into chunks at submit time.
     if isinstance(first_value, dict) and 'split_lines' in first_value:
         _split_text_file_input(config)
         return
@@ -264,21 +313,27 @@ def validate_required_fields(config, required_fields=None):
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
-    
+
     Returns:
+        'chunk'     - On-the-fly chunking (chunk_lines shape — no inputs.txt)
         'resampler' - Resampling jobs with resampler_name
         'merge'     - File merging jobs with input_data dict
         'mixing'    - Pileup mixing jobs with pbeam
         'stage1'    - Primary simulation jobs (cosmic, beam, etc.)
-    
-    Note: Order matters! Resampler jobs with dict input_data must be checked first.
+
+    Note: Order matters. chunk and resampler must be checked before
+    the generic `merge` fallback that only tests for a dict input_data.
     """
+    input_data = config.get('input_data')
+    if isinstance(input_data, dict):
+        first_value = next(iter(input_data.values()), None)
+        if isinstance(first_value, dict) and 'chunk_lines' in first_value:
+            return 'chunk'
     if 'resampler_name' in config:
         return 'resampler'
     elif 'pbeam' in config:
         return 'mixing'
-    # If input_data is a dict, treat as merge (extracts merge_factor from dict values)
-    elif isinstance(config.get('input_data'), dict):
+    elif isinstance(input_data, dict):
         return 'merge'
     else:
         return 'stage1'
@@ -599,6 +654,12 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
         # Merge jobs: simple file merging
         merge_factor = calculate_merge_factor(config)
         job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
+
+    elif job_type == 'chunk':
+        # Chunk-on-grid: no inputs.txt, no --merge-factor. The per-job
+        # slice is materialized at runtime by runmu2e. tbs.chunk_mode
+        # carries the source path + chunk size through jobpars.
+        job_args = []
         
     elif job_type == 'mixing':
         # Mixing jobs: add MaxEventsToSkip parameter to template

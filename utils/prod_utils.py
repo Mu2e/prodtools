@@ -547,10 +547,33 @@ def process_jobdef(jobdesc, fname, args):
     # Extract fields from JSON structure
     inloc = jobdesc_entry['inloc']
     tarball = jobdesc_entry['tarball']
-    
+
     # Copy jobdef to local directory if not already local
     if not Path(tarball).is_file():
         run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True, retries=3, retry_delay=60)
+
+    # If jobpars declares chunk_mode, materialize this job's slice before
+    # mu2e runs. runmu2e reads tbs.chunk_mode = {source, lines, local_filename}
+    # and writes the corresponding slice of the cvmfs source to local_filename
+    # in cwd. Every job's FCL references local_filename (set via
+    # fcl_overrides at jobdef-creation time), so mu2e reads whatever that
+    # file contains when it opens.
+    import shlex
+    jp_for_chunk = Mu2eJobPars(tarball)
+    tbs = jp_for_chunk.json_data.get('tbs', {}) if isinstance(jp_for_chunk.json_data, dict) else {}
+    chunk_mode = tbs.get('chunk_mode') if isinstance(tbs, dict) else None
+    if isinstance(chunk_mode, dict):
+        src = chunk_mode['source']
+        lines_per_chunk = int(chunk_mode['lines'])
+        local_name = chunk_mode['local_filename']
+        start = job_index_num * lines_per_chunk + 1
+        end = start + lines_per_chunk - 1
+        print(f"chunk_mode: extracting lines {start}-{end} of {src} -> {local_name}")
+        # Quote paths — they come from jobpars (cvmfs today, but future
+        # configs might contain whitespace or shell metacharacters).
+        sed_range = f"{start},{end}p"
+        cmd = f"sed -n {shlex.quote(sed_range)} {shlex.quote(src)} > {shlex.quote(local_name)}"
+        run(cmd, shell=True)
 
     # List input files
     job_io = Mu2eJobIO(tarball)
@@ -600,7 +623,7 @@ def process_jobdef(jobdesc, fname, args):
         raise
     
     outputs = jobdesc_entry['outputs']
-    return fcl, simjob_setup, infiles, outputs
+    return fcl, simjob_setup, infiles, outputs, inloc
 
 def push_output(output_specs, output_file="output.txt", parents_file="parents_list.txt", simjob_setup=None):
     """
@@ -642,19 +665,28 @@ def push_output(output_specs, output_file="output.txt", parents_file="parents_li
         print(f"Warning: pushOutput returned exit code {result}")
     return result
 
-def push_data(outputs, infiles, simjob_setup=None):
+def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     """Handle data file management and submission using wildcard patterns from JSON outputs.
-    
+
     Args:
         outputs: List of output specifications (dataset pattern, location)
         infiles: Space-separated list of input files (for parents_list.txt)
         simjob_setup: Path to SimJob setup script for art environment
+        track_parents: When True (default), writes parents_list.txt from
+            infiles and points output.txt at it. When False, writes
+            'none' in output.txt's third column and skips parents_list.txt
+            entirely — use for jobs whose inputs aren't SAM-registered
+            (e.g. cvmfs files via `inloc: dir:<path>`). printJson --parents
+            exits 25 on non-SAM parents, which cascades into
+            KeyError('checksum') inside pushOutput; this bool avoids that.
     """
     import glob
-    
-    # Write parents list
-    Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
-    
+
+    parents_field = "parents_list.txt" if track_parents else "none"
+
+    if track_parents:
+        Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
+
     # Build output specifications
     output_specs = []
     for output in outputs:
@@ -663,10 +695,10 @@ def push_data(outputs, infiles, simjob_setup=None):
         matching_files = glob.glob(dataset_pattern)
         print(f"Pattern '{dataset_pattern}' matched {len(matching_files)} files: {matching_files}")
         for filename in matching_files:
-            output_specs.append((location, filename, "parents_list.txt"))
-    
+            output_specs.append((location, filename, parents_field))
+
     # Use generic push function
-    return push_output(output_specs, "output.txt", "parents_list.txt", simjob_setup=simjob_setup)
+    return push_output(output_specs, "output.txt", parents_field, simjob_setup=simjob_setup)
 
 def push_logs(fcl, simjob_setup=None):
     """Handle log file management and submission.
