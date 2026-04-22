@@ -79,5 +79,15 @@
             "inloc": ["tape"],
             "outloc": [{"*.art": "disk"}],
             "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ag/setup.sh"]
+        },
+        {
+            "dsconf": "MDC2025af_best_v1_3",
+            "desc": "OnSpillTriggeredReco",
+            "generic_tarball": true,
+            "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+            "fcl_overrides": {"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"},
+            "inloc": "tape",
+            "outloc": {"*.art": "disk"},
+            "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
         }
 ]

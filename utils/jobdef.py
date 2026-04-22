@@ -48,30 +48,38 @@ def resolve_fhicl_file(templatespec: str) -> str:
     raise FileNotFoundError(f"Error: can not locate template file \"{templatespec}\" relative to FHICL_FILE_PATH={fhicl_path}")
 
 
-def _replace_placeholders(pattern: str, config: Dict) -> str:
+def _replace_placeholders(pattern: str, config: Dict, defer_keys: set = None) -> str:
     """Replace placeholders in output filename patterns, matching Perl behavior.
 
     Handles legacy tokens like `.owner.` and `.version.`, the literal
     'configuration', and `{var}` placeholders for any string fields in config.
+
+    defer_keys: set of config key names whose {key} placeholders should NOT be
+                replaced at creation time (left for runtime resolution from fname).
+                Used for generic tarballs where {desc} must stay unresolved.
     """
     if pattern is None:
         return pattern
+    if defer_keys is None:
+        defer_keys = set()
     replaced_pattern = pattern.strip()
     # Legacy tokens
     replaced_pattern = replaced_pattern.replace('.owner.', f'.{config.get("owner", "mu2e")}.')
     replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
     # Literal word used in some templates
     replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
-    # `{var}` placeholders
+    # `{var}` placeholders — skip any key in defer_keys
     for key, value in config.items():
+        if key in defer_keys:
+            continue  # leave e.g. {desc} as a literal placeholder for runtime substitution
         if isinstance(value, str):
             replaced_pattern = replaced_pattern.replace(f'{{{key}}}', value)
     return replaced_pattern
 
 
-def _add_outfile(tbs: Dict, key: str, pattern: str, config: Dict) -> None:
+def _add_outfile(tbs: Dict, key: str, pattern: str, config: Dict, defer_keys: set = None) -> None:
     """Replace placeholders and add an outfile entry to TBS."""
-    replaced = _replace_placeholders(pattern, config)
+    replaced = _replace_placeholders(pattern, config, defer_keys=defer_keys)
     if 'outfiles' not in tbs:
         tbs['outfiles'] = {}
     tbs['outfiles'][key] = replaced
@@ -283,6 +291,10 @@ def _validate_options_for_source_type(source_type: str, args_state: Dict) -> Non
         'SamplingInput': {
             'required': ['run_number', 'description', 'samplinginput'],
             'allowed': []
+        },
+        'PBISequence': {
+            'required': ['inputs', 'merge_factor', 'run_number'],
+            'allowed': ['description', 'auto_description', 'events_per_job']
         }
     }
     
@@ -420,7 +432,9 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     source_type = _get_source_type(template_path)
     
     # Validate options for source type (matching Perl's validateOptionsForSourceType exactly)
-    _validate_options_for_source_type(source_type, args_state)
+    # Skip for generic tarballs — no inputs list at creation time by design
+    if not (config and config.get('generic_tarball')):
+        _validate_options_for_source_type(source_type, args_state)
     
     # Build TBS based on source type (matching Perl behavior exactly)
     if source_type == 'EmptyEvent':
@@ -453,6 +467,21 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                 'source.maxEvents': 2147483647
             }
         tbs['subrunkey'] = 'source.subRun'
+
+    elif source_type == 'PBISequence':
+        # PBISequence: one text-chunk file per job. The module's pset validator
+        # accepts only fileNames + runNumber (plus static config like
+        # reconstitutedModuleLabel, integratedSummary, verbosity). Passing
+        # source.maxEvents / firstSubRunNumber / firstEventNumber is rejected.
+        # Sequencer uniqueness comes from the input chunk basename (e.g. the
+        # ".00" slot in dts.mu2e.PBINormal_33344.MDC2025ac.00.txt) — no
+        # subrunkey needed.
+        if args_state['inputs_list']:
+            tbs['inputs'] = {'source.fileNames': [args_state['merge_factor'], args_state['inputs_list']]}
+        tbs['event_id'] = {
+            'source.runNumber': args_state['run_number'],
+        }
+        tbs['subrunkey'] = ''  # explicit: no per-job subrun assignment
         
         if args_state['sampling']:
             samplingintable = {}
@@ -475,8 +504,9 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                 
                 if filename_pattern and filename_pattern.strip():
                     # Use shared helper to add to local outfiles dict
+                    defer_keys = config.get('_defer_keys', set()) if config else set()
                     tmp_container = {'outfiles': outfiles}
-                    _add_outfile(tmp_container, output_key, filename_pattern, config)
+                    _add_outfile(tmp_container, output_key, filename_pattern, config, defer_keys=defer_keys)
                 else:
                     # No template pattern found - this shouldn't happen in a properly resolved template
                     # Fail like Perl does when output filename is not defined
@@ -489,7 +519,8 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         tfileservice_filename = _get_fcl_value(template_path, 'services.TFileService.fileName')
         if tfileservice_filename and tfileservice_filename.strip() and tfileservice_filename.strip() != '/dev/null':
             # Add via shared helper (Perl adds it to %outtable)
-            _add_outfile(tbs, 'services.TFileService.fileName', tfileservice_filename, config)
+            defer_keys = config.get('_defer_keys', set()) if config else set()
+            _add_outfile(tbs, 'services.TFileService.fileName', tfileservice_filename, config, defer_keys=defer_keys)
     except:
         # If TFileService.fileName is not defined, skip it
         pass
@@ -513,6 +544,14 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     # This fixes the bug where different indices produce the same output filename
     if 'sequencer_from_index' in config:
         tbs['sequencer_from_index'] = config['sequencer_from_index']
+
+    # Handle event_id_per_index — per-job linear overrides.
+    # Shape: {"source.firstEventNumber": {"offset": 0, "step": 1000}}
+    # Evaluated per job as: value = offset + index * step.
+    # Added for PBISequence where firstEventNumber must be globally unique
+    # across chunks, but generic — any key that takes an integer works.
+    if 'event_id_per_index' in config:
+        tbs['event_id_per_index'] = config['event_id_per_index']
 
     # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
     ordered_tbs = {}

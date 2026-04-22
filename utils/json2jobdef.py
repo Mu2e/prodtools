@@ -42,13 +42,66 @@ def _write_random_selection(out_f, query: str, total_needed: int, seed_source: s
         produced += 1
         idx = (idx + 1) % count
 
+def _split_text_file_input(config):
+    """Handle `input_data = {"<path>": {"split_lines": N}}`.
+
+    Splits a local text file from the given path into N-line chunks, writes
+    them into a `chunks/` subdirectory of cwd, and writes basenames to
+    `inputs.txt`. Runtime must pass `--default-location dir:<cwd>/chunks/`
+    to jobfcl so the basenames resolve.
+
+    Used for text-driven primary sources like PBISequence.
+    """
+    input_data = config['input_data']
+    if len(input_data) != 1:
+        raise ValueError("split_lines input_data must have exactly one source file")
+
+    src_str, spec = next(iter(input_data.items()))
+    src = Path(src_str)
+    if not src.is_file():
+        raise ValueError(f"split_lines source file not found: {src}")
+
+    split_lines = int(spec['split_lines'])
+    chunks_dir = Path('chunks')
+    chunks_dir.mkdir(exist_ok=True)
+
+    # Chunk sequencer follows Mu2e convention: <RRRRRR>_<SSSSSSSS> (run_subrun),
+    # zero-padded. Combined with sequencer_from_index, each output inherits the
+    # run from its chunk's basename and substitutes job index as the subrun,
+    # producing standard filenames like
+    #     dts.mu2e.PBINormal_33344.MDC2025ai.001430_00000000.art
+    run = int(config.get('run', 0))
+    slug = f"dts.{config.get('owner', 'mu2e')}.{config['desc']}.{config['dsconf']}"
+    lines = src.read_text().splitlines()
+    chunk_names = []
+    for i in range(0, len(lines), split_lines):
+        idx = i // split_lines
+        chunk_seq = f"{run:06d}_{idx:08d}"
+        chunk_path = chunks_dir / f"{slug}.{chunk_seq}.txt"
+        chunk_path.write_text("\n".join(lines[i:i + split_lines]) + "\n")
+        chunk_names.append(chunk_path.name)
+
+    with open('inputs.txt', 'w') as f:
+        for name in chunk_names:
+            f.write(name + '\n')
+
+    # split_lines almost always wants per-job sequencers from the job index
+    # (otherwise every job output gets the same sequencer as chunk 00 and they
+    # collide). User can set sequencer_from_index: false explicitly to opt out.
+    config.setdefault('sequencer_from_index', True)
+
+
 def _create_inputs_file(config, exclude_files=None):
     """Helper: create inputs.txt file from datasets with merge factors.
-    
+
     Supports optional random sampling by allowing input_data values to be
     dictionaries with the following keys:
         - count (int): number of files to use (required)
         - random (bool): if True, choose a deterministic pseudo-random sample
+
+    Also supports text-file splitting when the value is a dict with
+    `split_lines`: the source file is split locally into N-line chunks and
+    inputs.txt is populated with the chunk basenames.
 
     Args:
         config: Job configuration dictionary.
@@ -61,10 +114,35 @@ def _create_inputs_file(config, exclude_files=None):
                 "random": true
             }
         }
+
+        "input_data": {
+            "/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/PBI_Normal_33344.txt": {
+                "split_lines": 1000
+            }
+        }
     """
     input_data = config.get('input_data')
     if not isinstance(input_data, dict):
         raise ValueError(f"input_data must be a dict, got {type(input_data)}")
+
+    # Text-file split shape — distinct from the SAM-based flow below.
+    first_value = next(iter(input_data.values()), None)
+    if isinstance(first_value, dict) and 'split_lines' in first_value:
+        _split_text_file_input(config)
+        return
+
+    # Local-dir shape: if inloc is "dir:<path>", treat input_data keys as
+    # basenames and write them verbatim (no SAM lookup). At runtime,
+    # jobfcl prepends the directory prefix. Used for cvmfs-resident
+    # inputs that aren't in SAM:
+    #     "inloc": "dir:/cvmfs/.../DataFiles/PBI/",
+    #     "input_data": {"PBI_Normal_33344.txt": 1}
+    inloc = config.get('inloc', '')
+    if isinstance(inloc, str) and inloc.startswith('dir:'):
+        with open('inputs.txt', 'w') as f:
+            for key in input_data.keys():
+                f.write(key + '\n')
+        return
     
     # By default, include all files in the dataset. Older behavior applied an
     # event_count>0 filter; that is now controlled by an explicit flag so that
@@ -285,21 +363,24 @@ def append_jobdef(config, jobdefs_file=None):
     Handles both simple and complex outloc structures.
     """
     parfile_name = get_parfile_name(config)
-    
-    # Query job count if njobs is -1
-    njobs = config['njobs']
-    if njobs == -1:
-        jp = Mu2eJobPars(parfile_name)
-        njobs = jp.njobs()
-        print(f"Queried job count: {njobs}")
-    
+    is_generic = config.get('generic_tarball', False)
+
     # Create JSON structure for the job definition
     jobdef_entry = {
         "tarball": parfile_name,
-        "njobs": njobs,
         "inloc": config['inloc'],
         "outputs": []
     }
+
+    # Generic tarballs have no pre-determined job count — omit njobs so
+    # runmu2e detects direct-input mode (absence of njobs is the trigger)
+    if not is_generic:
+        njobs = config['njobs']
+        if njobs == -1:
+            jp = Mu2eJobPars(parfile_name)
+            njobs = jp.njobs()
+            print(f"Queried job count: {njobs}")
+        jobdef_entry["njobs"] = njobs
     
     # Handle outloc - must be dict with dataset-specific locations
     outloc = config['outloc']
@@ -431,7 +512,7 @@ def main():
         with open(jobdefs_file, 'r') as f:
             jobdefs = json.load(f)
         
-        total_jobs = sum(j['njobs'] for j in jobdefs)
+        total_jobs = sum(j.get('njobs', 0) for j in jobdefs)
         
         # Print summary
         for i, j in enumerate(jobdefs):
@@ -451,6 +532,11 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     config['owner'] = config.get('owner', os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e'))
     config['inloc'] = config.get('inloc', 'none')
     config['njobs'] = config.get('njobs', -1)
+
+    # Generic tarball mode: no input_data, {desc} deferred for runtime resolution
+    if config.get('generic_tarball'):
+        config['_defer_keys'] = {'desc'}
+        config['njobs'] = 0
     
     # Auto-generate desc from input_data if desc is missing
     # This extracts the 3rd field from dataset name (e.g., "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")

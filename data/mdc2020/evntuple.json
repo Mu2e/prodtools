@@ -74,6 +74,23 @@
         "inloc": ["tape"],
         "outloc": [{"*.root": "tape"}],
         "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2020/v01_02_00/setup.sh"]
+    },
+    {
+        "dsconf": ["MDC2020-001"],
+        "desc": ["CeEndpointOnSpillTriggered"],
+        "fcl": ["EventNtuple/fcl/from_mcs-mockdata.fcl"],
+        "input_data": [
+            {"mcs.mu2e.CeEndpointOnSpillTriggered.MDC2020ar_best_v1_3.art": 1}
+        ],
+        "fcl_overrides": [
+            {
+              "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+            }
+          ],
+
+        "inloc": ["tape"],
+        "outloc": [{"*.root": "tape"}],
+        "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2020/v01_02_00/setup.sh"]
     }
 
 ]

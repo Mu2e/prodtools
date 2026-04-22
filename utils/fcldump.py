@@ -115,6 +115,53 @@ def locate_tarball(jobdef):
         raise RuntimeError(f"Error locating tarball for {jobdef}: {e}")
 
 
+def write_fcl_direct_input(tarball, fname, loc='tape', proto='root'):
+    """Generate FCL for direct-input mode: generic tarball + specific input file.
+
+    Parses desc and sequencer from fname, resolves output filenames, and writes
+    a FCL that appends source.fileNames and output overrides to the base FCL.
+    """
+    from pathlib import Path
+    parts = Path(fname).name.split('.')
+    if len(parts) != 6:
+        raise ValueError(
+            f"Invalid filename format: {fname}. "
+            f"Expected prefix.owner.desc.dsconf.sequencer.ext"
+        )
+    desc = parts[2]
+    seq  = parts[4]
+
+    job_fcl = Mu2eJobFCL(tarball, inloc=loc, proto=proto)
+    base_fcl = job_fcl._extract_fcl()
+    outputs_map = job_fcl.job_outputs(0, override_desc=desc, override_seq=seq)
+
+    # Resolve the input file to a full xroot/file path via SAM
+    formatted_fname = job_fcl._format_filename(fname)
+
+    # Strip lines from the base FCL that will be overridden below (avoids
+    # showing unresolved {desc} placeholders from the generic tarball)
+    override_keys = set(outputs_map.keys()) | {'source.fileNames'}
+    filtered_lines = [
+        line for line in base_fcl.splitlines()
+        if not any(line.lstrip().startswith(k) for k in override_keys)
+    ]
+    filtered_fcl = '\n'.join(filtered_lines)
+
+    fcl = f"{Path(fname).stem}.fcl"
+    with open(fcl, 'w') as f:
+        f.write(filtered_fcl)
+        f.write("\n# Direct-input overrides:\n")
+        f.write(f'source.fileNames: ["{formatted_fname}"]\n')
+        for key, filename in outputs_map.items():
+            f.write(f'{key}: "{filename}"\n')
+
+    print(f"Wrote {fcl}")
+    print(f"\n--- {fcl} content ---")
+    with open(fcl) as f:
+        print(f.read())
+    return fcl
+
+
 def main():
     p = argparse.ArgumentParser(description='Generate FCL from dataset name or target file')
     p.add_argument('--dataset', help='Dataset name (art: dts.mu2e.RPCInternalPhysical.MDC2020az.art or jobdef: cnf.mu2e.ExtractedCRY.MDC2020av.tar)')
@@ -123,6 +170,7 @@ def main():
     p.add_argument('--index', type=int, default=0)
     p.add_argument('--target', help='Target file (e.g., dts.mu2e.RPCInternalPhysical.MDC2020az.001202_00000296.art)')
     p.add_argument('--local-jobdef', help='Direct path to local job definition file')
+    p.add_argument('--fname', help='Input art file for direct-input mode (use with --local-jobdef for generic tarballs)')
     p.add_argument('--list-dsconf', help='List all job definitions for a given dsconf (e.g., MDC2020ba_best_v1_3)')
     args = p.parse_args()
 
@@ -130,7 +178,7 @@ def main():
     if args.list_dsconf:
         list_jobdefs(args.list_dsconf)
         return
-    
+
     # Require either dataset or target, unless using --local-jobdef
     if not args.dataset and not args.target and not args.local_jobdef:
         p.error("Either --dataset or --target must be provided, or use --local-jobdef")
@@ -140,9 +188,13 @@ def main():
         jobdef = args.local_jobdef
         if not os.path.exists(jobdef):
             p.error(f"Job definition file not found: {jobdef}")
-        
+
         print(f"Using local job definition: {jobdef}")
-        write_fcl(jobdef, args.loc, args.proto, args.index, args.target)
+        if args.fname:
+            # Direct-input mode: generic tarball + specific input file
+            write_fcl_direct_input(jobdef, args.fname, args.loc, args.proto)
+        else:
+            write_fcl(jobdef, args.loc, args.proto, args.index, args.target)
         
     else:
         source = args.dataset or args.target

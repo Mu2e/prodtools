@@ -45,6 +45,17 @@
 	"inloc": ["tape"],
 	"outloc": [{"*.art": "tape"}],
 	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bf/setup.sh"]
+    },
+    {
+	"dsconf": ["MDC2020ar_best_v1_3"],
+	"fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+	"input_data": [
+        {"dig.mu2e.CeEndpointOnSpillTriggered.MDC2020ar_best_v1_3.art": 1}
+    ],
+    "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+	"inloc": ["tape"],
+	"outloc": [{"*.art": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ar/setup.sh"]
     }
 
 

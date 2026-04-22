@@ -1606,6 +1606,564 @@ class TestGetOutputDatasetNames(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 22. validate_jobdesc — three-way mode detection (prod_utils.py)
+# ---------------------------------------------------------------------------
+
+class TestValidateJobdesc(unittest.TestCase):
+
+    def test_template_mode(self):
+        from utils.prod_utils import validate_jobdesc
+        jd = [{'fcl_template': 'base.fcl', 'setup_script': '/s/setup.sh',
+               'inloc': 'tape', 'outputs': []}]
+        self.assertEqual(validate_jobdesc(jd), 'template')
+
+    def test_direct_input_mode(self):
+        from utils.prod_utils import validate_jobdesc
+        jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
+               'inloc': 'tape', 'outputs': []}]
+        self.assertEqual(validate_jobdesc(jd), 'direct_input')
+
+    def test_normal_mode(self):
+        from utils.prod_utils import validate_jobdesc
+        jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
+               'inloc': 'tape', 'outputs': []}]
+        self.assertFalse(validate_jobdesc(jd))
+
+    def test_direct_input_is_truthy(self):
+        """'direct_input' string must be truthy for backward-compatible if-checks."""
+        from utils.prod_utils import validate_jobdesc
+        jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
+               'inloc': 'tape', 'outputs': []}]
+        self.assertTrue(validate_jobdesc(jd))
+
+    def test_normal_mode_is_falsy(self):
+        from utils.prod_utils import validate_jobdesc
+        jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
+               'inloc': 'tape', 'outputs': []}]
+        self.assertFalse(validate_jobdesc(jd))
+
+    def test_direct_input_multiple_entries_exits(self):
+        from utils.prod_utils import validate_jobdesc
+        jd = [
+            {'tarball': 'a.tar', 'inloc': 'tape', 'outputs': []},
+            {'tarball': 'b.tar', 'inloc': 'tape', 'outputs': []},
+        ]
+        with self.assertRaises(SystemExit):
+            validate_jobdesc(jd)
+
+    def test_direct_input_missing_outputs_exits(self):
+        from utils.prod_utils import validate_jobdesc
+        jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar', 'inloc': 'tape'}]
+        with self.assertRaises(SystemExit):
+            validate_jobdesc(jd)
+
+    def test_normal_mode_missing_njobs_exits(self):
+        """Entry without tarball: falls through to normal-mode validation which requires njobs."""
+        from utils.prod_utils import validate_jobdesc
+        jd = [{'inloc': 'tape', 'outputs': []}]  # no tarball, no njobs
+        with self.assertRaises(SystemExit):
+            validate_jobdesc(jd)
+
+    def test_normal_mode_with_generic_entry_ignored(self):
+        """Normal-mode jobdesc with a trailing generic tarball (no njobs) is valid."""
+        from utils.prod_utils import validate_jobdesc
+        jd = [
+            {'tarball': 'a.tar', 'njobs': 100, 'inloc': 'tape', 'outputs': []},
+            {'tarball': 'b.tar', 'njobs': 200, 'inloc': 'tape', 'outputs': []},
+            {'tarball': 'cnf.mu2e.OnSpillTriggeredReco.MDC2025af.0.tar',
+             'inloc': 'tape', 'outputs': []},  # generic - no njobs
+        ]
+        self.assertFalse(validate_jobdesc(jd))
+
+    def test_empty_list_exits(self):
+        from utils.prod_utils import validate_jobdesc
+        with self.assertRaises(SystemExit):
+            validate_jobdesc([])
+
+
+# ---------------------------------------------------------------------------
+# 23. job_outputs() override_desc / override_seq (direct-input mode)
+# ---------------------------------------------------------------------------
+
+def _generic_reco_jobpars(owner='mu2e', dsconf='MDC2025af_best_v1_3'):
+    """Jobpars for a generic reco tarball: {desc} deferred in outfiles."""
+    return {
+        "code": "",
+        "setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh",
+        "tbs": {
+            "seed": "services.SeedService.baseSeed",
+            "subrunkey": "",
+            "event_id": {"source.maxEvents": 2147483647},
+            "outfiles": {
+                "outputs.LoopHelixOutput.fileName":
+                    f"mcs.{owner}.{{desc}}.{dsconf}.sequencer.art"
+            },
+        },
+        "jobname": f"cnf.{owner}.OnSpillTriggeredReco.{dsconf}.0.tar",
+        "owner": owner,
+        "dsconf": dsconf,
+    }
+
+
+class TestJobOutputsOverride(unittest.TestCase):
+
+    def test_override_seq_used_instead_of_computed(self):
+        """override_seq must appear in the output filename."""
+        from utils.jobfcl import Mu2eJobFCL
+        jp = _generic_reco_jobpars()
+        tar = _make_tarball(jp, "#include \"OnSpill.fcl\"\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='tape')
+            outputs = job.job_outputs(0, override_seq='001430_00000042')
+            out_file = outputs['outputs.LoopHelixOutput.fileName']
+            self.assertIn('001430_00000042', out_file)
+        finally:
+            os.unlink(tar)
+
+    def test_override_desc_replaces_desc_placeholder(self):
+        """{desc} in outfile template is replaced by override_desc."""
+        from utils.jobfcl import Mu2eJobFCL
+        jp = _generic_reco_jobpars()
+        tar = _make_tarball(jp, "#include \"OnSpill.fcl\"\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='tape')
+            outputs = job.job_outputs(
+                0,
+                override_desc='CeEndpointOnSpillTriggered',
+                override_seq='001430_00000042'
+            )
+            out_file = outputs['outputs.LoopHelixOutput.fileName']
+            self.assertIn('CeEndpointOnSpillTriggered', out_file)
+            self.assertNotIn('{desc}', out_file)
+        finally:
+            os.unlink(tar)
+
+    def test_different_override_desc_yields_different_output(self):
+        from utils.jobfcl import Mu2eJobFCL
+        jp = _generic_reco_jobpars()
+        tar = _make_tarball(jp, "#include \"OnSpill.fcl\"\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='tape')
+            out_a = job.job_outputs(0, override_desc='CeEndpoint', override_seq='001430_00000001')
+            out_b = job.job_outputs(0, override_desc='CosmicSignal', override_seq='001430_00000001')
+            self.assertNotEqual(
+                out_a['outputs.LoopHelixOutput.fileName'],
+                out_b['outputs.LoopHelixOutput.fileName']
+            )
+        finally:
+            os.unlink(tar)
+
+    def test_output_follows_six_part_mu2e_convention(self):
+        from utils.jobfcl import Mu2eJobFCL
+        jp = _generic_reco_jobpars()
+        tar = _make_tarball(jp, "#include \"OnSpill.fcl\"\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='tape')
+            outputs = job.job_outputs(
+                0,
+                override_desc='CeEndpointMix1BBTriggered',
+                override_seq='001430_00000042'
+            )
+            out_file = outputs['outputs.LoopHelixOutput.fileName']
+            parts = out_file.split('.')
+            self.assertEqual(len(parts), 6)
+            self.assertEqual(parts[0], 'mcs')
+            self.assertEqual(parts[1], 'mu2e')
+            self.assertEqual(parts[2], 'CeEndpointMix1BBTriggered')
+            self.assertEqual(parts[4], '001430_00000042')
+            self.assertEqual(parts[5], 'art')
+        finally:
+            os.unlink(tar)
+
+    def test_no_overrides_backward_compatible(self):
+        """Existing callers with no overrides must still work."""
+        from utils.jobfcl import Mu2eJobFCL
+        jp = _empty_event_jobpars(run=1430)
+        tar = _make_tarball(jp, "module_type : EmptyEvent\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='dir:/tmp')
+            outputs = job.job_outputs(3)
+            out_file = outputs['outputs.PrimaryOutput.fileName']
+            self.assertIn('001430_00000003', out_file)
+        finally:
+            os.unlink(tar)
+
+
+# ---------------------------------------------------------------------------
+# 24. _replace_placeholders defer_keys (jobdef.py)
+# ---------------------------------------------------------------------------
+
+class TestReplacePlaceholdersDeferKeys(unittest.TestCase):
+
+    def _rp(self, pattern, config, defer_keys=None):
+        from utils.jobdef import _replace_placeholders
+        return _replace_placeholders(pattern, config, defer_keys=defer_keys)
+
+    def test_desc_replaced_without_defer(self):
+        result = self._rp(
+            "mcs.mu2e.{desc}.TC.sequencer.art",
+            {'desc': 'CeEndpoint', 'dsconf': 'TC'}
+        )
+        self.assertEqual(result, "mcs.mu2e.CeEndpoint.TC.sequencer.art")
+
+    def test_desc_not_replaced_with_defer(self):
+        result = self._rp(
+            "mcs.mu2e.{desc}.TC.sequencer.art",
+            {'desc': 'CeEndpoint', 'dsconf': 'TC'},
+            defer_keys={'desc'}
+        )
+        self.assertIn('{desc}', result)
+        self.assertNotIn('CeEndpoint', result)
+
+    def test_other_keys_still_replaced_when_desc_deferred(self):
+        """Deferring desc must not block substitution of other keys."""
+        result = self._rp(
+            "mcs.mu2e.{desc}.{dsconf}.sequencer.art",
+            {'desc': 'CeEndpoint', 'dsconf': 'TestConf'},
+            defer_keys={'desc'}
+        )
+        self.assertIn('{desc}', result)
+        self.assertIn('TestConf', result)
+        self.assertNotIn('{dsconf}', result)
+
+    def test_none_defer_keys_behaves_like_empty_set(self):
+        result = self._rp(
+            "mcs.mu2e.{desc}.{dsconf}.sequencer.art",
+            {'desc': 'CeEndpoint', 'dsconf': 'TC'},
+            defer_keys=None
+        )
+        self.assertNotIn('{desc}', result)
+        self.assertNotIn('{dsconf}', result)
+
+    def test_empty_defer_keys_replaces_all(self):
+        result = self._rp(
+            "mcs.mu2e.{desc}.{dsconf}.sequencer.art",
+            {'desc': 'CeEndpoint', 'dsconf': 'TC'},
+            defer_keys=set()
+        )
+        self.assertNotIn('{desc}', result)
+        self.assertNotIn('{dsconf}', result)
+
+
+# ---------------------------------------------------------------------------
+# 25. process_direct_input (prod_utils.py)
+# ---------------------------------------------------------------------------
+
+class TestProcessDirectInput(unittest.TestCase):
+    """End-to-end tests for process_direct_input() with a real in-memory tarball."""
+
+    def setUp(self):
+        import tempfile
+        self._orig_dir = os.getcwd()
+        self._tmpdir = tempfile.mkdtemp()
+        os.chdir(self._tmpdir)
+        self._tar = _make_tarball(
+            _generic_reco_jobpars(),
+            "#include \"Production/JobConfig/recoMC/OnSpill.fcl\"\n"
+        )
+
+    def tearDown(self):
+        os.chdir(self._orig_dir)
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _run(self, fname):
+        from utils.prod_utils import process_direct_input
+        jobdesc = [{
+            'tarball': self._tar,
+            'inloc': 'tape',
+            'outputs': [{'dataset': '*.art', 'location': 'disk'}],
+        }]
+        with patch('utils.jobquery.Mu2eJobPars') as mock_pars:
+            mock_pars.return_value.setup.return_value = \
+                "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
+            return process_direct_input(jobdesc, fname, MagicMock())
+
+    def test_returns_four_tuple(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        result = self._run(fname)
+        self.assertEqual(len(result), 4)
+
+    def test_fcl_named_after_input_stem(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        fcl, _, _, _ = self._run(fname)
+        self.assertEqual(
+            fcl,
+            "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.fcl"
+        )
+
+    def test_fcl_file_written_to_disk(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        fcl, _, _, _ = self._run(fname)
+        self.assertTrue(os.path.isfile(fcl))
+
+    def test_fcl_contains_source_file_names_with_input(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        fcl, _, _, _ = self._run(fname)
+        content = Path(fcl).read_text()
+        self.assertIn('source.fileNames', content)
+        self.assertIn(fname, content)
+
+    def test_fcl_contains_output_fileName_override(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        fcl, _, _, _ = self._run(fname)
+        content = Path(fcl).read_text()
+        self.assertIn('outputs.LoopHelixOutput.fileName', content)
+
+    def test_output_filename_uses_desc_from_fname(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        fcl, _, _, _ = self._run(fname)
+        content = Path(fcl).read_text()
+        self.assertIn('CeEndpointOnSpillTriggered', content)
+
+    def test_output_filename_uses_seq_from_fname(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        fcl, _, _, _ = self._run(fname)
+        content = Path(fcl).read_text()
+        self.assertIn('001430_00000042', content)
+
+    def test_different_input_desc_gives_different_output_filename(self):
+        fname_a = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000001.art"
+        fname_b = "dig.mu2e.CosmicSignalMix1BBTriggered.MDC2025af_best_v1_3.001430_00000001.art"
+        fcl_a, _, _, _ = self._run(fname_a)
+        fcl_b, _, _, _ = self._run(fname_b)
+        content_a = Path(fcl_a).read_text()
+        content_b = Path(fcl_b).read_text()
+        # Each FCL must mention only its own desc in the output filename
+        self.assertIn('CeEndpointOnSpillTriggered', content_a)
+        self.assertIn('CosmicSignalMix1BBTriggered', content_b)
+
+    def test_infiles_is_fname(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        _, _, infiles, _ = self._run(fname)
+        self.assertEqual(infiles, fname)
+
+    def test_outputs_from_jobdesc(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        _, _, _, outputs = self._run(fname)
+        self.assertEqual(outputs, [{'dataset': '*.art', 'location': 'disk'}])
+
+    def test_setup_script_returned(self):
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        _, simjob_setup, _, _ = self._run(fname)
+        self.assertIn('/cvmfs/', simjob_setup)
+
+    def test_bad_fname_format_exits(self):
+        from utils.prod_utils import process_direct_input
+        jobdesc = [{'tarball': self._tar, 'inloc': 'tape', 'outputs': []}]
+        with self.assertRaises(SystemExit):
+            process_direct_input(jobdesc, "only.four.parts.art", MagicMock())
+
+    def test_base_fcl_content_included(self):
+        """The FCL from the tarball's mu2e.fcl must appear before the overrides."""
+        fname = "dig.mu2e.CeEndpointOnSpillTriggered.MDC2025af_best_v1_3.001430_00000042.art"
+        fcl, _, _, _ = self._run(fname)
+        content = Path(fcl).read_text()
+        # The tarball mu2e.fcl starts with an #include
+        self.assertIn('#include', content)
+        # Direct-input overrides must come after base content
+        override_pos = content.find('source.fileNames')
+        include_pos = content.find('#include')
+        self.assertGreater(override_pos, include_pos)
+
+
+# ---------------------------------------------------------------------------
+# N. calculate_merge_factor — split_lines branch
+# ---------------------------------------------------------------------------
+
+class TestCalculateMergeFactorSplitLines(unittest.TestCase):
+    """Guard the `split_lines → merge_factor = 1` branch added with the
+    text-file splitting input_data shape. Also smoke-test the existing
+    shapes to catch accidental regressions."""
+
+    def test_split_lines_returns_one(self):
+        from utils.prod_utils import calculate_merge_factor
+        config = {"input_data": {"/cvmfs/PBI_Normal.txt": {"split_lines": 1000}}}
+        self.assertEqual(calculate_merge_factor(config), 1)
+
+    def test_split_lines_value_is_ignored(self):
+        # Any N-line split yields one chunk per job; chunk size doesn't
+        # change the merge factor.
+        from utils.prod_utils import calculate_merge_factor
+        for n in (1, 500, 10000):
+            config = {"input_data": {"/cvmfs/x.txt": {"split_lines": n}}}
+            self.assertEqual(calculate_merge_factor(config), 1)
+
+    def test_plain_int_still_returned(self):
+        from utils.prod_utils import calculate_merge_factor
+        config = {"input_data": {"dts.mu2e.X.Y.art": 5}}
+        self.assertEqual(calculate_merge_factor(config), 5)
+
+    def test_count_form_still_works(self):
+        from utils.prod_utils import calculate_merge_factor
+        config = {"input_data": {"dts.mu2e.X.Y.art": {"count": 7, "random": True}}}
+        self.assertEqual(calculate_merge_factor(config), 7)
+
+    def test_unknown_dict_spec_raises(self):
+        from utils.prod_utils import calculate_merge_factor
+        config = {"input_data": {"dts.mu2e.X.Y.art": {"foo": "bar"}}}
+        with self.assertRaises(ValueError):
+            calculate_merge_factor(config)
+
+
+# ---------------------------------------------------------------------------
+# N+1. Mu2eJobFCL.sequencer — source.runNumber short-circuit
+# ---------------------------------------------------------------------------
+
+def _pbi_sequence_jobpars(run=1430, files=None, owner='mu2e', dsconf='TestConf'):
+    """Return a jobpars.json dict suitable for a PBISequence job.
+
+    event_id uses `source.runNumber` (the key PBISequence accepts) rather
+    than `source.firstRun` (EmptyEvent/RootInput convention). subrunkey
+    is empty — PBISequence doesn't accept per-job subrun overrides.
+    """
+    return {
+        "code": "",
+        "setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/TestConf/setup.sh",
+        "tbs": {
+            "seed": "services.SeedService.baseSeed",
+            "subrunkey": "",
+            "event_id": {"source.runNumber": run},
+            "outfiles": {
+                "outputs.PrimaryOutput.fileName":
+                    f"dts.{owner}.TestDesc.{dsconf}.sequencer.art"
+            },
+            "inputs": {"source.fileNames": [1, files or ["PBI_Normal.txt"]]},
+        },
+        "jobname": f"cnf.{owner}.TestDesc.{dsconf}.0.tar",
+        "owner": owner,
+        "dsconf": dsconf,
+    }
+
+
+class TestSequencerRunNumber(unittest.TestCase):
+    """sequencer() short-circuits on explicit run keys before trying to
+    parse input filenames as Mu2e names. Recognized keys:
+        - source.firstRun (EmptyEvent / RootInput)
+        - source.run      (SamplingInput)
+        - source.runNumber (PBISequence — added 2026-04-21)
+    """
+
+    def test_runNumber_produces_mu2e_standard_sequencer(self):
+        from utils.jobfcl import Mu2eJobFCL
+        jp = _pbi_sequence_jobpars(run=1430)
+        tar = _make_tarball(jp, "module_type : PBISequence\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='dir:/tmp')
+            self.assertEqual(job.sequencer(0), "001430_00000000")
+            self.assertEqual(job.sequencer(5), "001430_00000005")
+            self.assertEqual(job.sequencer(42), "001430_00000042")
+        finally:
+            os.unlink(tar)
+
+    def test_runNumber_bypasses_filename_parsing(self):
+        # Input filename that would fail Mu2eFilename parsing — verifies
+        # the short-circuit fires before the fallback path.
+        from utils.jobfcl import Mu2eJobFCL
+        jp = _pbi_sequence_jobpars(run=1430, files=["not-a-mu2e-name.txt"])
+        tar = _make_tarball(jp, "module_type : PBISequence\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='dir:/tmp')
+            # If the short-circuit broke, this would raise when parsing
+            # the non-conforming basename.
+            self.assertEqual(job.sequencer(0), "001430_00000000")
+        finally:
+            os.unlink(tar)
+
+    def test_firstRun_and_runNumber_agree(self):
+        # Different event_id keys should produce the same sequencer for
+        # the same run+index.
+        from utils.jobfcl import Mu2eJobFCL
+        jp_first = _empty_event_jobpars(run=1430)
+        jp_num = _pbi_sequence_jobpars(run=1430)
+        tar_first = _make_tarball(jp_first, "module_type : EmptyEvent\n")
+        tar_num = _make_tarball(jp_num, "module_type : PBISequence\n")
+        try:
+            job_first = Mu2eJobFCL(tar_first, inloc='dir:/tmp')
+            job_num = Mu2eJobFCL(tar_num, inloc='dir:/tmp')
+            for index in (0, 3, 100):
+                self.assertEqual(job_first.sequencer(index), job_num.sequencer(index))
+        finally:
+            os.unlink(tar_first)
+            os.unlink(tar_num)
+
+
+# ---------------------------------------------------------------------------
+# N+2. Mu2eJobFCL.job_event_settings — event_id_per_index linear overrides
+# ---------------------------------------------------------------------------
+
+class TestEventIdPerIndex(unittest.TestCase):
+    """Per-index linear overrides on event_id fields. Schema:
+        tbs.event_id_per_index = { fcl_key: { offset, step } }
+    Evaluated per job as: result[fcl_key] = offset + index * step.
+    Applied after base event_id and subrunkey so per-index overrides win.
+    """
+
+    def _jobpars_with_per_index(self, per_index, event_id=None, subrunkey=''):
+        jp = _pbi_sequence_jobpars(run=1430)
+        jp["tbs"]["subrunkey"] = subrunkey
+        if event_id is not None:
+            jp["tbs"]["event_id"] = event_id
+        jp["tbs"]["event_id_per_index"] = per_index
+        return jp
+
+    def test_linear_override_applied_per_index(self):
+        from utils.jobfcl import Mu2eJobFCL
+        jp = self._jobpars_with_per_index({
+            "source.firstEventNumber": {"offset": 0, "step": 1000},
+        })
+        tar = _make_tarball(jp, "module_type : PBISequence\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='dir:/tmp')
+            self.assertEqual(job.job_event_settings(0)["source.firstEventNumber"], 0)
+            self.assertEqual(job.job_event_settings(5)["source.firstEventNumber"], 5000)
+            self.assertEqual(job.job_event_settings(25)["source.firstEventNumber"], 25000)
+        finally:
+            os.unlink(tar)
+
+    def test_nonzero_offset(self):
+        from utils.jobfcl import Mu2eJobFCL
+        jp = self._jobpars_with_per_index({
+            "source.firstEventNumber": {"offset": 42, "step": 10},
+        })
+        tar = _make_tarball(jp, "module_type : PBISequence\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='dir:/tmp')
+            self.assertEqual(job.job_event_settings(3)["source.firstEventNumber"], 42 + 30)
+        finally:
+            os.unlink(tar)
+
+    def test_missing_step_defaults_to_zero(self):
+        # A spec with only offset should treat step as 0 (i.e. constant).
+        from utils.jobfcl import Mu2eJobFCL
+        jp = self._jobpars_with_per_index({
+            "source.firstEventNumber": {"offset": 100},
+        })
+        tar = _make_tarball(jp, "module_type : PBISequence\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='dir:/tmp')
+            self.assertEqual(job.job_event_settings(0)["source.firstEventNumber"], 100)
+            self.assertEqual(job.job_event_settings(9)["source.firstEventNumber"], 100)
+        finally:
+            os.unlink(tar)
+
+    def test_overrides_base_event_id_on_same_key(self):
+        # If event_id fixes a value and event_id_per_index names the same
+        # key, the per-index computation wins.
+        from utils.jobfcl import Mu2eJobFCL
+        jp = self._jobpars_with_per_index(
+            per_index={"source.firstEventNumber": {"offset": 0, "step": 500}},
+            event_id={"source.runNumber": 1430, "source.firstEventNumber": 999},
+        )
+        tar = _make_tarball(jp, "module_type : PBISequence\n")
+        try:
+            job = Mu2eJobFCL(tar, inloc='dir:/tmp')
+            self.assertEqual(job.job_event_settings(2)["source.firstEventNumber"], 1000)
+        finally:
+            os.unlink(tar)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
