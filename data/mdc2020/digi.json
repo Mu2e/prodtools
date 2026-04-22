@@ -14,5 +14,19 @@
 	"inloc": ["tape"],
 	"outloc": [{"*.art": "tape"}],
 	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020bc/setup.sh"]
+    },
+    {
+	"dsconf": ["MDC2020ar_best_v1_3"],
+	"fcl": ["Production/JobConfig/digitize/OnSpill.fcl"],
+	"input_data": [
+		{"dts.mu2e.CeEndpoint.MDC2020ar.art": 10}
+	],
+    "fcl_overrides": {
+		"outputs.TriggeredOutput.fileName":   "dig.owner.{desc}OnSpillTriggered.version.sequencer.art",
+		"outputs.TriggerableOutput.fileName": "dig.owner.{desc}OnSpillTriggerable.version.sequencer.art"
+	},
+	"inloc": ["tape"],
+	"outloc": [{"*.art": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ar/setup.sh"]
     }
 ]

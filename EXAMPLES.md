@@ -1,887 +1,704 @@
-# Mu2e Production Tools - Usage Examples
+# Mu2e Production Tools — Usage Examples
 
-This document provides practical examples for using the Python-based Mu2e production tools.
+Practical examples for the Python-based Mu2e production tools. Every
+command here is a real invocation you can paste into a shell once your
+Mu2e environment is set up.
 
 ## Quick Navigation
 
-- **[Environment Setup](#environment-setup)** - Required Mu2e environment configuration
-- **[Job Definition Creation](#1-creating-job-definitions)** - Generate job definition tarballs
-- **[FCL Generation](#2-fcl-configuration-generation)** - Create FCL files from jobdefs or target files
-- **[Mixing Jobs](#3-mixing-job-definitions)** - Complete guide to mixing jobs
-- **[JSON Expansion](#4-json-configuration-expansion)** - Parameter space exploration
-- **[Production Execution](#5-production-job-execution)** - Run production workflows
-- **[Additional Tools](#additional-tools)** - Database monitoring, family tree visualization, log analysis, filter efficiency, dataset monitoring, recovery datasets
+- [1. Environment Setup](#1-environment-setup)
+- [2. Overview](#2-overview)
+- [3. Creating Job Definitions](#3-creating-job-definitions)
+- [4. Random Sampling in Input Data](#4-random-sampling-in-input-data)
+- [5. FCL Generation](#5-fcl-generation)
+- [6. Mixing Jobs](#6-mixing-jobs)
+- [7. JSON Expansion](#7-json-expansion)
+- [8. Production Execution](#8-production-execution)
+- [9. Sequential vs. Pseudo-Random Auxiliary Input Selection](#9-sequential-vs-pseudo-random-auxiliary-input-selection)
+- [10. FCL Overrides](#10-fcl-overrides)
+- [11. Parity Tests](#11-parity-tests)
+- [12. Additional Tools](#12-additional-tools)
+- [13. Troubleshooting](#13-troubleshooting)
 
-## Environment Setup
-
-**IMPORTANT: Set up the Mu2e environment before using any tools:**
+## 1. Environment Setup
 
 ```bash
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
 muse setup ops
-# Note: muse setup SimJob is optional for most tools
 ```
 
-This setup provides access to:
-- `fhicl-get` - FHiCL configuration parser
-- `mu2ejobdef` - Mu2e job definition tool (for parity testing)
-- `samweb_client` - Python library for SAM data access
-- `mdh` - Mu2e data handling tools
+`muse setup SimJob` is optional for most tools — only `muse setup ops`
+is required. A few commands (parity tests, `json2jobdef`) need SimJob.
 
-### Alternative: Automated Environment Setup
+This exposes:
 
-For convenience, you can use the included setup script:
+- `fhicl-get` — FHiCL parser
+- `mu2ejobdef` — Perl reference (used by parity tests)
+- `samweb_client` — Python SAM client
+- `mdh` — Mu2e data handling
+
+### Optional: add prodtools to PATH
 
 ```bash
-cd prodtools
 source bin/setup.sh
 ```
 
-This script automatically:
-- Adds `prodtools/bin/` to your PATH
-- Adds `prodtools/` to your PYTHONPATH
-- Enables running all commands directly from anywhere
+Adds `prodtools/bin/` to `PATH` and `prodtools/` to `PYTHONPATH`, so you
+can run `json2jobdef`, `fcldump`, `runmu2e`, etc. from anywhere. For
+Run1B workflows that need local `fcl/` resolved by `MU2E_SEARCH_PATH`,
+use `source bin/setup_run1b.sh` instead.
 
-**Note**: You still need to source the Mu2e environment and run `muse setup ops` first.
+## 2. Overview
 
-**After sourcing, you can run commands directly:**
-```bash
-# Production tools
-json2jobdef --json config.json --index 0
-fcldump --dataset dts.mu2e.RPCExternal.MDC2020az.art
-runjobdef --jobdesc jobdefs_list.json --dry-run
-runfcl --fcl template.fcl --nevents 1000 --dry-run
+**Core production tools:**
 
-# Test tools (run from test/ directory)
-cd test
-./parity_test.sh          # Run index 0 only (default)
-./parity_test.sh --all    # Run all configurations
-./compare_tarballs.sh     # Compare test results
-```
+- `json2jobdef` — create job definition tarballs from JSON configs
+- `jobdef` — low-level job definition creation (direct flags)
+- `jobfcl` — generate FCL for a specific index in a jobdef tarball
+- `fcldump` — generate FCL from dataset name, target file, or local tarball
+- `runmu2e` — execute production jobs from job definitions
+- `jsonexpander` — expand template JSONs into parameter cross-products
+- `jobquery` — inspect job parameter tarballs
+- `mkidxdef` — create SAM index definitions from a jobdefs list
 
-## Overview
+**Analysis and diagnostics:**
 
-The `prodtools` package provides implementations of Mu2e production tools:
+- `pomsMonitor` — analyze POMS job definitions via a persistent SQLite DB
+- `pomsMonitorWeb` — Flask UI for the monitoring DB
+- `famtree` — dataset parentage trees with Mermaid diagrams
+- `logparser` — parse job performance metrics from log files
+- `genFilterEff` — compute generation filter efficiency per dataset
+- `datasetFileList` — list files in a dataset or SAM definition
+- `listNewDatasets` — recently created datasets in SAM
+- `mkrecovery` — build a recovery SAM definition for missing files
+- `copy_to_stash` — copy a dataset into StashCache or resilient dCache
+- `listMcsDefs` / `listRelatedDefs` — enumerate related mcs/dig/dts defs
+- `plot_logs` — visualize log metrics merged with NERSC job counts
 
-**Core Production Tools:**
-- `json2jobdef` - Create job definition tarballs from JSON configs
-- `fcldump` - Generate FCL configurations from jobdefs, datasets, or target files
-- `runmu2e` - Execute production jobs from job definitions
-- `runfcl` - Execute jobs from FCL templates (one-in-one-out processing)
-- `mkidxdef` - Create SAM index definitions
-- `jsonexpander` - Generate parameter combinations from templates
-- `jobdef` - Create job definitions directly (low-level tool)
+## 3. Creating Job Definitions
 
-**Analysis and Diagnostics:**
-- `pomsMonitor` - Monitor POMS production jobs using persistent SQLite database
-- `pomsMonitorWeb` - Web interface for job monitoring and JSON editing
-- `famtree` - Generate family tree diagrams for data lineage
-- `logparser` - Analyze job performance metrics from log files (parallel processing)
-- `genFilterEff` - Calculate generation filter efficiency for datasets
-- `datasetFileList` - List files in datasets with pnfs paths
-- `listNewDatasets` - Monitor recently created datasets
-- `mkrecovery` - Create recovery dataset definitions for missing files
-- `plot_logs` - Visualize log metrics merged with NERSC job counts
+### A. JSON-based (recommended): `json2jobdef`
 
-## 1. Creating Job Definitions
-
-### A. JSON-Based Configuration (Recommended)
-
-Create job definitions using JSON configuration files:
-
-```json
-[
-    {
-	"desc": "POT_Run1_a",
-	"dsconf": "MDC2020ba",
-	"fcl": "Production/JobConfig/beam/POT.fcl",
-	"fcl_overrides": {
-	    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
-		"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
-	},
-	"njobs": 20000,
-	"events": 5000,
-	"run": 1431,
-	"outloc": {
-		"*.art": "disk"
-	},
-	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ba/setup.sh",
-	"owner": "mu2e"
-    }
-]
-```
-
-**Usage:**
-```bash
-# Create job definition from JSON for 1st entry
-json2jobdef --json data/stage1.json --index 0
-
-# Create job definition from JSON for a pair of desc and dsconf
-json2jobdef --json data/stage1.json --desc POT_Run1_a --dsconf MDC2020ba
-
-# Create job definitions from JSON for all enrties that match dsconf
-json2jobdef --json data/stage1.json --dsconf MDC2020ba
-
-```
-
-**Output:**
-- `cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.tar` (job definition tarball)
-- `jobdefs_list.json` (descriptions of all job definitions to run over)
-- `cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.fcl` (FCL test file)
-
-### A.1. Random Sampling in Input Data
-
-For resampler and artcat jobs, you can use deterministic pseudo-random file selection:
+Stage-1 example (`data/Run1B/stage1.json`):
 
 ```json
 {
-    "desc": "NeutralsFlashCat",
+    "desc": "POT_Run1_a",
     "dsconf": "MDC2025ac",
-    "fcl": "Production/JobConfig/common/artcat.fcl",
-    "input_data": {
-        "sim.mu2e.PiTargetStops.MDC2025ac.art": {
-            "count": 10,
-            "random": true
-        }
+    "fcl": "Production/JobConfig/beam/POT.fcl",
+    "fcl_overrides": {
+        "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
     },
-    "njobs": 1000,
+    "njobs": 20000,
+    "events": 5000,
+    "run": 1430,
+    "outloc": {"*.art": "disk"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
     "owner": "mu2e"
 }
 ```
 
-**Random Sampling Features:**
-- **Deterministic**: Same seed produces same file selection (seed derived from config)
-- **Pseudo-random**: Files are shuffled deterministically before selection
-- **Per-job distribution**: Each job gets a unique subset of files
-- **Avoids JSON bloating**: Uses `inputs.txt` file instead of listing all files in jobpars.json
+```bash
+# Single entry by index
+json2jobdef --json data/Run1B/stage1.json --index 0
 
-**How it works:**
-1. All files from the dataset are listed and sorted
-2. Files are shuffled using a deterministic seed (based on owner, desc, dsconf, dataset, count, njobs)
-3. Files are cycled through to select the required count per job
-4. Results in `inputs.txt` file with selected files (similar to resampler jobs)
+# By (desc, dsconf) pair
+json2jobdef --json data/Run1B/stage1.json --desc POT_Run1_a --dsconf MDC2025ac
 
-**Without random sampling** (all files used):
+# All entries matching a dsconf
+json2jobdef --json data/Run1B/stage1.json --dsconf MDC2025ac
+```
+
+**Outputs:**
+
+- `cnf.<owner>.<desc>.<dsconf>.0.tar` — job definition tarball
+- `cnf.<owner>.<desc>.<dsconf>.0.fcl` — test FCL for index 0
+- `jobdefs_list.json` — list of generated jobdefs (use with `runmu2e`)
+
+**Useful flags:**
+
+- `--verbose` — print the underlying `mu2ejobdef` / `jobdef` command
+- `--no-cleanup` — keep `inputs.txt`, `template.fcl`, `*Cat.txt`
+- `--jobdefs <file>` — custom filename for the jobdefs list
+- `--prod` — enable `pushout` and run `mkidxdef` after generation
+- `--pushout` — register the tarball in SAM via `pushOutput`
+- `--json-output` — emit structured JSON instead of human-readable text
+- `--extend` — create a delta job definition excluding already-processed
+  inputs; auto-increments the tarball version
+- `--ignore-empty` — skip entries whose input datasets have no files
+  instead of failing
+
+### B. Resampler shape
+
+Resamplers use a single `input_data` dataset with a merge factor and a
+`resampler_name`:
+
 ```json
 {
-    "input_data": {
-        "sim.mu2e.PiTargetStops.MDC2025ac.art": 10
-    }
+    "desc": "EleBeamFlash",
+    "dsconf": "Run1Baa",
+    "fcl": "Production/JobConfig/pileup/EleBeamResampler.fcl",
+    "resampler_name": "beamResampler",
+    "input_data": {"sim.mu2e.EleBeamCat.Run1Baa.art": 1},
+    "njobs": 5000,
+    "events": 1000000,
+    "run": 1440,
+    "inloc": "disk",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh",
+    "owner": "mu2e",
+    "sequential_aux": true
 }
 ```
 
-### B. Direct Job Definition Creation
+### C. Low-level: `jobdef`
 
-For more control, use the `jobdef.py` utility directly:
-
-```bash
-# Stage-1 example
-
-jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020av/setup.sh \
-	--dsconf MDC2020av --desc ExtractedCRY --dsowner mu2e \
-	--run-number 1205 --events-per-job 500000 \
-	--include Production/JobConfig/cosmic/ExtractedCRY.fcl
-
-# Resampler example
-json2jobdef --json data/resampler.json --index 0 --verbose # to get a command example
-jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020ap/setup.sh \
-	--dsconf MDC2020ap --desc RMCFlatGammaStops --dsowner mu2e \
-	--run-number 1202 --events-per-job 1000000 \
-	--auxinput 1:physics.filters.TargetStopResampler.fileNames:inputs.txt --embed template.fcl
-
-```
-
-### B. From Job Definition Files
-
-Generate FCL configurations from existing job definition tarballs:
+For full control or debugging, bypass JSON and call `jobdef` directly:
 
 ```bash
-# Generate FCL with xroot protocol for file access
-python3 -c "
-from utils.jobfcl import Mu2eJobFCL
-
-job_fcl = Mu2eJobFCL('cnf.mu2e.CosmicCORSIKALow.MDC2020az.0.tar', 
-                     inloc='tape', proto='root')
-fcl_content = job_fcl.generate_fcl(0)
-print(fcl_content)
-"
+jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh \
+       --dsconf MDC2025ac --desc ExtractedCRY --dsowner mu2e \
+       --run-number 1205 --events-per-job 500000 \
+       --include Production/JobConfig/cosmic/ExtractedCRY.fcl
 ```
 
-### B. Quick FCL Generation with `fcldump`
+Key flags: `--setup` or `--code`, `--dsconf`, `--desc` or
+`--auto-description`, `--dsowner`, `--embed <fcl>` or `--include <fcl>`,
+`--run-number`, `--events-per-job`, `--inputs <file>`, `--merge-factor`,
+`--auxinput <SPEC>`, `--samplinginput <SPEC>`.
 
-Generate FCL files directly from dataset names or specific target files:
+Use `json2jobdef --verbose --json <cfg> --index <i>` to see the
+underlying `jobdef` command for any JSON entry.
 
-```bash
-# Generate FCL from dataset name - automatically finds and downloads jobdef
-fcldump --dataset dts.mu2e.RPCExternalPhysical.MDC2020az.art
+## 4. Random Sampling in Input Data
 
-# Generate FCL for a specific output file (finds the job that produces it)
-fcldump --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art
-
-# Generate FCL from local job definition file
-fcldump --local-jobdef cnf.mu2e.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.tar --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art
-
-# This will:
-# 1. Find the corresponding jobdef: cnf.mu2e.RPCExternalPhysical.MDC2020az.0.tar
-# 2. Download it using mdh copy-file (unless using --local-jobdef)
-# 3. Generate: cnf.mu2e.RPCExternalPhysical.MDC2020az.0.fcl
-# 4. When using --target, automatically finds the correct job index and input files
-# 5. Sequential auxiliary input selection is controlled by the job definition (tbs.sequential_aux)
-```
-
-### C. Understanding the `--target` Option
-
-The `--target` option allows you to generate FCL configurations for specific output files without knowing the job index. This is particularly useful for:
-
-- **Debugging missing files** - Generate FCL for a specific output to understand what went wrong
-- **Reproducing specific jobs** - Get the exact configuration that produced a particular file
-- **Validation** - Verify that a job definition can produce the expected output
-
-**How it works:**
-1. **Parses the target filename** - Extracts sequencer (e.g., `001202_00000428`) from the target
-2. **Finds the job index** - Maps the sequencer to the corresponding job index in the job definition
-3. **Generates specific FCL** - Creates configuration with the exact input files and settings for that job
-4. **Validates output** - Ensures the target file is actually produced by the found job
-
-**Example with missing file:**
-```bash
-# The file dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art is missing
-# Use fcldump to understand what should have produced it:
-fcldump --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art --proto root --loc tape
-
-# This will:
-# - Find job index 180 (from sequencer 001202_00000428)
-# - Generate FCL with the specific input file: dts.mu2e.DIOtail95.MDC2020at.001202_00000428.art
-# - Include all necessary pileup mixing files
-# - Set correct output filenames with the specific sequencer
-```
-
-## 3. Mixing Job Definitions
-
-### A. Basic Mixing Configuration
-
-Mixing jobs combine signal events with pileup backgrounds from multiple sources:
+Deterministic pseudo-random file selection is available for resampler
+and artcat jobs by giving `input_data` a dict with `count` and `random`:
 
 ```json
 {
-    "input_data": ["dts.mu2e.CeEndpoint.MDC2020ar.art", "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art", "dts.mu2e.FlateMinus.MDC2020ar.art"],
+    "desc": "NeutralsFlashCat",
+    "dsconf": "MDC2025ad",
+    "sequencer_from_index": true,
+    "fcl": "Production/JobConfig/common/artcat.fcl",
+    "input_data": {
+        "dts.mu2e.NeutralsFlash.MDC2025ac.art": {
+            "count": 5000,
+            "random": true
+        }
+    },
+    "njobs": 1000,
+    "inloc": "disk",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh",
+    "owner": "mu2e"
+}
+```
+
+The seed is derived from `(owner, desc, dsconf, dataset, count, njobs)`,
+so the same inputs always produce the same file selection. Selected
+files are written to `inputs.txt` (keeping `jobpars.json` small).
+
+Non-random form (all files, repeated to reach the count):
+
+```json
+"input_data": {"sim.mu2e.PiTargetStops.MDC2025ac.art": 10}
+```
+
+## 5. FCL Generation
+
+### A. `jobfcl` — generate FCL from a jobdef tarball
+
+```bash
+# By job index
+jobfcl --jobdef cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar --index 4900
+
+# Override default input location / protocol
+jobfcl --jobdef cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar --index 0 \
+       --default-location tape --default-protocol root
+
+# By target output filename (jobfcl finds the right index)
+jobfcl --jobdef cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar \
+       --target dts.mu2e.NeutralsFlash.MDC2025ac.001430_00000428.art
+```
+
+Defaults: `--default-location tape`, `--default-protocol file`. Either
+`--index` or `--target` must be given.
+
+### B. `fcldump` — generate FCL from a dataset or target
+
+```bash
+# From dataset name (finds and downloads the jobdef tarball)
+fcldump --dataset dts.mu2e.RPCInternalPhysical.MDC2020az.art
+
+# From a specific output file (computes the correct index)
+fcldump --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art
+
+# Using a local tarball (skip the mdh download)
+fcldump --local-jobdef cnf.mu2e.DIOtail95Mix1BB.MDC2020ba_best_v1_3.0.tar \
+        --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art
+
+# List all SAM job definitions for a given dsconf
+fcldump --list-dsconf MDC2020ba_best_v1_3
+
+# Direct-input mode: supply your own art input via --fname
+fcldump --local-jobdef cnf.mu2e.Reco.MDC2025af_best_v1_3.tar \
+        --fname mcs.mu2e.Foo.MDC2025af_best_v1_3.001450_00000100.art
+```
+
+Flag defaults: `--proto root`, `--loc tape`, `--index 0`.
+
+### C. Targeting a specific output
+
+`--target` is for debugging missing files or reproducing a specific
+job. It parses the sequencer (e.g. `001202_00000428`) out of the
+filename, maps it to the corresponding job index, and emits FCL with the
+exact input files and seeds for that job. Use it when you know the
+output filename but not the index.
+
+## 6. Mixing Jobs
+
+Mixing combines primary events with pileup backgrounds. The config is
+array-valued so `jsonexpander` can produce combinations. From
+`data/mdc2025/mix.json`:
+
+```json
+{
+    "input_data": [
+        {"dts.mu2e.CePlusEndpoint.MDC2025ac.art": 1},
+        {"dts.mu2e.CeEndpoint.MDC2025ac.art": 1},
+        {"dts.mu2e.CosmicSignal.MDC2025ac.art": 1}
+    ],
     "pileup_datasets": [{
         "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
         "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
-        "dts.mu2e.NeutralsFlashCat.MDC2025ac.art": 50,
+        "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
         "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
     }],
-    "dsconf": ["MDC2020aw_best_v1_3"],
+    "dsconf": ["MDC2025af_best_v1_1"],
     "mixconf": [0],
-    "pbeam": ["Mix1BB", "Mix2BB"],
-    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2020aw/setup.sh"],
+    "pbeam": ["Mix1BB"],
+    "owner": ["mu2e"],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"],
     "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
-    "merge_events": [2000],
+    "merge_events": [500],
     "inloc": ["tape"],
     "outloc": [{"dig.mu2e.*.art": "tape"}],
-    "owner": ["mu2e"],
     "fcl_overrides": [{
-        "services.DbService.purpose": "MDC2020_best",
-        "services.DbService.version": "v1_3",
-        "services.DbService.verbose": 2,
-        "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_1"
     }]
 }
 ```
 
-**Key Changes:**
-- **`pileup_datasets`**: Now a list containing a dict (was separate `*_dataset` and `*_count` fields)
-- **Count values**: Specify how many files to use from each pileup catalog
-- **Automatic mixer mapping**: Datasets are automatically mapped to mixer types (MuBeamFlashMixer, EleBeamFlashMixer, etc.)
+Key points:
 
-### B. Generate Mixing Job Definitions
+- `input_data` is a list of single-key dicts — each key is a primary
+  dataset, the value is its merge factor.
+- `pileup_datasets` is a list containing a dict mapping each catalog
+  dataset to its per-job file count.
+- Pileup datasets are mapped to mixer names automatically
+  (`MuBeamFlashMixer`, `EleBeamFlashMixer`, …) from the dataset name.
+
+### Generate mixing jobdefs
 
 ```bash
-# 1. Expand the mixing template to individual configurations
-jsonexpander --json data/mix.json \
-	--output expanded_mix.json
+# Single configuration
+json2jobdef --json data/mdc2025/mix.json --index 0
 
-# 2. Generate jobdef for a specific mixing configuration
-json2jobdef.py --json data/mix.json --index 0
+# All configurations for a dsconf
+json2jobdef --json data/mdc2025/mix.json --dsconf MDC2025af_best_v1_1
 
-# 3. Generate multiple jobdefs for specific dsconf
-json2jobdef.py --json data/mix.json --dsconf MDC2020ba_best_v1_3
+# Or: expand first, inspect, then generate per entry
+jsonexpander --json data/mdc2025/mix.json --output expanded_mix.json
 ```
 
-### B. Input Template Format
+## 7. JSON Expansion
 
-The input JSON can contain arrays for any parameter to create combinations:
+Any array-valued key in a JSON config becomes a dimension of a cross
+product. `jsonexpander` flattens the template into one entry per
+combination:
+
+```bash
+jsonexpander --json data/mdc2025/mix.json --output expanded_mix.json
+jsonexpander --json data/mdc2025/mix.json --output expanded_mix.json --mixing
+```
+
+The `--mixing` flag adds mixing-specific fields (mixer names, pileup
+counts) to each expanded entry.
+
+## 8. Production Execution
+
+`runmu2e` runs a single job from a jobdefs list. The job index is
+selected via the `fname` environment variable, encoded as
+`etc.mu2e.index.NNN.NNNNNNN.txt` — `NNN` is the job index (zero-padded);
+the last field is a per-index sub-counter used by POMS.
+
+```bash
+# fname selects job index 0 out of the jobdefs list
+export fname=etc.mu2e.index.000.0000000.txt
+
+# Dry run, 5 events
+runmu2e --jobdesc jobdefs_list.json --dry-run --nevts 5
+
+# Real run (no dry-run)
+runmu2e --jobdesc jobdefs_list.json --nevts -1
+```
+
+Flags: `--jobdesc` (required), `--dry-run`, `--nevts` (default -1 = all),
+`--copy-input` (use `mdh copy-file` to stage inputs locally when needed),
+`--mu2e-options` (extra flags passed through to `mu2e`).
+
+### What `runmu2e` does
+
+1. Parses the job index from `fname`, picks the matching entry from the
+   jobdefs file.
+2. Downloads the jobdef tarball with `mdh copy-file` (unless already
+   present).
+3. Generates the FCL via `jobfcl` with the correct input location /
+   protocol.
+4. Runs `mu2e -c <fcl> -n <nevts>`.
+5. Pushes outputs with `pushOutput` (skipped under `--dry-run`).
+
+### `inloc` values
+
+`inloc` selects how input files are referenced:
+
+- `tape`, `disk`, `scratch` — explicit dCache locations
+- `auto` — resolve per-file via SAMWeb
+- `resilient` — files on resilient dCache, read via xrootd on the grid
+- `stash` — files on StashCache, read via CVMFS on the grid
+- `none` — no input files (primary generation)
+
+### Example jobdefs entry
+
+`runmu2e` consumes entries like this one from `jobdefs_list.json`:
 
 ```json
 {
-  "primary_dataset": [
-    "dts.mu2e.CeEndpoint.MDC2020ar.art",
-    "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art",
-    "dts.mu2e.FlateMinus.MDC2020ar.art",
-    "dts.mu2e.FlatePlus.MDC2020ar.art"
-  ],
-  "dbpurpose": ["perfect", "best"],
-  "pbeam": ["Mix1BB", "Mix2BB"]
-}
-```
-
-## 5. Production Job Execution
-
-### A. Template-Based Execution (`runfcl`)
-
-Execute jobs directly from FCL templates (one-in-one-out processing):
-
-```bash
-# Basic usage - process a single file with a template
-runfcl --fcl template.fcl --nevents 1000
-
-# With database configuration
-runfcl --fcl template.fcl --release an --dbpurpose best --dbversion v1_3
-
-# Dry run to test
-runfcl --fcl template.fcl --nevents 1000 --dry-run
-```
-
-**What `runfcl` does:**
-1. **Reads input file** from `fname` environment variable
-2. **Generates FCL** from template with database and output configurations
-3. **Runs Mu2e** with the generated FCL
-4. **Handles outputs** and creates `output.txt` for SAM registration
-5. **Runs pushOutput** for file registration
-
-### B. Job Definition Execution (`runmu2e`)
-
-Execute production workflows from job definition files:
-
-```bash
-# After setting up the environment (see Environment Setup section above)
-# Set the job index environment variable (required for production)
-export fname=etc.mu2e.index.000.0000000.txt
-
-# Run a production job with dry-run mode
-runmu2e --jobdesc jobdefs_list.json --dry-run --nevts 5
-```
-
-**Understanding the `fname` format:**
-- `etc.mu2e.index.000.0000000.txt` means job index 0
-- `etc.mu2e.index.001.0000000.txt` means job index 1
-- The job index determines which job definition to use from the jobdefs file
-
-### C. What `runmu2e` Does
-
-1. **Token Validation** - Verifies grid authentication
-2. **Job Parsing** - Extracts parameters from jobdefs file using the `fname` index
-3. **File Download** - Downloads job definition tarball using `mdh copy-file`
-4. **FCL Generation** - Creates FCL with proper XrootD protocol for input files
-   - **Sequential auxiliary input selection** is controlled by the job definition (`tbs.sequential_aux`)
-   - **MaxEventsToSkip parameter** is automatically added for resampler jobs
-5. **Job Execution** - Runs `mu2e` with the generated configuration
-6. **Output Management** - Handles output files and prepares for SAM submission
-
-**Example successful output:**
-```
-Job 0 uses definition 0
-Global job index: 0, Local job index within definition: 0
-Running: mdh copy-file -e 3 -o -v -s disk -l local cnf.mu2e.NeutralsFlash.MDC2025ab.0.tar
-FCL file generated: cnf.mu2e.NeutralsFlash.MDC2025ab.0.fcl
-Job setup script: /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh
-Mu2e command: mu2e -c cnf.mu2e.NeutralsFlash.MDC2025ab.0.fcl -n 5
-=== Mu2e execution completed successfully ===
-[DRY RUN] Would run: pushOutput output.txt
-```
-
-### D. Command Line Options
-
-```bash
-runmu2e -h
-Usage: runmu2e [options] --jobdesc <jobdesc_file>
-  --jobdesc           Path to job descriptions file (required)
-  --copy-input        Copy input files using mdh
-  --dry-run           Print commands without actually running pushOutput
-  --nevts <n>         Number of events to process (-1 for all events)
-```
-
-### E. Example jobdefs File Format
-
-The `inloc` field specifies where input files are located. You can use:
-- `"disk"`, `"tape"`, or `"scratch"` - explicit location
-- `"auto"` - defaults to tape with automatic SAMWeb fallback to available location
-- `"none"` - no input files
-
-```json
-  {
     "tarball": "cnf.mu2e.CeMLeadingLogMix2BB.MDC2020ba_best_v1_3.0.tar",
     "njobs": 2000,
     "inloc": "tape",
     "outputs": [
-      {
-        "dataset": "dig.mu2e.*.art",
-        "location": "tape"
-      }
+        {"dataset": "dig.mu2e.*.art", "location": "tape"}
     ]
-  }
+}
 ```
 
-### B. Sequential Auxiliary Input Selection
+## 9. Sequential vs. Pseudo-Random Auxiliary Input Selection
 
-For resampler jobs, you can control how auxiliary input files are selected using the `sequential_aux` setting in your JSON configuration:
+For resampler jobs, `sequential_aux` at the top level of the JSON
+config controls how auxiliary input files are distributed across jobs:
 
 ```json
 {
-    "desc": "FlateMinus",
-    "dsconf": "MDC2025ba",
-    "fcl": "Production/JobConfig/primary/RMCFlatGammaStops.fcl",
-    "tbs": {
-        "auxin": {
-            "dts.mu2e.FlateMinus.MDC2025ba.art": [1, ["file1.art", "file2.art", "file3.art"]]
-        },
-        "sequential_aux": true
+    "desc": "EleBeamFlash",
+    "dsconf": "Run1Baa",
+    "resampler_name": "beamResampler",
+    "input_data": {"sim.mu2e.EleBeamCat.Run1Baa.art": 1},
+    "sequential_aux": true
+}
+```
+
+- `true` — files are assigned sequentially with rollover (job 0 → file
+  1, job 1 → file 2, …; wraps when jobs exceed files). Each file is
+  used the same number of times; easy to reproduce.
+- `false` or omitted — deterministic pseudo-random assignment.
+
+Internally, `jobdef` places this under `tbs.sequential_aux` in the
+tarball; the top-level JSON field is the user-facing form.
+
+## 10. FCL Overrides
+
+`fcl_overrides` is a flat dict of FHiCL paths → values. They are
+injected as a short template FCL that is `--embed`'ed into the tarball,
+so the base FCL is never expanded:
+
+```json
+{
+    "fcl_overrides": {
+        "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+        "services.DbService.purpose": "MDC2020_best",
+        "services.DbService.version": "v1_3",
+        "outputs.PrimaryOutput.compressionLevel": 1,
+        "services.SeedService.baseSeed": 12345
     }
 }
 ```
 
-**Sequential vs. Pseudo-Random Selection:**
+The generated template looks like:
 
-- **`"sequential_aux": true`** - Files are selected sequentially with rollover (job 0 gets file1, job 1 gets file2, job 2 gets file3, job 3 gets file1, etc.)
-- **`"sequential_aux": false`** (default) - Files are selected using deterministic pseudo-random selection
-
-**Benefits of Sequential Selection:**
-- **Predictable distribution** - Each file is used exactly the same number of times
-- **Better for testing** - Easier to reproduce specific input file combinations
-- **Rollover handling** - When job index exceeds file count, selection wraps around to the beginning
-
-### C. Custom FCL Overrides
-
-Template-based approach handles FCL overrides:
-
-```json
-{
-  "fcl_overrides": {
-    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
-    "physics.producers.generate.inputModule": "compressDigiMCs",
-    "outputs.PrimaryOutput.fileName": "dts.owner.CustomJob.version.sequencer.art",
-    "outputs.PrimaryOutput.compressionLevel": 1,
-    "services.SeedService.baseSeed": 12345
-  }
-}
+```fcl
+#include "Production/JobConfig/cosmic/ExtractedCRY.fcl"
+services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+services.DbService.purpose: "MDC2020_best"
+services.DbService.version: "v1_3"
+outputs.PrimaryOutput.compressionLevel: 1
+services.SeedService.baseSeed: 12345
 ```
 
-**How FCL Overrides Work:**
+A special `"#include"` key can add extra `#include` lines to the
+template; see `data/mdc2025/mix.json` for real-world usage.
 
-1. **Template Creation**: `write_fcl_template()` creates `template.fcl` with:
-   ```fcl
-   #include "Production/JobConfig/cosmic/ExtractedCRY.fcl"
-   services.GeometryService.bFieldFile: "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
-   physics.producers.generate.inputModule: "compressDigiMCs"
-   outputs.PrimaryOutput.fileName: "dts.owner.CustomJob.version.sequencer.art"
-   outputs.PrimaryOutput.compressionLevel: 1
-   services.SeedService.baseSeed: 12345
-   ```
+## 11. Parity Tests
 
-2. **Embedding**: `--embed template.fcl` embeds this complete template into `mu2e.fcl`
-
-3. **Result**: The final `mu2e.fcl` contains the include directive plus all overrides, but the base FCL is never expanded
-
-**Benefits:**
-- **Clean templates**: Only include directive + overrides, no base FCL content
-- **Overrides included**: All FCL overrides are directly embedded
-- **No expansion**: Base FCL files remain unexpanded for maintainability
-- **Perfect parity**: Both Python and Perl versions handle overrides identically
-
-## 7. Troubleshooting
-
-### Common Issues and Solutions
-
-#### Environment Setup Problems
-
-**Problem**: `samweb: command not found` or `fhicl-get: command not found`
-```bash
-# Solution: Follow the Environment Setup section above
-# Verify tools are available:
-which fhicl-get
-which mu2ejobdef
-python3 -c "import samweb_client; print('samweb_client is available')"
-```
-
-#### File Access Issues
-
-**Problem**: `mdh: command not found`
-**Solution**: Follow the Environment Setup section above.
-
-## 8. Running Parity Tests
-### A. Basic Usage
-
-The parity tests should be run from the `test/` directory to ensure all relative paths work correctly:
+Parity tests validate byte-for-byte equivalence between this Python
+implementation and the Perl `mu2ejobdef` reference across stage1,
+resampler, and mixing configurations.
 
 ```bash
-# Navigate to test directory
 cd test
-
-# Run only index 0 configurations (default)
-./parity_test.sh
-
-# Run all configurations
-./parity_test.sh --all
-
-# Compare results manually
-./compare_tarballs.sh
+./parity_test.sh           # run only index 0 (default)
+./parity_test.sh --all     # run every configuration
+./compare_tarballs.sh      # re-run just the comparison step
 ```
 
-### B. What Parity Tests Do
+Requires `MUSE_WORK_DIR` set via `muse setup SimJob`.
 
-1. **Generate job definitions** using both Python (`json2jobdef.py`) and Perl (`mu2ejobdef`) tools
-2. **Compare outputs** for byte-for-byte parity between implementations
-3. **Test multiple configurations** from stage1, resampler, and mixing job types
+## 12. Additional Tools
 
-### C. Test Coverage
-
-- **Stage1 Jobs**: 5 configurations (cosmic, beam, etc.)
-- **Resampler Jobs**: 23 configurations (various resampling scenarios)
-- **Mixing Jobs**: 32 configurations (different mixing combinations)
-
-## Additional Tools
-
-### Database-Based Job Monitoring (`pomsMonitor` and `pomsMonitorWeb`)
-
-Monitor POMS production jobs using a persistent SQLite database:
+### `pomsMonitor` — POMS analysis with a persistent SQLite DB
 
 ```bash
-# Set up environment
-mu2einit
-muse setup ops
+# Rebuild the DB from POMS JSONs
+pomsMonitor --build-db --pattern 'MDC202*'
 
-# Build/refresh the database from POMS JSON files
-pomsMonitor --build-db --pattern MDC202*
+# List all job definitions
+pomsMonitor --list
 
-# List all jobs with outputs
-pomsMonitor --list --outputs
-
-# Filter by campaign
+# Filter by campaign, show output datasets
 pomsMonitor --campaign MDC2025ac --outputs
 
-# Show only complete datasets
-pomsMonitor --list --outputs --complete
+# Only complete / incomplete datasets
+pomsMonitor --campaign MDC2025ac --outputs --complete
+pomsMonitor --campaign MDC2025ac --outputs --incomplete
 
-# Show only incomplete datasets
-pomsMonitor --list --outputs --incomplete
+# Print only dataset names (e.g. for piping)
+pomsMonitor --campaign MDC2025ac --datasets-only
 
-# Print only dataset names
-pomsMonitor --list --outputs --datasets-only
+# Datasets created in the last 7 days
+pomsMonitor --outputs --since 7d
+
+# Mark / unmark datasets as ignored (persisted in the DB)
+pomsMonitor --ignore dig.mu2e.Foo.MDC2025ac.art --ignore-reason "bad config"
+pomsMonitor --unignore dig.mu2e.Foo.MDC2025ac.art
+pomsMonitor --list-ignored
 ```
 
-**Web Interface:**
+Key flags: `--pattern`, `--db`, `--build-db`, `--list`, `--campaign`,
+`--outputs`, `--sort`, `--complete`, `--incomplete`, `--datasets-only`,
+`--since`, `--needs-processing`, `--ignore{,-reason}`, `--unignore`,
+`--list-ignored`. Default DB path: `~/.prodtools/poms_data.db`.
+
+### `pomsMonitorWeb` — Flask UI
+
 ```bash
-# Start the web server
 pomsMonitorWeb
-
-# Open browser to: http://localhost:5000
-# Features:
-# - Interactive job monitoring dashboard
-# - Dataset status tracking
-# - JSON to jobdef interface
-# - JSON file editor
-# - Reload database from POMS JSONs
+# open http://localhost:5000
 ```
 
-**What the database provides:**
-- **Persistent storage**: Database built once, queries are fast
-- **Job definitions**: All jobdefs from POMS JSON files
-- **Dataset information**: File counts, event counts, creation dates
-- **Status tracking**: Complete vs incomplete datasets
-- **Performance metrics**: Average CPU time, memory usage (from logs)
+Runs on `0.0.0.0:5000`. Provides an interactive dashboard, dataset
+status view, JSON editor, and a "reload DB from POMS JSONs" action.
 
-**Database location:**
-- Default: `~/.prodtools/poms_data.db`
-- Can be specified with `--db` option
-
-### Family Tree Visualization (`famtree`)
-
-Trace the parentage chain of files and generate Mermaid diagrams:
+### `famtree` — dataset family trees
 
 ```bash
-# Set up environment
-mu2einit 
-muse setup ops
-source /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v1.3.8/bin/setup.sh 
-
-# Generate family tree diagram
+# Mermaid diagram for a file's parentage
 famtree mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001114.art
 
-# Generate with efficiency statistics
-famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art --stats
+# With efficiency statistics
+famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art \
+        --stats --max-files 5
 
-# Generate PNG with statistics (sample 5 files per dataset)
-famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art --stats --max-files 5 --png
-
-# Convert existing diagram to SVG for viewing
-npx -y @mermaid-js/mermaid-cli -i mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md
-firefox mcs.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.md-1.svg &
+# Render a PNG (or --svg) directly via mmdc
+famtree dig.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00001999.art --png
 ```
 
-**What `famtree` does:**
-1. **Traces parentage** - Follows the chain of input files that led to the creation of a given output file
-2. **Groups by dataset** - Shows one representative per dataset to avoid clutter
-3. **Generates Mermaid diagram** - Creates a visual family tree showing data lineage
-4. **Filters etc files** - Automatically excludes `etc*.txt` files from the tree
-5. **Efficiency statistics** - Optionally includes filter efficiency (passed/generated events) for each dataset
+Flags: `--stats`, `--max-files` (default 10), `--png`, `--svg`.
+`etc*.txt` files are excluded from diagrams automatically.
 
-**Command-line options:**
-- `--stats` - Include efficiency statistics in node labels (e.g., "eff=0.2316 (3474/15000)")
-- `--max-files N` - Number of files to sample for statistics (default: 10, faster with lower values)
-- `--png` - Automatically convert to PNG using `mmdc`
-- `--svg` - Automatically convert to SVG using `mmdc`
-
-### Log Analysis (`logparser`)
-
-Analyze Mu2e job performance metrics from log files using parallel processing:
+### `logparser` — per-dataset performance summary
 
 ```bash
-# Analyze single dataset
-$ logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
-Processing log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
-{
-  "dataset": "log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log",
-  "CPU [h]": 0.2,
-  "CPU_max [h]": 0.2,
-  "Real [h]": 0.21,
-  "Real_max [h]": 0.21,
-  "VmPeak [GB]": 1.64,
-  "VmPeak_max [GB]": 1.64,
-  "VmHWM [GB]": 1.11,
-  "VmHWM_max [GB]": 1.11
-}
+# One dataset
+logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
 
-# Analyze multiple datasets
-$ logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log \
-            log.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
+# Multiple datasets
+logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log \
+          log.mu2e.CePLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
 
-# Limit number of log files processed per dataset
-$ logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log --max-logs 100
+# Cap log files scanned per dataset
+logparser log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log --max-logs 100
 ```
 
-**What `logparser` extracts:**
-- **CPU time** - Average and maximum CPU usage across all log files
-- **Real time** - Average and maximum wall clock time for job execution
-- **Memory usage** - Average and maximum peak virtual memory (VmPeak) and high water mark (VmHWM)
-- **JSON output** - Machine-readable summary printed to stdout
+Emits JSON with `CPU [h]`, `CPU_max [h]`, `Real [h]`, `Real_max [h]`,
+`VmPeak [GB]`, `VmPeak_max [GB]`, `VmHWM [GB]`, `VmHWM_max [GB]`.
 
-**Performance:**
-- **Parallel processing**: Uses ThreadPoolExecutor (10 workers) for fast log file parsing
-- **Direct database access**: Uses `get_dataset_files()` instead of subprocess calls
-- **Efficient**: Much faster than previous version with subprocess overhead
-
-**Visualizing log metrics with NERSC job counts:**
-
-The NERSC job counts CSV can be exported from the [Fermilab batch monitoring dashboard](https://fifemon.fnal.gov/monitor/d/000000053/experiment-batch-details?from=now-30d&to=now&var-experiment=mu2e&orgId=1&viewPanel=10) (panel 10: "Running Jobs").
+### `genFilterEff` — generation filter efficiency
 
 ```bash
-# First activate the Python environment with pandas
-$ pyenv ana
+genFilterEff --out SimEff.txt --chunksize 100 \
+    sim.mu2e.MuBeamCat.MDC2025ac.art \
+    sim.mu2e.EleBeamCat.MDC2025ac.art \
+    sim.mu2e.NeutralsCat.MDC2025ac.art
 
-# Generate merged plots from log CSV and NERSC job counts CSV
-$ python3 utils/plot_logs.py log.mu2e.PiBeam.MDC2025ac.csv data/nersc_runjobs.csv
-Log data: 5000 points from 2025-10-07 09:41:49 to 2025-10-08 00:59:06
-NERSC data: 920 points from 2025-09-17 17:00:00 to 2025-10-14 01:00:00
-Merged: 5000 points
+# Limit files per dataset
+genFilterEff --out SimEff.txt --maxFilesToProcess 1000 sim.mu2e.MuBeamCat.MDC2025ac.art
 
-Saved: log.mu2e.PiBeam.MDC2025ac.png
-
-Files: 5000
-CPU:  0.94 ± 0.13 h
-Real: 1.02 ± 0.26 h
-Mem:  2.25 ± 0.00 GB
-
-Correlations with NERSC-Perlmutter-CPU:
-  CPU [h]:      -0.445
-  Real [h]:     -0.406
-  VmPeak [GB]:  -0.012
-  VmHWM [GB]:   0.153
+# Quiet
+genFilterEff --out SimEff.txt --verbosity 0 sim.mu2e.MuBeamCat.MDC2025ac.art
 ```
 
-The visualization script creates a 3-panel plot showing:
-- Running jobs on NERSC-Perlmutter-CPU over time (top)
-- CPU/Real time metrics from job logs (middle)
-- Memory usage (VmPeak/VmHWM) from job logs (bottom)
-- Correlation statistics between job counts and performance metrics
-- Mean lines with values in legends
-- Statistics summary printed to console
-- PNG output with same basename as input CSV
+Output is Proditions-compatible (`TABLE SimEfficiencies2`). Flags:
+`--out`/`--outfile`, `--chunksize`/`--chunkSize` (default 100),
+`--maxFilesToProcess`, `--verbosity` (0/1/2, default 2),
+`--writeFullDatasetName`, `--firstLine`.
 
-### Dataset File Listing (`datasetFileList`)
-
-Python implementation of file listing with exact parity to Perl version:
+### `datasetFileList` — pnfs paths for a dataset or SAM definition
 
 ```bash
-# List files in a dataset
-$ datasetFileList log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log | head
-/pnfs/mu2e/persistent/datasets/phy-etc/log/mu2e/CeMLeadingLogMix1BBTriggered/MDC2020ba_best_v1_3/log/2f/30/log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.001202_00000000-1756219665.log
-...
-
-# List files using SAM definition names (like samListLocations --defname)
-$ datasetFileList --defname log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
-...
+datasetFileList log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log | head
+datasetFileList --defname log.mu2e.CeMLeadingLogMix1BBTriggered.MDC2020ba_best_v1_3.log
+datasetFileList --basename dts.mu2e.EleBeamFlash.Run1Baa.art
+datasetFileList --disk dts.mu2e.EleBeamFlash.Run1Baa.art
 ```
 
-**Features:**
-- **Exact Perl parity** - Byte-for-byte identical output to original Perl implementation
-- **SHA256 path generation** - Correctly constructs `/pnfs` paths with hash-based subdirectories
-- **SAM definition support** - Works with both dataset names and SAM definition names
-- **Performance** - Faster execution than the original Perl version
+Flags: `--basename`, `--disk`, `--tape`, `--scratch`, `--defname`.
 
-### Generation Filter Efficiency (`genFilterEff`)
-
-Calculate overall filter efficiency for simulation datasets - the ratio of passed events to generated events:
+### `listNewDatasets` — recent SAM datasets
 
 ```bash
-# Set up environment
-mu2einit
-muse setup ops
-
-# Calculate efficiency for single dataset
-genFilterEff --out=SimEff.txt --chunksize=100 sim.mu2e.Beam.MDC2020p.art
-
-# Calculate for multiple datasets
-genFilterEff --out=SimEff.txt --chunksize=100 \
-  sim.mu2e.MuBeamCat.MDC2025ac.art \
-  sim.mu2e.EleBeamCat.MDC2025ac.art \
-  sim.mu2e.NeutralsCat.MDC2025ac.art
-
-# Process only first 1000 files per dataset
-genFilterEff --out=SimEff.txt --maxFilesToProcess=1000 sim.mu2e.Beam.MDC2020p.art
-
-# Quiet mode (minimal output)
-genFilterEff --out=SimEff.txt --verbosity=0 sim.mu2e.Beam.MDC2020p.art
-```
-
-**Example output:**
-```
-Processing dataset  sim.mu2e.Beam.MDC2020p.art, using 10 out of 50000 files
-        eff = 0.1705 (6820 / 40000) after processing 10 files of sim.mu2e.Beam.MDC2020p.art
-```
-
-**Output file format (Proditions-compatible):**
-```
-TABLE SimEfficiencies2
-Beam,   6820,   40000,  0.1705
-```
-
-**What `genFilterEff` does:**
-1. **Queries SAM metadata** - Retrieves `dh.gencount` (generated events) and `event_count` (passed events)
-2. **Processes in chunks** - Batches SAM queries for efficiency (default: 100 files per request)
-3. **Calculates efficiency** - Computes ratio of passed/generated events
-4. **Proditions format** - Outputs in format compatible with Mu2e Proditions database
-
-**Command-line options:**
-- `--out OUTFILE` - Output file path (required)
-- `--chunksize N` - Number of files to query per SAM transaction (default: 100)
-- `--maxFilesToProcess N` - Limit processing to first N files per dataset
-- `--verbosity LEVEL` - Control output: 0=quiet, 1=minimal, 2=verbose (default: 2)
-- `--writeFullDatasetName` - Use full dataset name instead of description field
-- `--firstLine TEXT` - Custom first line for output (default: "TABLE SimEfficiencies2")
-
-**Python implementation:**
-- Direct replacement for `mu2eGenFilterEff` Perl tool
-- Uses `samweb_wrapper` for SAM queries
-- Follows prodtools design patterns
-
-### List New Datasets (`listNewDatasets`)
-
-Monitor and track recently created datasets in the SAM database with file counts and average sizes:
-
-```bash
-# Set up environment
-mu2einit
-muse setup ops
-
-# List art files from last 7 days (default)
-listNewDatasets
-
-# List log files from last 14 days
+listNewDatasets                       # art files, last 7 days, mu2epro
 listNewDatasets --filetype log --days 14
-
-# List files for specific user
 listNewDatasets --user oksuzian
-
-# Skip file size calculation for faster execution
-listNewDatasets --no-size
-
-# Use custom SAM query
-listNewDatasets --query "dh.dataset sim.mu2e.%.MDC2025ab%"
+listNewDatasets --size                # include average file size
+listNewDatasets --query "dh.dataset sim.mu2e.%.MDC2025ac%"
 ```
 
-**Example output:**
-```
-Checking for art files created after: 2025-10-01 for user: mu2epro
-------------------------------------------------
-Grouped file counts:
-   COUNT DATASET                                                                                              FILE SIZE
-   -----  -------                                                                                              --------
-      15 sim.mu2e.Beam.MDC2025ab.art                                                                            234 MB
-       8 sim.mu2e.Neutrals.MDC2025ab.art                                                                        187 MB
-      23 sim.mu2e.CosmicCRY.MDC2025ab.art                                                                       156 MB
-------------------------------------------------
-```
+Flags: `--filetype`, `--days`, `--user`, `--size`, `--query`.
 
-**What `listNewDatasets` does:**
-1. **Queries SAM database** - Searches for files matching criteria (date, user, format)
-2. **Groups by dataset** - Extracts dataset names and counts files
-3. **Calculates sizes** - Computes average file size per dataset (optional)
+### `mkrecovery` — recovery SAM definitions for missing files
 
-**Command-line options:**
-- `--filetype TYPE` - File format to search for: art, log, etc. (default: art)
-- `--days N` - Number of days to look back (default: 7)
-- `--user USERNAME` - Filter by username (default: mu2epro)
-- `--no-size` - Skip file size calculation for faster execution
-- `--query QUERY` - Custom SAM query (overrides all other parameters)
-
-**Dataset name extraction:**
-The tool extracts dataset names from filenames by taking the first 4 dot-separated fields:
-- `sim.mu2e.Beam.MDC2025ab.001430_00000000.art` → `sim.mu2e.Beam.MDC2025ab.art`
-- Groups all files with the same base dataset name together
-
-**Python implementation:**
-- Port of `Production/Scripts/listNewDatasets.sh` bash script
-- Uses `samweb` CLI commands for database queries
-- Follows prodtools design patterns with class-based structure
-- Supports both standalone and module usage
-
-### Create Recovery Datasets (`mkrecovery`)
-
-Identify missing files from a production and create a SAM dataset definition for recovery:
+Single tarball mode:
 
 ```bash
-# Set up environment
-mu2einit
-muse setup ops
-
-# Create recovery dataset for missing files
-mkrecovery /pnfs/mu2e/.../cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar \
-           dts.mu2e.EarlyNeutralsFlash.MDC2025ac.art \
-           40000
+mkrecovery /pnfs/.../cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar \
+           --dataset dts.mu2e.EarlyNeutralsFlash.MDC2025ac.art \
+           --njobs 40000
 ```
 
-**Example output:**
-```
-Missing: 208 of 40000
-Created SAM definition: dts.mu2e.EarlyNeutralsFlash.MDC2025ac-recovery
-```
+Multi-job mode from a `jobdefs_list.json`:
 
-**What `mkrecovery` does:**
-1. **Reads job definition** - Extracts expected output file pattern from tarball
-2. **Queries SAM dataset** - Gets actual files that were produced
-3. **Identifies missing files** - Compares expected vs actual
-4. **Creates SAM definition** - Recovery dataset with `etc` input files for resubmission
-
-**To use the recovery dataset:**
 ```bash
-# List files in the recovery dataset
-samweb list-definition-files dts.mu2e.EarlyNeutralsFlash.MDC2025ac-recovery
-
-# Count files that need recovery
-samweb count-definition-files dts.mu2e.EarlyNeutralsFlash.MDC2025ac-recovery
-
-# Use with job submission (POMS)
-# Reference the recovery definition in your campaign configuration
+mkrecovery jobdefs_list.json --jobdesc
 ```
 
-The recovery definition contains `etc.mu2e.index.000.JJJJJJJ.txt` files that can be used to resubmit only the missing jobs.
+Creates a SAM definition named `<dataset>-recovery` containing
+`etc.mu2e.index.NNN.NNNNNNN.txt` files for the missing jobs, which you
+can submit through POMS.
+
+### `mkidxdef` — SAM index definitions from a jobdefs list
+
+```bash
+mkidxdef --jobdefs jobdefs_list.json           # preview
+mkidxdef --jobdefs jobdefs_list.json --prod    # create in SAM
+```
+
+### `jobquery` — inspect a jobdef tarball
+
+```bash
+jobquery --jobname  cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+jobquery --njobs    cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+jobquery --input-datasets   cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+jobquery --input-files      cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+jobquery --output-datasets  cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+jobquery --output-files dig.mu2e.Foo.MDC2025ac.art:100 cnf.mu2e.Foo.MDC2025ac.0.tar
+jobquery --codesize         cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+jobquery --setup            cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+jobquery --extract-code     cnf.mu2e.NeutralsFlash.MDC2025ac.0.tar
+```
+
+### `copy_to_stash` — copy a dataset into StashCache or resilient dCache
+
+```bash
+# Default: copy into $MU2E_STASH_WRITE (use inloc: stash in configs)
+copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art
+
+# Into $MU2E_RESILIENT (use inloc: resilient)
+copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --dest resilient
+
+# First 10 files only, for testing
+copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --source disk --limit 10
+
+# Dry run / just list target paths
+copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --dry-run
+copy_to_stash --list dts.mu2e.CeEndpoint.Run1Bab.art
+```
+
+Flags: `--dataset`, `--dest` (`stash`|`resilient`, default `stash`),
+`--source` (`disk`|`tape`, default `disk`), `--limit`, `--dry-run`,
+`--list`, `--quiet`.
+
+### `listMcsDefs` / `listRelatedDefs` — enumerate related SAM defs
+
+```bash
+listRelatedDefs mcs MDC2025af
+listRelatedDefs dig Run1Bai
+listRelatedDefs dts MDC2020ba
+```
+
+For every `<type>.*.<pattern>*.art` SAM definition, prints its `cnf`
+(tarball) and `log` siblings. `listMcsDefs` is an alias.
+
+### `plot_logs` — visualize log metrics with NERSC job counts
+
+Export NERSC job counts from the [Fermilab batch monitoring dashboard](https://fifemon.fnal.gov/monitor/d/000000053/experiment-batch-details)
+(panel 10, "Running Jobs"), then:
+
+```bash
+pyenv ana
+python3 utils/plot_logs.py log.mu2e.PiBeam.MDC2025ac.csv data/nersc_runjobs.csv
+```
+
+Produces a three-panel PNG (running jobs on NERSC-Perlmutter-CPU, CPU /
+real time from job logs, and memory metrics) with correlation statistics
+printed to stdout.
+
+## 13. Troubleshooting
+
+### `samweb: command not found` / `fhicl-get: command not found`
+
+Re-run section 1. Verify:
+
+```bash
+which fhicl-get
+which mu2ejobdef
+python3 -c "import samweb_client; print(samweb_client.__file__)"
+```
+
+### `mdh: command not found`
+
+Same fix — `muse setup ops` puts `mdh` on the path.
+
+### `json2jobdef`: "Mu2e SimJob environment not set up"
+
+Some `json2jobdef` paths need `muse setup SimJob` in addition to
+`muse setup ops`. Run it and retry.
+
+### Parity tests: "MUSE_WORK_DIR environment variable is not set"
+
+Set up the SimJob environment before running parity tests:
+
+```bash
+muse setup SimJob
+cd test && ./parity_test.sh
+```
+
+### `runmu2e` does nothing useful / picks the wrong job
+
+`runmu2e` reads the job index from `fname`. Check the value:
+
+```bash
+echo "$fname"
+# should be etc.mu2e.index.NNN.NNNNNNN.txt — NNN is the job index
+```

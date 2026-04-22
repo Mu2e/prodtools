@@ -11,9 +11,10 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.prod_utils import (
-    run, 
-    validate_jobdesc, 
-    process_template, 
+    run,
+    validate_jobdesc,
+    process_template,
+    process_direct_input,
     process_jobdef,
     push_data,
     push_logs
@@ -33,19 +34,21 @@ def main():
     with open(args.jobdesc, 'r') as f:
         jobdesc = json.load(f)
     
-    is_template_mode = validate_jobdesc(jobdesc)
-    
+    mode = validate_jobdesc(jobdesc)
+
     # Get job definition by index from fname environment variable
     fname = os.getenv("fname")
     if not fname:
         print("Error: fname environment variable is not set.")
         sys.exit(1)
-    
+
     # Process job based on mode
-    if is_template_mode:
+    if mode == 'template':
         fcl, simjob_setup = process_template(jobdesc[0], fname)
-        infiles = fname  # In template mode, input is just the fname
-        outputs = jobdesc[0]['outputs'] # patern for output location
+        infiles = fname
+        outputs = jobdesc[0]['outputs']
+    elif mode == 'direct_input':
+        fcl, simjob_setup, infiles, outputs = process_direct_input(jobdesc, fname, args)
     else:
         fcl, simjob_setup, infiles, outputs = process_jobdef(jobdesc, fname, args)
     

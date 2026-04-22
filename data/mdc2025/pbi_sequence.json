@@ -1,0 +1,36 @@
+[
+    {
+        "desc": "PBINormal_33344",
+        "dsconf": "MDC2025ai",
+        "fcl": "Production/JobConfig/primary/NoPrimaryPBISequence.fcl",
+        "input_data": {
+            "PBI_Normal_33344.txt": 1
+        },
+        "run": 1430,
+        "owner": "mu2e",
+        "inloc": "dir:/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/",
+        "outloc": {"*.art": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "fcl_overrides": {
+            "physics.producers.compressDetStepMCs.surfaceStepTag": "FindMCPrimary",
+            "outputs.PrimaryOutput.fileName": "dts.owner.PBINormal_33344.version.sequencer.art"
+        }
+    },
+    {
+        "desc": "PBIPathological_33344",
+        "dsconf": "MDC2025ai",
+        "fcl": "Production/JobConfig/primary/NoPrimaryPBISequence.fcl",
+        "input_data": {
+            "PBI_Pathological_33344.txt": 1
+        },
+        "run": 1430,
+        "owner": "mu2e",
+        "inloc": "dir:/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/",
+        "outloc": {"*.art": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "fcl_overrides": {
+            "physics.producers.compressDetStepMCs.surfaceStepTag": "FindMCPrimary",
+            "outputs.PrimaryOutput.fileName": "dts.owner.PBIPathological_33344.version.sequencer.art"
+        }
+    }
+]

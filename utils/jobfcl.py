@@ -328,9 +328,15 @@ class Mu2eJobFCL(Mu2eJobBase):
         """Get sequencer for job index."""
         tbs = self.json_data.get('tbs', {})
         
-        # Check for explicit run number in event_id
+        # Check for explicit run number in event_id. Different source types
+        # use different FCL parameter names for the run number:
+        #   EmptyEvent / RootInput → source.firstRun
+        #   SamplingInput          → source.run
+        #   PBISequence            → source.runNumber
         event_id = tbs.get('event_id', {})
-        run = event_id.get('source.firstRun') or event_id.get('source.run')
+        run = (event_id.get('source.firstRun')
+               or event_id.get('source.run')
+               or event_id.get('source.runNumber'))
         if run:
             return f"{run:06d}_{index:08d}"
         
@@ -360,17 +366,25 @@ class Mu2eJobFCL(Mu2eJobBase):
         # Otherwise, use the sequencer from input files directly
         return parent_sequencer
     
-    def job_outputs(self, index: int) -> Dict[str, str]:
-        """Get output files for job index."""
+    def job_outputs(self, index: int,
+                    override_desc: str = None,
+                    override_seq: str = None) -> Dict[str, str]:
+        """Get output files for job index.
+
+        override_desc: if provided, substitute {desc} in outfile patterns.
+                       Used in direct-input mode where desc comes from fname.
+        override_seq:  if provided, use this sequencer instead of computing
+                       from input files. Used in direct-input mode.
+        """
         tbs = self.json_data.get('tbs', {})
         outfiles = tbs.get('outfiles')
-        
+
         if not outfiles:
             return {}
-        
+
         result = {}
-        seq = self.sequencer(index)
-        
+        seq = override_seq if override_seq is not None else self.sequencer(index)
+
         for key, template in outfiles.items():
             # The template may still contain placeholders that need to be resolved
             # Replace placeholders with actual values
@@ -380,12 +394,15 @@ class Mu2eJobFCL(Mu2eJobBase):
             resolved_template = resolved_template.replace('.sequencer.', f'.{seq}.')
             # Also handle {sequencer} format (Python-style placeholder)
             resolved_template = resolved_template.replace('{sequencer}', seq)
-            
+            # Substitute {desc} from fname at runtime (direct-input / generic tarball mode)
+            if override_desc is not None:
+                resolved_template = resolved_template.replace('{desc}', override_desc)
+
             # Skip filenames that don't follow Mu2e naming convention (e.g., /dev/null, relative paths)
             if not resolved_template.startswith(('dts.', 'dig.', 'sim.', 'rec.', 'nts.', 'cnf.', 'mcs.')):
                 result[key] = resolved_template
                 continue
-            
+
             # Update sequencer in the filename (fallback: parse and replace 5th field)
             fn = Mu2eFilename(resolved_template)
             parts = fn.filename.split('.')
@@ -393,21 +410,23 @@ class Mu2eJobFCL(Mu2eJobBase):
                 parts[4] = seq
             fn.filename = '.'.join(parts)
             result[key] = fn.basename()
-        
+
         return result
     
     def job_event_settings(self, index: int) -> Dict[str, Union[int, str]]:
         """Get event settings for job index."""
         tbs = self.json_data.get('tbs', {})
         event_id = tbs.get('event_id')
-        
-        if not event_id:
+        per_index = tbs.get('event_id_per_index', {})
+
+        if not event_id and not per_index:
             return {}
-        
+
         result = {}
-        for key, value in event_id.items():
-            result[key] = value
-        
+        if event_id:
+            for key, value in event_id.items():
+                result[key] = value
+
         subrunkey = tbs.get('subrunkey')
         if subrunkey is not None:
             if subrunkey != '':
@@ -415,7 +434,14 @@ class Mu2eJobFCL(Mu2eJobBase):
         else:
             # Old format
             result['source.firstSubRun'] = index
-        
+
+        # Per-index linear overrides: result[key] = offset + index * step.
+        # Applied last so they override any fixed event_id entry on the same key.
+        for key, spec in per_index.items():
+            offset = int(spec.get('offset', 0))
+            step = int(spec.get('step', 0))
+            result[key] = offset + index * step
+
         return result
     
     def job_seed(self, index: int) -> Dict[str, int]:

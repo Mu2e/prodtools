@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "P=$(jq -r '.tool_input.file_path // \"\"'); case \"$P\" in *__pycache__*|*.pyc) exit 0 ;; */utils/*.py|*/bin/*|*/data/*.json|*/data/*/*.json|*/CLAUDE.md) REL=${P##*/prodtools/}; jq -n --arg p \"$REL\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Edited \" + $p + \" this turn. If it adds a new abstraction, extends an existing one, or captures a decision with rationale, run /wiki-ingest to record it. Otherwise ignore.\")}}' ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "O=$(jq -r '.tool_response.stdout // .tool_response.output // \"\"'); HITS=$(echo \"$O\" | grep -oE 'Art has completed and will exit with status 0|Declare SAM for [^ ]+|pushOutput status at exit: 0' | head -3); if [ -n \"$HITS\" ]; then jq -n --arg h \"$HITS\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Wiki-worthy signal in Bash output:\\n\" + $h + \"\\nIf this represents a new capability, bug fix, or decision (not just a repeat test), consider /wiki-ingest.\")}}'; fi; exit 0",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

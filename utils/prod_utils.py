@@ -147,11 +147,15 @@ def calculate_merge_factor(fields):
     value = list(input_data.values())[0]
 
     if isinstance(value, dict):
+        if 'split_lines' in value:
+            # split_lines means "split a local text file into N-line chunks;
+            # each job consumes one chunk" — merge_factor is implicitly 1.
+            return 1
         if 'count' in value:
             return int(value['count'])
         if 'merge_factor' in value:
             return int(value['merge_factor'])
-        raise ValueError("input_data dict spec must include 'count' or 'merge_factor'")
+        raise ValueError("input_data dict spec must include 'count', 'merge_factor', or 'split_lines'")
 
     return int(value)
 
@@ -287,13 +291,14 @@ def create_index_definition(output_index_dataset, job_count, input_index_dataset
 
 def validate_jobdesc(jobdesc):
     """Validate job descriptions list structure and required fields.
-    
+
     Args:
         jobdesc: List of job description dictionaries
-        
+
     Returns:
-        bool: True if template mode, False if normal mode
-        
+        str or False: 'template' if template mode, 'direct_input' if direct-input mode,
+                      False if normal mode
+
     Raises:
         SystemExit: If validation fails
     """
@@ -301,33 +306,52 @@ def validate_jobdesc(jobdesc):
     if not jobdesc:
         print("Error: No job descriptions found in jobdesc file")
         sys.exit(1)
-    
+
     # Check if template mode (has fcl_template field)
-    is_template_mode = 'fcl_template' in jobdesc[0]
-    
-    if is_template_mode:
-        # Template mode validation
+    if 'fcl_template' in jobdesc[0]:
         if len(jobdesc) > 1:
             print("Error: Template mode (fcl_template) requires exactly one entry in jobdesc list")
             print(f"Found {len(jobdesc)} entries. Template mode processes one file at a time.")
             sys.exit(1)
-        
         entry = jobdesc[0]
         required_fields = ['fcl_template', 'setup_script', 'inloc', 'outputs']
         for field in required_fields:
             if field not in entry:
                 print(f"Error: Template mode requires '{field}' field")
                 sys.exit(1)
-    else:
-        # Normal mode validation
-        for i, entry in enumerate(jobdesc):
-            required_fields = ['tarball', 'njobs', 'inloc', 'outputs']
-            for field in required_fields:
-                if field not in entry:
-                    print(f"Error: Normal mode requires '{field}' field in jobdesc entry {i}")
-                    sys.exit(1)
-    
-    return is_template_mode
+        return 'template'
+
+    # Check if direct-input mode: tarball present but no njobs
+    if 'tarball' in jobdesc[0] and 'njobs' not in jobdesc[0]:
+        if len(jobdesc) > 1:
+            print("Error: Direct-input mode requires exactly one entry in jobdesc list")
+            print(f"Found {len(jobdesc)} entries.")
+            sys.exit(1)
+        entry = jobdesc[0]
+        required_fields = ['tarball', 'inloc', 'outputs']
+        for field in required_fields:
+            if field not in entry:
+                print(f"Error: Direct-input mode requires '{field}' field")
+                sys.exit(1)
+        return 'direct_input'
+
+    # Normal mode validation
+    # Entries with tarball but no njobs are generic tarballs - skip in normal dispatch
+    # Entries missing tarball entirely are invalid
+    for i, entry in enumerate(jobdesc):
+        if 'njobs' not in entry:
+            if 'tarball' in entry:
+                print(f"[INFO] entry {i} ({entry['tarball']}) has no njobs (generic tarball) - skipped in normal dispatch")
+                continue
+            print(f"Error: Normal mode requires 'njobs' field in jobdesc entry {i}")
+            sys.exit(1)
+        required_fields = ['tarball', 'inloc', 'outputs']
+        for field in required_fields:
+            if field not in entry:
+                print(f"Error: Normal mode requires '{field}' field in jobdesc entry {i}")
+                sys.exit(1)
+
+    return False
 
 def process_template(jobdesc_entry, fname):
     """Process a job in template mode.
@@ -402,6 +426,77 @@ def process_template(jobdesc_entry, fname):
     
     return fcl, simjob_setup
 
+def process_direct_input(jobdesc, fname, args):
+    """Process a job in direct-input mode.
+
+    In this mode fname is an actual art file (e.g. assigned by Data Dispatcher).
+    Output filenames are derived from fname's desc and sequencer fields.
+
+    Args:
+        jobdesc: List with exactly one job description dictionary
+        fname: Input art filename (full name, e.g. dig.mu2e.CeEndpoint....art)
+        args: Command line arguments (unused but kept for API consistency)
+
+    Returns:
+        tuple: (fcl, simjob_setup, fname, outputs)
+    """
+    from .jobquery import Mu2eJobPars
+
+    jobdesc_entry = jobdesc[0]
+    tarball = jobdesc_entry['tarball']
+
+    # Parse fname components: prefix.owner.desc.dsconf.sequencer.ext
+    fname_base = Path(fname).name
+    parts = fname_base.split('.')
+    if len(parts) != 6:
+        print(f"Error: Invalid filename format: {fname_base}. "
+              f"Expected prefix.owner.desc.dsconf.sequencer.ext")
+        sys.exit(1)
+    desc = parts[2]
+    seq = parts[4]
+
+    print(f"Direct-input mode: fname={fname}, desc={desc}, seq={seq}")
+
+    # Download tarball if not already local
+    if not Path(tarball).is_file():
+        run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True,
+            retries=3, retry_delay=60)
+
+    # Extract base FCL from tarball and resolve output filenames
+    job_fcl = Mu2eJobFCL(tarball)
+    base_fcl = job_fcl._extract_fcl()
+    outputs_map = job_fcl.job_outputs(0, override_desc=desc, override_seq=seq)
+
+    # Write FCL: base content + direct-input overrides appended
+    # FHiCL last-definition-wins semantics handle the override
+    fname_stem = Path(fname).stem  # strip .art
+    fcl = f"{fname_stem}.fcl"
+    with open(fcl, 'w') as f:
+        f.write(base_fcl)
+        f.write("\n# Direct-input overrides:\n")
+        f.write(f'source.fileNames: ["{fname}"]\n')
+        for key, filename in outputs_map.items():
+            f.write(f'{key}: "{filename}"\n')
+
+    print(f"Wrote {fcl}")
+    print(f"\n--- {fcl} content ---")
+    with open(fcl) as f:
+        print(f.read())
+
+    # Extract setup script from tarball
+    try:
+        jp = Mu2eJobPars(tarball)
+        simjob_setup = jp.setup()
+        print(f"Job setup script: {simjob_setup}")
+    except Exception as e:
+        print(f"ERROR: Failed to get job setup information from {tarball}")
+        print(f"Exception: {e}")
+        raise
+
+    outputs = jobdesc_entry['outputs']
+    return fcl, simjob_setup, fname, outputs
+
+
 def process_jobdef(jobdesc, fname, args):
     """Process a job in normal mode.
     
@@ -430,6 +525,8 @@ def process_jobdef(jobdesc, fname, args):
     jobdesc_index = None
     
     for i, entry in enumerate(jobdesc):
+        if 'njobs' not in entry:
+            continue  # skip generic tarball entries
         if job_index < cumulative_jobs + entry['njobs']:
             jobdesc_entry = entry
             jobdesc_index = i
@@ -437,7 +534,7 @@ def process_jobdef(jobdesc, fname, args):
         cumulative_jobs += entry['njobs']
     
     if jobdesc_entry is None:
-        total_jobs = sum(d['njobs'] for d in jobdesc)
+        total_jobs = sum(d.get('njobs', 0) for d in jobdesc)
         print(f"Error: Job index {job_index} out of range. Total jobs available: {total_jobs}")
         sys.exit(1)
     
@@ -484,8 +581,12 @@ def process_jobdef(jobdesc, fname, args):
         print(f"FCL: {fcl}")
     # Generate FCL - Normal mode with streaming inputs
     else:
-        print(f"Using streaming inputs from {inloc}")
-        fcl = write_fcl(tarball, inloc, 'root', job_index_num)
+        # For dir:<path> inloc, inputs are on a locally-mounted filesystem
+        # (typically cvmfs). The xroot protocol only works for /pnfs paths,
+        # so use the 'file' protocol (direct POSIX read) for dir: mode.
+        proto = 'file' if inloc.startswith('dir:') else 'root'
+        print(f"Using streaming inputs from {inloc} (protocol: {proto})")
+        fcl = write_fcl(tarball, inloc, proto, job_index_num)
         print(f"FCL: {fcl}")
     
     # Extract setup script from tarball

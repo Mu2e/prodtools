@@ -45,10 +45,20 @@
               "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
             }
           ],
-    
+
         "inloc": ["tape"],
         "outloc": [{"*.root": "tape"}],
         "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_00_00/setup.sh"]
+    },
+    {
+        "dsconf": "MDC2025-002",
+        "desc": "EventNtupleFromMCS",
+        "generic_tarball": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "fcl_overrides": {"services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"},
+        "inloc": "tape",
+        "outloc": {"*.root": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_02_00/setup.sh"
     }
 
 ]
