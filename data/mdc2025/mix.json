@@ -86,5 +86,34 @@
 
       }
     ]
+  },
+  {
+    "input_data": [
+      {"dts.mu2e.PBINormal_33344.MDC2025aj.art": 1},
+      {"dts.mu2e.PBIPathological_33344.MDC2025aj.art": 1}
+    ],
+    "pileup_datasets": [{
+      "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+      "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+      "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+      "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+    }],
+    "dsconf": ["MDC2025ai_best_v1_3"],
+    "mixconf": [3],
+    "pbeam": ["Mix1BB"],
+    "owner": ["mu2e"],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh"],
+    "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+    "merge_events": [500],
+    "inloc": ["resilient"],
+    "outloc": [{"dig.mu2e.*.art": "tape"}],
+    "fcl_overrides": [
+      {
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_3",
+        "#include": "Production/JobConfig/mixing/NoPrimaryPBISequence.fcl",
+        "outputs.Output.fileName": "dig.mu2e.{desc}.{dsconf}.sequence.art"
+      }
+    ]
   }
 ]

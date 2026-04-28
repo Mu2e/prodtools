@@ -1,0 +1,99 @@
+[
+    {
+	"desc": "POT_Run1_a",
+	"dsconf": "MDC2025ac",
+	"fcl": "Production/JobConfig/beam/POT.fcl",
+	"fcl_overrides": {
+		"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+	},
+	"njobs": 20000,
+	"events": 5000,
+	"run": 1430,
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
+	"owner": "mu2e"
+    },
+    {
+	"desc": "POT_Run1_b",
+	"dsconf": "MDC2025ae",
+	"fcl": "Production/JobConfig/beam/POT.fcl",
+	"fcl_overrides": {
+		"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"		
+	},
+	"njobs": 10000,
+	"events": 5000,
+	"run": 1430,
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh",
+	"owner": "mu2e"
+    },
+	{
+		"desc": "POT_Run1_b",
+		"dsconf": "Run1Bai",
+		"fcl": "Production/JobConfig/beam/POT.fcl",
+		"fcl_overrides": {
+			"#include": "Production/JobConfig/beam/epilog_1b.fcl",
+			"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v06.txt"
+		},
+		"njobs": 20000,
+		"events": 100000,
+		"run": 1460,
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh",
+		"owner": "mu2e"
+	},
+    {
+	"desc": "CosmicDSStopsCRY",	
+	"dsconf": "MDC2025ab",
+	"fcl": "Production/JobConfig/cosmic/S1DSStopsCRY.fcl",
+	"fcl_overrides": {
+		"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+		"outputs.S1LowOutput.fileName": "/dev/null"
+	},
+	"njobs": 20000,
+	"events": 2500000,
+	"run": 1430,
+	"outloc": {
+		"*.art": "tape"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ab/setup.sh",
+	"owner": "mu2e"
+    },
+    {
+		"desc": "ExtractedCRY",
+		"dsconf": "MDC2025ad",
+		"fcl": "Production/JobConfig/cosmic/ExtractedCRY.fcl",
+		"njobs": 20000,
+		"events": 500000,
+		"run": 1400,
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh",
+		"owner": "mu2e"
+	},
+    {
+	"desc": "PiBeam",
+		"dsconf": "Run1Bah",
+		"fcl": "Production/JobConfig/beam/POT_infinitepion.fcl",
+		"fcl_overrides": {
+			"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+			"physics.producers.g4run.Mu2eG4CommonCut.pars[1].pars[2].pars": "[ TS2Vacuum, Coll31, Coll32, TS2InnerCryoShell, TS3InnerCryoShell, TS2CryoInsVac, TS3CryoInsVac, PbarAbsDisk, PbarAbsWedge, VirtualDetector_Coll31_In, VirtualDetector_Coll32_In, VirtualDetector_Coll31_Out, VirtualDetector_Coll32_Out, Coll31OutRecord, Coll32InRecord, Coll31OutRecord ]",
+			"physics.producers.g4run.Mu2eG4CommonCut.pars[1].pars[3].pars[0].pars[0].pars": "[ TS3Vacuum ]"
+		},
+		"njobs": 5000,
+		"events": 200000,
+		"run": 1450,
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bah/setup.sh",
+		"owner": "mu2e"
+	}
+]

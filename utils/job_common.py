@@ -43,6 +43,11 @@ class Mu2eFilename:
         """Return the basename of the file."""
         return self.filename
 
+    def relpathname(self) -> str:
+        """SHA256 hash-prefixed relative path, matching Perl Mu2eFilename->relpathname()."""
+        h = hashlib.sha256(self.filename.encode()).hexdigest()
+        return f"{h[:2]}/{h[2:4]}/{self.filename}"
+
 def remove_storage_prefix(path: str) -> str:
     """Remove storage system prefixes (enstore:, dcache:) from a file path.
     

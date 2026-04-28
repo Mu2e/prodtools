@@ -4,10 +4,17 @@ import logging
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 from datetime import datetime
 from .jobfcl import Mu2eJobFCL
 from .jobdef import create_jobdef
+
+# Default SL7 container for G4Beamline runs (overridable via JSON `container` field).
+# G4Beamline binaries on cvmfs are linked against SL7 libs; running on AL9 hosts
+# requires apptainer-wrapping. On grid, set the same image as the outer container
+# in poms/g4bl.cfg's +SingularityImage so no wrapping is needed at runtime.
+DEFAULT_G4BL_CONTAINER = "/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-dev-sl7:latest"
 
 def setup_logging(verbose: bool) -> None:
     logging.basicConfig(
@@ -184,83 +191,6 @@ def write_fcl_template(base, overrides):
                 # (strings get quotes, lists get proper syntax with double quotes)
                 f.write(f'{key}: {json.dumps(val)}\n')
 
-def parse_jobdef_fields(jobdefs_file, index=None):
-    """
-    Extract job definition fields from a jobdefs file and index.
-    
-    Args:
-        jobdefs_file: Path to the jobdefs file
-        index: Index of the job definition to extract (optional, will extract from fname env var if not provided)
-        
-    Returns:
-        tuple: (tarfile, job_index, inloc, outloc)
-    """
-
-    #check token before proceeding
-    try:
-        run(f"httokendecode -H", shell=True)
-    except SystemExit:
-        print("Warning: Token validation failed. Please check your token.")
-    run("pwd", shell=True)
-    run("ls -ltr", shell=True)
-
-    # Extract index from fname environment variable if not provided
-    if index is None:
-        fname = os.getenv("fname")
-        if not fname:
-            print("Error: fname environment variable is not set.")
-            sys.exit(1)
-        try:
-            index = int(fname.split('.')[4].lstrip('0') or '0')
-        except (IndexError, ValueError) as e:
-            print("Error: Unable to extract index from filename.")
-            sys.exit(1)
-
-    if not os.path.exists(jobdefs_file):
-        print(f"Error: Jobdefs file {jobdefs_file} does not exist.")
-        sys.exit(1)
-    
-    jobdefs_list = make_jobdefs_list(Path(jobdefs_file))
-    
-    if len(jobdefs_list) < index:
-        print(f"Error: Expected at least {index} job definitions, but got only {len(jobdefs_list)}")
-        sys.exit(1)
-    
-    # Get the index-th job definition (adjusting for Python's 0-index).
-    jobdef = jobdefs_list[index]
-    print(f"The {index}th job definition is: {jobdef}")
-
-    # Split the job definition into fields (parfile job_index inloc outloc).
-    fields = jobdef.split()
-    if len(fields) != 4:
-        print(f"Error: Expected 4 fields (parfile job_index inloc outloc) in the job definition, but got: {jobdef}")
-        sys.exit(1)
-
-    # Return the fields: (tarfile, job_index, inloc, outloc)
-    print(f"IND={fields[1]} TARF={fields[0]} INLOC={fields[2]} OUTLOC={fields[3]}")
-    return fields[0], int(fields[1]), fields[2], fields[3]
-
-def make_jobdefs_list(input_file):
-    """
-    Create a list of individual job definitions from a jobdef jobdesc file.
-    
-    Args:
-        input_file: Path to jobdef jobdesc file
-        
-    Returns:
-        List of individual job definition strings: parfile job_index inloc outloc
-    """
-    if not input_file.exists():
-        sys.exit(f"Input file not found: {input_file}")
-    
-    jobdefs_list = []
-    for line in input_file.read_text().splitlines():
-        parfile, njobs, inloc, outloc = line.strip().split()
-        for i in range(int(njobs)):
-            jobdefs_list.append(f"{parfile} {i} {inloc} {outloc}")
-    print(f"Generated the list of {len(jobdefs_list)} jobdefs from {input_file}")
-    return jobdefs_list
-
 def replace_file_extensions(input_str, first_field, last_field):
     """Replace the first and last fields in a dot-separated string."""
     fields = input_str.split('.')
@@ -306,6 +236,19 @@ def validate_jobdesc(jobdesc):
     if not jobdesc:
         print("Error: No job descriptions found in jobdesc file")
         sys.exit(1)
+
+    # Check if g4bl runner (has runner: 'g4bl' field)
+    if jobdesc[0].get('runner') == 'g4bl':
+        if len(jobdesc) > 1:
+            print("Error: g4bl runner requires exactly one entry in jobdesc list")
+            sys.exit(1)
+        entry = jobdesc[0]
+        required_fields = ['embed_dir', 'main_input', 'events_per_job', 'outputs']
+        for field in required_fields:
+            if field not in entry:
+                print(f"Error: g4bl runner requires '{field}' field")
+                sys.exit(1)
+        return 'g4bl'
 
     # Check if template mode (has fcl_template field)
     if 'fcl_template' in jobdesc[0]:
@@ -624,6 +567,93 @@ def process_jobdef(jobdesc, fname, args):
     
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, infiles, outputs, inloc
+
+
+def _is_inside_sl7():
+    """True if running inside an SL7 (Scientific Linux 7) container/host."""
+    try:
+        with open('/etc/redhat-release') as f:
+            return 'release 7' in f.read()
+    except OSError:
+        return False
+
+
+def process_g4bl_jobdef(jobdesc_entry, fname, args):
+    """Run a G4Beamline simulation job.
+
+    Unlike art-side process_jobdef which prepares an FCL for runmu2e to execute,
+    this function executes g4bl in-place (no separate `mu2e -c` step). The
+    runmu2e.py 'g4bl' branch skips its FCL/mu2e dispatch when this returns.
+
+    Linear sequencer: First_Event = (job_index - 1) * events_per_job + 1.
+    """
+    parts = Path(fname).name.split('.')
+    if len(parts) < 5:
+        raise RuntimeError(f"Invalid g4bl fname: {fname}; expected dot-separated index in field 5")
+    try:
+        job_index = int(parts[4].lstrip('0') or '0')
+    except ValueError as e:
+        raise RuntimeError(f"Could not parse job index from {fname}: {e}")
+
+    embed_dir = jobdesc_entry['embed_dir']
+    main_input = jobdesc_entry['main_input']
+    events_per_job = int(jobdesc_entry['events_per_job'])
+    container = jobdesc_entry.get('container', DEFAULT_G4BL_CONTAINER)
+
+    if not Path(embed_dir).is_dir():
+        raise RuntimeError(f"embed_dir not found: {embed_dir}")
+    if not (Path(embed_dir) / main_input).is_file():
+        raise RuntimeError(f"main_input not found: {embed_dir}/{main_input}")
+
+    # 0-based job index → events [job_index*N + 1, (job_index+1)*N]
+    first_event = job_index * events_per_job + 1
+
+    # Output histogram file: g4bl.<owner>.<desc>.<dsconf>.<sequencer>.root
+    desc = jobdesc_entry.get('desc', parts[2] if len(parts) >= 3 else 'g4bl')
+    dsconf = jobdesc_entry.get('dsconf', parts[3] if len(parts) >= 4 else 'unknown')
+    sequencer = parts[4] if len(parts) >= 5 else f"{job_index:06d}_00000000"
+    histo_file = f"g4bl.mu2e.{desc}.{dsconf}.{sequencer}.root"
+    histo_path = os.path.abspath(histo_file)
+
+    # Inline bash script passed via `bash -c <multi-line>`. shell=False on the
+    # subprocess.run side avoids host /bin/sh quote-mangling. `--cleanenv` on
+    # apptainer prevents AL9 env vars (PYTHONHOME, UPS_DIR, PRODUCTS, etc.)
+    # from leaking into the SL7 container and breaking setupmu2e-art.sh's UPS
+    # init — without it, `setup` ends up undefined despite source returning 0.
+    # (Discovered 2026-04-27.)
+    inner_script = (
+        "source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh\n"
+        "setup G4beamline\n"
+        f"cd {shlex.quote(embed_dir)}\n"
+        f"g4bl {shlex.quote(main_input)} "
+        f"Num_Events={events_per_job} First_Event={first_event} "
+        f"param histoFile={shlex.quote(histo_path)}"
+    )
+
+    if _is_inside_sl7():
+        cmd_list = ['bash', '-c', inner_script]
+        print(f"g4bl: running natively (already inside SL7)")
+    else:
+        cmd_list = [
+            'apptainer', 'exec', '--cleanenv',
+            '-B', '/cvmfs',
+            '-B', '/tmp',
+            '-B', embed_dir,
+        ]
+        home = os.environ.get('HOME', '')
+        if home and Path(home).is_dir():
+            cmd_list += ['-B', home]
+        cmd_list += [container, 'bash', '-c', inner_script]
+        print(f"g4bl: wrapping in apptainer ({container})")
+
+    print(f"  events_per_job={events_per_job}, first_event={first_event}")
+    print(f"  histo_file={histo_path}")
+    result = subprocess.run(cmd_list, check=False)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd_list)
+
+    return jobdesc_entry['outputs'], histo_file
+
 
 def push_output(output_specs, output_file="output.txt", parents_file="parents_list.txt", simjob_setup=None):
     """

@@ -89,5 +89,22 @@
             "inloc": "tape",
             "outloc": {"*.art": "disk"},
             "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
+        },
+        {
+            "dsconf": ["MDC2025ai_best_v1_3"],
+            "tarball_append": "-reco",
+            "fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+            "input_data": [
+                {"dig.mu2e.PBINormal_33344Mix1BB.MDC2025ai_best_v1_3.art": 1},
+                {"dig.mu2e.PBIPathological_33344Mix1BB.MDC2025ai_best_v1_3.art": 1}
+            ],
+            "fcl_overrides": [{
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            }],
+            "inloc": ["tape"],
+            "outloc": [{"*.art": "disk"}],
+            "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh"]
         }
 ]

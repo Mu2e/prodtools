@@ -110,3 +110,17 @@ prodtools_cvmfs/
 indir/
 web/mermaid/
 web/*.md
+
+# Local POMS DB (derived from poms_map/, rebuildable)
+poms_data.db
+
+# Scratch / local notes / test workspaces (root only)
+/os
+/sys
+/prompts*.txt
+/mu2e_common.gdml
+/MDC*-test.json
+/momentum_resolution_*.png
+/test2/
+/test_runmu2e/
+/test_reco/

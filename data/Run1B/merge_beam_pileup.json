@@ -1,0 +1,72 @@
+[
+	{
+		"desc": "EleBeamFlashCat",
+		"dsconf": "Run1Bai-007",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.EleBeamFlash.Run1Bai-007.art": 100},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.EleBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	},
+	{
+		"desc": "MuBeamFlashCat",
+		"dsconf": "Run1Bai-007",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.MuBeamFlash.Run1Bai-007.art": 100},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	},
+	{
+		"desc": "MuStopPileupCat",
+		"dsconf": "Run1Bai-007",
+		"input_data": {"dts.mu2e.MuStopPileup.Run1Bai-007.art": 100},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuStopPileupCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	},
+	{
+		"desc": "NeutralsFlashCat",
+		"dsconf": "Run1Bai-003",
+		"input_data": {"dts.mu2e.NeutralsFlash.Run1Bai-003.art": 5000},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsFlashCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	},
+	{
+		"desc": "TargetStopsCat",
+		"dsconf": "Run1Bai-003",
+		"input_data": {"sim.mu2e.TargetStops.Run1Bai-003.art": 2500},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "sim.owner.TargetStopsCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	}
+]

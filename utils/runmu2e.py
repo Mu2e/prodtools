@@ -16,6 +16,7 @@ from utils.prod_utils import (
     process_template,
     process_direct_input,
     process_jobdef,
+    process_g4bl_jobdef,
     push_data,
     push_logs
 )
@@ -41,6 +42,15 @@ def main():
     if not fname:
         print("Error: fname environment variable is not set.")
         sys.exit(1)
+
+    # G4Beamline runner: executes g4bl directly, no FCL/mu2e step.
+    if mode == 'g4bl':
+        outputs, histo_file = process_g4bl_jobdef(jobdesc[0], fname, args)
+        if not args.dry_run:
+            push_data(outputs, infiles="", simjob_setup=None, track_parents=False)
+        else:
+            print("[DRY RUN] Would run: pushOutput output.txt")
+        sys.exit(0)
 
     # Process job based on mode
     inloc = None  # populated by process_jobdef; None for template/direct_input

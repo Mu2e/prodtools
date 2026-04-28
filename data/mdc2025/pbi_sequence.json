@@ -1,7 +1,7 @@
 [
     {
         "desc": "PBINormal_33344",
-        "dsconf": "MDC2025ai",
+        "dsconf": "MDC2025aj",
         "fcl": "Production/JobConfig/primary/NoPrimaryPBISequence.fcl",
         "input_data": {
             "/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/PBI_Normal_33344.txt": {
@@ -12,7 +12,11 @@
         "owner": "mu2e",
         "inloc": "none",
         "outloc": {"*.art": "tape"},
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aj/setup.sh",
+        "event_id_per_index": {
+            "source.firstSubRunNumber": {"offset": 0, "step": 1},
+            "source.firstEventNumber": {"offset": 0, "step": 1000}
+        },
         "fcl_overrides": {
             "physics.producers.compressDetStepMCs.surfaceStepTag": "FindMCPrimary",
             "outputs.PrimaryOutput.fileName": "dts.owner.PBINormal_33344.version.sequencer.art"
@@ -20,7 +24,7 @@
     },
     {
         "desc": "PBIPathological_33344",
-        "dsconf": "MDC2025ai",
+        "dsconf": "MDC2025aj",
         "fcl": "Production/JobConfig/primary/NoPrimaryPBISequence.fcl",
         "input_data": {
             "/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/PBI_Pathological_33344.txt": {
@@ -31,7 +35,11 @@
         "owner": "mu2e",
         "inloc": "none",
         "outloc": {"*.art": "tape"},
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aj/setup.sh",
+        "event_id_per_index": {
+            "source.firstSubRunNumber": {"offset": 0, "step": 1},
+            "source.firstEventNumber": {"offset": 0, "step": 1000}
+        },
         "fcl_overrides": {
             "physics.producers.compressDetStepMCs.surfaceStepTag": "FindMCPrimary",
             "outputs.PrimaryOutput.fileName": "dts.owner.PBIPathological_33344.version.sequencer.art"

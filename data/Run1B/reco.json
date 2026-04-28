@@ -1,0 +1,169 @@
+[
+    {
+	"dsconf": "Run1Bab2_best_v1_2",
+	"fcl": "Production/JobConfig/recoMC/NoField.fcl",
+	"input_data": [
+	    {"dig.mu2e.CeEndpointOnSpillTriggerable.Run1Bab_best_v1_2.art": 100},
+	    {"dig.mu2e.CeEndpointMixLowTriggerable.Run1Bab_best_v1_2.art": 100},
+
+		{"dig.mu2e.DIOOnSpillTriggerable.Run1Bab_best_v1_2.art": 100},
+
+		{"dig.mu2e.DIOtail50OnSpillTriggerable.Run1Bab_best_v1_2.art": 100},
+	    {"dig.mu2e.DIOtail50MixLowTriggerable.Run1Bab_best_v1_2.art": 100},
+
+		{"dig.mu2e.DIOtail80OnSpillTriggerable.Run1Bab_best_v1_2.art": 100},
+	    {"dig.mu2e.DIOtail80MixLowTriggerable.Run1Bab_best_v1_2.art": 100},
+
+		{"dig.mu2e.DIOtail90OnSpillTriggerable.Run1Bab_best_v1_2.art": 100},
+	    {"dig.mu2e.DIOtail90MixLowTriggerable.Run1Bab_best_v1_2.art": 100},
+
+		{"dig.mu2e.FlateMinusMixLowTriggerable.Run1Bab_best_v1_2.art": 100},
+	    {"dig.mu2e.NoPrimaryMixLowTriggerable.Run1Bab_best_v1_2.art": 100}
+	],
+	"fcl_overrides": {
+	    "services.DbService.purpose": "Sim_best",
+	    "services.DbService.version": "v1_2",
+		"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art",
+		"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+        "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt"
+	},
+	"inloc": "tape",
+	"outloc": {"*.art": "tape"},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh"
+    },
+
+    {
+		"dsconf": "Run1Baf_best_v1_4-000",
+		"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+		"input_data": [
+			{"dig.mu2e.CeEndpointMixLowTriggerable.Run1Bab2_best_v1_2.art": 10},                                         
+			{"dig.mu2e.DIOtail0_60MixLowTriggerable.Run1Bab2_best_v1_2.art": 10},                                        
+			{"dig.mu2e.DIOtail60_80MixLowTriggerable.Run1Bab2_best_v1_2.art": 10},                                       
+			{"dig.mu2e.DIOtail80_90MixLowTriggerable.Run1Bab2_best_v1_2.art": 10},                                       
+			{"dig.mu2e.DIOtail90_infMixLowTriggerable.Run1Bab2_best_v1_2.art": 10},                                      
+			{"dig.mu2e.FlatGammaMixLowTriggerable.Run1Bab2_best_v1_2.art": 10},                                          
+			{"dig.mu2e.FlateMinusMixLowTriggerable.Run1Bab2_best_v1_2.art": 10},                                         
+			{"dig.mu2e.NoPrimaryMixLowTriggerable.Run1Bab2_best_v1_2.art": 10},
+			
+			{"dig.mu2e.CeEndpointMixLow.Run1Baf_best_v1_4.art": 10},                                                     
+			{"dig.mu2e.DIOtail0_60MixLow.Run1Baf_best_v1_4.art": 10},                                                    
+			{"dig.mu2e.DIOtail60_80MixLow.Run1Baf_best_v1_4.art": 10},                                                   
+			{"dig.mu2e.DIOtail80_90MixLow.Run1Baf_best_v1_4.art": 10},                                                   
+			{"dig.mu2e.DIOtail90_infMixLow.Run1Baf_best_v1_4.art": 10},                                                  
+			{"dig.mu2e.FlatGammaMixLow.Run1Baf_best_v1_4.art": 10},                                                      
+			{"dig.mu2e.FlateMinusMixLow.Run1Baf_best_v1_4.art": 10},                                                     
+			{"dig.mu2e.NoPrimaryMixLow.Run1Baf_best_v1_4.art": 10}, 
+		
+			{"dig.mu2e.CeEndpointOnSpillTriggerable.Run1Bab2_best_v1_2.art": 1},                                        
+			{"dig.mu2e.DIOtail0_60OnSpillTriggerable.Run1Bab2_best_v1_2.art": 1},                                       
+			{"dig.mu2e.DIOtail60_80OnSpillTriggerable.Run1Bab2_best_v1_2.art": 1},                                      
+			{"dig.mu2e.DIOtail80_90OnSpillTriggerable.Run1Bab2_best_v1_2.art": 1},                                      
+			{"dig.mu2e.DIOtail90_infOnSpillTriggerable.Run1Bab2_best_v1_2.art": 1},                                     
+			{"dig.mu2e.FlatGammaOnSpillTriggerable.Run1Bab2_best_v1_2.art": 1},                                         
+			{"dig.mu2e.FlateMinusOnSpillTriggerable.Run1Bab2_best_v1_2.art": 1}
+		],
+		"fcl_overrides": {
+			"services.DbService.purpose": "Sim_best",
+			"services.DbService.version": "v1_4",
+			"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art",
+			"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+			"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt"
+		},
+		"inloc": "tape",
+		"outloc": {"*.art": "tape"},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baf/setup.sh"
+		},
+		{
+			"dsconf": "Run1Baf_best_v1_4-001",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.CeEndpointMixLow.Run1Baf_best_v1_4-000.art": 10},                                                 
+				{"dig.mu2e.DIOtail0_60MixLow.Run1Baf_best_v1_4-000.art": 10},                                                
+				{"dig.mu2e.DIOtail60_80MixLow.Run1Baf_best_v1_4-000.art": 10},                                               
+				{"dig.mu2e.DIOtail80_90MixLow.Run1Baf_best_v1_4-000.art": 10},                                               
+				{"dig.mu2e.DIOtail90_infMixLow.Run1Baf_best_v1_4-000.art": 10},                                              
+				{"dig.mu2e.FlatGammaMixLow.Run1Baf_best_v1_4-000.art": 10},                                                  
+				{"dig.mu2e.FlateMinusMixLow.Run1Baf_best_v1_4-000.art": 10},                                                 
+				{"dig.mu2e.NoPrimaryMixLow.Run1Baf_best_v1_4-000.art": 10}
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_4",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baf/setup.sh"
+		},
+		{
+			"dsconf": "Run1Bah_best_v1_4-002",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.CeEndpointMix1BB.Run1Bah_best_v1_4-000.art": 10},                                                 
+				{"dig.mu2e.DIOtail0_60Mix1BB.Run1Bah_best_v1_4-000.art": 10},                                                
+				{"dig.mu2e.DIOtail60_80Mix1BB.Run1Bah_best_v1_4-000.art": 10},                                               
+				{"dig.mu2e.DIOtail80_90Mix1BB.Run1Bah_best_v1_4-000.art": 10},                                               
+				{"dig.mu2e.DIOtail90_infMix1BB.Run1Bah_best_v1_4-000.art": 10},                                              
+				{"dig.mu2e.FlatGammaMix1BB.Run1Bah_best_v1_4-000.art": 10},                                                  
+				{"dig.mu2e.FlateMinusMix1BB.Run1Bah_best_v1_4-000.art": 10},                                                 
+				{"dig.mu2e.NoPrimaryMix1BB.Run1Bah_best_v1_4-002.art": 10},
+				{"dig.mu2e.MuCap1809keVCaloMix1BB.Run1Bah_best_v1_4-000.art": 10},
+
+				{"dig.mu2e.CeEndpoint.Run1Bah_best_v1_4-000.art": 1},                                                 
+				{"dig.mu2e.DIOtail0_60.Run1Bah_best_v1_4-000.art": 10},                                                
+				{"dig.mu2e.DIOtail60_80.Run1Bah_best_v1_4-000.art": 1},                                               
+				{"dig.mu2e.DIOtail80_90.Run1Bah_best_v1_4-000.art": 1},                                               
+				{"dig.mu2e.DIOtail90_inf.Run1Bah_best_v1_4-000.art": 1},                                              
+				{"dig.mu2e.FlatGamma.Run1Bah_best_v1_4-000.art": 1},                                                  
+				{"dig.mu2e.FlateMinus.Run1Bah_best_v1_4-000.art": 1},                                                 
+				{"dig.mu2e.NoPrimary.Run1Bah_best_v1_4-000.art": 1},
+				{"dig.mu2e.MuCap1809keVCalo.Run1Bah_best_v1_4-000.art": 1}
+
+
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_4",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bah/setup.sh"
+		},
+		{
+			"dsconf": "Run1Bai_best_v1_4-001",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.CeEndpointMix1BB.Run1Bai_best_v1_4-000.art": 10},                                                 
+				{"dig.mu2e.FlatGammaMix1BB.Run1Bai_best_v1_4-000.art": 10},                                                  
+				{"dig.mu2e.FlateMinusMix1BB.Run1Bai_best_v1_4-000.art": 10},                                                 
+				{"dig.mu2e.NoPrimaryMix1BB.Run1Bai_best_v1_4-000.art": 10},
+				{"dig.mu2e.MuCap1809keVCaloMix1BB.Run1Bai_best_v1_4-000.art": 10},
+
+				{"dig.mu2e.CeEndpoint.Run1Bai_best_v1_4-000.art": 1},                                                 
+				{"dig.mu2e.FlatGamma.Run1Bai_best_v1_4-000.art": 1},                                                  
+				{"dig.mu2e.FlateMinus.Run1Bai_best_v1_4-000.art": 1},                                                 
+				{"dig.mu2e.NoPrimary.Run1Bai_best_v1_4-000.art": 1},
+				{"dig.mu2e.MuCap1809keVCalo.Run1Bai_best_v1_4-000.art": 1}
+
+
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_4",
+				"services.DbService.nearestMatch": "true",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v06.txt"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+		}
+]
