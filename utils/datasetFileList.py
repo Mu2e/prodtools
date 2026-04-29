@@ -12,26 +12,11 @@ from pathlib import Path
 
 # Handle both module and standalone imports
 try:
-    from .job_common import get_samweb_wrapper
+    from .job_common import get_samweb_wrapper, Mu2eFilename
 except ImportError:
     # When running as standalone script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from utils.job_common import get_samweb_wrapper
-
-class Mu2eFilename:
-    """Parse Mu2e filenames to get relative path components."""
-    
-    def __init__(self, filename: str):
-        self.filename = filename
-    
-    def relpathname(self) -> str:
-        """Get relative pathname like the Perl Mu2eFilename->relpathname()."""
-        # Generate hash-based subdirectory using SHA256 (matches original Perl behavior)
-        import hashlib
-        hash_obj = hashlib.sha256(self.filename.encode())
-        hash_hex = hash_obj.hexdigest()
-        hash_path = f"{hash_hex[:2]}/{hash_hex[2:4]}"
-        return f"{hash_path}/{self.filename}"
+    from utils.job_common import get_samweb_wrapper, Mu2eFilename
 
 class Mu2eDSName:
     """Parse Mu2e dataset names."""

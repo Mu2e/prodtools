@@ -1,0 +1,90 @@
+[
+    {
+        "desc": "STMBeamToVDEle",
+        "dsconf": "MDC2025ai",
+        "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025ai.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025ai.sequence.art"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {"sim.mu2e.EleBeamCat.MDC2025ab.art": 1},
+        "njobs": 5000,
+        "events": 1106516,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "STMBeamToVDMu",
+        "dsconf": "MDC2025ai",
+        "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025ai.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025ai.sequence.art"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {"sim.mu2e.MuBeamCat.MDC2025ab.art": 1},
+        "njobs": 20000,
+        "events": 200000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "STMBeamToVDTarget",
+        "dsconf": "MDC2025ai",
+        "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD1809.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025ai.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025ai.sequence.art"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.TargetStopsCat.MDC2025ac.art": 1},
+        "njobs": 1000,
+        "events": 1000000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "STMNeutralsToVD",
+        "dsconf": "MDC2025ai",
+        "fcl": "Production/JobConfig/pileup/STM/NeutralsTo2VD.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025ai.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025ai.sequence.art"
+        },
+        "resampler_name": "neutralsResampler",
+        "input_data": {"sim.mu2e.NeutralsCat.MDC2025ab.art": 1},
+        "njobs": 20000,
+        "events": 100000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    }
+]

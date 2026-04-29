@@ -1,0 +1,197 @@
+[
+  {
+	"dsconf": ["MDC2025-000"],
+	"fcl": ["EventNtuple/fcl/from_mcs-extracted.fcl"],
+    "input_data": [
+        {"mcs.mu2e.CeEndpointOnSpillTriggerableTriggerable-KL.Run1Bab2_best_v1_2.art": 2},
+        {"mcs.mu2e.DIOOnSpillTriggerableTriggerable-KL.Run1Bab2_best_v1_2.art": 1},
+        {"mcs.mu2e.DIOtail50OnSpillTriggerableTriggerable-KL.Run1Bab2_best_v1_2.art": 2},
+        {"mcs.mu2e.DIOtail80OnSpillTriggerableTriggerable-KL.Run1Bab2_best_v1_2.art": 5},
+        {"mcs.mu2e.DIOtail90OnSpillTriggerableTriggerable-KL.Run1Bab2_best_v1_2.art": 5}
+    ],
+    "fcl_overrides": [
+        {
+          "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+        }
+      ],
+
+    "inloc": ["tape"],
+	"outloc": [{"*.root": "tape"}],
+	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_01_01/setup.sh"]
+  },
+  {
+    "dsconf": ["Run1B-003"],
+    "fcl": ["EventNtuple/fcl/from_mcs-Run1B.fcl"],
+      "input_data": [
+          {"mcs.mu2e.CeEndpointMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                      
+          {"mcs.mu2e.CeEndpointOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                     
+          {"mcs.mu2e.DIOtail0_60MixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                     
+          {"mcs.mu2e.DIOtail0_60OnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                           
+          {"mcs.mu2e.DIOtail60_80MixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                    
+          {"mcs.mu2e.DIOtail60_80OnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                   
+          {"mcs.mu2e.DIOtail80_90MixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                    
+          {"mcs.mu2e.DIOtail80_90OnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                   
+          {"mcs.mu2e.DIOtail90_infMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                   
+          {"mcs.mu2e.DIOtail90_infOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                  
+          {"mcs.mu2e.FlatGammaMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},
+          {"mcs.mu2e.FlatGammaOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                      
+          {"mcs.mu2e.FlateMinusMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                      
+          {"mcs.mu2e.FlateMinusOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},
+          {"mcs.mu2e.NoPrimaryMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1}
+      ],
+      "fcl_overrides": [
+          {
+            "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+          }
+        ],
+  
+      "inloc": ["tape"],
+    "outloc": [{"*.root": "tape"}],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_01_04/setup.sh"]
+  },
+  {
+    "dsconf": ["Run1B-003"],
+    "fcl": ["EventNtuple/fcl/from_mcs-Run1B.fcl"],
+      "input_data": [
+          {"mcs.mu2e.CeEndpointMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                      
+          {"mcs.mu2e.CeEndpointOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                     
+          {"mcs.mu2e.DIOtail0_60MixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                     
+          {"mcs.mu2e.DIOtail0_60OnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                           
+          {"mcs.mu2e.DIOtail60_80MixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                    
+          {"mcs.mu2e.DIOtail60_80OnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                   
+          {"mcs.mu2e.DIOtail80_90MixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                    
+          {"mcs.mu2e.DIOtail80_90OnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                   
+          {"mcs.mu2e.DIOtail90_infMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                   
+          {"mcs.mu2e.DIOtail90_infOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                  
+          {"mcs.mu2e.FlatGammaMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},
+          {"mcs.mu2e.FlatGammaOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                      
+          {"mcs.mu2e.FlateMinusMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},                                      
+          {"mcs.mu2e.FlateMinusOnSpillTriggerable-KL.Run1Baf_best_v1_4-000.art": 1},
+          {"mcs.mu2e.NoPrimaryMixLowTriggerable-KL.Run1Baf_best_v1_4-000.art": 1}
+      ],
+      "fcl_overrides": [
+          {
+            "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+          }
+        ],
+  
+      "inloc": ["tape"],
+    "outloc": [{"*.root": "tape"}],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_01_04/setup.sh"]
+  },
+  {
+    "dsconf": ["Run1B-004"],
+    "fcl": ["EventNtuple/fcl/from_mcs-Run1B.fcl"],
+      "input_data": [
+        {"mcs.mu2e.CeEndpointMixLow-KL.Run1Baf_best_v1_4-001.art": 1},                                              
+        {"mcs.mu2e.DIOtail0_60MixLow-KL.Run1Baf_best_v1_4-001.art": 1},                                             
+        {"mcs.mu2e.DIOtail60_80MixLow-KL.Run1Baf_best_v1_4-001.art": 1},                                            
+        {"mcs.mu2e.DIOtail80_90MixLow-KL.Run1Baf_best_v1_4-001.art": 1},                                            
+        {"mcs.mu2e.DIOtail90_infMixLow-KL.Run1Baf_best_v1_4-001.art": 1},                                           
+        {"mcs.mu2e.FlatGammaMixLow-KL.Run1Baf_best_v1_4-001.art": 1},                                               
+        {"mcs.mu2e.FlateMinusMixLow-KL.Run1Baf_best_v1_4-001.art": 1},                                              
+        {"mcs.mu2e.NoPrimaryMixLow-KL.Run1Baf_best_v1_4-001.art": 1}  
+      ],
+      "fcl_overrides": [
+          {
+            "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+          }
+        ],
+  
+      "inloc": ["tape"],
+    "outloc": [{"*.root": "tape"}],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_01_04/setup.sh"]
+    },
+    {
+      "dsconf": ["Run1B-005"],
+      "fcl": ["EventNtuple/fcl/from_mcs-Run1B.fcl"],
+        "input_data": [
+          {"mcs.mu2e.CeEndpointMix1BB-KL.Run1Bah_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.DIOtail0_60Mix1BB-KL.Run1Bah_best_v1_4-001.art": 1},                                             
+          {"mcs.mu2e.DIOtail60_80Mix1BB-KL.Run1Bah_best_v1_4-001.art": 1},                                            
+          {"mcs.mu2e.DIOtail80_90Mix1BB-KL.Run1Bah_best_v1_4-001.art": 1},                                            
+          {"mcs.mu2e.DIOtail90_infMix1BB-KL.Run1Bah_best_v1_4-001.art": 1},                                           
+          {"mcs.mu2e.FlatGammaMix1BB-KL.Run1Bah_best_v1_4-001.art": 1},                                               
+          {"mcs.mu2e.FlateMinusMix1BB-KL.Run1Bah_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.NoPrimaryMix1BB-KL.Run1Bah_best_v1_4-001.art": 1},
+          {"mcs.mu2e.MuCap1809keVCaloMix1BB-KL.Run1Bah_best_v1_4-001.art": 1},
+          
+          {"mcs.mu2e.CeEndpoint-KL.Run1Bah_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.DIOtail0_60-KL.Run1Bah_best_v1_4-001.art": 1},                                             
+          {"mcs.mu2e.DIOtail60_80-KL.Run1Bah_best_v1_4-001.art": 1},                                            
+          {"mcs.mu2e.DIOtail80_90-KL.Run1Bah_best_v1_4-001.art": 1},                                            
+          {"mcs.mu2e.DIOtail90_inf-KL.Run1Bah_best_v1_4-001.art": 1},                                           
+          {"mcs.mu2e.FlatGamma-KL.Run1Bah_best_v1_4-001.art": 1},                                               
+          {"mcs.mu2e.FlateMinus-KL.Run1Bah_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.MuCap1809keVCalo-KL.Run1Bah_best_v1_4-001.art": 1}
+        ],
+        "fcl_overrides": [
+            {
+              "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+            }
+          ],
+    
+        "inloc": ["tape"],
+      "outloc": [{"*.root": "tape"}],
+      "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_02_00/setup.sh"]
+    },
+    {
+      "dsconf": ["Run1B-007"],
+      "fcl": ["EventNtuple/fcl/from_mcs-Run1B.fcl"],
+        "input_data": [                                              
+          {"mcs.mu2e.NoPrimaryMix1BB-KL.Run1Bah_best_v1_4-002.art": 1}
+        ],
+        "fcl_overrides": [
+            {
+              "physics.EventNtupleEndPath": [ "EventNtuple" ],
+              "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+            }
+          ],
+    
+        "inloc": ["tape"],
+      "outloc": [{"*.root": "tape"}],
+      "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_02_00/setup.sh"]
+    },
+    {
+      "dsconf": ["Run1B-008"],
+      "fcl": ["EventNtuple/fcl/from_mcs-Run1B.fcl"],
+        "input_data": [
+          {"mcs.mu2e.CeEndpointMix1BB-KL.Run1Bai_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.FlatGammaMix1BB-KL.Run1Bai_best_v1_4-001.art": 1},                                               
+          {"mcs.mu2e.FlateMinusMix1BB-KL.Run1Bai_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.NoPrimaryMix1BB-KL.Run1Bai_best_v1_4-001.art": 1},
+          {"mcs.mu2e.MuCap1809keVCaloMix1BB-KL.Run1Bai_best_v1_4-001.art": 1},
+          
+          {"mcs.mu2e.CeEndpoint-KL.Run1Bai_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.FlatGamma-KL.Run1Bai_best_v1_4-001.art": 1},                                               
+          {"mcs.mu2e.FlateMinus-KL.Run1Bai_best_v1_4-001.art": 1},                                              
+          {"mcs.mu2e.MuCap1809keVCalo-KL.Run1Bai_best_v1_4-001.art": 1}
+        ],
+        "fcl_overrides": [
+            {
+              "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+            }
+          ],
+    
+        "inloc": ["tape"],
+      "outloc": [{"*.root": "tape"}],
+      "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_02_00/setup.sh"]
+    },
+    {
+      "dsconf": ["Run1B-009"],
+      "fcl": ["EventNtuple/fcl/from_mcs-Run1B.fcl"],
+        "input_data": [                                             
+          {"mcs.mu2e.NoPrimaryMix1BB-KL.Run1Bai_best_v1_4-001.art": 1}
+        ],
+        "fcl_overrides": [
+            {
+              "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root",
+              "physics.EventNtupleEndPath": [ "EventNtuple" ]
+            }
+          ],
+    
+        "inloc": ["tape"],
+      "outloc": [{"*.root": "tape"}],
+      "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_02_00/setup.sh"]
+    }
+]

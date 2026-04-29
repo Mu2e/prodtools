@@ -8,7 +8,7 @@ Before answering any question about running the prodtools commands
 (`json2jobdef`, `jobfcl`, `fcldump`, `runmu2e`, `jobdef`, `jsonexpander`,
 `jobquery`, `mkidxdef`, `pomsMonitor`, `famtree`, `logparser`,
 `genFilterEff`, `datasetFileList`, `listNewDatasets`, `mkrecovery`,
-`copy_to_stash`, `listRelatedDefs`), read `EXAMPLES.md` at the repo
+`copy_to_stash`), read `EXAMPLES.md` at the repo
 root. It is the authoritative reference for CLI flags, JSON config
 shapes, and canonical invocations. Do not guess flags or copy patterns
 from memory — consult the current doc.

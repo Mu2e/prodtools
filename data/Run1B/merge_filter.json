@@ -1,0 +1,265 @@
+[
+    {
+	"desc": "CosmicCRYSpillSplitter",
+	"dsconf": "MDC2025ac",
+	"fcl": "Production/JobConfig/cosmic/SpillSplitter.fcl",
+	"input_data": {"dts.mu2e.CosmicCRYAll.MDC2025ac.art": 10},
+	"inloc": "tape",
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+    },
+	{
+		"desc": "PiBeamCat",
+		"dsconf": "Run1Bah",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"sim.mu2e.PiBeam.Run1Bah.art": 100},
+		"fcl_overrides": {
+			"outputs.out.fileName": "sim.owner.PiBeamCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bah/setup.sh"
+	},
+	{
+		"desc": "MuonIPAStopSelector",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/pileup/MuonIPAStopSelector.fcl",
+		"input_data": {"sim.mu2e.IPAStopsCat.MDC2025ac.art": 1},
+		"inloc": "tape",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "EleBeamFlashCat",
+		"dsconf": "Run1Baa2",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.EleBeamFlash.Run1Baa.art": 4998},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.EleBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh"
+	},
+	{
+		"desc": "EleBeamFlashCat",
+		"dsconf": "Run1Bag",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.EleBeamFlash.Run1Bag.art": 50},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.EleBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh"
+	},
+	{
+		"desc": "MuBeamFlashCat",
+		"dsconf": "Run1Baa1",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.MuBeamFlash.Run1Baa1.art": 500},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh"
+	},	
+	{
+		"desc": "MuBeamFlashCat",
+		"dsconf": "Run1Bag",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.MuBeamFlash.Run1Bag.art": 500},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuBeamFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh"
+	},
+	{
+		"desc": "NeutralsFlashCat",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": {"dts.mu2e.NeutralsFlash.MDC2025ac.art": 1000},
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsFlashCat.version.sequence.art"
+		},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "MuStopPileupCat",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/common/artcat.fcl",	
+		"input_data": {"dts.mu2e.MuStopPileup.MDC2025ac.art": 100},
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuStopPileupCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": [
+			{"dts.mu2e.EarlyNeutralsFlash.MDC2025ac.art": 10000},
+			{"dts.mu2e.EarlyMuBeamFlash.MDC2025ac.art": 10000},
+			{"dts.mu2e.EarlyEleBeamFlash.MDC2025ac.art": 10000}
+		],
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.{desc}Cat.version.sequence.art"
+		},
+		"outloc": {"*.art": "tape"},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "BeamSplitter",
+		"dsconf": "MDC2025ae",
+		"fcl": "Production/JobConfig/beam/BeamSplitter.fcl",	
+		"input_data": {"sim.mu2e.Beam.MDC2025ae.art": 5000},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ae/setup.sh"
+	},
+	{
+		"desc": "BeamSplitter",
+		"dsconf": "MDC2025ac",
+		"fcl": "Production/JobConfig/beam/BeamSplitter.fcl",	
+		"input_data": {"sim.mu2e.Beam.MDC2025ac.art": 5000},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
+	},
+	{
+		"desc": "BeamSplitter-000",
+		"dsconf": "Run1Bai",
+		"fcl": "Production/JobConfig/beam/BeamSplitter.fcl",
+		"input_data": {"sim.mu2e.Beam.Run1Bai.art": 100},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	},
+	{
+		"desc": "TargetStopsCat",
+		"dsconf": "Run1Baa1",
+		"input_data": {"sim.mu2e.TargetStops.Run1Baa1.art": 2500},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "sim.owner.TargetStopsCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh"
+	},
+	{
+			"desc": "MuonStopSelector",
+			"dsconf": "Run1Bai",
+			"input_data": {"sim.mu2e.TargetStopsCat.Run1Bai-003.art": 1},
+			"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",      
+			"inloc": "tape",
+			"outloc": {
+					"*.art": "tape"
+			},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	},
+	{
+		"desc": "MuStopPileupCat",
+		"dsconf": "Run1Baa",
+		"input_data": {"dts.mu2e.MuStopPileup.Run1Baa.art": 100},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuStopPileupCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh"
+	},
+	{
+		"desc": "MuStopPileupCat",
+		"dsconf": "Run1Bag",
+		"input_data": {"dts.mu2e.MuStopPileup.Run1Bag.art": 1000},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.MuStopPileupCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh"
+	},
+	{
+		"desc": "NeutralsFlashCat",
+		"dsconf": "Run1Baa",
+		"input_data": {"dts.mu2e.NeutralsFlash.Run1Baa.art": 5000},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsFlashCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh"
+	},
+	{
+		"desc": "NeutralsFlashCat",
+		"dsconf": "Run1Bag",
+		"input_data": {"dts.mu2e.NeutralsFlash.Run1Bag.art": 5000},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsFlashCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh"
+	},
+	{
+		"desc": "NeutralsCat",
+		"dsconf": "Run1Baa",
+		"input_data": {"sim.mu2e.Neutrals.MDC2025ae3.art": 500},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh"
+	}
+]

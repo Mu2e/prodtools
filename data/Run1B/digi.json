@@ -1,0 +1,83 @@
+[
+  {
+    "dsconf": "Run1Bab2_best_v1_2",
+    "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+    "input_data": [
+      {"dts.mu2e.CeEndpoint.Run1Bab.art": 100},
+      {"dts.mu2e.DIOtail0_60.Run1Bab.art": 100},
+      {"dts.mu2e.DIOtail60_80.Run1Bab.art": 100},
+      {"dts.mu2e.DIOtail80_90.Run1Bab.art": 100},
+      {"dts.mu2e.DIOtail90_inf.Run1Bab.art": 100},
+      {"dts.mu2e.FlatGamma.Run1Bab.art": 100},
+      {"dts.mu2e.FlateMinus.Run1Bab.art": 100}
+    ],
+    "fcl_overrides": {
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_2",
+      "outputs.TriggeredOutput.fileName": "dig.owner.{desc}OnSpillTriggered.version.sequencer.art",
+      "outputs.TriggerableOutput.fileName": "dig.owner.{desc}OnSpillTriggerable.version.sequencer.art",
+      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt",
+      "outputs.TriggerableOutput.SelectEvents" : []
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh"
+  },
+  {
+    "dsconf": "Run1Bah_best_v1_4-000",
+    "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+    "input_data": [
+      {"dts.mu2e.CeEndpoint.Run1Bag.art": 100},
+      {"dts.mu2e.DIOtail0_60.Run1Bag.art": 100},
+      {"dts.mu2e.DIOtail60_80.Run1Bag.art": 100},
+      {"dts.mu2e.DIOtail80_90.Run1Bag.art": 100},
+      {"dts.mu2e.DIOtail90_inf.Run1Bag.art": 100},
+      {"dts.mu2e.FlatGamma.Run1Bag.art": 100},
+      {"dts.mu2e.FlateMinus.Run1Bag.art": 100},
+      {"dts.mu2e.CosmicCRYAll.Run1Bah.art": 100},
+      {"dts.mu2e.RPCExternal.Run1Bah.art": 100}
+    ],
+    "fcl_overrides": {
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_4",
+      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+      "services.ProditionsService.strawElectronics.digitizationEnd": "1650",
+      "physics.producers.CaloShowerROMaker.digitizationEnd": "1650",
+      "physics.producers.CaloDigiMaker.digitizationEnd": "1650",
+      "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+      "#include": [
+        "Production/JobConfig/digitize/OnSpill_run1b_epilog.fcl"
+      ]    
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bah/setup.sh"
+  },
+  {
+    "dsconf": "Run1Bah_best_v1_4-000",
+    "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+    "input_data": [
+      {"dts.mu2e.MuCap1809keVCalo.Run1Bag.art": 100}
+    ],
+    "fcl_overrides": {
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_4",
+      "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+      "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+      "services.ProditionsService.strawElectronics.digitizationEnd": "1650",
+      "physics.producers.CaloShowerROMaker.digitizationEnd": "1650",
+      "physics.producers.CaloDigiMaker.digitizationEnd": "1650",
+      "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+      "outputs.Output.fastCloning": "false",
+      "#include": [
+        "Production/JobConfig/digitize/OnSpill_run1b_epilog.fcl",
+        "Production/JobConfig/mixing/NoPrimary.fcl"
+      ]    
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bah/setup.sh"
+  }
+]

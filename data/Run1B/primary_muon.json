@@ -1,0 +1,287 @@
+[
+    {
+        "desc": "DIO",
+        "dsconf": "Run1Baa",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
+        "events": 5000,
+        "njobs": 200,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 0,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIO.version.sequencer.art",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 0.01,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 1.0
+        },
+        "run": 1440,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "DIOtail0_60",
+        "dsconf": "Run1Bag",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
+        "events": 1000000,
+        "njobs": 15000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 0,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 60,
+            "physics.producers.generate.decayProducts.czmin": 0.9,
+            "physics.producers.generate.decayProducts.czmax": 1.0,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail0_60.version.sequencer.art",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 20
+        },
+        "run": 1451,
+        "version": 1,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "DIOtail60_80",
+        "dsconf": "Run1Bag",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
+        "events": 200000,
+        "njobs": 10000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 60,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 80,
+            "physics.producers.generate.decayProducts.czmin": 0.9,
+            "physics.producers.generate.decayProducts.czmax": 1.0,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail60_80.version.sequencer.art",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 20
+        },
+        "run": 1451,
+        "version": 1,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "DIOtail80_90",
+        "dsconf": "Run1Bag",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
+        "events": 200000,
+        "njobs": 5000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 80,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 90,
+            "physics.producers.generate.decayProducts.czmin": 0.9,
+            "physics.producers.generate.decayProducts.czmax": 1.0,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail80_90.version.sequencer.art",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 20
+        },
+        "run": 1450,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "DIOtail90_inf",
+        "dsconf": "Run1Bag",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
+        "events": 200000,
+        "njobs": 5000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 90,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "physics.producers.generate.decayProducts.czmin": 0.9,
+            "physics.producers.generate.decayProducts.czmax": 1.0,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail90_inf.version.sequencer.art",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 20
+        },
+        "run": 1450,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "CeEndpoint",
+        "dsconf": "Run1Bai-001",
+        "fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v06.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Bai.art": 1},
+        "events": 1000000,
+        "njobs": 2000,
+        "run": 1460,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "FlateMinus",
+        "dsconf": "Run1Bai-001",
+        "fcl": "Production/JobConfig/primary/FlateMinus.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v06.txt",
+            "physics.producers.generate.startMom": 50,
+            "physics.producers.generate.endMom": 110,
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Bai.art": 1},
+        "njobs": 2000,
+        "events": 1000000,
+        "run": 1460,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "FlatGamma",
+        "dsconf": "Run1Bai-001",
+        "fcl": "Production/JobConfig/primary/FlatGamma.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v06.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.producers.generate.startMom": 50,
+            "physics.producers.generate.endMom": 110,
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Bai.art": 1},
+        "njobs": 2000,
+        "events": 1000000,
+        "run": 1460,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "NoPrimary",
+        "dsconf": "Run1Bai",
+        "fcl": "Production/JobConfig/primary/NoPrimary.fcl",
+        "fcl_overrides": {
+            "physics.producers.compressDetStepMCs.surfaceStepTag" : "FindMCPrimary",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v06.txt"
+        },
+        "events": 5000,
+        "njobs": 20000,
+        "run": 1460,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        }
+    },
+    {
+        "desc": "MuCap1809keV",
+        "dsconf": "Run1Bag",
+        "fcl": "Production/JobConfig/primary/MuCap1809keVCalo.fcl",
+        "fcl_overrides": {
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
+        "events": 10000,
+        "njobs": 1000,
+        "run": 1450,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "CosmicCRYAll",
+        "dsconf": "Run1Bah",
+        "fcl": "Production/JobConfig/cosmic/S2Resampler.fcl",
+        "fcl_overrides": {
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+            "outputs.PrimaryOutput.fileName": "dts.owner.CosmicCRYAll.version.sequencer.art"
+        },
+        "resampler_name": "CosmicResampler",
+        "input_data": {"sim.mu2e.CosmicDSStopsCRYAll.MDC2025ab.art": 1},
+        "events": 500000,
+        "njobs": 10000,
+        "run": 1450,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bah/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    }
+]

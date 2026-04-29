@@ -473,13 +473,16 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         tbs['subrunkey'] = 'source.subRun'
 
     elif source_type == 'PBISequence':
-        # PBISequence: one text-chunk file per job. The module's pset validator
-        # accepts only fileNames + runNumber (plus static config like
-        # reconstitutedModuleLabel, integratedSummary, verbosity). Passing
-        # source.maxEvents / firstSubRunNumber / firstEventNumber is rejected.
-        # Sequencer uniqueness comes from the input chunk basename (e.g. the
-        # ".00" slot in dts.mu2e.PBINormal_33344.MDC2025ac.00.txt) — no
-        # subrunkey needed.
+        # PBISequence: one text-chunk file per job. Up to MDC2025ai the module's
+        # pset validator accepted only fileNames + runNumber (plus static config
+        # like reconstitutedModuleLabel, integratedSummary, verbosity) and
+        # rejected source.maxEvents / firstSubRunNumber / firstEventNumber.
+        # MDC2025aj (Offline PR #1799 + Production #533, merged 2026-04-15) adds
+        # firstSubRunNumber and firstEventNumber as optional atoms (default 0),
+        # so per-index offsets via `event_id_per_index` are now accepted there.
+        # source.maxEvents is still rejected. Sequencer uniqueness otherwise
+        # comes from the input chunk basename (e.g. the ".00" slot in
+        # dts.mu2e.PBINormal_33344.MDC2025ac.00.txt) — no subrunkey needed.
         has_inputs = bool(args_state.get('inputs_list'))
         has_chunk_mode = bool(config and config.get('chunk_mode'))
         if not (has_inputs or has_chunk_mode):
