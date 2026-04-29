@@ -1,0 +1,11 @@
+[
+    {
+        "tarball": "/tmp/cnf.mu2e.G4blPOT.TESTaa.0.tar",
+        "njobs": 1,
+        "runner": "g4bl",
+        "inloc": "none",
+        "outputs": [
+            {"dataset": "nts.mu2e.G4blPOT.TESTaa.*.root", "location": "disk"}
+        ]
+    }
+]

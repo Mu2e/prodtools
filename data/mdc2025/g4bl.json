@@ -1,14 +1,14 @@
 [
     {
         "runner": "g4bl",
-        "desc": "Mu2EBeamline",
-        "dsconf": "MDC2025ai_g4bl_v1_0",
+        "desc": "G4blPOT",
+        "dsconf": "TESTaa",
         "embed_dir": "/exp/mu2e/app/users/oksuzian/G4BeamlineScripts",
         "main_input": "Mu2E.in",
         "events_per_job": 10000,
         "njobs": 100,
         "outputs": [
-            {"dataset": "g4bl.mu2e.Mu2EBeamline.MDC2025ai_g4bl_v1_0.root", "location": "disk"}
+            {"dataset": "nts.mu2e.G4blPOT.TESTaa.root", "location": "disk"}
         ]
     }
 ]

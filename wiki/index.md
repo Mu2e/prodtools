@@ -18,6 +18,7 @@
 - [[input-data-dir-shape]] — use `inloc: "dir:<path>"` for cvmfs-resident inputs; basenames in input_data, runtime resolves via existing `dir:` prefix _(2026-04-21)_
 - [[input-data-chunk-mode]] — `chunk_lines` input_data shape; on-the-fly chunking at grid time via `tbs.chunk_mode` + runmu2e sed slice. Best of split_lines and dir: without the trade-offs _(2026-04-22)_
 - [[metacat-reference]] — samweb→metacat CLI bridge, MQL patterns, Python API snippets, read-only MCP install (from `Mu2e/aitools`) _(2026-04-24)_
+- [[poms-reference]] — POMS data model (Campaign/Stage/Submission), dispatch lifecycle, Mu2e conventions (`i<stem>` naming via mkidxdef, dropbox path, decoupling possibility), `poms_client` library, common pitfalls _(2026-04-28)_
 
 ### Analyses
 <!-- entries added by wiki-query when answers are filed -->

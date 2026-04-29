@@ -17,42 +17,49 @@ from utils.prod_utils import (
     process_direct_input,
     process_jobdef,
     process_g4bl_jobdef,
+    build_mu2e_cmd,
     push_data,
-    push_logs
+    push_logs,
 )
 
-def main():
-    parser = argparse.ArgumentParser(description="Execute production jobs from job definitions.")
-    parser.add_argument("--copy-input", action="store_true", help="Copy input files using mdh")
-    parser.add_argument('--dry-run', action='store_true', help='Print commands without actually running pushOutput')
-    parser.add_argument('--nevts', type=int, default=-1, help='Number of events to process (-1 for all events, default: -1)')
-    parser.add_argument('--mu2e-options', type=str, default='', help='Extra options to pass to mu2e command (e.g., "--no-timing --debug")')
-    parser.add_argument('--jobdesc', required=True, help='Path to the job descriptions JSON file (e.g., jobdefs_list.json)')
-    
-    args = parser.parse_args()
 
-    # Load and validate job descriptions from JSON file
-    with open(args.jobdesc, 'r') as f:
-        jobdesc = json.load(f)
-    
-    mode = validate_jobdesc(jobdesc)
+def _dispatch_and_execute(mode, jobdesc, fname, args):
+    """Dispatch on runner mode, prep, execute, push. Returns True iff the
+    execute step failed (so main can exit nonzero).
 
-    # Get job definition by index from fname environment variable
-    fname = os.getenv("fname")
-    if not fname:
-        print("Error: fname environment variable is not set.")
-        sys.exit(1)
-
-    # G4Beamline runner: executes g4bl directly, no FCL/mu2e step.
+    Encapsulates the per-runner asymmetry in one place:
+    - art runners (template / direct_input / normal) return an FCL which
+      this function then executes via `mu2e -c`.
+    - g4bl runner executes inside `process_g4bl_jobdef`; this function
+      only pushes its outputs.
+    """
+    # G4Beamline: process_g4bl_jobdef both prepares and executes; it
+    # streams stdout to a SAM-named .log file. Push data only on success
+    # but always push the log if it exists, so failed grid jobs are
+    # debuggable in SAM.
     if mode == 'g4bl':
-        outputs, histo_file = process_g4bl_jobdef(jobdesc[0], fname, args)
-        if not args.dry_run:
-            push_data(outputs, infiles="", simjob_setup=None, track_parents=False)
-        else:
-            print("[DRY RUN] Would run: pushOutput output.txt")
-        sys.exit(0)
+        try:
+            outputs, _histo_file, log_file, succeeded = process_g4bl_jobdef(jobdesc[0], fname, args)
+        except RuntimeError as e:
+            print(f"=== g4bl prep failed: {e} ===")
+            return True
 
-    # Process job based on mode
+        if not succeeded:
+            print("=== g4bl execution failed ===")
+
+        if args.dry_run:
+            print("[DRY RUN] Would run: pushOutput output.txt")
+        else:
+            if succeeded:
+                push_data(outputs, infiles="", simjob_setup=None, track_parents=False)
+            else:
+                print("g4bl failed - skipping data push, attempting log push")
+            if log_file and Path(log_file).is_file():
+                push_logs(log_file=log_file, simjob_setup=None)
+
+        return not succeeded
+
+    # Art runners: prep returns FCL; execute `mu2e -c` here.
     inloc = None  # populated by process_jobdef; None for template/direct_input
     if mode == 'template':
         fcl, simjob_setup = process_template(jobdesc[0], fname)
@@ -68,29 +75,21 @@ def main():
     # on the push. All other cases (including None for template / direct
     # input) default to tracking parents.
     track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
-    
-    setup_cmd = f"source {simjob_setup}"
-    mu2e_cmd = f"mu2e -c {fcl}"
-    if args.nevts > 0:
-        mu2e_cmd += f" -n {args.nevts}"
-    if args.mu2e_options.strip():
-        mu2e_cmd += f" {args.mu2e_options.strip()}"
 
-    combined_cmd = f"{setup_cmd} && {mu2e_cmd}"
-    print(f"Executing: {combined_cmd}")
+    cmd = build_mu2e_cmd(fcl, simjob_setup, args)
+    print(f"Executing: {cmd}")
     print(f"Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
-    
     print("=== Starting Mu2e execution ===")
+
     job_failed = False
     try:
-        run(combined_cmd, shell=True)
+        run(cmd, shell=False)
         print("=== Mu2e execution completed successfully ===")
     except subprocess.CalledProcessError as e:
         job_failed = True
         print(f"=== Mu2e execution failed with exit code {e.returncode} ===")
-        # Don't re-raise - we still want to upload logs and outputs
-    
-    # Handle output files and submission (even if job failed)
+        # Don't re-raise — we still want to upload logs and outputs
+
     if not args.dry_run:
         if not job_failed:
             push_data(outputs, infiles, simjob_setup=simjob_setup, track_parents=track_parents)
@@ -100,10 +99,32 @@ def main():
         push_logs(fcl, simjob_setup=simjob_setup)
     else:
         print("[DRY RUN] Would run: pushOutput output.txt")
-    
-    # Exit with error code if job failed
-    if job_failed:
+
+    return job_failed
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Execute production jobs from job definitions.")
+    parser.add_argument("--copy-input", action="store_true", help="Copy input files using mdh")
+    parser.add_argument('--dry-run', action='store_true', help='Print commands without actually running pushOutput')
+    parser.add_argument('--nevts', type=int, default=-1, help='Number of events to process (-1 for all events, default: -1)')
+    parser.add_argument('--mu2e-options', type=str, default='', help='Extra options to pass to mu2e command (e.g., "--no-timing --debug")')
+    parser.add_argument('--jobdesc', required=True, help='Path to the job descriptions JSON file (e.g., jobdefs_list.json)')
+
+    args = parser.parse_args()
+
+    with open(args.jobdesc, 'r') as f:
+        jobdesc = json.load(f)
+    mode = validate_jobdesc(jobdesc)
+
+    fname = os.getenv("fname")
+    if not fname:
+        print("Error: fname environment variable is not set.")
         sys.exit(1)
+
+    if _dispatch_and_execute(mode, jobdesc, fname, args):
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

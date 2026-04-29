@@ -5,16 +5,12 @@ import json
 import os
 import re
 import shlex
+import tarfile
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from .jobfcl import Mu2eJobFCL
 from .jobdef import create_jobdef
-
-# Default SL7 container for G4Beamline runs (overridable via JSON `container` field).
-# G4Beamline binaries on cvmfs are linked against SL7 libs; running on AL9 hosts
-# requires apptainer-wrapping. On grid, set the same image as the outer container
-# in poms/g4bl.cfg's +SingularityImage so no wrapping is needed at runtime.
-DEFAULT_G4BL_CONTAINER = "/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-dev-sl7:latest"
 
 def setup_logging(verbose: bool) -> None:
     logging.basicConfig(
@@ -243,7 +239,18 @@ def validate_jobdesc(jobdesc):
             print("Error: g4bl runner requires exactly one entry in jobdesc list")
             sys.exit(1)
         entry = jobdesc[0]
-        required_fields = ['embed_dir', 'main_input', 'events_per_job', 'outputs']
+        # The map (jobdesc) only carries dispatch fields. The runtime config
+        # (desc/dsconf/main_input/events_per_job) lives inside the tarball's
+        # `jobpars.json` for grid mode — the tarball is self-describing.
+        # Embed_dir mode (local smoke) has no tarball, so the entry must
+        # carry the runtime config directly.
+        if entry.get('tarball'):
+            required_fields = ['outputs']  # runtime config in tarball/jobpars.json
+        elif entry.get('embed_dir'):
+            required_fields = ['desc', 'dsconf', 'main_input', 'events_per_job', 'outputs']
+        else:
+            print("Error: g4bl runner requires either 'tarball' or 'embed_dir'")
+            sys.exit(1)
         for field in required_fields:
             if field not in entry:
                 print(f"Error: g4bl runner requires '{field}' field")
@@ -569,90 +576,145 @@ def process_jobdef(jobdesc, fname, args):
     return fcl, simjob_setup, infiles, outputs, inloc
 
 
-def _is_inside_sl7():
-    """True if running inside an SL7 (Scientific Linux 7) container/host."""
-    try:
-        with open('/etc/redhat-release') as f:
-            return 'release 7' in f.read()
-    except OSError:
-        return False
+def build_mu2e_cmd(fcl, simjob_setup, args):
+    """Build the `subprocess.run(..., shell=False)`-ready arg list for running
+    mu2e against an FCL.
+
+    The inner bash script joins setup-source and mu2e with `&&` so mu2e is
+    skipped if the source fails — matches the prior shell=True
+    `f"source X && mu2e -c Y"` semantics. shell=False here closes the
+    quoting hazard around `fcl` / `simjob_setup` paths without changing
+    bash's parsing of the inner script.
+    """
+    inner = f"source {simjob_setup} && mu2e -c {fcl}"
+    if args.nevts > 0:
+        inner += f" -n {int(args.nevts)}"
+    if args.mu2e_options.strip():
+        inner += f" {args.mu2e_options.strip()}"
+    return ['bash', '-c', inner]
 
 
 def process_g4bl_jobdef(jobdesc_entry, fname, args):
-    """Run a G4Beamline simulation job.
+    """Run a G4Beamline simulation job. Returns
+    (outputs, histo_file, log_file, succeeded).
 
-    Unlike art-side process_jobdef which prepares an FCL for runmu2e to execute,
-    this function executes g4bl in-place (no separate `mu2e -c` step). The
-    runmu2e.py 'g4bl' branch skips its FCL/mu2e dispatch when this returns.
+    Two source modes:
+    - `tarball`: extract the cnf.*.tar (built by g4bl_jobdef build tool) to a
+      scratch dir; treat extracted `work/` as embed_dir. This is the grid path
+      since /exp/mu2e/app is not mounted on workers.
+    - `embed_dir`: read the lattice files directly from local fs. Local-only
+      smoke path; prefer tarball mode for any real run.
 
-    Linear sequencer: First_Event = (job_index - 1) * events_per_job + 1.
+    Streams g4bl stdout/stderr to a SAM-named log file
+    (`log.mu2e.<desc>.<dsconf>.<sequencer>.log`) in addition to the runner's
+    stdout. The log file is always returned (and exists) if exec started, even
+    on g4bl failure — push it via push_logs(log_file=...) so failed jobs are
+    debuggable in SAM. Raises RuntimeError on prep failures (missing tarball,
+    missing embed_dir, missing main_input) — no log produced in those cases.
+
+    Sequencer: First_Event = job_index * events_per_job + 1 (0-based).
     """
     parts = Path(fname).name.split('.')
     if len(parts) < 5:
-        raise RuntimeError(f"Invalid g4bl fname: {fname}; expected dot-separated index in field 5")
-    try:
-        job_index = int(parts[4].lstrip('0') or '0')
-    except ValueError as e:
-        raise RuntimeError(f"Could not parse job index from {fname}: {e}")
+        raise RuntimeError(f"Invalid g4bl fname: {fname}; expected 6-field Mu2e name")
+    sequencer = parts[4]
+    stripped = sequencer.lstrip('0')
+    job_index = int(stripped) if stripped else 0
 
-    embed_dir = jobdesc_entry['embed_dir']
-    main_input = jobdesc_entry['main_input']
-    events_per_job = int(jobdesc_entry['events_per_job'])
-    container = jobdesc_entry.get('container', DEFAULT_G4BL_CONTAINER)
+    # Tarball mode (grid path): runtime config lives in jobpars.json INSIDE
+    # the tarball — the tarball is self-describing. Embed_dir mode (local
+    # smoke) has no tarball, so config is on the jobdesc entry.
+    tarball = jobdesc_entry.get('tarball')
+    if tarball:
+        if not Path(tarball).is_file():
+            raise RuntimeError(f"tarball not found: {tarball}")
+        extract_dir = tempfile.mkdtemp(prefix='g4bl_extract_')
+        with tarfile.open(tarball) as t:
+            t.extractall(extract_dir)
+        embed_dir = os.path.join(extract_dir, 'work')
+        if not Path(embed_dir).is_dir():
+            raise RuntimeError(f"tarball missing 'work/' subdir: {tarball}")
+        jobpars_path = os.path.join(extract_dir, 'jobpars.json')
+        if not Path(jobpars_path).is_file():
+            raise RuntimeError(f"tarball missing jobpars.json: {tarball}")
+        with open(jobpars_path) as f:
+            jobpars = json.load(f)
+        # Required keys in jobpars.json — fail loudly if any is missing.
+        desc = jobpars['desc']
+        dsconf = jobpars['dsconf']
+        main_input = jobpars['main_input']
+        events_per_job = int(jobpars['events_per_job'])
+    else:
+        embed_dir = jobdesc_entry['embed_dir']
+        desc = jobdesc_entry['desc']
+        dsconf = jobdesc_entry['dsconf']
+        main_input = jobdesc_entry['main_input']
+        events_per_job = int(jobdesc_entry['events_per_job'])
+        if not Path(embed_dir).is_dir():
+            raise RuntimeError(f"embed_dir not found: {embed_dir}")
 
-    if not Path(embed_dir).is_dir():
-        raise RuntimeError(f"embed_dir not found: {embed_dir}")
     if not (Path(embed_dir) / main_input).is_file():
         raise RuntimeError(f"main_input not found: {embed_dir}/{main_input}")
 
-    # 0-based job index → events [job_index*N + 1, (job_index+1)*N]
     first_event = job_index * events_per_job + 1
 
-    # Output histogram file: g4bl.<owner>.<desc>.<dsconf>.<sequencer>.root
-    desc = jobdesc_entry.get('desc', parts[2] if len(parts) >= 3 else 'g4bl')
-    dsconf = jobdesc_entry.get('dsconf', parts[3] if len(parts) >= 4 else 'unknown')
-    sequencer = parts[4] if len(parts) >= 5 else f"{job_index:06d}_00000000"
-    histo_file = f"g4bl.mu2e.{desc}.{dsconf}.{sequencer}.root"
+    # SAM-named histogram + log files. `nts.` (simulation ntuple) is the
+    # canonical Mu2e tier for ROOT TTrees from a sim job; matches the
+    # metacat naming convention used everywhere else.
+    histo_file = f"nts.mu2e.{desc}.{dsconf}.{sequencer}.root"
     histo_path = os.path.abspath(histo_file)
+    log_file = f"log.mu2e.{desc}.{dsconf}.{sequencer}.log"
+    log_path = os.path.abspath(log_file)
 
-    # Inline bash script passed via `bash -c <multi-line>`. shell=False on the
-    # subprocess.run side avoids host /bin/sh quote-mangling. `--cleanenv` on
-    # apptainer prevents AL9 env vars (PYTHONHOME, UPS_DIR, PRODUCTS, etc.)
-    # from leaking into the SL7 container and breaking setupmu2e-art.sh's UPS
-    # init — without it, `setup` ends up undefined despite source returning 0.
-    # (Discovered 2026-04-27.)
+    # Native AL9 g4bl via spack. spack is a shell function defined by
+    # setupmu2e-art.sh; `spack load g4beamline` directly fails to propagate
+    # PATH in non-interactive shells, so use `eval $(spack load --sh ...)`.
+    # No apptainer wrap, no SL7 container — workers already run on AL9
+    # (fnal-wn-el9) per the standard fermigrid.cfg outer container.
+    # `unset PYTHON*` avoids subprocess-leaked vars (PYTHONHOME/PATH from
+    # the runmu2e Python) confusing spack (which is itself Python and looks
+    # up packages via its own site-packages). Same class of leak we hit
+    # with apptainer; fixed there with --cleanenv, here by selective unset.
+    # CLI keyword syntax: plain `key=value`, NOT `param key=value` (the
+    # `param` form is input-file syntax; g4bl 3.08b rejects it on the
+    # command line, unlike the older 3.08 SL7 build that was lenient).
     inner_script = (
-        "source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh\n"
-        "setup G4beamline\n"
+        # Unset SPACK_ENV first: if the parent shell did `muse setup ops`
+        # (the typical art-runner setup), SPACK_ENV=...ops-019... is
+        # inherited via subprocess. `spack load g4beamline` then searches
+        # only the ops-019 environment — which doesn't contain g4beamline —
+        # and fails with "Spec 'g4beamline' matches no installed packages".
+        # The Mu2e wiki notes this as a known limitation ("after muse setup
+        # it is no longer possible to spack load a package"). Discovered
+        # 2026-04-28 after env-leak debugging.
+        "unset SPACK_ENV PYTHONHOME PYTHONPATH PYTHONNOUSERSITE\n"
+        "source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1\n"
+        'eval "$(spack load --sh g4beamline)"\n'
         f"cd {shlex.quote(embed_dir)}\n"
-        f"g4bl {shlex.quote(main_input)} "
-        f"Num_Events={events_per_job} First_Event={first_event} "
-        f"param histoFile={shlex.quote(histo_path)}"
+        f"g4bl {shlex.quote(main_input)} viewer=none "
+        f"First_Event={first_event} Num_Events={events_per_job} "
+        f"histoFile={shlex.quote(histo_path)}"
     )
+    cmd_list = ['bash', '-c', inner_script]
 
-    if _is_inside_sl7():
-        cmd_list = ['bash', '-c', inner_script]
-        print(f"g4bl: running natively (already inside SL7)")
-    else:
-        cmd_list = [
-            'apptainer', 'exec', '--cleanenv',
-            '-B', '/cvmfs',
-            '-B', '/tmp',
-            '-B', embed_dir,
-        ]
-        home = os.environ.get('HOME', '')
-        if home and Path(home).is_dir():
-            cmd_list += ['-B', home]
-        cmd_list += [container, 'bash', '-c', inner_script]
-        print(f"g4bl: wrapping in apptainer ({container})")
-
+    print(f"g4bl: running natively (spack-loaded g4beamline on AL9)")
     print(f"  events_per_job={events_per_job}, first_event={first_event}")
     print(f"  histo_file={histo_path}")
-    result = subprocess.run(cmd_list, check=False)
-    if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd_list)
+    print(f"  log_file={log_path}")
 
-    return jobdesc_entry['outputs'], histo_file
+    # Stream g4bl stdout/stderr to BOTH the runner's stdout AND the SAM log
+    # file. Real-time visibility for the operator + persisted log for SAM push.
+    proc = subprocess.Popen(cmd_list, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    with open(log_path, 'w') as log_f:
+        for line in proc.stdout:
+            log_f.write(line)
+            sys.stdout.write(line)
+            sys.stdout.flush()
+    proc.stdout.close()
+    rc = proc.wait()
+
+    return jobdesc_entry['outputs'], histo_file, log_file, (rc == 0)
 
 
 def push_output(output_specs, output_file="output.txt", parents_file="parents_list.txt", simjob_setup=None):
@@ -730,31 +792,48 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     # Use generic push function
     return push_output(output_specs, "output.txt", parents_field, simjob_setup=simjob_setup)
 
-def push_logs(fcl, simjob_setup=None):
+def push_logs(fcl=None, simjob_setup=None, log_file=None):
     """Handle log file management and submission.
-    
+
+    Either pass `fcl` (log filename derived via replace_file_extensions, the
+    art-side convention) or `log_file` directly (g4bl runner provides the SAM
+    name explicitly). At least one must be set.
+
     Args:
-        fcl: FCL filename to derive log filename from
-        simjob_setup: Path to SimJob setup script for art environment
+        fcl: FCL filename to derive log filename from (art convention).
+        simjob_setup: Path to SimJob setup script for art environment.
+        log_file: Explicit log filename. Wins over `fcl` if both given. The
+            g4bl path uses this since there's no FCL.
     """
     import shutil
-    
-    logfile = replace_file_extensions(fcl, "log", "log")
-    
-    # Copy jobsub log if available
+
+    if log_file is not None:
+        logfile = log_file
+    elif fcl is not None:
+        logfile = replace_file_extensions(fcl, "log", "log")
+    else:
+        print("Warning: push_logs called with neither fcl nor log_file; nothing to push")
+        return 0
+
+    # Copy jobsub log if available (only meaningful when we derived from fcl
+    # and JOBSUB_LOG_FILE is the canonical source; for explicit log_file the
+    # runner has already streamed to it).
     jsb_tmp = os.getenv("JSB_TMP")
-    if jsb_tmp:
+    if jsb_tmp and log_file is None:
         src = os.path.join(jsb_tmp, "JOBSUB_LOG_FILE")
         print(f"Copying jobsub log from {src} to {logfile}")
         try:
             shutil.copy(src, logfile)
         except FileNotFoundError:
             print(f"Warning: Jobsub log not found at {src}")
-    
+
     # Push log if it exists
     if Path(logfile).exists():
-        output_specs = [("disk", logfile, "parents_list.txt")]
-        return push_output(output_specs, "log_output.txt", "parents_list.txt", simjob_setup=simjob_setup)
+        # G4bl jobs have no SAM-registered parents → parents_file="none".
+        # Art jobs use parents_list.txt (written by push_data earlier).
+        parents = "none" if log_file is not None else "parents_list.txt"
+        output_specs = [("disk", logfile, parents)]
+        return push_output(output_specs, "log_output.txt", parents, simjob_setup=simjob_setup)
     else:
         print(f"Warning: Log file {logfile} not found, skipping log push")
         return 0
