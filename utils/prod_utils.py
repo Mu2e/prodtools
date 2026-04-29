@@ -627,7 +627,15 @@ def process_g4bl_jobdef(jobdesc_entry, fname, args):
     tarball = jobdesc_entry.get('tarball')
     if tarball:
         if not Path(tarball).is_file():
-            raise RuntimeError(f"tarball not found: {tarball}")
+            # On grid workers the tarball arrives only as a basename in the
+            # POMS map. Use `mdh copy-file` to fetch from dCache to cwd —
+            # same pattern as art-side process_direct_input. cnf tarballs
+            # live on `disk` location (active workflow access) by Mu2e
+            # convention; matches art-side `-s disk` for cnf.*.tar.
+            run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}",
+                shell=True, retries=3, retry_delay=60)
+            if not Path(tarball).is_file():
+                raise RuntimeError(f"mdh copy-file did not produce {tarball} in cwd")
         extract_dir = tempfile.mkdtemp(prefix='g4bl_extract_')
         with tarfile.open(tarball) as t:
             t.extractall(extract_dir)
