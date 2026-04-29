@@ -8,11 +8,8 @@ import sys
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
-try:
-    import sqlalchemy  # noqa: F401
-except ImportError:
-    sys.stderr.write("error: SQLAlchemy not found. Run 'pyenv ana' after 'muse setup ops'.\n")
-    sys.exit(2)
+from utils._guards import require_packages
+require_packages('sqlalchemy')
 
 from utils.poms_db import get_db_session, DatasetInfo, JobOutput, Job
 from utils.db_analyzer import get_default_db_path

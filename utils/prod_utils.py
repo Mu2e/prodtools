@@ -1,16 +1,29 @@
-import subprocess
-import sys
-import logging
+import glob
 import json
+import logging
 import os
 import re
 import shlex
+import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
-from pathlib import Path
+import time
 from datetime import datetime
-from .jobfcl import Mu2eJobFCL
+from pathlib import Path
 from .jobdef import create_jobdef
+from .jobfcl import Mu2eJobFCL
+from .jobiodetail import Mu2eJobIO
+from .jobquery import Mu2eJobPars
+from .samweb_wrapper import (
+    count_files,
+    create_definition,
+    delete_definition,
+    describe_definition,
+    list_files,
+    locate_file_full,
+)
 
 def setup_logging(verbose: bool) -> None:
     logging.basicConfig(
@@ -34,7 +47,6 @@ def run(cmd, shell=False, retries=0, retry_delay=60):
     retry_delay: seconds to wait between retries
     Returns the exit code (0 for success) or raises CalledProcessError for failure.
     """
-    import time
     attempts = retries + 1
     for attempt in range(1, attempts + 1):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -63,6 +75,55 @@ def run(cmd, shell=False, retries=0, retry_delay=60):
 
 
 
+def _job_index_from_fname(fname):
+    """Parse (job_index, sequencer) from a Mu2e fname's field 4 (0-indexed).
+    Returns (0, parts[4]) for all-zero sequencers (parent-tarball convention).
+    Raises RuntimeError on a fname with <5 dot-separated fields."""
+    parts = Path(fname).name.split('.')
+    if len(parts) < 5:
+        raise RuntimeError(f"Invalid Mu2e fname: {fname}; expected >=5 dot-separated fields")
+    sequencer = parts[4]
+    stripped = sequencer.lstrip('0')
+    return (int(stripped) if stripped else 0), sequencer
+
+
+def _fetch_file_local(filename, src_location='disk'):
+    """Fetch a SAM-registered file from dCache to cwd via `mdh copy-file`.
+    No-op if `filename` is already locally present (basename-relative).
+    `src_location` defaults to 'disk' (the cnf-tarball convention, matching
+    pushOutput's `disk` destination); pass the actual location for input
+    data files."""
+    if Path(filename).is_file():
+        return
+    run(f"mdh copy-file -e 3 -o -v -s {src_location} -l local {filename}",
+        shell=True, retries=3, retry_delay=60)
+    if not Path(filename).is_file():
+        raise RuntimeError(f"mdh copy-file did not produce {filename} in cwd")
+
+
+def _require_fields(entry, required_fields, mode_name):
+    """Fail loudly (sys.exit 1) if any required field is missing from entry.
+    Used by validate_jobdesc per-mode validation."""
+    for field in required_fields:
+        if field not in entry:
+            print(f"Error: {mode_name} requires '{field}' field")
+            sys.exit(1)
+
+
+def _extract_simjob_setup(tarball):
+    """Read the SimJob setup-script path from a cnf.*.tar's jobpars.json
+    via Mu2eJobPars. Re-raises with a clear context line on the realistic
+    failure modes (bad tarball, missing key, missing file)."""
+    try:
+        jp = Mu2eJobPars(tarball)
+        setup = jp.setup()
+        print(f"Job setup script: {setup}")
+        return setup
+    except (tarfile.TarError, KeyError, FileNotFoundError, OSError) as e:
+        print(f"ERROR: Failed to get job setup information from {tarball}: {e}")
+        raise
+
+
 def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
     """
     Generate and write an FCL file using mu2ejobfcl.
@@ -82,36 +143,27 @@ def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
     print(f"{perl_cmd}")
     
     # Use Python mu2ejobfcl implementation
-    try:
-        job_fcl = Mu2eJobFCL(jobdef, inloc=inloc, proto=proto)
-        
-        # Find job index
-        if target:
-            job_index = job_fcl.find_index(target=target)
-        else:
-            job_index = job_fcl.find_index(index=index)
-        
-        # Generate FCL content
-        result = job_fcl.generate_fcl(job_index)
-        
-        print(f"Wrote {fcl}")
-        with open(fcl, 'w') as f:
-            f.write(result + '\n')
-        
-        # Print the FCL content
-        print(f"\n--- {fcl} content ---")
-        print(result + '\n')
+    job_fcl = Mu2eJobFCL(jobdef, inloc=inloc, proto=proto)
 
-        return fcl
-    
-    except Exception as e:
-        print(f"Error generating FCL: {e}")
-        raise
+    if target:
+        job_index = job_fcl.find_index(target=target)
+    else:
+        job_index = job_fcl.find_index(index=index)
+
+    result = job_fcl.generate_fcl(job_index)
+
+    print(f"Wrote {fcl}")
+    with open(fcl, 'w') as f:
+        f.write(result + '\n')
+
+    print(f"\n--- {fcl} content ---")
+    print(result + '\n')
+
+    return fcl
 
 def get_def_counts(dataset, include_empty=False):
     """Get file count and event count for a dataset."""
-    from .samweb_wrapper import count_files, list_files
-    
+
     # Count files
     query = f"defname: {dataset}" if include_empty else f"defname: {dataset} and event_count>0"
     nfiles = count_files(query)
@@ -195,19 +247,17 @@ def replace_file_extensions(input_str, first_field, last_field):
     return '.'.join(fields)
 
 def create_index_definition(output_index_dataset, job_count, input_index_dataset):
-        
-    from .samweb_wrapper import delete_definition, create_definition, describe_definition
-    
     idx_name = f"i{output_index_dataset}"
     idx_format = f"{job_count:07d}"
     
-    # Check if definition exists before trying to delete it
-    try:
-        describe_definition(idx_name)
-        print(f"Definition {idx_name} exists, attempting to delete...")
+    # Check if definition exists before trying to delete it.
+    # samweb_wrapper.describe_definition catches errors internally and
+    # returns "" for a missing definition — check truthiness, don't
+    # try/except (the wrapper never raises).
+    if describe_definition(idx_name):
+        print(f"Definition {idx_name} exists, deleting...")
         delete_definition(idx_name)
-        print(f"Successfully deleted {idx_name}")
-    except Exception as e:
+    else:
         print(f"Definition {idx_name} does not exist, skipping deletion")
 
     # Create the new definition
@@ -251,10 +301,7 @@ def validate_jobdesc(jobdesc):
         else:
             print("Error: g4bl runner requires either 'tarball' or 'embed_dir'")
             sys.exit(1)
-        for field in required_fields:
-            if field not in entry:
-                print(f"Error: g4bl runner requires '{field}' field")
-                sys.exit(1)
+        _require_fields(entry, required_fields, 'g4bl runner')
         return 'g4bl'
 
     # Check if template mode (has fcl_template field)
@@ -264,11 +311,9 @@ def validate_jobdesc(jobdesc):
             print(f"Found {len(jobdesc)} entries. Template mode processes one file at a time.")
             sys.exit(1)
         entry = jobdesc[0]
-        required_fields = ['fcl_template', 'setup_script', 'inloc', 'outputs']
-        for field in required_fields:
-            if field not in entry:
-                print(f"Error: Template mode requires '{field}' field")
-                sys.exit(1)
+        _require_fields(jobdesc[0],
+                        ['fcl_template', 'setup_script', 'inloc', 'outputs'],
+                        'Template mode')
         return 'template'
 
     # Check if direct-input mode: tarball present but no njobs
@@ -277,12 +322,9 @@ def validate_jobdesc(jobdesc):
             print("Error: Direct-input mode requires exactly one entry in jobdesc list")
             print(f"Found {len(jobdesc)} entries.")
             sys.exit(1)
-        entry = jobdesc[0]
-        required_fields = ['tarball', 'inloc', 'outputs']
-        for field in required_fields:
-            if field not in entry:
-                print(f"Error: Direct-input mode requires '{field}' field")
-                sys.exit(1)
+        _require_fields(jobdesc[0],
+                        ['tarball', 'inloc', 'outputs'],
+                        'Direct-input mode')
         return 'direct_input'
 
     # Normal mode validation
@@ -295,11 +337,7 @@ def validate_jobdesc(jobdesc):
                 continue
             print(f"Error: Normal mode requires 'njobs' field in jobdesc entry {i}")
             sys.exit(1)
-        required_fields = ['tarball', 'inloc', 'outputs']
-        for field in required_fields:
-            if field not in entry:
-                print(f"Error: Normal mode requires '{field}' field in jobdesc entry {i}")
-                sys.exit(1)
+        _require_fields(entry, ['tarball', 'inloc', 'outputs'], f'Normal mode (jobdesc entry {i})')
 
     return False
 
@@ -313,8 +351,7 @@ def process_template(jobdesc_entry, fname):
     Returns:
         tuple: (fcl, simjob_setup)
     """
-    import re
-    
+
     print(f"Template mode: using fcl_template job definition")
     
     # Get FCL template path and validate
@@ -390,7 +427,6 @@ def process_direct_input(jobdesc, fname, args):
     Returns:
         tuple: (fcl, simjob_setup, fname, outputs)
     """
-    from .jobquery import Mu2eJobPars
 
     jobdesc_entry = jobdesc[0]
     tarball = jobdesc_entry['tarball']
@@ -407,10 +443,7 @@ def process_direct_input(jobdesc, fname, args):
 
     print(f"Direct-input mode: fname={fname}, desc={desc}, seq={seq}")
 
-    # Download tarball if not already local
-    if not Path(tarball).is_file():
-        run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True,
-            retries=3, retry_delay=60)
+    _fetch_file_local(tarball)
 
     # Extract base FCL from tarball and resolve output filenames
     job_fcl = Mu2eJobFCL(tarball)
@@ -434,14 +467,7 @@ def process_direct_input(jobdesc, fname, args):
         print(f.read())
 
     # Extract setup script from tarball
-    try:
-        jp = Mu2eJobPars(tarball)
-        simjob_setup = jp.setup()
-        print(f"Job setup script: {simjob_setup}")
-    except Exception as e:
-        print(f"ERROR: Failed to get job setup information from {tarball}")
-        print(f"Exception: {e}")
-        raise
+    simjob_setup = _extract_simjob_setup(tarball)
 
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, fname, outputs
@@ -458,15 +484,12 @@ def process_jobdef(jobdesc, fname, args):
     Returns:
         tuple: (fcl, simjob_setup, infiles, outputs)
     """
-    from .jobiodetail import Mu2eJobIO
-    from .jobquery import Mu2eJobPars
-    from .samweb_wrapper import locate_file_full
-    
+
     # Extract job index from filename
     try:
-        job_index = int(fname.split('.')[4].lstrip('0') or '0')
-    except (IndexError, ValueError) as e:
-        print(f"Error: Unable to extract job index from filename: {e}")
+        job_index, _ = _job_index_from_fname(fname)
+    except RuntimeError as e:
+        print(f"Error: {e}")
         sys.exit(1)
     
     # Find which job description this job index belongs to
@@ -499,8 +522,7 @@ def process_jobdef(jobdesc, fname, args):
     tarball = jobdesc_entry['tarball']
 
     # Copy jobdef to local directory if not already local
-    if not Path(tarball).is_file():
-        run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}", shell=True, retries=3, retry_delay=60)
+    _fetch_file_local(tarball)
 
     # If jobpars declares chunk_mode, materialize this job's slice before
     # mu2e runs. runmu2e reads tbs.chunk_mode = {source, lines, local_filename}
@@ -508,7 +530,6 @@ def process_jobdef(jobdesc, fname, args):
     # in cwd. Every job's FCL references local_filename (set via
     # fcl_overrides at jobdef-creation time), so mu2e reads whatever that
     # file contains when it opens.
-    import shlex
     jp_for_chunk = Mu2eJobPars(tarball)
     tbs = jp_for_chunk.json_data.get('tbs', {}) if isinstance(jp_for_chunk.json_data, dict) else {}
     chunk_mode = tbs.get('chunk_mode') if isinstance(tbs, dict) else None
@@ -549,7 +570,7 @@ def process_jobdef(jobdesc, fname, args):
             file_inloc = locations[0]['location_type']
             print(f"Detected location of {file}: {file_inloc}")
             print(f"Copying {file} from {file_inloc}")
-            run(f"mdh copy-file -e 3 -o -v -s {file_inloc} -l local {file}", shell=True, retries=3, retry_delay=60)
+            _fetch_file_local(file, src_location=file_inloc)
         run(f"mkdir indir; mv *.art indir/", shell=True)
         print(f"FCL: {fcl}")
     # Generate FCL - Normal mode with streaming inputs
@@ -563,15 +584,8 @@ def process_jobdef(jobdesc, fname, args):
         print(f"FCL: {fcl}")
     
     # Extract setup script from tarball
-    try:
-        jp = Mu2eJobPars(tarball)
-        simjob_setup = jp.setup()
-        print(f"Job setup script: {simjob_setup}")
-    except Exception as e:
-        print(f"ERROR: Failed to get job setup information from {tarball}")
-        print(f"Exception: {e}")
-        raise
-    
+    simjob_setup = _extract_simjob_setup(tarball)
+
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, infiles, outputs, inloc
 
@@ -614,28 +628,16 @@ def process_g4bl_jobdef(jobdesc_entry, fname, args):
 
     Sequencer: First_Event = job_index * events_per_job + 1 (0-based).
     """
-    parts = Path(fname).name.split('.')
-    if len(parts) < 5:
-        raise RuntimeError(f"Invalid g4bl fname: {fname}; expected 6-field Mu2e name")
-    sequencer = parts[4]
-    stripped = sequencer.lstrip('0')
-    job_index = int(stripped) if stripped else 0
+    job_index, sequencer = _job_index_from_fname(fname)
 
     # Tarball mode (grid path): runtime config lives in jobpars.json INSIDE
     # the tarball — the tarball is self-describing. Embed_dir mode (local
     # smoke) has no tarball, so config is on the jobdesc entry.
     tarball = jobdesc_entry.get('tarball')
     if tarball:
-        if not Path(tarball).is_file():
-            # On grid workers the tarball arrives only as a basename in the
-            # POMS map. Use `mdh copy-file` to fetch from dCache to cwd —
-            # same pattern as art-side process_direct_input. cnf tarballs
-            # live on `disk` location (active workflow access) by Mu2e
-            # convention; matches art-side `-s disk` for cnf.*.tar.
-            run(f"mdh copy-file -e 3 -o -v -s disk -l local {tarball}",
-                shell=True, retries=3, retry_delay=60)
-            if not Path(tarball).is_file():
-                raise RuntimeError(f"mdh copy-file did not produce {tarball} in cwd")
+        # On grid workers the tarball arrives only as a basename in the POMS
+        # map; _fetch_file_local mdh-copies it from dCache when not local.
+        _fetch_file_local(tarball)
         extract_dir = tempfile.mkdtemp(prefix='g4bl_extract_')
         with tarfile.open(tarball) as t:
             t.extractall(extract_dir)
@@ -738,8 +740,7 @@ def push_output(output_specs, output_file="output.txt", parents_file="parents_li
     Returns:
         int: Exit code from pushOutput command
     """
-    import glob
-    
+
     output_lines = []
     for spec in output_specs:
         location, pattern, parents = spec
@@ -780,7 +781,6 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
             exits 25 on non-SAM parents, which cascades into
             KeyError('checksum') inside pushOutput; this bool avoids that.
     """
-    import glob
 
     parents_field = "parents_list.txt" if track_parents else "none"
 
@@ -813,7 +813,6 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None):
         log_file: Explicit log filename. Wins over `fcl` if both given. The
             g4bl path uses this since there's no FCL.
     """
-    import shutil
 
     if log_file is not None:
         logfile = log_file

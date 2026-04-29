@@ -16,7 +16,7 @@ import re
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.job_common import Mu2eFilename, Mu2eJobBase
+from utils.job_common import Mu2eFilename, Mu2eJobBase, remove_storage_prefix
 import samweb_client  # type: ignore
 
 STASH_READ_ROOT = os.environ.get(
@@ -190,7 +190,6 @@ class Mu2eJobFCL(Mu2eJobBase):
             physical_path = self._locate_file(filename)
         
         # Clean up location format prefixes
-        from utils.job_common import remove_storage_prefix
         clean_path = remove_storage_prefix(physical_path)
         
         # Remove file location suffix like (2290@fm4794l8) if present

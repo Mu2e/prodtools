@@ -31,12 +31,18 @@ def find_missing_indices(tarball_path, dataset, njobs):
     return missing_indices, missing_files
 
 def create_recovery_definition(defname, indices):
-    """Create SAM recovery definition from job indices."""
+    """Create SAM recovery definition from job indices. Returns True on
+    success; on failure prints the error and returns False (does not
+    re-raise — caller can decide whether to abort the recovery flow)."""
     etc_files = [f"etc.mu2e.index.000.{idx:07d}.txt" for idx in sorted(indices)]
     query = f"dh.dataset etc.mu2e.index.000.txt and file_name in ({', '.join(etc_files)})"
-    result = create_definition(defname, query)
-    print(f"Created SAM definition: {defname}" if result else f"Failed to create {defname} (may already exist)")
-    return result
+    try:
+        create_definition(defname, query)
+    except Exception as e:
+        print(f"Failed to create SAM definition {defname}: {e}")
+        return False
+    print(f"Created SAM definition: {defname}")
+    return True
 
 def locate_tarball(sam, tarball):
     """Locate and return full path to tarball."""

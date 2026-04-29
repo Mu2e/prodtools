@@ -9,20 +9,8 @@ import shlex
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
-_missing = []
-try:
-    import sqlalchemy  # noqa: F401
-except ImportError:
-    _missing.append("SQLAlchemy")
-try:
-    import flask  # noqa: F401
-except ImportError:
-    _missing.append("Flask")
-if _missing:
-    sys.stderr.write(
-        f"error: {' and '.join(_missing)} not found. Run 'pyenv ana' after 'muse setup ops'.\n"
-    )
-    sys.exit(2)
+from utils._guards import require_packages
+require_packages('sqlalchemy', 'flask')
 
 from flask import Flask, jsonify, request, redirect
 from utils.poms_db import get_db_session, Job, DatasetInfo

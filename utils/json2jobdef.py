@@ -7,6 +7,7 @@ Usage:
   - Direct file: python3 mu2e_poms_util/json2jobdef.py --help
 """
 import os, sys
+import logging
 import random
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,7 +21,7 @@ from utils.mixing_utils import *
 from utils.config_utils import get_tarball_desc, prepare_fields_for_job
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
-from utils.samweb_wrapper import list_files, count_files
+from utils.samweb_wrapper import list_files, count_files, locate_file
 
 
 def _write_random_selection(out_f, query: str, total_needed: int, seed_source: str):
@@ -375,7 +376,6 @@ def build_jobdef(config, job_args, json_output=False):
     cmd_parts.extend(['--embed', 'template.fcl'])
     
     # Always show the mu2ejobdef equivalent command when verbose logging is enabled
-    import logging
     if logging.getLogger().level <= logging.DEBUG:
         print(f"🐪 mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
     
@@ -556,8 +556,7 @@ def main():
     
     # If --prod mode, create index definition after generation
     if args.prod:
-        from utils.prod_utils import create_index_definition
-        
+
         jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.txt'
         print(f"\n{'='*60}")
         print(f"Creating index definition from {jobdefs_file}")
@@ -686,8 +685,7 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
             print(f"Warning: Local file {parfile_name} not found, skipping pushout")
         else:
             # Push file to SAM if it doesn't already exist there
-            from utils.samweb_wrapper import locate_file
-            
+
             # Check if file exists on SAM
             loc = locate_file(parfile_name)
             if not loc:
@@ -750,7 +748,6 @@ def load_json(json_path):
         return configs
     
     # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
-    from utils.mixing_utils import expand_configs
     return expand_configs(configs)
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):

@@ -9,6 +9,7 @@ import os
 import sys
 import glob
 import json
+import time
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,7 +43,8 @@ def _get_dataset_stats(dataset_name):
                 int(result.get('total_file_size', 0) or 0)
             )
         return (0, 0, 0)
-    except Exception:
+    except Exception as e:
+        print(f"Warning: _get_dataset_stats failed for {dataset_name}: {e}", file=sys.stderr)
         return (0, 0, 0)
 
 
@@ -66,7 +68,8 @@ def _check_dataset_has_children(dataset_name):
         # Check if any files are children of the first file
         children = list_files(f'ischildof: (file_name {first_file})')
         return len(children) > 0
-    except Exception:
+    except Exception as e:
+        print(f"Warning: _check_dataset_has_children failed for {dataset_name}: {e}", file=sys.stderr)
         return False
 
 
@@ -128,7 +131,8 @@ def _get_dataset_creation_date(dataset_name):
                     except ValueError:
                         continue
         return None
-    except Exception:
+    except Exception as e:
+        print(f"Warning: _get_dataset_creation_date failed for {dataset_name}: {e}", file=sys.stderr)
         return None
 
 
@@ -156,8 +160,8 @@ def _infer_dataset_location(dataset_name):
             full_path = entry.get('full_path')
             if full_path:
                 return _normalize_location(full_path)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: _infer_dataset_location failed for {dataset_name}: {e}", file=sys.stderr)
     return 'N/A'
 
 
@@ -180,7 +184,6 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
 
     all_json_files = sorted(glob.glob(f"{poms_dir}/{pattern}.json"))
     if since is not None:
-        import time
         cutoff = since.timestamp()
         json_files = [f for f in all_json_files if os.path.getmtime(f) >= cutoff]
         print(f"Loading {len(json_files)} JSON files modified since {since.strftime('%Y-%m-%d')} "
@@ -363,8 +366,10 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
 
     try:
         session.commit()
-    except Exception:
+    except Exception as e:
+        print(f"ERROR: session.commit() failed in build_db; rolling back. {e}", file=sys.stderr)
         session.rollback()
+        raise
     if discovered:
         print(f"Discovered and cached {discovered} derived datasets")
 

@@ -3,9 +3,8 @@
 Wrapper for samweb_client Python module
 """
 
-import os
-import sys
-from typing import List, Dict, Optional, Union
+import functools
+from typing import Dict, List
 
 from samweb_client import SAMWebClient #type: ignore
 
@@ -72,23 +71,16 @@ class SAMWebWrapper:
             print(f"Error locating files: {e}")
             return {}
     
-    def create_definition(self, definition_name: str, query: str) -> bool:
-        """Create a definition (equivalent to samweb create-definition)."""
-        try:
-            self.client.createDefinition(definition_name, query)
-            return True
-        except Exception as e:
-            print(f"Error creating definition {definition_name}: {e}")
-            return False
-    
-    def delete_definition(self, definition_name: str) -> bool:
-        """Delete a definition (equivalent to samweb delete-definition)."""
-        try:
-            self.client.deleteDefinition(definition_name)
-            return True
-        except Exception as e:
-            print(f"Error deleting definition {definition_name}: {e}")
-            return False
+    def create_definition(self, definition_name: str, query: str) -> None:
+        """Create a definition (equivalent to samweb create-definition).
+        Raises samweb exceptions (e.g., DefinitionAlreadyExists, SAMWebHTTPError)
+        on failure — write ops should fail loudly, not silently."""
+        self.client.createDefinition(definition_name, query)
+
+    def delete_definition(self, definition_name: str) -> None:
+        """Delete a definition (equivalent to samweb delete-definition).
+        Raises samweb exceptions (e.g., DefinitionNotFound) on failure."""
+        self.client.deleteDefinition(definition_name)
     
     def describe_definition(self, definition_name: str) -> str:
         """Describe a definition (equivalent to samweb describe-definition)."""
@@ -143,41 +135,6 @@ class SAMWebWrapper:
             print(f"Error getting metadata for {filename}: {e}")
             return {}
     
-    def modify_metadata(self, filename: str, metadata: Dict) -> bool:
-        """Modify metadata for a file (equivalent to samweb modify-metadata)."""
-        try:
-            self.client.modifyFileMetadata(filename, metadata)
-            return True
-        except Exception as e:
-            print(f"Error modifying metadata for {filename}: {e}")
-            return False
-    
-    def verify_file_checksum(self, filename: str) -> bool:
-        """Verify file checksum (equivalent to samweb verify-file-checksum)."""
-        try:
-            return self.client.verifyFileChecksum(filename)
-        except Exception as e:
-            print(f"Error verifying checksum for {filename}: {e}")
-            return False
-    
-    def add_file_location(self, filename: str, location: str) -> bool:
-        """Add file location (equivalent to samweb add-file-location)."""
-        try:
-            self.client.addFileLocation(filename, location)
-            return True
-        except Exception as e:
-            print(f"Error adding file location for {filename}: {e}")
-            return False
-    
-    def remove_file_location(self, filename: str, location: str) -> bool:
-        """Remove file location (equivalent to samweb remove-file-location)."""
-        try:
-            self.client.removeFileLocation(filename, location)
-            return True
-        except Exception as e:
-            print(f"Error removing file location for {filename}: {e}")
-            return False
-    
     def file_lineage(self, filename: str, lineage_type: str = 'parents') -> List[str]:
         """Get file lineage using SAM client getFileLineage method.
         
@@ -193,15 +150,13 @@ class SAMWebWrapper:
             return []
     
 
-# Global instance for easy access
-_samweb_wrapper = None
-
+@functools.lru_cache(maxsize=1)
 def get_samweb_wrapper() -> SAMWebWrapper:
-    """Get or create a global SAMWeb wrapper instance."""
-    global _samweb_wrapper
-    if _samweb_wrapper is None:
-        _samweb_wrapper = SAMWebWrapper()
-    return _samweb_wrapper
+    """Get or create a global SAMWeb wrapper instance.
+    `lru_cache(maxsize=1)` makes lookup thread-safe (CPython's GIL +
+    cache-result memoization) — replaces an earlier `if _x is None: _x = ...`
+    pattern that was racy across threads."""
+    return SAMWebWrapper()
 
 # Convenience functions that match the external samweb command interface
 def count_files(query: str) -> int:
@@ -221,13 +176,13 @@ def locate_file_full(filename: str) -> List[Dict]:
     """Locate a file and return full location details."""
     return get_samweb_wrapper().locate_file_full(filename)
 
-def create_definition(definition_name: str, query: str) -> bool:
-    """Create a definition."""
-    return get_samweb_wrapper().create_definition(definition_name, query)
+def create_definition(definition_name: str, query: str) -> None:
+    """Create a definition. Raises on failure."""
+    get_samweb_wrapper().create_definition(definition_name, query)
 
-def delete_definition(definition_name: str) -> bool:
-    """Delete a definition."""
-    return get_samweb_wrapper().delete_definition(definition_name)
+def delete_definition(definition_name: str) -> None:
+    """Delete a definition. Raises on failure."""
+    get_samweb_wrapper().delete_definition(definition_name)
 
 def describe_definition(definition_name: str) -> str:
     """Describe a definition."""
@@ -247,22 +202,6 @@ def list_definitions(defname: str = None) -> List[str]:
 def get_metadata(filename: str) -> Dict:
     """Get metadata for a file."""
     return get_samweb_wrapper().get_metadata(filename)
-
-def modify_metadata(filename: str, metadata: Dict) -> bool:
-    """Modify metadata for a file."""
-    return get_samweb_wrapper().modify_metadata(filename, metadata)
-
-def verify_file_checksum(filename: str) -> bool:
-    """Verify file checksum."""
-    return get_samweb_wrapper().verify_file_checksum(filename)
-
-def add_file_location(filename: str, location: str) -> bool:
-    """Add file location."""
-    return get_samweb_wrapper().add_file_location(filename, location)
-
-def remove_file_location(filename: str, location: str) -> bool:
-    """Remove file location."""
-    return get_samweb_wrapper().remove_file_location(filename, location)
 
 def file_lineage(filename: str, lineage_type: str = 'parents') -> List[str]:
     """Get file lineage using SAM client getFileLineage method."""
