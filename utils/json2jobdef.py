@@ -193,15 +193,27 @@ def _create_inputs_file(config, exclude_files=None):
             for key in input_data.keys():
                 f.write(key + '\n')
         return
-    
-    # By default, include all files in the dataset. Older behavior applied an
-    # event_count>0 filter; that is now controlled by an explicit flag so that
-    # zero-event files are not silently dropped.
+
+    _write_sam_inputs(config, input_data, exclude_files)
+
+
+def _write_sam_inputs(config, input_data, exclude_files=None):
+    """Write inputs.txt by resolving each input_data dataset against SAM.
+
+    Each input_data value is either a plain merge_factor (int) or a dict
+    `{"count": N, "random": <bool>}`. With `random: True`, a deterministic
+    pseudo-random sample of `count * njobs` files is selected; otherwise
+    list_files() returns all matching files.
+
+    `_event_count_positive` flag in `config` toggles a `event_count>0`
+    filter on the SAM query (older behavior applied this implicitly; now
+    explicit so zero-event files aren't silently dropped).
+    """
     event_count_positive = bool(config.get('_event_count_positive'))
     query_template = "dh.dataset={}"
     if event_count_positive:
         query_template += " and event_count>0"
-    
+
     with open('inputs.txt', 'w') as out_f:
         for dataset, merge_factor in input_data.items():
             random_spec = {}
@@ -579,6 +591,69 @@ def main():
         map_stem = Path(jobdefs_file).stem
         create_index_definition(map_stem, total_jobs, "etc.mu2e.index.000.txt")
 
+def _build_job_args(config):
+    """Dispatch on `determine_job_type(config)` and return the per-mode
+    `job_args` list passed to `build_jobdef`. Sets transient config keys
+    where the job-type wants them (e.g. `_max_events_to_skip` for resampler)."""
+    job_type = determine_job_type(config)
+
+    if job_type == 'resampler':
+        try:
+            input_data = config['input_data']
+            if not isinstance(input_data, dict):
+                raise ValueError(f"input_data must be a dict, got {type(input_data)}")
+            first_dataset = list(input_data.keys())[0]
+            nfiles, nevts = get_def_counts(first_dataset)
+            config['_max_events_to_skip'] = nevts // nfiles
+        except Exception as e:
+            print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+        merge_factor = calculate_merge_factor(config)
+        return ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
+
+    if job_type == 'merge':
+        merge_factor = calculate_merge_factor(config)
+        return ['--inputs', 'inputs.txt', '--merge-factor', str(merge_factor)]
+
+    if job_type == 'chunk':
+        # Chunk-on-grid: no inputs.txt, no --merge-factor. Per-job slice
+        # is materialized at runtime by runmu2e via tbs.chunk_mode.
+        return []
+
+    if job_type == 'mixing':
+        merge_factor = calculate_merge_factor(config)
+        return ['--inputs', 'inputs.txt', '--merge-factor', str(merge_factor)] + build_pileup_args(config)
+
+    # Stage1 / default: no special args
+    return []
+
+
+def _pushout_to_sam(parfile_name):
+    """If `parfile_name` exists locally and isn't already in SAM, push it.
+    Idempotent — repeat calls are no-ops once SAM has the file."""
+    if not Path(parfile_name).exists():
+        print(f"Warning: Local file {parfile_name} not found, skipping pushout")
+        return
+
+    if locate_file(parfile_name):
+        print(f"File {parfile_name} already exists on SAM, skipping push")
+        return
+
+    print(f"Pushing {parfile_name} to SAM...")
+    with open('outputs.txt', 'w') as f:
+        f.write(f"disk {parfile_name} none\n")
+    run('pushOutput outputs.txt', shell=True)
+
+
+def _cleanup_temp_files():
+    """Remove the well-known transient files left in the build workdir."""
+    for temp_file in ('inputs.txt', 'template.fcl',
+                      'mubeamCat.txt', 'elebeamCat.txt',
+                      'neutralsCat.txt', 'mustopCat.txt'):
+        if Path(temp_file).exists():
+            Path(temp_file).unlink()
+            print(f"Cleanup: {temp_file}")
+
+
 def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True,
                          jobdefs_list=None, extend=False, ignore_empty=False):
     """Process a single configuration entry (original behavior)"""
@@ -625,96 +700,27 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
         remaining = sum(1 for _ in open('inputs.txt')) if Path('inputs.txt').exists() else 0
         print(f"  Extend summary: {len(exclude_files)} excluded, {remaining} remaining input files")
     
-    job_args = []
-    
-    job_type = determine_job_type(config)
-    
-    if job_type == 'resampler':
-        # Resampler jobs: calculate MaxEventsToSkip parameter and merge factor
-        try:
-            # input_data should be a dict, use first dataset for calculation
-            input_data = config['input_data']
-            if not isinstance(input_data, dict):
-                raise ValueError(f"input_data must be a dict, got {type(input_data)}")
-            
-            first_dataset = list(input_data.keys())[0]
-            nfiles, nevts = get_def_counts(first_dataset)
-            skip = nevts // nfiles
-            # Store skip value for later addition to template
-            config['_max_events_to_skip'] = skip
-        except Exception as e:
-            print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
-        
-        # Get merge_factor from input_data dict
-        merge_factor = calculate_merge_factor(config)
-        job_args = ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
-        
-    elif job_type == 'merge':
-        # Merge jobs: simple file merging
-        merge_factor = calculate_merge_factor(config)
-        job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
+    job_args = _build_job_args(config)
 
-    elif job_type == 'chunk':
-        # Chunk-on-grid: no inputs.txt, no --merge-factor. The per-job
-        # slice is materialized at runtime by runmu2e. tbs.chunk_mode
-        # carries the source path + chunk size through jobpars.
-        job_args = []
-        
-    elif job_type == 'mixing':
-        # Mixing jobs: add MaxEventsToSkip parameter to template
-        merge_factor = calculate_merge_factor(config)
-        job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
-        job_args += build_pileup_args(config)
-        
-    else:
-        # Stage1 jobs: no special processing needed
-        job_args = []
-    
     # build_jobdef handles FCL template creation for non-mixing jobs
-    # Always fcl-analyze the ORIGINAL FCL file for job structure understanding
     result = build_jobdef(config, job_args, json_output=json_output)
-    
-    append_jobdef(config, jobdefs_list)    
-    # Get the parfile name for pushout operations
-    parfile_name = get_parfile_name(config)
-    
-    # Handle pushout regardless of json_output setting
-    if pushout:
-        # First check if the local file exists before attempting SAM operations
-        if not Path(parfile_name).exists():
-            print(f"Warning: Local file {parfile_name} not found, skipping pushout")
-        else:
-            # Push file to SAM if it doesn't already exist there
 
-            # Check if file exists on SAM
-            loc = locate_file(parfile_name)
-            if not loc:
-                # File doesn't exist on SAM, push it
-                print(f"Pushing {parfile_name} to SAM...")
-                with open('outputs.txt', 'w') as f:
-                    f.write(f"disk {parfile_name} none\n")
-                run('pushOutput outputs.txt', shell=True)
-            else:
-                # File exists on SAM, don't push
-                print(f"File {parfile_name} already exists on SAM, skipping push")
-    
+    append_jobdef(config, jobdefs_list)
+    parfile_name = get_parfile_name(config)
+
+    if pushout:
+        _pushout_to_sam(parfile_name)
+
     if not json_output:
-        # Only output human-readable text when not using JSON output
         print(json.dumps(config, indent=2, sort_keys=True))
-        
         write_fcl(parfile_name, config.get('inloc', 'tape'), 'root')
         print(f"Generated: {parfile_name}")
-    
-    # Clean up temporary files AFTER job definition is created (unless --no-cleanup is specified)
+
     if no_cleanup:
         print("Temporary files kept (--no-cleanup specified)")
     else:
-        temp_files = ['inputs.txt', 'template.fcl', 'mubeamCat.txt', 'elebeamCat.txt', 'neutralsCat.txt', 'mustopCat.txt']
-        for temp_file in temp_files:
-            if Path(temp_file).exists():
-                Path(temp_file).unlink()
-                print(f"Cleanup: {temp_file}")
-    
+        _cleanup_temp_files()
+
     return result
 
 def is_already_expanded(configs):
