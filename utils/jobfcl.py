@@ -56,18 +56,13 @@ class Mu2eJobFCL(Mu2eJobBase):
         super().__init__(jobdef)
         self.inloc = inloc
         self.proto = proto
-        self.json_data = self._extract_json()
-        
+
         # Extract owner and dsconf directly from JSON fields
         # Use same default logic as mu2ejobdef.py for consistency
         default_owner = os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e')
         self.owner = self.json_data.get('owner', default_owner)
         self.dsconf = self.json_data.get('dsconf', 'unknown')
-        
-        # Read sequential_aux setting from job definition, default to False if not specified
-        tbs = self.json_data.get('tbs', {})
-        self.sequential_aux = tbs.get('sequential_aux', False)
-    
+
         # Cache the source type detection
         self._source_type = None
     
@@ -211,117 +206,6 @@ class Mu2eJobFCL(Mu2eJobBase):
         raise ValueError(
             f"Error: root protocol requested but a file pathname does not start with /pnfs: {clean_path}"
         )
-    
-    def job_primary_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get primary input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        inputs = tbs.get('inputs')
-        
-        if not inputs:
-            return {}
-        
-        result = {}
-        # inputs is a dict with one key-value pair
-        for dataset, (merge, filelist) in inputs.items():
-            nf = len(filelist)
-            first = index * merge
-            last = min(first + merge - 1, nf - 1)
-            
-            if first > last:
-                raise ValueError(f"job_primary_inputs(): invalid index {index}")
-            
-            result[dataset] = filelist[first:last + 1]
-        
-        return result
-    
-    def job_aux_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get auxiliary input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        auxin = tbs.get('auxin')
-        
-        if not auxin:
-            return {}
-        
-        result = {}
-        # Process auxiliary inputs in JSON order (which should be the correct order)
-        for dataset, (nreq, infiles) in auxin.items():
-            # Zero means take all files
-            if nreq == 0:
-                nreq = len(infiles)
-            
-            if self.sequential_aux:
-                # Sequential selection with rollover (like primary inputs)
-                nf = len(infiles)
-                first = index * nreq
-                last = min(first + nreq - 1, nf - 1)
-                
-                if first >= nf:
-                    # Roll over: start from the beginning
-                    first = first % nf
-                    last = min(first + nreq - 1, nf - 1)
-                
-                if first > last:
-                    raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
-                
-                result[dataset] = infiles[first:last + 1]
-            else:
-                # Draw nreq "random" files without repetitions (original behavior)
-                sample = []
-                available_files = infiles.copy()
-                
-                for count in range(nreq):
-                    if not available_files:
-                        break
-                    
-                    # Deterministic random selection
-                    rnd = self._my_random(index, *available_files)
-                    file_index = rnd % len(available_files)
-                    sample.append(available_files[file_index])
-                    available_files.pop(file_index)
-               
-                result[dataset] = sample
-        
-        return result
-    
-    def job_sampling_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get sampling input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        samplinginput = tbs.get('samplinginput')
-        
-        if not samplinginput:
-            return {}
-        
-        result = {}
-        for dataset, (nreq, filelist) in samplinginput.items():
-            # Zero means take all files
-            if nreq == 0:
-                nreq = len(filelist)
-            
-            # Sequential selection like primary inputs
-            nf = len(filelist)
-            first = index * nreq
-            last = min(first + nreq - 1, nf - 1)
-            
-            if first > last:
-                raise ValueError(f"job_sampling_inputs(): invalid index {index}")
-            
-            result[dataset] = filelist[first:last + 1]
-        
-        return result
-    
-    def job_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get all input files for job index."""
-        primary = self.job_primary_inputs(index)
-        aux = self.job_aux_inputs(index)
-        sampling = self.job_sampling_inputs(index)
-        
-        # Merge all input types
-        result = {}
-        result.update(primary)
-        result.update(aux)
-        result.update(sampling)
-        
-        return result
     
     def sequencer(self, index: int) -> str:
         """Get sequencer for job index."""

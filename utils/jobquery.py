@@ -20,10 +20,7 @@ class Mu2eJobPars(Mu2eJobBase):
         """Initialize with a job parameter file (.tar)"""
         super().__init__(parfile)
         self.parfile = parfile  # Keep for backward compatibility
-        self.json_data = self._extract_json()
-    
 
-    
     def jobname(self):
         """Get the job name"""
         return self.json_data.get('jobname', '')

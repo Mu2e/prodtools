@@ -66,15 +66,17 @@ def remove_storage_prefix(path: str) -> str:
 
 class Mu2eJobBase:
     """Base class for Mu2e job handling classes.
-    
+
     Provides common functionality for extracting data from job definition
-    tarballs and generating deterministic random numbers.
+    tarballs, generating deterministic random numbers, and computing the
+    per-job input file lists (primary / aux / sampling).
     """
-    
+
     def __init__(self, jobdef_path: str):
-        """Initialize with path to job definition tarball."""
+        """Initialize with path to job definition tarball; extract jobpars.json."""
         self.jobdef = jobdef_path
-    
+        self.json_data = self._extract_json()
+
     def _extract_json(self) -> dict:
         """Extract jobpars.json from tar file.
         
@@ -97,7 +99,7 @@ class Mu2eJobBase:
     
     def _my_random(self, *args) -> int:
         """Generate deterministic random number from inputs.
-        
+
         Consolidated implementation from jobfcl.py and jobiodetail.py.
         Uses SHA256 hash to create deterministic pseudo-random numbers.
         """
@@ -106,6 +108,106 @@ class Mu2eJobBase:
             h.update(str(arg).encode())
         # Take first 8 hex digits (32 bits)
         return int(h.hexdigest()[:8], 16)
+
+    def job_primary_inputs(self, index):
+        """Get primary input files for job index.
+
+        `tbs.inputs` maps each dataset to a (merge, filelist) tuple. Slices
+        the filelist by `[index*merge : index*merge+merge]` (clamped at end).
+        Raises ValueError if `index` is past the end.
+        Returns {} if no primary inputs configured.
+        """
+        tbs = self.json_data.get('tbs', {})
+        inputs = tbs.get('inputs')
+        if not inputs:
+            return {}
+
+        result = {}
+        for dataset, (merge, filelist) in inputs.items():
+            nf = len(filelist)
+            first = index * merge
+            last = min(first + merge - 1, nf - 1)
+            if first > last:
+                raise ValueError(f"job_primary_inputs(): invalid index {index}")
+            result[dataset] = filelist[first:last + 1]
+
+        return result
+
+    def job_aux_inputs(self, index):
+        """Get auxiliary input files for job index.
+
+        `tbs.auxin` maps each dataset to (nreq, infiles). When
+        `tbs.sequential_aux` is True, slice deterministically with rollover;
+        otherwise sample `nreq` files without repetition using `_my_random`.
+        Returns {} if no auxin configured.
+        """
+        tbs = self.json_data.get('tbs', {})
+        auxin = tbs.get('auxin')
+        if not auxin:
+            return {}
+
+        sequential_aux = tbs.get('sequential_aux', False)
+
+        result = {}
+        for dataset, (nreq, infiles) in auxin.items():
+            if nreq == 0:
+                nreq = len(infiles)
+
+            if sequential_aux:
+                nf = len(infiles)
+                first = index * nreq
+                last = min(first + nreq - 1, nf - 1)
+                if first >= nf:
+                    first = first % nf
+                    last = min(first + nreq - 1, nf - 1)
+                if first > last:
+                    raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
+                result[dataset] = infiles[first:last + 1]
+            else:
+                sample = []
+                available_files = infiles.copy()
+                for _ in range(nreq):
+                    if not available_files:
+                        break
+                    rnd = self._my_random(index, *available_files)
+                    file_index = rnd % len(available_files)
+                    sample.append(available_files[file_index])
+                    available_files.pop(file_index)
+                result[dataset] = sample
+
+        return result
+
+    def job_sampling_inputs(self, index):
+        """Get sampling input files for job index.
+
+        `tbs.samplinginput` maps each dataset to (nreq, filelist), sliced
+        sequentially by index. Returns {} if no sampling input configured.
+        """
+        tbs = self.json_data.get('tbs', {})
+        samplinginput = tbs.get('samplinginput')
+        if not samplinginput:
+            return {}
+
+        result = {}
+        for dataset, (nreq, filelist) in samplinginput.items():
+            if nreq == 0:
+                nreq = len(filelist)
+            nf = len(filelist)
+            first = index * nreq
+            last = min(first + nreq - 1, nf - 1)
+            if first > last:
+                raise ValueError(f"job_sampling_inputs(): invalid index {index}")
+            result[dataset] = filelist[first:last + 1]
+
+        return result
+
+    def job_inputs(self, index):
+        """Get all input files for job index — merged primary + aux + sampling."""
+        result = {}
+        result.update(self.job_primary_inputs(index))
+        result.update(self.job_aux_inputs(index))
+        result.update(self.job_sampling_inputs(index))
+        return result
 
 
 def get_samweb_wrapper():
