@@ -17,9 +17,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.poms_db import get_db_session, Job, JobOutput, DatasetInfo
 from utils.samweb_wrapper import count_files, locate_file, locate_file_full, list_files, list_definition_files, describe_definition
 from utils.jobiodetail import Mu2eJobIO
+from utils.jobquery import Mu2eJobPars
 from utils.logparser import process_dataset as parse_logs_for_dataset
 import re
 from datetime import datetime
+
+# Tarballs whose dCache replica hangs reads — skip to keep the build moving.
+# Remove entries once the underlying pool issue is resolved.
+_SKIP_TARBALLS = {
+    "cnf.mu2e.ensembleMDS3a.MDC2025af.0.tar",
+}
 
 
 def _extract_file_path(location):
@@ -281,6 +288,9 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
         jobs_query = jobs_query[:limit]
         print(f"Processing first {limit} jobs only (test mode)\n")
     for job in jobs_query:
+        if job.tarball in _SKIP_TARBALLS:
+            print(f"Skipping {job.tarball} (in _SKIP_TARBALLS — bad dCache replica)")
+            continue
         try:
             file_path = _extract_file_path(locate_file(job.tarball))
             if not file_path:
@@ -292,6 +302,15 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
             outputs = Mu2eJobIO(full_path).job_outputs(0)
             if not outputs:
                 continue
+
+            # POMS map JSON entries don't carry `indef`; the input dataset
+            # is encoded inside the cnf tarball. Pull it from there so the
+            # static dashboard's lineage walker has parent edges.
+            try:
+                inputs = Mu2eJobPars(full_path).input_datasets()
+                job.indef = ','.join(inputs) if inputs else None
+            except Exception as e:
+                print(f"  Warning: input_datasets failed for {job.tarball}: {e}", file=sys.stderr)
 
             # Compute performance metrics once per jobdef (aggregate across outputs)
             # Skip logparser if metrics are already present

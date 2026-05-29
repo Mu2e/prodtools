@@ -3,34 +3,245 @@
 <head>
     <title>Mu2e Production Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        (function() {
+            var t = localStorage.getItem('theme');
+            if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+        })();
+    </script>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; font-size: 1.3em; }
-        .jobs { background: #f8f8f8; padding: 15px; margin: 10px 0; border-radius: 5px; }
-        table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 1.5em; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; font-weight: bold; cursor: pointer; }
-        th:hover { background-color: #e0e0e0; }
-        .sortable::after { content: ' ↕'; color: #999; }
-        .sort-asc::after { content: ' ↑'; color: #000; }
-        .sort-desc::after { content: ' ↓'; color: #000; }
-        td:first-child { text-align: right; } /* NJOBS column */
-        td:nth-child(2) { text-align: right; } /* EVENTS column */
-        td:nth-child(3) { text-align: right; } /* FILE SIZE column */
-        td:nth-child(4) { text-align: center; } /* DATE column */
-        .group-even { background-color: #e8f4f8; }
-        .group-odd { background-color: #f0f0f0; }
-        .group-header { border-top: 2px solid #333; }
-        .output-dataset { color: #0066cc; cursor: pointer; text-decoration: underline; }
-        .output-dataset:hover { color: #004499; }
-        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
-        .modal-content { background-color: #fefefe; margin: 5% auto; padding: 20px; border: 1px solid #888; width: 90%; max-width: 1200px; max-height: 80vh; overflow-y: auto; }
-        .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
-        .close:hover { color: black; }
+        :root {
+            --bg: #f7f8fa;
+            --surface: #ffffff;
+            --border: #e3e6eb;
+            --border-strong: #cdd3da;
+            --text: #0f172a;
+            --text-muted: #475569;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --row-alt: #f9fafb;
+            --row-hover: #eef2f7;
+            --header-bg: #eceff3;
+            --header-bg-hover: #dde2e8;
+            --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg: #0f172a;
+                --surface: #1e293b;
+                --border: #334155;
+                --border-strong: #475569;
+                --text: #f1f5f9;
+                --text-muted: #94a3b8;
+                --primary: #60a5fa;
+                --primary-hover: #93c5fd;
+                --row-alt: #1a2538;
+                --row-hover: #273449;
+                --header-bg: #273449;
+                --header-bg-hover: #334155;
+                --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+            }
+        }
+        :root[data-theme="dark"] {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --border-strong: #475569;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --primary: #60a5fa;
+            --primary-hover: #93c5fd;
+            --row-alt: #1a2538;
+            --row-hover: #273449;
+            --header-bg: #273449;
+            --header-bg-hover: #334155;
+            --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 16px;
+            line-height: 1.55;
+            font-weight: 500;
+        }
+        h1 {
+            margin: 0;
+            padding: 18px 24px;
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+        .nav {
+            padding: 0 24px 12px 24px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .nav a {
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .nav a:hover { text-decoration: underline; }
+        .nav button {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border-strong);
+            padding: 4px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .nav button:hover { background: var(--row-hover); }
+
+        /* Sticky toolbar card */
+        .toolbar {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+            align-items: center;
+        }
+        .toolbar .group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding-right: 12px;
+            border-right: 1px solid var(--border);
+        }
+        .toolbar .group:last-child { border-right: none; padding-right: 0; }
+        .toolbar label { color: var(--text); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+        .toolbar input[type="text"],
+        .toolbar input[type="date"],
+        .toolbar select,
+        .toolbar button.menu-btn {
+            border: 1px solid var(--border-strong);
+            background: var(--surface);
+            color: var(--text);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 500;
+            font-family: inherit;
+        }
+        .toolbar input[type="text"]:focus,
+        .toolbar input[type="date"]:focus,
+        .toolbar select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+        .toolbar .clear-btn {
+            background: transparent;
+            border: 1px solid var(--border-strong);
+            color: var(--text-muted);
+            padding: 5px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .toolbar .clear-btn:hover { background: var(--row-hover); color: var(--text); }
+        .columns-dropdown { position: relative; display: inline-block; }
+        .columns-menu {
+            display: none;
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            background: var(--surface);
+            border: 1px solid var(--border-strong);
+            border-radius: 6px;
+            padding: 6px;
+            z-index: 100;
+            min-width: 160px;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
+        }
+        .columns-menu label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 6px;
+            cursor: pointer;
+            text-transform: none;
+            font-size: 13px;
+            color: var(--text);
+            letter-spacing: 0;
+            font-weight: normal;
+            border-radius: 4px;
+        }
+        .columns-menu label:hover { background: var(--row-hover); }
+
+        /* Table */
+        .jobs { padding: 16px 24px; }
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 15px;
+        }
+        th {
+            background: var(--header-bg);
+            color: var(--text);
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            text-align: left;
+            padding: 12px 14px;
+            border-bottom: 2px solid var(--border-strong);
+            cursor: pointer;
+            user-select: none;
+        }
+        th:hover { background: var(--header-bg-hover); }
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+            font-weight: 500;
+        }
+        tr:last-child td { border-bottom: none; }
+        .sortable::after { content: ' ↕'; color: #cbd1d8; }
+        .sort-asc::after { content: ' ↑'; color: var(--primary); }
+        .sort-desc::after { content: ' ↓'; color: var(--primary); }
+        td:first-child { text-align: right; font-variant-numeric: tabular-nums; }
+        td:nth-child(2) { text-align: right; }
+        td:nth-child(3) { text-align: right; font-variant-numeric: tabular-nums; }
+        td:nth-child(4) { text-align: center; color: var(--text-muted); }
+        tr:hover td { background: var(--row-hover); }
+        .group-header { display: none; }
+        .output-dataset {
+            color: var(--text);
+            cursor: pointer;
+            text-decoration: none;
+            font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .output-dataset:hover { color: var(--primary); text-decoration: underline; }
+
+        /* Modal */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.5); }
+        .modal-content { background: var(--surface); margin: 5% auto; padding: 24px; border-radius: 8px; width: 90%; max-width: 1200px; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+        .close { color: var(--text-muted); float: right; font-size: 24px; font-weight: 300; cursor: pointer; line-height: 1; }
+        .close:hover { color: var(--text); }
         .mermaid { text-align: center; }
-        .form-group { margin-bottom: 10px; }
-        .form-control { width: 200px; margin-left: 10px; }
-        .error { color: red; }
-        .warning { color: orange; }
+        .error { color: #dc2626; }
+        .warning { color: #d97706; }
+        .col-loc, .col-events, .col-size, .col-date, .col-real, .col-vmhwm,
+        .col-jobdesc, .col-tarball, .col-setup { display: none; }
     </style>
 </head>
 <body>
@@ -43,33 +254,51 @@
         <button onclick="reloadData()" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;">Rebuild DB</button>
     </div>
     
-    <div class="jobs">
-        <div class="form-group">
-            <label>
-                <input type="checkbox" id="statsToggle"> 
-                Include statistics in dataset lineage
-            </label>
+    <div class="toolbar">
+        <div class="group">
+            <label for="datasetFilter">Search</label>
+            <input type="text" id="datasetFilter" placeholder="dts*.art, sim*.art" onkeyup="filterDatasets()" style="width: 220px;">
         </div>
-        <div class="form-group">
-            <label for="datasetFilter">Filter datasets:</label>
-            <input type="text" id="datasetFilter" class="form-control" placeholder="e.g., dts*.art, sim*.art" onkeyup="filterDatasets()">
-        </div>
-        <div class="form-group">
-            <label for="statusFilter">Status:</label>
-            <select id="statusFilter" class="form-control" onchange="filterDatasets()" style="width: 150px;">
+        <div class="group">
+            <label for="statusFilter">Status</label>
+            <select id="statusFilter" onchange="filterDatasets()">
                 <option value="all">All</option>
                 <option value="complete">Complete</option>
                 <option value="incomplete">Incomplete</option>
                 <option value="nochild">No Children</option>
+                <option value="latest">Latest only</option>
             </select>
-            <button onclick="clearFilter()" style="margin-left: 10px;">Clear</button>
+            <label for="campaignFilter" style="margin-left: 8px;">Campaign</label>
+            <select id="campaignFilter" onchange="filterDatasets()">
+                <option value="all">All</option>
+                <option value="mdc2020">MDC2020</option>
+                <option value="mdc2025">MDC2025</option>
+                <option value="run1b">Run1B</option>
+            </select>
         </div>
-        <div class="form-group">
-            <label for="dateFromFilter">Date From:</label>
-            <input type="date" id="dateFromFilter" class="form-control" onchange="filterDatasets()" style="width: 150px; margin-right: 10px;">
-            <label for="dateToFilter">Date To:</label>
-            <input type="date" id="dateToFilter" class="form-control" onchange="filterDatasets()" style="width: 150px;">
+        <div class="group columns-dropdown">
+            <label for="columnsBtn">Columns</label>
+            <button id="columnsBtn" type="button" class="menu-btn" onclick="document.getElementById('columnsMenu').style.display = (document.getElementById('columnsMenu').style.display === 'block' ? 'none' : 'block');" style="min-width: 120px; cursor: pointer; text-align: left;">Select ▾</button>
+            <div id="columnsMenu" class="columns-menu">
+                <label><input type="checkbox" id="col_loc" onchange="toggleColumns()"> LOC</label>
+                <label><input type="checkbox" id="col_events" onchange="toggleColumns()"> EVENTS</label>
+                <label><input type="checkbox" id="col_size" onchange="toggleColumns()"> FILE SIZE</label>
+                <label><input type="checkbox" id="col_date" onchange="toggleColumns()"> DATE</label>
+                <label><input type="checkbox" id="col_real" onchange="toggleColumns()"> Real [h]</label>
+                <label><input type="checkbox" id="col_vmhwm" onchange="toggleColumns()"> VmHWM</label>
+                <label><input type="checkbox" id="col_jobdesc" onchange="toggleColumns()"> JOBDESC</label>
+                <label><input type="checkbox" id="col_tarball" onchange="toggleColumns()"> TARBALL</label>
+                <label><input type="checkbox" id="col_setup" onchange="toggleColumns()"> SETUP</label>
+            </div>
         </div>
+        <div class="group">
+            <label><input type="checkbox" id="statsToggle" style="margin-right: 4px;"> Lineage stats</label>
+            <button onclick="clearFilter()" class="clear-btn">Clear</button>
+            <button onclick="toggleTheme()" class="clear-btn" id="themeBtn" title="Toggle light/dark">🌙</button>
+        </div>
+    </div>
+
+    <div class="jobs">
         <div id="jobs-content">Loading...</div>
     </div>
 
@@ -107,12 +336,33 @@
         }
 
         function displayJobs(data) {
-            var colNames = ['NJOBS', 'LOC', '<EVENTS>', '<FILE SIZE [MB]>', 'DATE', 'Real [h]', 'VmHWM [GB]', 'JOBDESC / TARBALL / OUTPUT DATASETS'];
+            var colNames = ['NJOBS', 'LOC', '<EVENTS>', '<FILE SIZE [MB]>', 'DATE', 'Real [h]', 'VmHWM [GB]', 'OUTPUT DATASET', 'JOBDESC', 'TARBALL', 'SETUP'];
+            var colClasses = ['', 'col-loc', 'col-events', 'col-size', 'col-date', 'col-real', 'col-vmhwm', '', 'col-jobdesc', 'col-tarball', 'col-setup'];
             var statusColors = {'OK': '#28a745', 'MISSING': '#dc3545'};
+
+            // Compute "latest" winner per (tier, description, campaign-family).
+            // Campaign family = MDC\d{4} or Run\d+[A-Z]?; lex-greatest dsconf wins.
+            // Unmatched dsconfs are singletons (always "latest").
+            var campaignRe = /^(MDC\d{4}|Run\d+[A-Z]?)/;
+            var latestByGroup = {};
+            data.forEach(function(job) {
+                (job.outputs || []).forEach(function(o) {
+                    var parts = (o.name || '').split('.');
+                    if (parts.length < 5) return;
+                    var tier = parts[0], desc = parts[2], dsconf = parts[3];
+                    var fam = (dsconf.match(campaignRe) || [dsconf])[0];
+                    var key = tier + '|' + desc + '|' + fam;
+                    if (!latestByGroup[key] || dsconf > latestByGroup[key]) {
+                        latestByGroup[key] = dsconf;
+                    }
+                });
+            });
+
             var html = '<table><tr>';
-            
+
             for (var col = 0; col < colNames.length; col++) {
                 var cls = 'sortable' + (currentSortColumn === col ? (col > 0 ? ' sort-asc' : ' sort-desc') : '');
+                if (colClasses[col]) cls += ' ' + colClasses[col];
                 var escapedName = colNames[col].replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 html += '<th class="' + cls + '" onclick="sortTable(' + col + ')">' + escapedName + '</th>';
             }
@@ -123,52 +373,84 @@
                 var groupClass = (i % 2 === 0 ? 'group-even' : 'group-odd');
                 var isComplete = outputs.length > 0 && outputs.every(function(o) { return o.status === 'OK'; });
                 var sourceName = job.source_file ? job.source_file.split('/').pop() : '';
-                var sourceLink = job.source_file ? 
-                    '<a href="#" onclick="openJsonInEditor(\'' + job.source_file.replace(/'/g, "\\'") + '\'); return false;" style="color: #007bff; text-decoration: underline;">' + sourceName + '</a>' : '';
-                
-                // Combine JOBDESC, TARBALL, and SETUP into single cell
-                var jobdescAndTarball = sourceLink;
-                if (job.tarball) {
-                    jobdescAndTarball += (sourceLink ? '<br>' : '') + '<span style="font-weight: bold;">' + (job.tarball || 'N/A') + '</span>';
-                }
-                if (job.setup_script) {
-                    jobdescAndTarball += (jobdescAndTarball ? '<br>' : '') + '<span style="color: #666; font-size: 0.9em;">Setup: ' + job.setup_script + '</span>';
-                }
-                
-                html += '<tr class="' + groupClass + ' group-header" data-complete="' + isComplete + '" data-source="' + sourceName + '">';
-                html += '<td>' + (job.njobs || 0) + '</td>';
-                html += '<td></td>';
-                html += '<td></td>';
-                html += '<td></td>';
-                    html += '<td></td>';
-                html += '<td>' + (job.avg_real_h != null ? job.avg_real_h.toFixed(2) : '') + '</td>';
-                html += '<td>' + (job.avg_vmhwm_gb != null ? job.avg_vmhwm_gb.toFixed(2) : '') + '</td>';
-                html += '<td>' + (jobdescAndTarball || 'N/A') + '</td></tr>';
-                
+                var njobsTotal = job.njobs || 0;
+                var realStr = (job.avg_real_h != null ? job.avg_real_h.toFixed(2) : '');
+                var vmhwmStr = (job.avg_vmhwm_gb != null ? job.avg_vmhwm_gb.toFixed(2) : '');
+                var jobdescStr = sourceName || '';
+                var tarballStr = job.tarball || '';
+                var setupStr = job.setup_script || '';
+
                 outputs.forEach(function(o) {
                     var color = statusColors[o.status] || '#ffc107';
                     var datasetName = o.name || '';
-                    html += '<tr class="' + groupClass + '" data-complete="' + isComplete + '" data-source="' + sourceName + '" data-has-children="' + (o.has_children || false) + '" data-dataset="' + datasetName.toLowerCase() + '">';
-                    html += '<td>' + (o.nfiles || 0) + '</td>';
-                    html += '<td>' + (o.location || '') + '</td>';
-                    html += '<td>' + (o.events_per_file != null && o.events_per_file > 0 ? o.events_per_file.toLocaleString('en-US', {maximumFractionDigits: 2}) : '') + '</td>';
-                    html += '<td>' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
-                    html += '<td>' + (o.creation_date || '') + '</td>';
-                    html += '<td></td><td></td>';
-                    html += '<td><span class="output-dataset" onclick="showDatasetInfo(\'' + datasetName + '\')" style="color: ' + color + ';">' + datasetName + '</span></td></tr>';
+                    var njobsCell = (o.nfiles || 0) + '/' + njobsTotal;
+                    var parts = datasetName.split('.');
+                    var isLatest = true;
+                    if (parts.length >= 5) {
+                        var fam = (parts[3].match(campaignRe) || [parts[3]])[0];
+                        var key = parts[0] + '|' + parts[2] + '|' + fam;
+                        isLatest = (latestByGroup[key] === parts[3]);
+                    }
+                    html += '<tr class="' + groupClass + '" data-complete="' + isComplete + '" data-source="' + sourceName + '" data-has-children="' + (o.has_children || false) + '" data-dataset="' + datasetName.toLowerCase() + '" data-is-latest="' + isLatest + '">';
+                    html += '<td style="color: ' + color + '; font-weight: 700;">' + njobsCell + '</td>';
+                    html += '<td class="col-loc">' + (o.location || '') + '</td>';
+                    html += '<td class="col-events">' + (o.events_per_file != null && o.events_per_file > 0 ? o.events_per_file.toLocaleString('en-US', {maximumFractionDigits: 2}) : '') + '</td>';
+                    html += '<td class="col-size">' + (o.avg_size_mb ? o.avg_size_mb.toFixed(2) : '') + '</td>';
+                    html += '<td class="col-date">' + (o.creation_date || '') + '</td>';
+                    html += '<td class="col-real">' + realStr + '</td><td class="col-vmhwm">' + vmhwmStr + '</td>';
+                    html += '<td><span class="output-dataset" onclick="showDatasetInfo(\'' + datasetName + '\')">' + datasetName + '</span></td>';
+                    html += '<td class="col-jobdesc">' + jobdescStr + '</td>';
+                    html += '<td class="col-tarball">' + tarballStr + '</td>';
+                    html += '<td class="col-setup">' + setupStr + '</td></tr>';
                 });
             });
             
             document.getElementById('jobs-content').innerHTML = html + '</table>';
+            toggleColumns();
         }
 
+
+        function currentTheme() {
+            return document.documentElement.getAttribute('data-theme')
+                   || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        }
+        function currentMermaidTheme() {
+            return currentTheme() === 'dark' ? 'dark' : 'forest';
+        }
+
+        function applyTheme(theme) {
+            if (theme === 'dark' || theme === 'light') {
+                document.documentElement.setAttribute('data-theme', theme);
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+            }
+            var effective = theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            var btn = document.getElementById('themeBtn');
+            if (btn) btn.textContent = effective === 'dark' ? '☀' : '🌙';
+        }
+        function toggleTheme() {
+            var current = document.documentElement.getAttribute('data-theme')
+                          || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            var next = current === 'dark' ? 'light' : 'dark';
+            localStorage.setItem('theme', next);
+            applyTheme(next);
+        }
+
+        function toggleColumns() {
+            ['loc', 'events', 'size', 'date', 'real', 'vmhwm', 'jobdesc', 'tarball', 'setup'].forEach(function(name) {
+                var on = document.getElementById('col_' + name).checked;
+                var cells = document.querySelectorAll('.col-' + name);
+                for (var i = 0; i < cells.length; i++) {
+                    cells[i].style.display = on ? 'table-cell' : 'none';
+                }
+            });
+        }
 
         function filterDatasets() {
             var filters = {
                 dataset: document.getElementById('datasetFilter').value.toLowerCase(),
                 status: document.getElementById('statusFilter').value,
-                dateFrom: document.getElementById('dateFromFilter').value,
-                dateTo: document.getElementById('dateToFilter').value
+                campaign: document.getElementById('campaignFilter').value
             };
             var rows = document.querySelectorAll('#jobs-content tr');
             
@@ -180,13 +462,12 @@
                 var matches = true;
                 var datasetAttr = row.getAttribute('data-dataset') || '';
                 matches = matches && (!filters.dataset || matchPattern(datasetAttr, filters.dataset));
-                matches = matches && (filters.status === 'all' || 
+                matches = matches && (filters.status === 'all' ||
                                     (filters.status === 'complete' && row.getAttribute('data-complete') === 'true') ||
                                     (filters.status === 'incomplete' && row.getAttribute('data-complete') === 'false') ||
-                                    (filters.status === 'nochild' && row.getAttribute('data-has-children') === 'false'));
-                var dateStr = row.cells[3].textContent.trim();
-                matches = matches && (!filters.dateFrom || !dateStr || dateStr >= filters.dateFrom);
-                matches = matches && (!filters.dateTo || !dateStr || dateStr <= filters.dateTo);
+                                    (filters.status === 'nochild' && row.getAttribute('data-has-children') === 'false') ||
+                                    (filters.status === 'latest' && row.getAttribute('data-is-latest') === 'true'));
+                matches = matches && (filters.campaign === 'all' || datasetAttr.indexOf(filters.campaign) !== -1);
                 row.style.display = matches ? '' : 'none';
             }
             
@@ -218,10 +499,11 @@
         }
 
         function clearFilter() {
-            ['datasetFilter', 'dateFromFilter', 'dateToFilter'].forEach(function(id) {
+            ['datasetFilter'].forEach(function(id) {
                 document.getElementById(id).value = '';
             });
             document.getElementById('statusFilter').value = 'all';
+            document.getElementById('campaignFilter').value = 'all';
             filterDatasets();
         }
 
@@ -253,7 +535,7 @@
                         var match = data.output.match(/```mermaid\s*\n([\s\S]*?)\n?```/);
                         if (match) {
                             modalContent.innerHTML = '<div class="mermaid">' + match[1] + '</div>';
-                            mermaid.initialize({ startOnLoad: false, theme: 'forest', flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 9999 }, securityLevel: 'loose' });
+                            mermaid.initialize({ startOnLoad: false, theme: currentMermaidTheme(), flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 9999 }, securityLevel: 'loose' });
                             setTimeout(function() { mermaid.init(undefined, modalContent.querySelector('.mermaid')); }, 100);
                         } else {
                             modalContent.innerHTML = '<h3>Mermaid file content:</h3><pre>' + data.output + '</pre><p><em>Could not extract Mermaid code</em></p>';
@@ -287,10 +569,17 @@
         }
 
         // Initialize on page load
+        function updateToolbarHeight() {
+            var tb = document.querySelector('.toolbar');
+            if (tb) document.documentElement.style.setProperty('--toolbar-h', tb.offsetHeight + 'px');
+        }
         document.addEventListener('DOMContentLoaded', function() {
             var modal = document.getElementById('diagramModal');
             document.getElementsByClassName('close')[0].onclick = () => modal.style.display = 'none';
             window.onclick = (e) => { if (e.target == modal) modal.style.display = 'none'; };
+            updateToolbarHeight();
+            window.addEventListener('resize', updateToolbarHeight);
+            applyTheme(document.documentElement.getAttribute('data-theme'));
             loadJobs();
         });
     </script>
