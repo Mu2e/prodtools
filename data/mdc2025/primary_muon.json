@@ -648,5 +648,154 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "desc": "DIOtail95",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 4000,
+        "njobs": 5000,
+        "fcl_overrides": {
+            "physics.producers.generate.decayProducts.spectrum.elow": 95,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "physics.filters.GenFilter.maxr_min": 320,
+            "physics.filters.GenFilter.maxr_max": 500,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail95.version.sequencer.art"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "FlatMuMinus",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/FlatMuMinus.fcl",
+        "fcl_overrides": {
+            "physics.producers.generate.endMom": 120
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "njobs": 1500,
+        "events": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "FlateMinus",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/FlateMinus.fcl",
+        "fcl_overrides": {
+            "physics.producers.generate.endMom": 120
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "njobs": 1500,
+        "events": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "FlatePlus",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/FlatePlus.fcl",
+        "fcl_overrides": {
+            "physics.producers.generate.endMom": 120
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "njobs": 1500,
+        "events": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "IPAMuminusMichel",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/IPAMuminusMichel.fcl",
+        "resampler_name": "IPAMuminusStopResampler",
+        "input_data": {
+            "sim.mu2e.IPAMuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 4000,
+        "njobs": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "CeMLeadingLog",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/CeMLeadingLog.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 4000,
+        "njobs": 2500,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "CePLeadingLog",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/CePLeadingLog.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 4000,
+        "njobs": 2500,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
 ]

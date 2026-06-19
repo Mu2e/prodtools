@@ -295,6 +295,100 @@
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ad/setup.sh",
         "owner": "mu2e"
+    },
+    {
+        "desc": "RPCExternal",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/RPCExternal.fcl",
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {
+            "sim.mu2e.PiMinusFilter.MDC2025ac.art": 1
+        },
+        "njobs": 5000,
+        "events": 653000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCInternal",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/RPCInternal.fcl",
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {
+            "sim.mu2e.PiMinusFilter.MDC2025ac.art": 1
+        },
+        "njobs": 5000,
+        "events": 8000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "PbarResampling",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/PbarResampling.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.PbarSTGunStops.MDC2025ap.art": 1
+        },
+        "njobs": 5000,
+        "events": 6000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCInternalPhysical",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/RPCInternalPhysical.fcl",
+        "input_data": {
+            "sim.mu2e.PhysicalPionStops.MDC2025ac.art": 1
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "njobs": 5000,
+        "events": 8000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCExternalPhysical",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/RPCExternalPhysical.fcl",
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {
+            "sim.mu2e.PhysicalPionStops.MDC2025ac.art": 1
+        },
+        "njobs": 5000,
+        "events": 626000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
     }
-
 ]
