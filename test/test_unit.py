@@ -2893,6 +2893,114 @@ class TestSkipProduced(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 35. gencount + uniformity (poms_db.DatasetInfo, db_builder, pomsMonitor)
+# ---------------------------------------------------------------------------
+
+class TestDatasetInfoGencount(unittest.TestCase):
+    """DatasetInfo.gen_per_file and .filter_eff derived from gencount."""
+
+    def _info(self, **kw):
+        from utils.poms_db import DatasetInfo
+        return DatasetInfo(**kw)
+
+    def test_filter_eff(self):
+        i = self._info(nfiles=2000, nevts=2761, gencount=5000)
+        self.assertAlmostEqual(i.filter_eff, 2761 / 5000)
+
+    def test_gen_per_file(self):
+        i = self._info(nfiles=2000, nevts=2761, gencount=10_000_000)
+        self.assertEqual(i.gen_per_file, 5000)
+
+    def test_filter_eff_none_without_gencount(self):
+        self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=None).filter_eff)
+        self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=0).filter_eff)
+
+    def test_gen_per_file_none_without_gencount(self):
+        self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=None).gen_per_file)
+
+
+class TestGetDatasetGencount(unittest.TestCase):
+    """db_builder._get_dataset_gencount: gencount(file) * nfiles, one metadata call."""
+
+    def test_multiplies_per_file_by_nfiles(self):
+        from utils import db_builder
+        with patch.object(db_builder, 'list_definition_files',
+                          return_value=['f0.art', 'f1.art']), \
+             patch.object(db_builder, 'get_metadata',
+                          return_value={'dh.gencount': 5000}) as gm:
+            self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)
+            gm.assert_called_once()  # only ONE metadata call regardless of nfiles
+
+    def test_none_when_no_gencount_field(self):
+        from utils import db_builder
+        with patch.object(db_builder, 'list_definition_files', return_value=['f0.art']), \
+             patch.object(db_builder, 'get_metadata', return_value={'event_count': 5}):
+            self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
+
+    def test_none_when_no_files(self):
+        from utils import db_builder
+        self.assertIsNone(db_builder._get_dataset_gencount('ds', 0))
+
+    def test_none_on_exception(self):
+        from utils import db_builder
+        with patch.object(db_builder, 'list_definition_files',
+                          side_effect=Exception('SAM down')):
+            self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
+
+
+class TestUniformityReport(unittest.TestCase):
+    """pomsMonitor.uniformity_report: events/job = round(target/eff)."""
+
+    def _session_with(self, datasets):
+        """In-memory DB session seeded with (name, nfiles, nevts, gencount)."""
+        from utils.poms_db import get_db_session, DatasetInfo
+        s = get_db_session(None)  # in-memory
+        for name, nf, ne, gc in datasets:
+            s.add(DatasetInfo(dataset_name=name, nfiles=nf, nevts=ne, gencount=gc))
+        s.commit()
+        return s
+
+    def test_events_per_job_rounded(self):
+        from utils import pomsMonitor
+        # eff = nevts/gencount.
+        #   CeMLeadingLog: 2_761_000/5_000_000 = .5522 -> 2000/.5522 = 3622 -> 4000
+        #   DIOtail95:       500_000/1_000_000 = .5000 -> 2000/.50  = 4000
+        s = self._session_with([
+            ('dts.mu2e.CeMLeadingLog.MDC2025ap.art', 2000, 2_761_000, 5_000_000),
+            ('dts.mu2e.DIOtail95.MDC2025ap.art',     1000,   500_000, 1_000_000),
+        ])
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            pomsMonitor.uniformity_report(s, 'MDC2025ap', target=2000, round_to=1000)
+        out = buf.getvalue()
+        self.assertIn('CeMLeadingLog', out)
+        self.assertIn('4,000', out)  # 2000/0.5522 = 3623 -> 4000
+        # DIOtail95 eff exactly 0.5 -> 2000/0.5 = 4000
+        self.assertRegexpMatches(out, r'DIOtail95\s+0\.5000.*4,000')
+
+    def test_requires_campaign(self):
+        from utils import pomsMonitor
+        s = self._session_with([])
+        with self.assertRaises(SystemExit):
+            pomsMonitor.uniformity_report(s, None, target=2000)
+
+    def test_skips_missing_gencount(self):
+        from utils import pomsMonitor
+        s = self._session_with([
+            ('dts.mu2e.Good.MDC2025ap.art', 100, 50, 1000),
+            ('dts.mu2e.NoGen.MDC2025ap.art', 100, 50, None),
+        ])
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            pomsMonitor.uniformity_report(s, 'MDC2025ap', target=2000, round_to=1000)
+        out = buf.getvalue()
+        self.assertIn('Good', out)
+        self.assertNotIn('NoGen', out)  # missing-gencount goes to stderr, not the table
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

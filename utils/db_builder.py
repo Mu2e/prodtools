@@ -10,12 +10,13 @@ import sys
 import glob
 import json
 import time
+from typing import Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.poms_db import get_db_session, Job, JobOutput, DatasetInfo
-from utils.samweb_wrapper import count_files, locate_file, locate_file_full, list_files, list_definition_files, describe_definition
+from utils.samweb_wrapper import count_files, locate_file, locate_file_full, list_files, list_definition_files, describe_definition, get_metadata
 from utils.job_common import Mu2eName
 from utils.jobiodetail import Mu2eJobIO
 from utils.jobquery import Mu2eJobPars
@@ -54,6 +55,28 @@ def _get_dataset_stats(dataset_name):
     except Exception as e:
         print(f"Warning: _get_dataset_stats failed for {dataset_name}: {e}", file=sys.stderr)
         return (0, 0, 0)
+
+
+def _get_dataset_gencount(dataset_name, nfiles):
+    """Total generated events for a dataset = dh.gencount(one file) * nfiles.
+
+    gencount is uniform per file within a production dataset, so a single
+    get-metadata is enough (avoids an O(nfiles) sum). Returns None if the
+    dataset has no files or no dh.gencount (e.g. non-generator tiers)."""
+    if not nfiles:
+        return None
+    try:
+        files = list_definition_files(dataset_name)
+        if not files:
+            return None
+        md = get_metadata(files[0])
+        per_file = md.get('dh.gencount') if isinstance(md, dict) else None
+        if per_file is None:
+            return None
+        return int(per_file) * int(nfiles)
+    except Exception as e:
+        print(f"Warning: _get_dataset_gencount failed for {dataset_name}: {e}", file=sys.stderr)
+        return None
 
 
 def _check_dataset_has_children(dataset_name):
@@ -139,7 +162,7 @@ def _get_dataset_creation_date(dataset_name):
         return None
 
 
-def _normalize_location(raw: str | None) -> str:
+def _normalize_location(raw: Optional[str]) -> str:
     if not raw:
         return 'N/A'
     if raw.startswith('enstore'):
@@ -355,6 +378,7 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                 dataset_name = str(out_name.dataset)
 
                 nfiles, nevts, total_size = _get_dataset_stats(dataset_name)
+                gencount = _get_dataset_gencount(dataset_name, nfiles)
                 has_children = _check_dataset_has_children(dataset_name)
                 creation_date = _get_dataset_creation_date(dataset_name)
 
@@ -364,6 +388,7 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                     info = DatasetInfo(dataset_name=dataset_name)
                     session.add(info)
                 info.nfiles, info.nevts, info.total_size = nfiles, nevts, total_size
+                info.gencount = gencount
                 info.has_children = has_children
                 if creation_date:
                     info.creation_date = creation_date

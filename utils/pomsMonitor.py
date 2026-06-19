@@ -35,6 +35,46 @@ def _parse_since(since_str):
         )
 
 
+def uniformity_report(session, campaign, target, round_to=1000):
+    """Recommend events-per-job so each primary yields ~`target` passed
+    events/file, using measured filter efficiency (passed/generated) from the
+    DB's gencount column. Requires a gencount-populated DB (--build-db).
+
+    For each dts primary of `campaign`: eff = nevts/gencount;
+    events_per_job = target/eff, rounded to the nearest `round_to`.
+    """
+    from utils.poms_db import DatasetInfo
+    if not campaign:
+        sys.exit("--uniformity requires --campaign")
+
+    like = f"dts.mu2e.%.{campaign}.art"
+    rows = (session.query(DatasetInfo)
+            .filter(DatasetInfo.dataset_name.like(like))
+            .filter(DatasetInfo.nfiles > 0)
+            .all())
+    prim = [r for r in rows if r.gencount and r.gencount > 0 and r.nevts is not None]
+    missing = [r for r in rows if not (r.gencount and r.gencount > 0)]
+
+    if not prim:
+        print(f"No gencount-populated dts primaries for {campaign}. "
+              f"Run --build-db first (gencount is captured during build).")
+        return
+
+    print(f"Uniformity plan for {campaign}: target {target:,} passed events/file"
+          f" (events/job rounded to {round_to:,})")
+    print(f"{'primary':<24}{'eff':>9}{'pass/file':>11}{'events/job':>14}")
+    for r in sorted(prim, key=lambda x: x.filter_eff):
+        eff = r.filter_eff
+        raw = target / eff if eff > 0 else 0
+        ev = max(round_to, round(raw / round_to) * round_to) if eff > 0 else 0
+        desc = r.dataset_name.split('.')[2]
+        print(f"{desc:<24}{eff:>9.4f}{r.nevts / r.nfiles:>11,.0f}{ev:>14,}")
+
+    for r in missing:
+        print(f"# no gencount (skipped): {r.dataset_name.split('.')[2]} "
+              f"(dts not produced, or no dh.gencount)", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze POMS jobdesc JSON files")
     parser.add_argument('--pattern', default='MDC202*', help='POMS JSON file pattern (default: MDC202*)')
@@ -62,6 +102,14 @@ def main():
                         help='Remove the ignored flag from a dataset')
     parser.add_argument('--list-ignored', action='store_true',
                         help='List all datasets currently marked as ignored')
+    parser.add_argument('--uniformity', action='store_true',
+                        help='Recommend events-per-job per primary so each yields '
+                             '~--target passed events/file (needs gencount; --build-db). '
+                             'Requires --campaign.')
+    parser.add_argument('--target', type=int, default=2000,
+                        help='Target passed events per file for --uniformity (default: 2000)')
+    parser.add_argument('--round', type=int, default=1000, dest='round_to',
+                        help='Round events-per-job to nearest this for --uniformity (default: 1000)')
     args = parser.parse_args()
 
     since_dt = None
@@ -92,6 +140,10 @@ def main():
 
     if args.build_db:
         build_db(args.pattern, args.db, since=since_dt)
+
+    if args.uniformity:
+        uniformity_report(session, args.campaign, args.target, args.round_to)
+        return
 
     show_outputs = (
         args.outputs

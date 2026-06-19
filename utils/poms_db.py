@@ -63,7 +63,8 @@ class DatasetInfo(Base):
     id = Column(Integer, primary_key=True)
     dataset_name = Column(String, unique=True, index=True)
     nfiles = Column(Integer)
-    nevts = Column(Integer)
+    nevts = Column(Integer)         # passed/written events (SAM event_count)
+    gencount = Column(Integer)      # generated events (sum of dh.gencount); None if unknown
     total_size = Column(Integer)  # in bytes
     location = Column(String)
     has_children = Column(Boolean, default=False)  # True if any file in dataset has child files
@@ -80,6 +81,20 @@ class DatasetInfo(Base):
         if self.nfiles and self.nfiles > 0:
             return round(self.total_size / self.nfiles / 1e6, 2)
         return 0
+
+    @property
+    def gen_per_file(self):
+        """Generated events per file (the production `events`-per-job knob)."""
+        if self.gencount and self.nfiles:
+            return self.gencount / self.nfiles
+        return None
+
+    @property
+    def filter_eff(self):
+        """Filter efficiency = passed events / generated events."""
+        if self.gencount and self.gencount > 0 and self.nevts is not None:
+            return self.nevts / self.gencount
+        return None
 
 
 def get_db_session(db_path=None):
@@ -104,6 +119,8 @@ def get_db_session(db_path=None):
                 conn.exec_driver_sql("ALTER TABLE dataset_info ADD COLUMN ignored INTEGER DEFAULT 0")
             if 'ignore_reason' not in columns:
                 conn.exec_driver_sql("ALTER TABLE dataset_info ADD COLUMN ignore_reason TEXT")
+            if 'gencount' not in columns:
+                conn.exec_driver_sql("ALTER TABLE dataset_info ADD COLUMN gencount INTEGER")
         except Exception:
             pass
     Session = sessionmaker(bind=engine)
