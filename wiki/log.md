@@ -5,6 +5,16 @@ Recent entries: `grep "^## \[" log.md | tail -10`
 
 ---
 
+## [2026-05-22] ingest | MDC2025ap RPCExternal chain (non-Physical RPC at MDC2025)
+Pages written: 2026-05-22-mdc2025ap-rpcexternal-chain
+Pages updated: index.md
+Raw: raw/2026-05-22-mdc2025ap-rpcexternal-chain.md
+Reason: added single `RPCExternal` entry to `data/mdc2025/resampler_beam.json` at MDC2025ap to produce `dts.mu2e.RPCExternal.MDC2025ap.art` — the MDC2025 analog of `dts.mu2e.RPCExternal.MDC2020aw.art`. MDC2025 previously shipped only Physical RPC variants. Records the `PiTargetFilt → PiMinusFilter` rename insight and the partial-PS-off vs full DS-off geom distinction.
+
+## [2026-05-23] update | 2026-05-22-mdc2025ap-rpcexternal-chain (local smoke passed)
+Reason: `mu2e -c cnf.mu2e.RPCExternal.MDC2025ap.0.fcl -n 5` exited status 0 against real xroot `sim.mu2e.PiMinusFilter.MDC2025ac.001430_00000005.art` input; CPU 33 s, VmPeak 2.57 GB. PrimaryFilter rejected all 5 events (expected low-stats prescale, matches Run1Bak `-n ≥ 5` convention). Entry confirmed wireable end-to-end; ready for production push.
+
+
 ## [2026-04-21] init | Mu2e prodtools operational knowledge
 
 ## [2026-04-21] lint | 0 errors, 0 warnings, 1 info
@@ -163,3 +173,269 @@ Source: in-session 2026-04-28 ~21:12 UTC, after user revealed `spack load g4beam
 ## [2026-04-28] update | retired poms/g4bl.cfg
 Deleted `poms/g4bl.cfg` (SL7 outer-container submit cfg). No longer needed after the runner switched to native AL9 spack g4bl — workers can now run under the standard `poms/fermigrid.cfg` (fnal-wn-el9). Updated `wiki/pages/poms-reference.md` to note the retirement.
 Source: in-session 2026-04-28.
+
+## [2026-04-29] update | proposed: remove POMS from submit/recover loop
+Filed [[2026-04-29-remove-poms-from-submit-loop]] — phased plan. Phase 1: add `utils/submit.py` + `bin/submit_map` driving existing `mu2ejobsub` from a local SQLite submissions table; repoint `mkrecovery` to emit `--jobs=...` argv (drop the SAM `etc.mu2e.index` dataset round-trip); switch `pomsMonitor`/`db_builder`/`listNewDatasets --completeness` off `poms_map/*.json`. Phase 2: replace `mu2ejobsub` with Python `jobsub_argv.py` driving `jobsub_submit` directly + Python/bash `run_job.sh` worker shim. Status: proposed, not started.
+Source: in-session 2026-04-29.
+
+## [2026-04-30] update | Phase 1 first-step shipped + Phase 2 plan filed
+Phase 1: `utils/submit.py` + `bin/submit_map` written. Validated end-to-end: cluster 91222054 (2 BeamSplitter jobs, scratch outstage as oksuzian) submitted via prodtools→mu2ejobsub→jobsub_submit, no POMS in the loop. Outputs land in outstage but NOT in SAM (mu2ejobsub.sh does no pushOutput).
+
+Phase 2 plan filed at [[2026-04-30-phase2-direct-jobsub-implementation]]. Driver: per-job pushOutput + Perl-free pipeline. Three review agents found 21 fidelity gaps; folded into the plan as 10 correctness blockers (CB1–CB10). Scope tightened to jobdef-mode only for v1 (template/direct-input/g4bl modes stay on `--backend mu2ejobsub`). Ownership cost (taking on `mu2egrid::impl` semantics) explicitly accepted in plan.
+Source: in-session 2026-04-30.
+
+## [2026-05-05] ingest | json2jobdef-staging-workflow page added
+Pages written: json2jobdef-staging-workflow
+Skill added: /stage-entry (.claude/commands/stage-entry.md)
+Reason: cross-stage staging-config model (data/<campaign>/*.json entry shape, stage chain, dsconf flow, DbService rule) was undocumented; gap surfaced when planning a multi-dataset reco lift.
+
+## [2026-05-05] lint | 3 errors, 0 warnings, 2 info
+Report: [[lint-2026-05-05]]
+Fixed: 4 broken `[[reference_*]]` cross-refs introduced in first draft of `json2jobdef-staging-workflow` (memory files don't resolve via `[[slug]]`; rewritten as prose pointers). 3 remaining errors are pre-existing broken slugs (`2026-04-21-pbi-sequence-implementation`, `2026-04-24-mu2e-aitools-skills`, `run1bai-campaign`) flagged in earlier lints; not addressed this pass.
+
+## [2026-05-05] update | json2jobdef-staging-workflow + SimJob-version-selection rule
+Pages updated: json2jobdef-staging-workflow (added "SimJob version selection" section)
+Memory added: feedback_latest_simjob_in_new_entries
+Reason: user codified a forward-only rule that new `data/<campaign>/*.json` entries default `simjob_setup` and dsconf prefix to the lexicographically-greatest available release under `/cvmfs/.../Musings/SimJob/`, with cross-checks against known-broken releases (aj trig-config drift, pre-aj PBI offset gap).
+
+## [2026-05-05] update | json2jobdef-staging-workflow + stage-entry: --index semantics fix
+Pages updated: json2jobdef-staging-workflow (added "Selector semantics" subsection)
+Skill updated: /stage-entry (selectors block + examples now lead with --dsconf)
+Memory added: reference_json2jobdef_index_is_flat
+Reason: smoke test of am-bumped reco entries revealed --index N actually indexes the flattened (entry × input_data) expansion, not the JSON entry position — `--index 7` picked the 8th input of entry 0, not entry 7. argparse help is misleading. `--dsconf MDC2025am_best_v1_3` produced all 19 expected cnfs in one call (the natural bulk selector).
+
+## [2026-05-05] update | MDC2025am reco entries event-validated end-to-end
+Memory added: reference_mdc2025am_reco_verified
+Reason: 3 new reco.json entries (OnSpill batch, Extracted_am, OffSpill) ran `mu2e -c` to status 0 on real dig tape inputs under MDC2025am simjob with `services.DbService.{purpose=Sim_best,version=v1_3}`. First production use of `recoMC/OffSpill.fcl` as a reco.json entry. Confirms the forward-only "latest SimJob" rule is safe to apply for reco against am. Token gotcha noted: stale `/tmp/bt_token_mu2e_Analysis_<uid>` insufficient; fresh `htgettoken -a htvaultprod.fnal.gov -i mu2e` after `setup OfflineOps` writes `/run/user/<uid>/bt_u<uid>` which xrootd accepts.
+
+## [2026-05-05] update | MDC2025-025 extended with 19 MDC2025am reco entries
+Pushed: 19 cnf tarballs SAM-declared as mu2e (CeEndpointTriggered, CeMLeadingLog{,Mix1BB}Triggered, CePLeadingLogTriggered, CePlusEndpointTriggered, CosmicCRYAllMix1BBTriggered, CosmicSignalTriggered, DIOtail95OnSpillTriggered, FlatGammaCalo/FlatGamma/FlateMinus/FlatePlus/NoPrimaryMix1BBTriggered, RMC/RPC{External,Internal}OnSpillTriggered, CosmicCRYExtractedTriggeredReco_am, CosmicSignalOffSpillTriggered) at MDC2025am_best_v1_3, three fcls (recoMC/{OnSpill,Extracted,OffSpill}.fcl).
+Map: /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-025.json extended in place. iMDC2025-025 SAM index deleted+recreated. Map now holds 25 tarballs / 22402 jobs (was ~6/156 PBI-only before).
+Reason: user-directed cross-purpose extension — MDC2025-025 originally housed the PBI chain; user chose to add the unrelated MDC2025am reco campaign to the same map (option A from session prompt) rather than allocate a new map number. Diverges from `feedback_extend_existing_poms_map.md` ("later stage of same workflow") — this is a same-map override for a different workflow.
+
+## [2026-05-05] ingest | prodtools-prd page added (descriptive PRD via parallel agentic synthesis)
+Pages written: prodtools-prd
+Method: 3 parallel Explore agents (commands+workflows; integration+auth; users+history+gaps) → main-thread synthesis into a single ~330-line scannable PRD covering personas, goals/non-goals, capabilities (commands + skills), data flow diagram, integration surface, accounts/auth/env, in-flight roadmap signals, operational gotcha categories, repo layout, open questions.
+Reason: user requested an "agentic teams" PRD; descriptive shape (what prodtools IS today) chosen as the safe default — no forward strategy assumed. Cross-links wiki + memory rather than restating; pruned a few unverifiable specifics from agent outputs (test counts, exact cluster IDs without source check). Open questions section captures Phase 2 cutover, cross-purpose POMS map precedent, MetaCat migration depth, and the lingering broken wiki slugs.
+
+## [2026-05-05] update | corrected g4bl-vs-Offline chain conflation in PRD + staging-workflow
+Pages updated: prodtools-prd (§1 problem statement + §7 data-flow diagram), json2jobdef-staging-workflow (added clarifying paragraph after the stage-chain table)
+Memory added: reference_g4bl_decoupled_from_offline
+Reason: user flagged that the chain `g4bl → primary → digi → mix → reco → evntuple` is wrong — g4bl is Geant4 Beamline (its own simulation tool, runner-driven, .root output, no mu2e -c) and is decoupled from the Offline chain. Its outputs reach Offline downstream consumers only via separate Offline-side conversion that lives outside prodtools. Corrected both pages to show Offline chain as `primary → digi → mix → reco → evntuple` with g4bl noted as a parallel prodtools-managed pipeline.
+
+## [2026-05-05] update | pruned speculative "g4bl feeds Offline downstream" claim
+Pages updated: prodtools-prd (§1 + §7 data-flow note), json2jobdef-staging-workflow (clarifying paragraph)
+Memory updated: reference_g4bl_decoupled_from_offline (replaced "out-of-band conversion → downstream pileup/resampler inputs" diagram with terminal-within-prodtools)
+Reason: user flagged that my earlier correction still over-claimed — I'd written that g4bl outputs feed Offline stages "only after Offline-side conversion". I had no evidence for that. Verified: no other `data/<campaign>/<stage>.json` references g4bl outputs as input; raw source `2026-04-27-g4bl-runner-integration.md` describes only the runner setup, no downstream path. Within prodtools, g4bl outputs are terminal; whether any external tool consumes them is not documented in this repo.
+
+## [2026-05-05] update | g4bl runner is native AL9 spack, not SL7/apptainer
+Pages updated: prodtools-prd (§1 + §7), json2jobdef-staging-workflow (clarifying paragraph)
+Memory updated: reference_g4bl_decoupled_from_offline (history note + distinguishing markers)
+Reason: I cited the 2026-04-27 raw notes (which captured the original SL7/apptainer integration) as if they described current state. Commit `401e3da` switched to native AL9 spack and retired `poms/g4bl.cfg`. Current code in `utils/prod_utils.py:679-710` uses `eval "$(spack load --sh g4beamline)"` directly on AL9 workers — no container wrap. The SPACK_ENV gotcha (memory `reference_spack_env_after_muse_setup.md`) was discovered during this migration.
+
+## [2026-05-05] ingest | g4bl-runner page added (architecture detail per user request)
+Pages written: g4bl-runner
+Pages updated: prodtools-prd (§7 cross-link), json2jobdef-staging-workflow (clarifying paragraph cross-link), index.md
+Reason: user asked for detail on the "no SL7/apptainer wrap since commit 401e3da" claim. Synthesized from `git show 401e3da` (commit message + diff): current execution path (bash → unset SPACK_ENV/PYTHON* → source mu2e-art.sh → eval spack load g4beamline → g4bl on AL9 worker, no nested wrap), before/after diff table (apptainer fnal-dev-sl7 → nothing; whole-/tmp + HOME + embed_dir binds → nothing; --cleanenv → selective unset; _is_inside_sl7 retired; DEFAULT_G4BL_CONTAINER constant retired; poms/g4bl.cfg deleted), why two prior gotchas became unnecessary, minimized POMS map shape (5 fields, runtime config in tarball jobpars.json), naming/dsconf renames (g4bl.mu2e → nts.mu2e, Mu2EBeamline → G4blPOT, MDC2025ai_g4bl_v1_0 → TESTaa), demonstrator artifacts. PRD stays scannable; deep history lives in the new page.
+
+## [2026-05-08] update | MDC2025-025 extended with 20 MDC2025an ntuple entries (MDC2025-003)
+Added 3 new entries to `data/mdc2025/evntuple.json` against the just-completed MDC2025an reco mcs outputs:
+- mockdata batch (18 inputs: 17 OnSpill/Mix1BB triggered + 1 OffSpill-LH) → `from_mcs-mockdata.fcl`
+- OffSpill-CH (1 input) → `from_mcs-OffSpill.fcl` (new in AnalysisMDC2025 v02_00_00, hardcodes FitType: CentralHelix)
+- Extracted (1 input, merge factor 10) → `from_mcs-extracted.fcl`
+
+simjob_setup: `AnalysisMDC2025/v02_00_00`. dsconf: `MDC2025-003` (next sequential after existing MDC2025-000/-002 ntuple campaigns).
+
+Local smoke: OffSpill-CH cnf → `fcldump --local-jobdef` → `mu2e -c -n 1` ran clean (status 0, MergeKKOff + EventNtuple modules visited, ~0.4s CPU, 1.25 GB peak).
+
+Production push via `/mu2epro-run AnalysisMDC2025/v02_00_00 json2jobdef --json data/mdc2025/evntuple.json --dsconf MDC2025-003 --prod --jobdefs /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-025.json`. 20 cnf tarballs SAM-declared and copied to `/pnfs/.../phy-etc/cnf/.../MDC2025-003/tar/...`. Map: `MDC2025-025.json` extended in place to **64 tarballs / 65594 jobs** (was 44 / 44648). `iMDC2025-025` deleted+recreated to span all 64 entries.
+
+Findings worth noting:
+- **OffSpill SIGSEGV is fixed in MDC2025an** (Offline v13_11_00). All 20 reco mcs outputs (incl. OffSpill -LH/-CH at 500/500 each) are complete.
+- **fcl routing for OffSpill ntuples**: -LH → mockdata.fcl, -CH → OffSpill.fcl. The earlier evntuple.json precedent (v01_02_00) routed BOTH through mockdata, which was a latent bug (mockdata's default LoopHelix config doesn't match CH input). v02_00_00's dedicated OffSpill.fcl fixes it.
+- **`fcldump --local-jobdef` is the cleaner smoke entry point** vs `jobfcl` directly — defaults to `--proto root, --loc tape, --index 0` and writes the fcl to a file. Saved as `reference_jobfcl_proto_root_for_tape_smoke.md`.
+- **`/mu2e-run` and `/mu2epro-run` skills extended** to accept `<Musing>/<Version>` form (e.g. `AnalysisMDC2025/v02_00_00`) so they work for non-SimJob musings. Bare tags still treated as `SimJob/<tag>` for backwards compat.
+- **`samweb list-definitions` ≠ file metadata** — initial completeness check missed OffSpill -LH/-CH because SAM definitions weren't auto-created for suffixed-output names; `samweb count-files 'dh.dataset X'` showed 500/500 each. Saved as `reference_samweb_definitions_vs_metadata.md`.
+
+Source: in-session 2026-05-08 ~10:02 UTC; workdir `/tmp/mu2epro_run.PeRZO1`. Smoke artifacts in repo root: `cnf.oksuzian.CosmicSignalOffSpillTriggered-CH.MDC2025-003.0.tar`, `cnf.oksuzian....fcl`, `smoke_offspill_ch.fcl`.
+
+## [2026-05-07] update | MDC2025-025 extended with 19 MDC2025an reco entries
+Added 3 new entries to `data/mdc2025/reco.json` mirroring the am triplet (OnSpill batch of 17 inputs, Extracted, OffSpill) at `MDC2025an_best_v1_3` / `simjob_setup=MDC2025an`. Per the forward-only rule, am entries left untouched. Pushed via `/mu2epro-run`: 19 cnf tarballs SAM-declared + copied to `/pnfs/.../phy-etc/cnf/.../MDC2025an_best_v1_3/tar/...`.
+Map: `MDC2025-025.json` extended in place to **44 tarballs / 44648 jobs** (was 25 / 22402); `iMDC2025-025` deleted+recreated to span all 44 entries.
+Motivation: retry against the Offline `v13_11_00` build (am had `v13_09_00` and SIGSEGV'd OffSpill on grid 2026-05-06). Many `.so` libraries differ between am and an SimJob trees — realistic chance the SIGSEGV is fixed. Awaiting POMS dispatch + completeness check.
+Gotcha encountered: first push attempt used relative `--jobdefs MDC2025-025.json` from /tmp workdir; json2jobdef created a fresh 19-entry map there, and `mkidxdef --prod` rebuilt `iMDC2025-025` to point only at those 19 entries (orphaning prior 25 PBI + am from the SAM index, dropbox file untouched). Recovered by re-running with absolute `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-025.json`; pushOutput no-ops on already-declared tarballs ("File ... already exists on SAM, skipping push") so cost was zero. Saved as `reference_jobdefs_use_absolute_path.md`.
+Source: in-session 2026-05-07 ~23:13 UTC (workdir `/tmp/mu2epro_run.mFz3O2`).
+
+## [2026-05-06] update | reco multi-output suffix-substitution rule + OffSpill entry fix
+Memory added: reference_reco_output_suffix_overrides
+File updated: data/mdc2025/reco.json (entry 9 OffSpill — added `outputs.CentralHelixOutput.fileName` override + restored `-LH` suffix on `outputs.LoopHelixOutput.fileName`)
+Reason: discovered while debugging the SIGSEGV on OffSpill grid job that the in-flight cnf had a malformed `mcs.mu2e.description-CH.…` name in the appended fcl. Root cause: `recoMC/OffSpill.fcl` declares two outputs (`LoopHelixOutput` with `-LH`, `CentralHelixOutput` with `-CH` suffixes glued onto the desc token); mu2ejobfcl's auto-sub matches `\.<keyword>\.` patterns and so leaves `description-CH` literal. Bug independent of the SIGSEGV (would have surfaced at pushOutput SAM-declare for all 500 OffSpill jobs in MDC2025-025 even if reco had succeeded). Rule: for any reco entry, audit the upstream fcl's output declarations and override every output explicitly with `{desc}-<suffix>` form.
+
+## [2026-05-11] update | fcldump --dataset two-pass cnf search
+
+Bug: `fcldump --dataset <output>` assumes 1:1 desc→cnf mapping. Breaks
+on suffixed-output cnfs (e.g. `cnf.mu2e.CeEndpointMix1BB` produces
+`dig.mu2e.CeEndpointMix1BBTriggered.*` + `Triggerable.*`).
+
+Fix: extracted `_search_jobdefs(jobdefs, desc, input_type, name_filter)`
+helper. `find_matching_jobdef` now runs two passes — first with the
+original name pre-filter (fast, ~1s for 1:1 case), then on miss without
+the filter (full scan, ~2.5s for ~24 cnfs at MDC2025af_best_v1_1; cheaper
+than expected because samweb caches dataset-file lookups).
+
+Decisions captured:
+- Two-pass over single-pass: preserves the fast path for the 80% case
+  where 1:1 holds; fallback only fires on miss.
+- No multi-match defense: SAM enforces uniqueness on (desc, dsconf,
+  sequencer); two cnfs claiming the same output would collide at
+  pushOutput, so first-match-wins is safe.
+- No caching for v1: fallback wall-clock ~2.5s is acceptable for an
+  interactive tool.
+
+See memory `reference_cnf_to_output_desc_mismatch.md` for the bug class
+(same trap as reco LH/CH suffixes, one stage upstream).
+
+## [2026-05-12] update | /mu2eg4bl-submit skill added
+
+`.claude/commands/mu2eg4bl-submit.md` — wraps upstream `mu2eg4bl` with
+the three flags it actually needs in 2026 (`--g4bl-version=v3_08`,
+`--predefined-args=sl7`,
+`--jobsub-arg=--need-storage-modify=/mu2e/scratch/users/$USER/outstage`).
+Bare invocation submits and runs but silently loses output to dCache 403;
+verified 2026-05-11 against clusters 28125879 (no scope, 0 files) and
+28127301 (with scope, 12 files). The skill also auto-builds
+`Geometry.tar` from `Geometry/` and verifies a bearer token before
+submitting. Cross-references memory
+`reference_mu2eg4bl_needs_storage_modify.md`.
+
+Production-style g4bl still goes through `/stage-entry g4bl` →
+`json2jobdef` → native-AL9 prodtools runner (per
+`wiki/pages/g4bl-runner.md`). This skill is for one-off beamline
+studies that need the upstream mu2egrid path.
+
+## [2026-05-12] update | /mu2ejobsub-submit skill added
+
+`.claude/commands/mu2ejobsub-submit.md` — wraps upstream `mu2ejobsub`
+for direct, one-off invocations (smoke tests, recoveries, ad-hoc
+JIT-cnf submissions) outside the POMS-map / `submit_map` flow. Unlike
+`/mu2eg4bl-submit`, no `--need-storage-modify` workaround is needed
+because mu2ejobsub's Perl already requests WFOUTSTAGE scope internally
+(per ADR `2026-04-30` §CB1).
+
+Surfaces the critical caveat that `mu2ejobsub`'s worker shim does NOT
+run pushOutput — outputs land in outstage but are not SAM-registered.
+This is the gap Phase 2 (`submit_map --backend direct` →
+`runmu2e.py` direct mode) was built to close. Skill body steers
+users who need SAM-registered outputs to `/stage-entry` or
+`submit_map --backend direct` instead.
+
+Wraps the four `JOB_SET_SPECIFICATION` forms (`--all`,
+`--firstjob/--njobs`, `--jobs`, `--jobset`); enforces exactly one;
+defaults `--default-location=tape --default-protocol=root
+--predefined-args=al9`; passes all other flags through verbatim.
+
+## [2026-05-12] update | /jit-cnf-build skill added
+
+`.claude/commands/jit-cnf-build.md` — wraps the front half of the
+[JustInTimeFcl](https://mu2ewiki.fnal.gov/wiki/JustInTimeFcl) workflow:
+build a one-off `cnf.<owner>.<desc>.<dsconf>.0.tar` from a hand-written
+template.fcl via prodtools `jobdef` (thin wrapper around upstream
+`mu2ejobdef`), then auto-smoke via `fcldump --local-jobdef --index 0`.
+
+Composes with the recently-added `/mu2ejobsub-submit` skill: the
+build-and-smoke output of this skill feeds directly into a
+`/mu2ejobsub-submit <cnf>.tar --firstjob 0 --njobs N` invocation to
+ship the JIT cluster (per JustInTimeFcl steps 1-4).
+
+Refuses to author the template, set DbService overrides, or inject
+output filename patterns — those are user responsibility per the
+"no fallbacks for missing required data" feedback memory. Resolves
+short `--setup MDC2025af` tags to full
+`/cvmfs/.../Musings/SimJob/<tag>/setup.sh` paths. Surfaces ADR
+`2026-04-30` §CB10 reminder that direct-input/template cnfs must use
+the `mu2ejobsub` backend for submission (direct backend rejects
+them).
+
+For the declared-entries flow (`data/<campaign>/*.json`), use
+`/stage-entry` instead — covered by `wiki/pages/json2jobdef-staging-workflow.md`.
+
+## [2026-05-12] update | /mu2ejobdef-fcl skill added (upstream-Perl twin of /jit-cnf-build)
+
+`.claude/commands/mu2ejobdef-fcl.md` — wraps the upstream Perl
+binaries `mu2ejobdef` and `mu2ejobfcl` from `mu2egrid v8_03_02`
+directly, bypassing the prodtools Python parity reimplementations
+(`utils/jobdef.py`, `utils/jobfcl.py`).
+
+Two subcommands:
+- `build` — `mu2ejobdef --embed template.fcl ...` then optional
+  `mu2ejobfcl --index 0` smoke
+- `inspect` — `mu2ejobfcl --jobdef cnf.tar (--index N | --target T)`
+  for the wiki's "Inspect fcl by index" / "by output filename"
+  modes; supports `--default-proto file --default-loc dir:...` for
+  the local-undeclared-input case
+
+Intentional twin to `/jit-cnf-build`: same conceptual workflow,
+different runtime. Useful for following the JustInTimeFcl wiki
+verbatim, parity-testing prodtools against upstream, or as a fallback
+when a prodtools wrapper misbehaves. Both end at the same downstream
+(`/mu2ejobsub-submit cnf.X.tar --firstjob 0 --njobs N`), so cnfs
+produced by either are interchangeable for submission.
+
+Forwards all unknown flags verbatim — no rewriting `--option=value`
+to `--option value`. Resolves bare SimJob tags (`MDC2025af`) to full
+`/cvmfs/.../Musings/SimJob/<tag>/setup.sh` paths.
+
+## [2026-05-19] ingest | Run1Bak resampler_beam additions (DS-off, v40 geom)
+Pages written: 2026-05-19-run1bak-resampler-additions, run1bak-campaign
+Pages updated: index.md (Campaigns + Sources), json2jobdef-staging-workflow (Related)
+Reason: appended 4 new entries (NeutralsFlash, MuBeamFlash, EleBeamFlash, MuStopPileup) to `data/Run1B/resampler_beam.json` under dsconf `Run1Bak`, geom `geom_run1_b_v40.txt` + `bfgeom_DSOff.txt`, run 1470. Additive (originals at Run1Baa/Run1Baa1 v01 run 1440 preserved). Pion entries excluded. `input_data` refs unchanged (still consume upstream Run1B* outputs). Seeded the first Campaigns-section page in the wiki. Branch: field-off-option.
+
+## [2026-05-19] update | Run1Bak NeutralsFlash xroot validation
+Pages updated: 2026-05-19-run1bak-resampler-additions (added Validation section)
+Reason: `mu2e -c cnf.mu2e.NeutralsFlash.Run1Bak.0.fcl -n 5` against real xroot input `sim.mu2e.Neutrals.MDC2025ae3.001430_00000001.art` completed status 0 (29 s CPU, 2.5 GB VmPeak). Confirms v40 geom + DS-off field loads cleanly under Run1Bak musing and resampler reads xrootd upstream. All 5 events filtered out by EarlyPrescaleFilter/DetStepFilter (normal prescale). Also documented 1-event smoke artifact (`inconsistent simStage: 1 vs 0`) as a pre-existing local-smoke limitation reproducing on Run1Baa originals too — not a Run1Bak regression. Other 3 entries (MuBeam/EleBeam/MuStopPileup) not yet runtime-validated.
+
+## [2026-05-23] lint | 4 errors, 1 warning, 3 info
+Report: [[lint-2026-05-23]]
+Fixed: 3 issues — created [[reference-rpc-primary-inherits-bfgeom]] (closes 3 dead links, retires duplicated rule from 2 chain pages), substituted `[[run1bai-campaign]]` → [[run1bak-campaign]] in [[prodtools-prd]], refreshed `overview.md` with RPC/Pbar/Run1Bak ingest summary and new open questions. Remaining: 2 dead links ([[2026-04-21-pbi-sequence-implementation]], [[2026-04-24-mu2e-aitools-skills]]) and 3 info items.
+
+## [2026-05-26] lint | 2 errors, 0 warnings, 3 info
+Report: [[lint-2026-05-26]]
+Fixed: none (audit-only; same 2 recurring broken slugs as last cycle: [[2026-04-21-pbi-sequence-implementation]] and [[2026-04-24-mu2e-aitools-skills]]). Improvement vs [[lint-2026-05-23]]: [[run1bai-campaign]] no longer counted as active broken link — confirmed [[prodtools-prd]] substitution from last cycle stuck. New coverage gap flagged: CosmicCRYAll MDC2025ap chain (3 non-obvious facts currently memory-only — cosmic chain `PrimaryOutput.fileName` requirement, bfgeom non-inheritance, outloc-lives-in-POMS-map recovery procedure) warrants an ingest page to complete the MDC2025ap trilogy alongside [[2026-05-22-mdc2025ap-rpcexternal-chain]] / [[2026-05-23-mdc2025ap-pbarstgun-chain]].
+
+## [2026-05-26] ingest | MDC2025ap CosmicCRYAll chain + cosmic-vs-stop divergence
+Page added: [[2026-05-26-mdc2025ap-cosmiccryall-chain]]
+Reason: closes the coverage gap flagged in [[lint-2026-05-26]]. Captures three cosmic-vs-stop divergences (PrimaryOutput.fileName required, bFieldFile not inherited, inputFile defaults) that bit the push, plus the outloc-fix-in-POMS-map recovery procedure (also documented in `reference_outloc_lives_in_poms_map_not_cnf.md` memory). Sister ingest to [[2026-05-22-mdc2025ap-rpcexternal-chain]] and [[2026-05-23-mdc2025ap-pbarstgun-chain]]; explicitly cites [[reference-rpc-primary-inherits-bfgeom]] as a counterexample (the bfgeom inheritance rule does NOT apply to cosmic chains). Also flags input-residency caveat: `sim.mu2e.CosmicDSStopsCRYAll.MDC2025ab.art` is 44% tape-only at submission time despite entry tagging `inloc: disk`.
+
+## [2026-05-27] ingest | input_data max_nfiles cap
+Page added: [[input-data-max-nfiles]]
+Reason: extended `_write_sam_inputs` in `utils/json2jobdef.py` with an optional `max_nfiles` key inside the nested-dict value form of `input_data` (caps per-dataset file count written to inputs.txt). Documents both the shape (positive-int validation, sorted prefix slice for non-random, min-bound for random branch) and the design rationale (why nested-dict not a sibling key — the parser's `for dataset, merge_factor in input_data.items()` loop would treat sibling keys as dataset names). Establishes the rule of thumb for future input_data options: extend the value dict, don't add sibling keys to the `{dataset: value}` map. njobs not auto-recomputed; entry author keeps `merge_factor × njobs ≤ max_nfiles`.
+
+## [2026-05-29] ingest | Mu2eName unified dot-name grammar
+Page added: [[mu2ename-unified-grammar]]
+Reason: consolidated the Mu2e dot-name grammar into one value object (`utils/job_common.Mu2eName`). Covers file (6 fields), dataset (5 fields), and tarball (6 fields, slot 4 = integer index). Parse + build entry points, ~10 derivations (`.dataset`, `.with_sequencer`, `.as_tier`, `.log_dataset`, `.relpathname`), plus sub-field accessors (`.index`, `.campaign`, `.dsconf_base`, `.dsconf_version`, `.tier_class`) that absorbed the 7 "carve-out" sites the architecture audit flagged. Replaced two half-classes (`Mu2eFilename`, `Mu2eDSName`) and ~45 hand-rolled `.split('.')` / f-string call sites across 13 files in `utils/`. `Mu2eFilename` kept as alias of `Mu2eName` to preserve the Perl-parity contract on `relpathname()`. `_TIER_TO_OWNER_CLASS` deleted from `jobsub_argv.py` (now on `Mu2eName.tier_class`). Fail-loud type; two deliberately-lenient sites (`latestDatasets.parse_name`, `jobsub_argv.{description,campaign}_from_tarball`) keep their own `try/except → None` boundary. 203/203 unit tests green.
+
+## [2026-05-29] lint | 3 errors, 4 warnings, 3 info
+Report: [[lint-2026-05-29]]
+Fixed: none (offered)
+
+## [2026-05-29] ingest | digi output stream schema by fcl (bug found in MDC2025af CosmicCRYExtracted)
+Pages written: digi-output-stream-by-fcl
+Pages updated: index.md
+Trigger: json2jobdef validator caught literal `desc` placeholder in MDC2025ap CosmicCRYExtracted cnf output; root cause = override keys (TriggeredOutput/TriggerableOutput) don't match Extracted.fcl's single Output stream.
+
+## [2026-06-07] ingest | Run1Ban self-contained MuminusStopsCat rebuild chain
+Pages written: 2026-06-07-run1ban-mustop-rebuild-chain, run1ban-campaign
+Pages updated: run1bak-campaign, index, overview
+
+## [2026-06-07] update | 2026-06-07-run1ban-mustop-rebuild-chain (stage-A push complete + TS3 collection clarification)
+Pages updated: 2026-06-07-run1ban-mustop-rebuild-chain
+Reason: pushed EleBeamFlash@Run1Ban-001 and NeutralsFlash@Run1Ban-001 cnfs to production SAM via MDC2025-029.json (alongside MuBeamFlash already there; 15000 jobs total). Each smoke-tested locally with `mu2e -c ... --nevts 5` to status 0. Documented the non-obvious cut-tree override in `epilog_1b.fcl` that moves the `Beam` write point from DS2Vacuum to TS3Vacuum — explaining why EleBeamCat.Run1Bai / MuBeamCat.Run1Bai are safe to reuse as seeds for Run1Ban resamplers (TS region is identical between v06 and v40 musings) and why only MuminusStopsCat needs a Run1Ban rebuild.
+
+## [2026-06-14] ingest | Run1Ban-001 primaries (CeEndpoint, FlateMinus, FlatGamma, NoPrimary) added
+Pages written: 2026-06-14-run1ban-primaries-added
+Pages updated: run1ban-campaign, 2026-06-07-run1ban-mustop-rebuild-chain, index
+Reason: 4 entries appended to data/Run1B/primary_muon.json (after Run1Bai-001 block), mirroring Run1Bai shape with three deliberate divergences: geom v40 (not v06), run 1470 (not 1460), input MuminusStopsCat.Run1Ban (not Run1Bai). All 4 smoke-tested locally (mu2e -c --nevts 1 → Art status 0) on 2026-06-14 against /pnfs/.../MuminusStopsCat.Run1Ban tape file via xrootd. 26000 new jobs to extend MDC2025-029.json (20004 → 46004, under 100k cap). Not yet pushed to production.
+
+## [2026-06-15] ingest | Run1Ban STM resampler entries added
+Pages written: 2026-06-15-run1ban-stm-resampler-port
+Pages updated: run1ban-campaign, index

@@ -46,6 +46,19 @@
 		"owner": "mu2e"
 	},
     {
+		"desc": "ExtractedCRY",
+		"dsconf": "MDC2025ap",
+		"fcl": "Production/JobConfig/cosmic/ExtractedCRY.fcl",
+		"njobs": 20000,
+		"events": 500000,
+		"run": 1400,
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ap/setup.sh",
+		"owner": "mu2e"
+	},
+    {
 	"desc": "PiBeam",
 		"dsconf": "MDC2025ac",
 		"fcl": "Production/JobConfig/beam/POT_infinitepion.fcl",
@@ -60,5 +73,18 @@
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
 		"owner": "mu2e"
-	}
+	},
+    {
+        "desc": "PbarSTGunStops",
+        "dsconf": "MDC2025ap",
+        "fcl": "Production/JobConfig/pbar/PbarSTGunStops.fcl",
+        "njobs": 200,
+        "events": 10000,
+        "run": 1430,
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ap/setup.sh",
+        "owner": "mu2e"
+    }
 ]

@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Union
 import hashlib
 import re
 
-from utils.job_common import Mu2eFilename, Mu2eJobBase
+from utils.job_common import Mu2eName, Mu2eJobBase
 
 class Mu2eJobIO(Mu2eJobBase):
     """Python port of mu2ejobiodetail functionality."""
@@ -28,9 +28,8 @@ class Mu2eJobIO(Mu2eJobBase):
             sequencers = []
             for dataset, files in primary_inputs.items():
                 for filename in files:
-                    fn = Mu2eFilename(filename)
-                    sequencers.append(fn.sequencer)
-            
+                    sequencers.append(Mu2eName.parse(filename).sequencer)
+
             # Sort and return first
             sequencers.sort()
             return sequencers[0]
@@ -65,13 +64,7 @@ class Mu2eJobIO(Mu2eJobBase):
                 result[key] = template
                 continue
                 
-            fn = Mu2eFilename(template)
-            # Update sequencer in the filename
-            parts = fn.filename.split('.')
-            if len(parts) >= 5:
-                parts[4] = seq
-            fn.filename = '.'.join(parts)
-            result[key] = fn.basename()
+            result[key] = str(Mu2eName.parse(template).with_sequencer(seq))
         
         return result
     
@@ -129,15 +122,10 @@ def main():
         
         elif args.logfile:
             jobname = job_io.jobname()
-            fn = Mu2eFilename(jobname)
-            # Create log filename
-            parts = jobname.split('.')
-            if len(parts) >= 4:
-                # Format: log.owner.description.dsconf.sequencer.log
-                log_filename = f"log.{parts[1]}.{parts[2]}.{parts[3]}.{job_io.sequencer(args.index)}.log"
-                print(log_filename)
-            else:
-                print(f"log.{jobname}.{job_io.sequencer(args.index)}.log")
+            # jobname is the cnf tarball name; derive log.<owner>.<desc>.<dsconf>.<seq>.log
+            seq = job_io.sequencer(args.index)
+            log_name = Mu2eName.parse(jobname).as_tier('log').with_sequencer(seq).with_extension('log')
+            print(str(log_name))
     
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

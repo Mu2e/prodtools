@@ -12,46 +12,30 @@ from pathlib import Path
 
 # Handle both module and standalone imports
 try:
-    from .job_common import get_samweb_wrapper, Mu2eFilename
+    from .job_common import get_samweb_wrapper, Mu2eName
 except ImportError:
     # When running as standalone script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from utils.job_common import get_samweb_wrapper, Mu2eFilename
+    from utils.job_common import get_samweb_wrapper, Mu2eName
 
-class Mu2eDSName:
-    """Parse Mu2e dataset names."""
-    
-    def __init__(self, dsname: str):
-        self.dsname = dsname
-    
-    def _get_base_path(self) -> str:
-        """Determine the correct base path based on dataset type."""
-        if self.dsname.startswith(('sim.', 'dts.', 'dig.', 'mcs.')):
-            return "phy-sim"
-        elif self.dsname.startswith('nts.'):
-            return "phy-nts"
-        return "phy-etc"
-    
-    def _build_path(self, location: str) -> str:
-        """Build the full path for a given location."""
-        base_path = self._get_base_path()
-        ds_path = self.dsname.replace('.', '/')
-        
-        location_map = {
-            'disk': f"/pnfs/mu2e/persistent/datasets/{base_path}/{ds_path}",
-            'tape': f"/pnfs/mu2e/tape/{base_path}/{ds_path}",
-            'scratch': f"/pnfs/mu2e/scratch/datasets/{base_path}/{ds_path}"
-        }
-        
-        return location_map.get(location, "")
-    
-    def absdsdir(self, location: str) -> str:
-        """Get absolute dataset directory for a location."""
-        return self._build_path(location)
-    
-    def location_root(self, location: str) -> str:
-        """Get location root path (same as absdsdir)."""
-        return self._build_path(location)
+
+def _dataset_dir(dsname: str, location: str) -> str:
+    """Absolute /pnfs directory for a Mu2e dataset at the given location.
+
+    Uses Mu2eName.tier_class (the authoritative tier→owner-class map) to
+    derive the `phy-<class>` prefix. Returns '' for unknown locations.
+    """
+    n = Mu2eName.parse(dsname)
+    owner_prefix = "phy" if n.owner == "mu2e" else "usr"
+    base_path = f"{owner_prefix}-{n.tier_class}"
+    ds_path = dsname.replace('.', '/')
+    if location == 'disk':
+        return f"/pnfs/mu2e/persistent/datasets/{base_path}/{ds_path}"
+    if location == 'tape':
+        return f"/pnfs/mu2e/tape/{base_path}/{ds_path}"
+    if location == 'scratch':
+        return f"/pnfs/mu2e/scratch/datasets/{base_path}/{ds_path}"
+    return ""
 
 def parse_args():
     """Parse command line arguments exactly like the Perl version."""
@@ -140,8 +124,6 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     if not fns:
         raise RuntimeError(f"No files with dh.dataset={dataset_name} are registered in SAM.")
     
-    ds = Mu2eDSName(dataset_name)
-    
     # Determine location
     if location:
         fileloc = location
@@ -149,21 +131,21 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
         # Auto-detect: check which location directory exists
         fileloc = None
         for loc in stdloc:
-            if os.path.isdir(ds.absdsdir(loc)):
+            if os.path.isdir(_dataset_dir(dataset_name, loc)):
                 fileloc = loc
                 break
         if not fileloc:
             raise RuntimeError(f"Dataset {dataset_name} not found in any standard location")
-    
+
     # Construct paths
-    locroot = ds.location_root(fileloc)
+    locroot = _dataset_dir(dataset_name, fileloc)
     file_paths = []
-    
+
     for f in sorted(fns):
-        relpath = Mu2eFilename(f).relpathname()
+        relpath = Mu2eName.parse(f).relpathname()
         full_path = f"{locroot}/{relpath}"
         file_paths.append(full_path)
-    
+
     return file_paths
 
 def get_definition_files(definition_name: str) -> List[str]:

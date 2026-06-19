@@ -16,7 +16,7 @@ import re
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.job_common import Mu2eFilename, Mu2eJobBase, remove_storage_prefix
+from utils.job_common import Mu2eName, Mu2eJobBase, remove_storage_prefix
 import samweb_client  # type: ignore
 
 STASH_READ_ROOT = os.environ.get(
@@ -28,6 +28,36 @@ RESILIENT_ROOT = os.environ.get(
     "MU2E_RESILIENT",
     "/pnfs/mu2e/resilient"
 )
+
+
+_OUTPUT_FILENAME_KEY_RE = re.compile(r'^outputs\.\w+\.fileName$')
+_PLACEHOLDER_TOKEN_RE = re.compile(r'\b(description|desc|owner|version|sequencer)\b')
+
+
+def _check_output_filenames_substituted(outputs_dict: Dict[str, str], jobdef_name: str = "") -> None:
+    """Reject output fileNames that still contain unsubstituted placeholder
+    tokens. Fires when an upstream fcl declares an output with a suffix
+    glued to the desc token (e.g. description-CH) and the entry's
+    fcl_overrides didn't add an explicit {desc}-CH override. See memory
+    reference_reco_output_suffix_overrides."""
+    for key, filename in outputs_dict.items():
+        if not _OUTPUT_FILENAME_KEY_RE.match(key):
+            continue
+        m = _PLACEHOLDER_TOKEN_RE.search(filename)
+        if m:
+            raise ValueError(
+                f"jobfcl: {key} = {filename!r} contains unsubstituted placeholder "
+                f"{m.group(1)!r} (jobdef={jobdef_name}). Add an explicit override "
+                f"in the entry's fcl_overrides (e.g. \"mcs.owner.{{desc}}-CH.version.sequencer.art\")."
+            )
+
+
+def validate_output_filenames(jobdef_path: str, index: int = 0) -> None:
+    """Cheaply validate a cnf tarball's output filenames substitute cleanly.
+    Raises ValueError if any outputs.*.fileName has a literal placeholder
+    (description / owner / version / sequencer) surviving substitution."""
+    job_fcl = Mu2eJobFCL(jobdef_path)
+    _check_output_filenames_substituted(job_fcl.job_outputs(index), jobdef_name=jobdef_path)
 
 
 def _resilient_file_exists(pnfs_path: str) -> bool:
@@ -114,18 +144,14 @@ class Mu2eJobFCL(Mu2eJobBase):
         # Resolve stash path from filename — no SAM involved
         # If file not found on stash, fall back to SAM-based lookup
         if self.inloc == 'stash':
-            fn = Mu2eFilename(filename)
-            dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
-            ds_path = dataset.replace('.', '/')
+            ds_path = str(Mu2eName.parse(filename).dataset).replace('.', '/')
             stash_path = f"{STASH_READ_ROOT}/datasets/{ds_path}/{filename}"
             if os.path.exists(stash_path):
                 return stash_path
             # File not on stash — fall through to SAM lookup
 
         if self.inloc == 'resilient':
-            fn = Mu2eFilename(filename)
-            dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
-            ds_path = dataset.replace('.', '/')
+            ds_path = str(Mu2eName.parse(filename).dataset).replace('.', '/')
             resilient_path = f"{RESILIENT_ROOT}/datasets/{ds_path}/{filename}"
             if _resilient_file_exists(resilient_path):
                 return resilient_path
@@ -231,8 +257,7 @@ class Mu2eJobFCL(Mu2eJobBase):
         sequencers = []
         for dataset, files in primary_inputs.items():
             for filename in files:
-                fn = Mu2eFilename(filename)
-                sequencers.append(fn.sequencer)
+                sequencers.append(Mu2eName.parse(filename).sequencer)
         
         if not sequencers:
             raise ValueError("Error: get_sequencer(): no sequencers found in input files")
@@ -286,13 +311,8 @@ class Mu2eJobFCL(Mu2eJobBase):
                 result[key] = resolved_template
                 continue
 
-            # Update sequencer in the filename (fallback: parse and replace 5th field)
-            fn = Mu2eFilename(resolved_template)
-            parts = fn.filename.split('.')
-            if len(parts) >= 5:
-                parts[4] = seq
-            fn.filename = '.'.join(parts)
-            result[key] = fn.basename()
+            # Update sequencer in the filename (parse then re-emit with new seq)
+            result[key] = str(Mu2eName.parse(resolved_template).with_sequencer(seq))
 
         return result
     
@@ -415,8 +435,7 @@ class Mu2eJobFCL(Mu2eJobBase):
             if source is not None:
                 raise ValueError("Error: --target and --source are mutually exclusive")
             
-            fn = Mu2eFilename(target)
-            seq = fn.sequencer
+            seq = Mu2eName.parse(target).sequencer
             job_index = self.index_from_sequencer(seq)
             
             # Check that the target file matches what this job will produce
@@ -465,6 +484,7 @@ class Mu2eJobFCL(Mu2eJobBase):
         
         # Output files (add/replace outputs from job definition)
         outputs = self.job_outputs(index)
+        _check_output_filenames_substituted(outputs, jobdef_name=self.jobdef)
         for key, filename in outputs.items():
             # Always add the output from job definition (it may replace template values)
             config_lines.append(f'{key}: "{filename}"')

@@ -32,7 +32,7 @@ from typing import List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.job_common import Mu2eFilename, remove_storage_prefix
+from utils.job_common import Mu2eName, remove_storage_prefix
 from utils.samweb_wrapper import list_files, locate_file_full
 
 
@@ -66,9 +66,7 @@ def _subpath(filename: str) -> str:
 
     Format: datasets/<tier>/<owner>/<description>/<dsconf>/<ext>/<filename>
     """
-    fn = Mu2eFilename(filename)
-    dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
-    ds_path = dataset.replace('.', '/')
+    ds_path = str(Mu2eName.parse(filename).dataset).replace('.', '/')
     return f"datasets/{ds_path}/{filename}"
 
 

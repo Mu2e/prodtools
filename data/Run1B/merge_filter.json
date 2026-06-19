@@ -185,12 +185,37 @@
 			"desc": "MuonStopSelector",
 			"dsconf": "Run1Bai",
 			"input_data": {"sim.mu2e.TargetStopsCat.Run1Bai-003.art": 1},
-			"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",      
+			"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",
 			"inloc": "tape",
 			"outloc": {
 					"*.art": "tape"
 			},
 			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+	},
+	{
+		"desc": "TargetStopsCat",
+		"dsconf": "Run1Ban-001",
+		"input_data": {"sim.mu2e.TargetStops.Run1Ban-001.art": 2500},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "sim.owner.TargetStopsCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh"
+	},
+	{
+		"desc": "MuonStopSelector",
+		"dsconf": "Run1Ban",
+		"input_data": {"sim.mu2e.TargetStopsCat.Run1Ban-001.art": 1},
+		"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",
+		"inloc": "tape",
+		"outloc": {
+				"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh"
 	},
 	{
 		"desc": "MuStopPileupCat",

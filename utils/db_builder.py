@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.poms_db import get_db_session, Job, JobOutput, DatasetInfo
 from utils.samweb_wrapper import count_files, locate_file, locate_file_full, list_files, list_definition_files, describe_definition
+from utils.job_common import Mu2eName
 from utils.jobiodetail import Mu2eJobIO
 from utils.jobquery import Mu2eJobPars
 from utils.logparser import process_dataset as parse_logs_for_dataset
@@ -82,28 +83,23 @@ def _check_dataset_has_children(dataset_name):
 
 def _jobdef_to_log_dataset(tarball_name):
     """Convert jobdef tarball name to log dataset name.
-    
+
     Args:
         tarball_name: Jobdef tarball name (e.g., "cnf.mu2e.FlatMuMinus.MDC2025ab.0.tar")
-    
+
     Returns:
-        str: Log dataset name (e.g., "log.mu2e.FlatMuMinus.MDC2025ab.log")
+        str: Log dataset name (e.g., "log.mu2e.FlatMuMinus.MDC2025ab.log"),
+             or None if tarball_name is not a cnf tarball.
     """
-    if not tarball_name or not tarball_name.startswith('cnf.'):
+    if not tarball_name:
         return None
-    # Remove .tar extension
-    if tarball_name.endswith('.tar'):
-        base = tarball_name[:-4]
-    else:
-        base = tarball_name
-    # Remove the index part (e.g., ".0")
-    parts = base.rsplit('.', 1)
-    if len(parts) == 2 and parts[1].isdigit():
-        base = parts[0]
-    # Replace cnf. with log. and add .log
-    if base.startswith('cnf.'):
-        return base.replace('cnf.', 'log.', 1) + '.log'
-    return None
+    try:
+        n = Mu2eName.parse(tarball_name)
+    except ValueError:
+        return None
+    if not n.is_tarball:
+        return None
+    return str(n.log_dataset())
 
 
 def _get_dataset_creation_date(dataset_name):
@@ -203,6 +199,10 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
     seen_tarballs = set()
     count = 0
     
+    # NB: deliberately uses bare entry.get(...) rather than utils.poms_entry
+    # helpers — this is a batch scanner across hundreds of POMS-map files,
+    # so a single malformed entry must be skipped, not raise. Same lenient
+    # boundary pattern as latestDatasets.parse_name.
     for json_file in json_files:
         with open(json_file, "r") as f:
             entries = json.load(f)
@@ -346,10 +346,13 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                     continue
                 # Format: tier.owner.description.dsconf.sequencer.extension
                 # Dataset: tier.owner.description.dsconf.extension (skip sequencer)
-                parts = output_file.split('.')
-                if len(parts) != 6:
+                try:
+                    out_name = Mu2eName.parse(output_file)
+                except ValueError:
                     continue
-                dataset_name = f"{parts[0]}.{parts[1]}.{parts[2]}.{parts[3]}.{parts[5]}"
+                if not out_name.is_file:
+                    continue
+                dataset_name = str(out_name.dataset)
 
                 nfiles, nevts, total_size = _get_dataset_stats(dataset_name)
                 has_children = _check_dataset_has_children(dataset_name)

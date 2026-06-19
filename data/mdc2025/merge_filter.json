@@ -10,6 +10,17 @@
 	},
 	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh"
     },
+    {
+	"desc": "CosmicCRYSpillSplitter",
+	"dsconf": "MDC2025ap",
+	"fcl": "Production/JobConfig/cosmic/SpillSplitter.fcl",
+	"input_data": {"dts.mu2e.CosmicCRYAll.MDC2025ap.art": 10},
+	"inloc": "tape",
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ap/setup.sh"
+    },
 	{
 		"desc": "PiBeamCat",
 		"dsconf": "MDC2025ac",

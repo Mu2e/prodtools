@@ -240,6 +240,101 @@
         }
     },
     {
+        "desc": "CeEndpoint",
+        "dsconf": "Run1Ban-001",
+        "fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Ban.art": 1},
+        "events": 1000000,
+        "njobs": 2000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "FlateMinus",
+        "dsconf": "Run1Ban-001",
+        "fcl": "Production/JobConfig/primary/FlateMinus.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.producers.generate.startMom": 50,
+            "physics.producers.generate.endMom": 110,
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Ban.art": 1},
+        "njobs": 2000,
+        "events": 1000000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "FlatGamma",
+        "dsconf": "Run1Ban-001",
+        "fcl": "Production/JobConfig/primary/FlatGamma.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "physics.producers.generate.startMom": 50,
+            "physics.producers.generate.endMom": 110,
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE" : 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Ban.art": 1},
+        "njobs": 2000,
+        "events": 1000000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "NoPrimary",
+        "dsconf": "Run1Ban",
+        "fcl": "Production/JobConfig/primary/NoPrimary.fcl",
+        "fcl_overrides": {
+            "physics.producers.compressDetStepMCs.surfaceStepTag" : "FindMCPrimary",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt"
+        },
+        "events": 5000,
+        "njobs": 20000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        }
+    },
+    {
         "desc": "MuCap1809keV",
         "dsconf": "Run1Bag",
         "fcl": "Production/JobConfig/primary/MuCap1809keVCalo.fcl",

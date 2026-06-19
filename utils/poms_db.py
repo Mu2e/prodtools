@@ -7,6 +7,8 @@ from sqlalchemy.orm import relationship, sessionmaker
 import os
 from datetime import datetime
 
+from utils.job_common import Mu2eName
+
 Base = declarative_base()
 
 
@@ -32,14 +34,13 @@ class Job(Base):
     
     @property
     def campaign(self):
-        """Extract campaign from tarball."""
+        """Extract campaign (dsconf base, e.g. MDC2025af) from tarball name."""
         if not self.tarball:
             return None
-        parts = self.tarball.split('.')
-        if len(parts) >= 4:
-            campaign_full = parts[3]
-            return campaign_full.split('_')[0]
-        return None
+        try:
+            return Mu2eName.parse(self.tarball).dsconf_base
+        except ValueError:
+            return None
 
 
 class JobOutput(Base):

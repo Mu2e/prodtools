@@ -51,7 +51,10 @@ When regenerating, read in this order:
    (recommended) and direct `jobdef` invocations. Cover stage-1, resampler,
    mixing shapes.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
-   form and its deterministic-seed guarantee.
+   form and its deterministic-seed guarantee. Mention the optional
+   `"max_nfiles": M` cap inside the same nested-dict value (positive int;
+   non-random branch slices `sorted(files)[:M]`; random branch bounds
+   `total_needed`; `njobs` is NOT auto-recomputed).
 5. **FCL Generation (`jobfcl`, `fcldump`)** — from jobdef tarball, from
    dataset name, from target output filename. Include `--local-jobdef`.
 6. **Mixing Jobs** — JSON schema with `pileup_datasets` list-of-dict form,
@@ -69,10 +72,13 @@ When regenerating, read in this order:
 12. **Additional Tools** — one subsection per script in `bin/` that has
     user-facing CLI: `pomsMonitor`, `pomsMonitorWeb`, `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
-    `mkrecovery`, `mkidxdef`, `jobquery`, `plot_logs`. Each subsection:
+    `mkrecovery`, `mkidxdef`, `jobquery`, `plot_logs`,
+    `submit_map`, `copy_to_stash`, `add_inputs_from_list.py`,
+    `list_no_child_datasets`, `plot_straw_hits.py`. Each subsection:
     one-line purpose, 1–3 example invocations, key flags. Enumerate from
     the current `bin/` directory — add any new script found there, remove
-    any that no longer exist.
+    any that no longer exist. (`runjob.sh` is a worker bootstrap, not
+    user-facing — omit.)
 13. **Troubleshooting** — only entries that correspond to real error
     messages produced by current code. Remove stale ones.
 
@@ -83,10 +89,15 @@ reading the code:
 
 - `muse setup SimJob` is optional for most tools; only `muse setup ops`
   is required.
-- The `etc.mu2e.index.NNN.NNNNNNN.txt` filename in `fname` encodes the
-  job index — `NNN` is the job index (zero-padded).
-- `inloc` accepts `disk`, `tape`, `scratch`, `auto`, `none`. `auto`
-  defaults to tape with SAMWeb fallback.
+- The `etc.mu2e.index.000.NNNNNNN.txt` filename in `fname` encodes the
+  job index — the seventh-field `NNNNNNN` (the **sequencer**) is the
+  job index, zero-padded to 7 digits. `mkrecovery` writes these as
+  `etc.mu2e.index.000.{idx:07d}.txt`. The `000` field is a fixed
+  description placeholder, not the index.
+- `inloc` accepts `disk`, `tape`, `scratch`, `resilient`, `stash`,
+  `none`, or `dir:<path>` (locally-mounted FS, e.g. cvmfs). There is no
+  `auto`. `resilient` reads via xrootd, `stash` reads via CVMFS, and
+  `dir:` reads via direct POSIX (the `file:` protocol is forced).
 - Random sampling seed is derived from `(owner, desc, dsconf, dataset,
   count, njobs)` — same inputs always produce the same file selection.
 - Parity tests validate byte-for-byte equivalence against the Perl

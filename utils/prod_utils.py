@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from .jobdef import create_jobdef
+from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
 from .jobiodetail import Mu2eJobIO
 from .jobquery import Mu2eJobPars
@@ -76,13 +77,16 @@ def run(cmd, shell=False, retries=0, retry_delay=60):
 
 
 def _job_index_from_fname(fname):
-    """Parse (job_index, sequencer) from a Mu2e fname's field 4 (0-indexed).
-    Returns (0, parts[4]) for all-zero sequencers (parent-tarball convention).
-    Raises RuntimeError on a fname with <5 dot-separated fields."""
-    parts = Path(fname).name.split('.')
-    if len(parts) < 5:
-        raise RuntimeError(f"Invalid Mu2e fname: {fname}; expected >=5 dot-separated fields")
-    sequencer = parts[4]
+    """Parse (job_index, sequencer) from a Mu2e fname's sequencer field.
+    Returns (0, sequencer) for all-zero sequencers (parent-tarball convention).
+    Raises RuntimeError on a fname that isn't a 6-field Mu2e file/tarball."""
+    try:
+        n = Mu2eName.parse(Path(fname).name)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid Mu2e fname: {fname}: {exc}")
+    sequencer = n.sequencer
+    if sequencer is None:
+        raise RuntimeError(f"Invalid Mu2e fname: {fname}; no sequencer field")
     stripped = sequencer.lstrip('0')
     return (int(stripped) if stripped else 0), sequencer
 
@@ -240,11 +244,8 @@ def write_fcl_template(base, overrides):
                 f.write(f'{key}: {json.dumps(val)}\n')
 
 def replace_file_extensions(input_str, first_field, last_field):
-    """Replace the first and last fields in a dot-separated string."""
-    fields = input_str.split('.')
-    fields[0] = first_field
-    fields[-1] = last_field
-    return '.'.join(fields)
+    """Replace the tier and extension fields of a Mu2e dot-name."""
+    return str(Mu2eName.parse(input_str).as_tier(first_field).with_extension(last_field))
 
 def create_index_definition(output_index_dataset, job_count, input_index_dataset):
     idx_name = f"i{output_index_dataset}"
@@ -365,18 +366,20 @@ def process_template(jobdesc_entry, fname):
         fcl_content = f.read()
     fcl_basename = Path(fcl_template_path).stem
     
-    # Parse variables from input filename (format: prefix.owner.desc.dsconf.sequencer.ext)
-    # Extract filename from full path and split into parts
-    fname_base = Path(fname).name  # Get just the filename, not the full path
-    parts = fname_base.split('.')  # Split by dots: ['dig', 'mu2e', 'CosmicSignalTriggered', 'MDC2025ad', '001430_00000000', 'art']
-    if len(parts) != 6:
-        raise RuntimeError(f"Invalid filename format: {fname_base}. Expected exactly 6 dot-separated fields (prefix.owner.desc.dsconf.sequencer.ext).")
-    
+    # Parse variables from input filename (format: tier.owner.desc.dsconf.sequencer.ext)
+    fname_base = Path(fname).name
+    try:
+        n = Mu2eName.parse(fname_base)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid filename format: {fname_base}: {exc}")
+    if not n.is_file:
+        raise RuntimeError(f"Invalid filename format: {fname_base}. Expected a 6-field file name.")
+
     template_vars = {
-        'owner': parts[1],      # mu2e
-        'desc': parts[2],       # CosmicSignalTriggered
-        'dsconf': parts[3],     # MDC2025ad
-        'sequencer': parts[4]   # 001430_00000000
+        'owner': n.owner,
+        'desc': n.description,
+        'dsconf': n.dsconf,
+        'sequencer': n.sequencer,
     }
     
     # Allow overriding template variables from jobdesc
@@ -431,15 +434,19 @@ def process_direct_input(jobdesc, fname, args):
     jobdesc_entry = jobdesc[0]
     tarball = jobdesc_entry['tarball']
 
-    # Parse fname components: prefix.owner.desc.dsconf.sequencer.ext
+    # Parse fname components: tier.owner.desc.dsconf.sequencer.ext
     fname_base = Path(fname).name
-    parts = fname_base.split('.')
-    if len(parts) != 6:
-        print(f"Error: Invalid filename format: {fname_base}. "
-              f"Expected prefix.owner.desc.dsconf.sequencer.ext")
+    try:
+        n = Mu2eName.parse(fname_base)
+    except ValueError as exc:
+        print(f"Error: Invalid filename format: {fname_base}: {exc}")
         sys.exit(1)
-    desc = parts[2]
-    seq = parts[4]
+    if not n.is_file:
+        print(f"Error: Invalid filename format: {fname_base}. "
+              f"Expected tier.owner.desc.dsconf.sequencer.ext")
+        sys.exit(1)
+    desc = n.description
+    seq = n.sequencer
 
     print(f"Direct-input mode: fname={fname}, desc={desc}, seq={seq}")
 
@@ -800,7 +807,7 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     # Use generic push function
     return push_output(output_specs, "output.txt", parents_field, simjob_setup=simjob_setup)
 
-def push_logs(fcl=None, simjob_setup=None, log_file=None):
+def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
     """Handle log file management and submission.
 
     Either pass `fcl` (log filename derived via replace_file_extensions, the
@@ -812,6 +819,10 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None):
         simjob_setup: Path to SimJob setup script for art environment.
         log_file: Explicit log filename. Wins over `fcl` if both given. The
             g4bl path uses this since there's no FCL.
+        location: pushOutput destination class — "disk" (default, persistent),
+            "scratch", or "tape". User runs may need "scratch" because
+            non-mu2epro accounts typically lack `storage.modify` scope on
+            `/mu2e/persistent/datasets/usr-etc/log/<owner>/`.
     """
 
     if log_file is not None:
@@ -839,7 +850,7 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None):
         # G4bl jobs have no SAM-registered parents → parents_file="none".
         # Art jobs use parents_list.txt (written by push_data earlier).
         parents = "none" if log_file is not None else "parents_list.txt"
-        output_specs = [("disk", logfile, parents)]
+        output_specs = [(location, logfile, parents)]
         return push_output(output_specs, "log_output.txt", parents, simjob_setup=simjob_setup)
     else:
         print(f"Warning: Log file {logfile} not found, skipping log push")

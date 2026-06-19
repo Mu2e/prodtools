@@ -21,6 +21,7 @@ from utils.mixing_utils import *
 from utils.config_utils import get_tarball_desc, prepare_fields_for_job
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
+from utils.jobfcl import validate_output_filenames
 from utils.samweb_wrapper import list_files, count_files, locate_file
 
 
@@ -201,9 +202,14 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
     """Write inputs.txt by resolving each input_data dataset against SAM.
 
     Each input_data value is either a plain merge_factor (int) or a dict
-    `{"count": N, "random": <bool>}`. With `random: True`, a deterministic
-    pseudo-random sample of `count * njobs` files is selected; otherwise
-    list_files() returns all matching files.
+    `{"count": N, "random": <bool>, "max_nfiles": M}`. With `random: True`,
+    a deterministic pseudo-random sample of `count * njobs` files is
+    selected; otherwise list_files() returns all matching files.
+    `max_nfiles` (optional, positive int) caps the per-dataset file count
+    written to inputs.txt — applied as a deterministic prefix slice of the
+    sorted file list (non-random branch) or as an upper bound on
+    `total_needed` (random branch). njobs is NOT recomputed; the entry
+    author is responsible for keeping `merge_factor * njobs <= max_nfiles`.
 
     `_event_count_positive` flag in `config` toggles a `event_count>0`
     filter on the SAM query (older behavior applied this implicitly; now
@@ -217,11 +223,16 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
     with open('inputs.txt', 'w') as out_f:
         for dataset, merge_factor in input_data.items():
             random_spec = {}
+            max_nfiles = None
             if isinstance(merge_factor, dict):
                 random_spec = merge_factor
+                max_nfiles = random_spec.get('max_nfiles')
+                if max_nfiles is not None:
+                    if not isinstance(max_nfiles, int) or max_nfiles <= 0:
+                        raise ValueError(f"input_data spec for {dataset}: max_nfiles must be a positive int, got {max_nfiles!r}")
                 merge_factor = merge_factor.get('count') or merge_factor.get('merge_factor')
                 if merge_factor is None:
-                    raise ValueError(f"input_data spec for {dataset} must include 'count' when using dict form")
+                    raise ValueError(f"input_data spec for {dataset} must include 'count' or 'merge_factor' when using dict form")
 
             query = query_template.format(dataset)
 
@@ -237,6 +248,8 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
                     njobs = max(1, available // max(per_job, 1))
 
                 total_needed = per_job * max(njobs, 1)
+                if max_nfiles is not None:
+                    total_needed = min(total_needed, max_nfiles)
                 seed_source = (
                     f"{config.get('owner','')}.{config.get('desc','')}.{config.get('dsconf','')}"
                     f".{dataset}.{per_job}.{njobs}"
@@ -244,6 +257,8 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
                 _write_random_selection(out_f, query, total_needed, seed_source)
             else:
                 files = list_files(query)
+                if max_nfiles is not None:
+                    files = sorted(files)[:max_nfiles]
                 for filepath in files:
                     if exclude_files and filepath in exclude_files:
                         continue
@@ -268,12 +283,11 @@ def _next_version(config):
 
     max_version = -1
     for fname in files:
-        parts = fname.split('.')
         try:
-            version = int(parts[-2])
-            max_version = max(max_version, version)
-        except (ValueError, IndexError):
+            version = Mu2eName.parse(fname).index
+        except ValueError:
             continue
+        max_version = max(max_version, version)
 
     return max_version + 1
 
@@ -393,10 +407,18 @@ def build_jobdef(config, job_args, json_output=False):
     
     # Now create jobdef using the template.fcl
     create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=json_output)
-    
+
     # Get the parfile name for both modes
     parfile_name = get_parfile_name(config)
     fcl_file = get_fcl_name(config)
+
+    # Build-time guard: ensure every outputs.*.fileName substitutes cleanly.
+    # Catches missing fcl_overrides for outputs whose upstream defaults embed
+    # a suffix on the desc token (e.g. description-CH) before the cnf is pushed.
+    try:
+        validate_output_filenames(parfile_name)
+    except ValueError as e:
+        sys.exit(f"json2jobdef: cnf failed output-filename validation: {e}")
     
     if json_output:
         # Return structured data for machine consumption
@@ -512,7 +534,7 @@ def main():
     p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and run mkidxdef after generation')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
-    p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.txt)')
+    p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.json)')
     p.add_argument('--json-output', action='store_true', help='Output structured JSON instead of human-readable text')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
@@ -569,7 +591,7 @@ def main():
     # If --prod mode, create index definition after generation
     if args.prod:
 
-        jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.txt'
+        jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.json'
         print(f"\n{'='*60}")
         print(f"Creating index definition from {jobdefs_file}")
         print(f"{'='*60}")

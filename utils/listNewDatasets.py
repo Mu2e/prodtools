@@ -14,6 +14,7 @@ if __name__ == '__main__':
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from samweb_wrapper import list_files
+from job_common import Mu2eName
 
 
 DEFAULT_POMS_DIR = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map"
@@ -92,14 +93,14 @@ class DatasetLister:
         return query
     
     def extract_dataset_name(self, filename: str) -> str:
-        """Extract dataset name: first 4 dot-separated fields + extension from actual filename."""
-        parts = filename.split('.')
-        if len(parts) >= 4:
-            # Use the actual extension from the filename, not self.ext
-            # This handles cases where custom queries search for different file types (e.g., .fcl)
-            actual_ext = '.' + parts[-1] if len(parts) > 1 else ''
-            return f"{'.'.join(parts[:4])}{actual_ext}"
-        return filename
+        """Extract dataset name: drop the sequencer field from a file name.
+
+        Lenient: returns filename unchanged if it isn't a parseable Mu2e name.
+        """
+        try:
+            return str(Mu2eName.parse(filename).dataset)
+        except ValueError:
+            return filename
     
     def get_average_filesize(self, dataset: str) -> str:
         """Return average file size in MB, or 'N/A' if unavailable."""

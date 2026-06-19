@@ -11,7 +11,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from utils.job_common import Mu2eJobBase
+from utils.job_common import Mu2eJobBase, Mu2eName
 
 class Mu2eJobPars(Mu2eJobBase):
     """Python equivalent of Mu2eJobPars.pm"""
@@ -96,14 +96,14 @@ class Mu2eJobPars(Mu2eJobBase):
         datasets = set()
         
         def extract_dataset_from_files(file_list):
-            """Extract dataset name from first file in list."""
+            """Extract dataset name from first file in list (always .art ext)."""
             if not file_list:
                 return None
-            first_file = file_list[0]
-            parts = first_file.split('.')
-            if len(parts) >= 4:
-                return '.'.join(parts[:4]) + '.art'
-            return None
+            try:
+                n = Mu2eName.parse(file_list[0])
+            except ValueError:
+                return None
+            return str(n.with_extension('art').dataset)
         
         # Get datasets from inputs
         inputs = tbs.get('inputs', {})
