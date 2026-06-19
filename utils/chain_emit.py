@@ -178,6 +178,7 @@ def synthesize_entry(template, input_dataset):
     entry['desc'] = n.description
     return _subst(entry, {'desc': n.description,
                           'campaign': n.campaign,
+                          'parent_dsconf': n.dsconf,   # full input dsconf incl build suffix
                           'input': input_dataset})
 
 

@@ -2686,6 +2686,27 @@ class TestChainEmit(unittest.TestCase):
         self.assertIn("SimJob/MDC2025ap/", entry['simjob_setup'])
         self.assertNotIn("{campaign}", json.dumps(entry))
 
+    def test_parent_dsconf_substitution(self):
+        """{parent_dsconf} = the full dsconf of the input dataset (incl build
+        suffix), so an ntuple output can reuse its reco parent's dsconf."""
+        from utils import chain_emit
+        tmpl = {
+            "desc": "{desc}",
+            "dsconf": "{parent_dsconf}",
+            "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+            "input_data": {"mcs.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
+            "fcl_overrides": {"services.TFileService.fileName":
+                              "nts.mu2e.{desc}.version.sequencer.root"},
+            "inloc": "disk", "simjob_setup": "x",
+        }
+        e = chain_emit.synthesize_entry(
+            tmpl, "mcs.mu2e.CeEndpointOnSpill.MDC2025ap_best_v1_1.art")
+        self.assertEqual(e['dsconf'], "MDC2025ap_best_v1_1")
+        # Run1B-style suffix with recovery pass is carried through verbatim
+        e2 = chain_emit.synthesize_entry(
+            tmpl, "mcs.mu2e.CeEndpoint-KL.Run1Ban_best_v1_4-001.art")
+        self.assertEqual(e2['dsconf'], "Run1Ban_best_v1_4-001")
+
     def test_output_datasets(self):
         from utils import chain_emit
         entry = chain_emit.synthesize_entry(self.TEMPLATE, "dts.mu2e.CeEndpoint.MDC2025ap.art")

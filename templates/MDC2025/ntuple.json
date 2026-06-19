@@ -1,7 +1,7 @@
 [
   {
     "desc": "{desc}",
-    "dsconf": "{campaign}",
+    "dsconf": "{parent_dsconf}",
     "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
     "input_data": {"mcs.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
     "fcl_overrides": {
@@ -13,7 +13,7 @@
   },
   {
     "desc": "CosmicCRYExtracted",
-    "dsconf": "{campaign}",
+    "dsconf": "{parent_dsconf}",
     "fcl": "EventNtuple/fcl/from_mcs-extracted.fcl",
     "input_data": {"mcs.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
     "fcl_overrides": {

@@ -1,6 +1,6 @@
 {
   "desc": "{desc}",
-  "dsconf": "Run1B-NNN",
+  "dsconf": "{parent_dsconf}",
   "fcl": "EventNtuple/fcl/from_mcs-Run1B.fcl",
   "input_data": {"mcs.mu2e.{desc}-KL.{campaign}_best_v1_4-001.art": 1},
   "fcl_overrides": {
