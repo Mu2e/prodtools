@@ -1,0 +1,32 @@
+[
+  {
+    "desc": "{desc}",
+    "dsconf": "{campaign}_best_v1_1",
+    "tarball_append": "-reco",
+    "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+    "input_data": {"dig.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
+    "fcl_overrides": {
+      "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_1"
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "disk"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+  },
+  {
+    "desc": "CosmicCRYExtracted",
+    "dsconf": "{campaign}_best_v1_1",
+    "tarball_append": "-reco",
+    "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
+    "input_data": {"dig.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
+    "fcl_overrides": {
+      "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_1"
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+  }
+]

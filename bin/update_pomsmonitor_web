@@ -1,0 +1,85 @@
+#!/bin/bash
+# Update the published pomsMonitor static page on mu2e-exp.fnal.gov.
+#
+# Two steps, both required (refreshing the DB alone leaves the static HTML
+# stale — that's the gotcha this script exists to prevent):
+#   1. rebuild the SQLite DB from the production POMS maps
+#   2. re-render index.html + jobs.json from that DB
+#
+# CRITICAL: render reads the dashboard HTML from --prodtools-dir. It MUST be
+# this repo (rich monitor.html), NOT the web cgi-bin checkout (stale/lean),
+# or the page regresses to an older layout. We pin it to this repo's root.
+#
+# Runs as the invoking user (the web files under .../pomsMonitor/ and the DB
+# are owned by the deployer, not mu2epro). Needs pyenv ana for SQLAlchemy.
+# NOTE: only `set -e`. The cvmfs setup scripts sourced below reference unset
+# vars and can return non-zero, which would trip `set -u`/`pipefail`.
+set -e
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WEB=/web/sites/m/mu2e-exp.fnal.gov
+DB="$WEB/data/poms_data.db"
+OUT="$WEB/htdocs/computing/ops/production/pomsMonitor"
+PATTERN='MDC202*'
+DRY_RUN=0
+
+usage() {
+    cat <<EOF
+Usage: update_pomsmonitor_web [options]
+  --pattern P    POMS-map glob to build the DB from (default: $PATTERN)
+  --db PATH      SQLite DB to write/read (default: $DB)
+  --out DIR      htdocs dir for index.html + jobs.json (default: $OUT)
+  --dry-run      show what would run; make no changes
+  -h, --help     this help
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pattern) PATTERN="$2"; shift 2 ;;
+        --db) DB="$2"; shift 2 ;;
+        --out) OUT="$2"; shift 2 ;;
+        --dry-run) DRY_RUN=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+echo "=== pomsMonitor web update ==="
+echo "repo:    $REPO"
+echo "db:      $DB"
+echo "out:     $OUT"
+echo "pattern: $PATTERN"
+
+if [ "$DRY_RUN" = 1 ]; then
+    echo "[DRY RUN] would: build-db then render_static (--prodtools-dir $REPO); no changes made."
+    exit 0
+fi
+
+# Mu2e env + SQLAlchemy (pyenv ana). Quiet; failures still surface via set -e.
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh >/dev/null 2>&1 || true
+muse setup ops >/dev/null 2>&1 || true
+source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana >/dev/null 2>&1 || true
+
+# Safety: back up the current published files before overwriting.
+ts="$(date +%Y%m%d_%H%M%S)"
+for f in index.html jobs.json; do
+    [ -f "$OUT/$f" ] && cp -p "$OUT/$f" "$OUT/$f.bak-$ts" && echo "backup: $OUT/$f.bak-$ts"
+done
+
+echo "--- step 1/2: rebuild DB ---"
+python3 "$REPO/bin/pomsMonitor" --build-db --pattern "$PATTERN" --db "$DB" >/dev/null
+echo "DB rebuilt: $DB"
+
+echo "--- step 2/2: render static page (from THIS repo) ---"
+python3 "$REPO/web/pomsMonitor/render_static.py" \
+    --out "$OUT" --prodtools-dir "$REPO" --db "$DB"
+
+# Guard against the known regression: the rich page is ~29-30 KB; the stale
+# cgi-bin source yields ~18 KB. Warn loudly if we somehow produced the lean one.
+sz=$(stat -c%s "$OUT/index.html")
+if [ "$sz" -lt 25000 ]; then
+    echo "WARNING: index.html is only ${sz} B (<25 KB) — looks like the lean page." >&2
+    echo "         Check --prodtools-dir points at the repo with the rich monitor.html." >&2
+fi
+echo "=== done: index.html ${sz} B, jobs.json $(stat -c%s "$OUT/jobs.json") B ==="

@@ -1,0 +1,18 @@
+{
+  "desc": "{desc}",
+  "dsconf": "{campaign}_best_v1_4-000",
+  "tarball_append": "-reco",
+  "fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+  "input_data": {"dig.mu2e.{desc}.{campaign}_best_v1_4-000.art": 10},
+  "fcl_overrides": {
+    "services.DbService.purpose": "Sim_best",
+    "services.DbService.version": "v1_4",
+    "services.DbService.nearestMatch": "true",
+    "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}-KL.version.sequencer.art",
+    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+    "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt"
+  },
+  "inloc": "tape",
+  "outloc": {"*.art": "tape"},
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+}
