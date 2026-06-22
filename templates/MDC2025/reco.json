@@ -1,25 +1,63 @@
 [
   {
-    "desc": "{desc}",
-    "dsconf": "{campaign}_best_v1_1",
+    "desc": [
+      "CeMLeadingLogOnSpill",
+      "CePLeadingLogMix1BB",
+      "CePLeadingLogOnSpill",
+      "CosmicCRYAllOnSpill",
+      "CosmicCalibOnSpill",
+      "CosmicSignalOnSpill",
+      "DIOtail95OnSpill",
+      "FlatGammaCaloOnSpill",
+      "FlatGammaOnSpill",
+      "FlatMuMinusOnSpill",
+      "FlateMinusOnSpill",
+      "FlatePlusOnSpill",
+      "IPAMuminusMichelOnSpill",
+      "PbarResamplingOnSpill",
+      "RMCExternalOnSpill",
+      "RMCInternalOnSpill",
+      "RPCExternalOnSpill",
+      "RPCExternalPhysicalOnSpill",
+      "RPCInternalPhysicalOnSpill",
+      "ensembleMDS3cOnSpill",
+      "CeMLeadingLogMix1BB",
+      "CosmicSignalMix1BB",
+      "FlatGammaMix1BB",
+      "FlatGammaCaloMix1BB",
+      "FlateMinusMix1BB",
+      "FlatePlusMix1BB",
+      "NoPrimaryMix1BB",
+      "ensembleMDS3cMix1BB",
+      "CeMLeadingLogMix2BB",
+      "CePLeadingLogMix2BB",
+      "CosmicSignalMix2BB",
+      "FlatGammaMix2BB",
+      "FlatGammaCaloMix2BB",
+      "FlateMinusMix2BB",
+      "FlatePlusMix2BB",
+      "NoPrimaryMix2BB",
+      "ensembleMDS3cMix2BB"
+    ],
+    "dsconf": "{out_campaign}_best_v1_1",
     "tarball_append": "-reco",
     "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
-    "input_data": {"dig.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
+    "input_data": {"dig.mu2e.{desc}.{campaign}.art": 1},
     "fcl_overrides": {
       "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
       "services.DbService.purpose": "Sim_best",
       "services.DbService.version": "v1_1"
     },
     "inloc": "tape",
-    "outloc": {"*.art": "disk"},
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
   },
   {
     "desc": "CosmicCRYExtracted",
-    "dsconf": "{campaign}_best_v1_1",
+    "dsconf": "{out_campaign}_best_v1_1",
     "tarball_append": "-reco",
     "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
-    "input_data": {"dig.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
+    "input_data": {"dig.mu2e.{desc}.{campaign}.art": 1},
     "fcl_overrides": {
       "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
       "services.DbService.purpose": "Sim_best",
@@ -27,6 +65,22 @@
     },
     "inloc": "tape",
     "outloc": {"*.art": "tape"},
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+  },
+  {
+    "desc": "CosmicSignalOffSpill",
+    "dsconf": "{out_campaign}_best_v1_1",
+    "tarball_append": "-reco",
+    "fcl": "Production/JobConfig/recoMC/OffSpill.fcl",
+    "input_data": {"dig.mu2e.{desc}.{campaign}.art": 1},
+    "fcl_overrides": {
+      "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}-LH.version.sequencer.art",
+      "outputs.CentralHelixOutput.fileName": "mcs.owner.{desc}-CH.version.sequencer.art",
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_1"
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
   }
 ]
