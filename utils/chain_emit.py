@@ -137,13 +137,20 @@ def match_entry(template, description):
     return _default_entry(entries)
 
 
-def derive_input_defname(template, campaign):
+def derive_input_defname(template, campaign, family_wide=False):
     """Discovery defname for this stage's inputs: the template's input pattern
-    with ``{desc}`` replaced by the SAM wildcard ``%`` and ``{campaign}`` filled
-    from ``campaign`` (per-campaign templates usually bake the campaign already).
+    with ``{desc}`` replaced by the SAM wildcard ``%`` and ``{campaign}`` filled.
+
+    family_wide=False (digi/reco/ntuple): inputs come from the same campaign as
+    the output, so ``{campaign}`` → ``<campaign>%``.
+
+    family_wide=True (mix): inputs are primaries produced at any release of the
+    family, independent of the output build, so ``{campaign}`` → ``<family>%``
+    (e.g. dts.mu2e.%.MDC2025%.art). The caller then narrows to latest-per-desc.
     """
     pat = _input_pattern(_default_entry(_entries(template)))
-    pat = pat.replace('{campaign}', f"{campaign}%")
+    repl = f"{family_of(campaign)}%" if family_wide else f"{campaign}%"
+    pat = pat.replace('{campaign}', repl)
     pat = pat.replace('{desc}', '%')
     return pat
 
@@ -161,40 +168,72 @@ def _subst(obj, mapping):
     return obj
 
 
-def synthesize_entry(template, input_dataset):
+def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=False):
     """Return a ``json2jobdef`` config entry for one discovered input dataset.
 
     Substitutes the per-dataset fields: ``{desc}`` → its description,
     ``{campaign}`` → its release campaign (e.g. ``MDC2025ap``), ``{input}`` →
-    the dataset name. input_data is pinned to the concrete dataset (keeping the
-    template's merge factor); all other fields are the curated family template.
+    the dataset name, ``{out_campaign}`` → the target build campaign.
+
+    For most stages input and output share a campaign, so ``out_campaign``
+    defaults to the input's campaign. Mixing is the exception: it reads
+    primaries from whatever campaign they were produced at but writes a
+    separately-tagged build, so the caller passes the target build campaign and
+    the template uses ``{out_campaign}`` for dsconf/simjob_setup.
+
+    ``defer_desc`` (mixing): do NOT pin ``desc`` or substitute ``{desc}``.
+    Mixing derives its output desc as ``input_desc + pbeam`` at generation time
+    (config_utils.prepare_fields_for_job); pinning desc here would block that
+    append, and pre-substituting ``{desc}`` in the output override would lock the
+    name to the bare primary desc (missing the ``Mix1BB`` suffix). Leaving
+    ``{desc}`` literal lets json2jobdef resolve it from the pbeam-augmented desc.
     """
     n = Mu2eName.parse(input_dataset)
     entry = copy.deepcopy(match_entry(template, n.description))
     merge = _input_merge(entry)
-    entry['input_data'] = {input_dataset: merge}
-    # Pin desc to the concrete description (the matched entry may carry a list
-    # or the {desc} wildcard); {desc}/{campaign}/{input} substitute everywhere.
-    entry['desc'] = n.description
-    return _subst(entry, {'desc': n.description,
-                          'campaign': n.campaign,
-                          'parent_dsconf': n.dsconf,   # full input dsconf incl build suffix
-                          'input': input_dataset})
+    # Pin the concrete input, preserving the template's container shape:
+    # list-form [{name: merge}] (mixing/jsonexpander) vs dict {name: merge}
+    # (digi/reco/ntuple). pileup_datasets and other fields are left untouched.
+    if isinstance(entry.get('input_data'), list):
+        entry['input_data'] = [{input_dataset: merge}]
+    else:
+        entry['input_data'] = {input_dataset: merge}
+    mapping = {'campaign': n.campaign,
+               'out_campaign': out_campaign or n.campaign,
+               'parent_dsconf': n.dsconf,   # full input dsconf incl build suffix
+               'input': input_dataset}
+    if not defer_desc:
+        # Pin desc to the concrete description and substitute {desc} everywhere.
+        entry['desc'] = n.description
+        mapping['desc'] = n.description
+    else:
+        # Mixing: drop desc entirely so json2jobdef's prepare_fields_for_job
+        # derives desc = input_desc + pbeam (it skips derivation if desc is set).
+        # Leave {desc} tokens (e.g. in the output fileName) unsubstituted for it
+        # to resolve from the pbeam-augmented desc.
+        entry.pop('desc', None)
+    return _subst(entry, mapping)
 
 
-def emit_config(template, input_datasets):
+def emit_config(template, input_datasets, out_campaign=None, defer_desc=False):
     """Synthesize a json2jobdef config (list of entries) for the given inputs."""
-    return [synthesize_entry(template, ds) for ds in input_datasets]
+    return [synthesize_entry(template, ds, out_campaign=out_campaign,
+                             defer_desc=defer_desc)
+            for ds in input_datasets]
 
 
 def output_datasets(entry, owner='mu2e'):
     """Expected output dataset name(s) of a synthesized entry: derived from each
     ``*.fileName`` override (a Mu2e file pattern with literal ``owner``/``version``
     fields plus a sequencer), resolving owner and version (=dsconf) and dropping
-    the sequencer. Skips templates that resolve to a path (e.g. /dev/null)."""
-    dsconf = entry.get('dsconf', '')
+    the sequencer. Skips templates that resolve to a path (e.g. /dev/null).
+
+    Handles both shapes: scalar fields (digi/reco/ntuple) and list-wrapped
+    jsonexpander fields (mixing), unwrapping ``[x]`` -> ``x``."""
+    unwrap = lambda v: v[0] if isinstance(v, list) and v else v
+    dsconf = unwrap(entry.get('dsconf', '')) or ''
     out = []
-    for key, val in entry.get('fcl_overrides', {}).items():
+    for key, val in (unwrap(entry.get('fcl_overrides', {})) or {}).items():
         if not key.endswith('fileName') or not isinstance(val, str) or '/' in val:
             continue
         parts = val.split('.')

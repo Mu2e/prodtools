@@ -144,16 +144,20 @@ def _dataset_exists(name):
         return False
 
 
-def _filter_unproduced(inputs, template):
+def _filter_unproduced(inputs, template, out_campaign=None, defer_desc=False):
     """Drop inputs whose this-stage output already exists in SAM (the chain has
     already produced them). Output dataset names come from the synthesized entry.
-    Diagnostics to stderr."""
+
+    out_campaign/defer_desc MUST match what emit_config uses, so the computed
+    output name is the actual target build (e.g. the ar reco output, not the
+    input's ap-build output). Diagnostics to stderr."""
     from utils import chain_emit
     print(f"Checking produced outputs for {len(inputs)} datasets, please wait...",
           file=sys.stderr)
     kept = []
     for ds in inputs:
-        entry = chain_emit.synthesize_entry(template, ds)
+        entry = chain_emit.synthesize_entry(template, ds, out_campaign=out_campaign,
+                                            defer_desc=defer_desc)
         produced = [o for o in chain_emit.output_datasets(entry) if _dataset_exists(o)]
         if produced:
             _vlog(f"# already produced (skipped): {ds} -> {','.join(produced)}")
@@ -172,15 +176,32 @@ def _emit(args):
     if not args.campaign:
         sys.exit("--emit requires --campaign")
 
+    # Family-wide stages discover inputs by latest build PER DESC across the
+    # whole family, regardless of which release they were produced at, and write
+    # a separately-tagged build. --campaign is the OUTPUT build.
+    #   digi, mix ← dts primaries (the small primary set)
+    #   reco      ← dig: take the latest dig of every desc anywhere in the family
+    #               (Mix1BB, OnSpill, all streams) and reco them into the output
+    #               build. Input build version varies per desc; the input pattern
+    #               must not pin it.
+    # ntuple stays pinned: it consumes mcs at a specific reco build and uses
+    # {parent_dsconf} to carry that build through.
+    FAMILY_WIDE = {'digi', 'mix', 'reco'}
+    family_wide = (args.emit in FAMILY_WIDE)
+    is_mix = (args.emit == 'mix')
+    out_campaign = args.campaign
+
     try:
         template = chain_emit.load_template(args.campaign, args.emit, args.templates_dir)
-        defname = args.defname or chain_emit.derive_input_defname(template, args.campaign)
+        defname = args.defname or chain_emit.derive_input_defname(
+            template, args.campaign, family_wide=family_wide)
     except (FileNotFoundError, ValueError) as e:
         sys.exit(str(e))
     _vlog(f"# discovering inputs: {defname}")
 
     names = fetch_definitions(defname, args.user)
-    names = _narrow_to_latest_release(names)
+    if not family_wide:
+        names = _narrow_to_latest_release(names)
     rows, skipped = latest_per_description(names)
     latest = [latest_name for _, _, latest_name, _ in rows]
 
@@ -202,9 +223,11 @@ def _emit(args):
     if args.complete_only:
         latest = _filter_complete(latest)
     if args.skip_produced:
-        latest = _filter_unproduced(latest, template)
+        latest = _filter_unproduced(latest, template, out_campaign=out_campaign,
+                                    defer_desc=is_mix)
 
-    config = chain_emit.emit_config(template, latest)
+    config = chain_emit.emit_config(template, latest, out_campaign=out_campaign,
+                                    defer_desc=is_mix)
     print(json.dumps(config, indent=2))
     if skipped:
         _vlog(f"# skipped {len(skipped)} unparseable name(s)")
@@ -221,7 +244,7 @@ def main():
                     help="print only the latest defname per group (no description/count columns)")
     ap.add_argument("--show-count", action="store_true",
                     help="include a column with how many dsconfs were collapsed per description")
-    ap.add_argument("--emit", choices=("digi", "reco", "ntuple"),
+    ap.add_argument("--emit", choices=("digi", "reco", "ntuple", "mix"),
                     help="synthesize a json2jobdef config for this stage, one entry "
                          "per latest input dataset (POMS-free chain hop)")
     ap.add_argument("--campaign",

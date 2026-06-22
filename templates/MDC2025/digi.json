@@ -1,7 +1,7 @@
 [
   {
     "desc": "{desc}",
-    "dsconf": "{campaign}_best_v1_1",
+    "dsconf": "{out_campaign}_best_v1_1",
     "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
     "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
     "fcl_overrides": {
@@ -11,11 +11,11 @@
     },
     "inloc": "tape",
     "outloc": {"*.art": "tape"},
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
   },
   {
     "desc": "CosmicCRYExtracted",
-    "dsconf": "{campaign}_best_v1_1",
+    "dsconf": "{out_campaign}_best_v1_1",
     "fcl": "Production/JobConfig/digitize/Extracted.fcl",
     "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
     "fcl_overrides": {
@@ -25,6 +25,6 @@
     },
     "inloc": "tape",
     "outloc": {"*.art": "tape"},
-    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
   }
 ]

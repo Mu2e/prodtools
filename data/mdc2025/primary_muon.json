@@ -797,5 +797,29 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "desc": "MuCap1809keVCalo",
+        "dsconf": "MDC2025ar",
+        "fcl": "Production/JobConfig/primary/MuCap1809keVCalo.fcl",
+        "fcl_overrides": {
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "outputs.PrimaryOutput.fileName": "dts.owner.MuCap1809keVCalo.version.sequencer.art"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 5000,
+        "njobs": 1000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
 ]

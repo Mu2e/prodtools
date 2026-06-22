@@ -1,0 +1,112 @@
+[
+  {
+    "desc": [
+      "CeMLeadingLog",
+      "CePLeadingLog",
+      "FlateMinus",
+      "FlatePlus",
+      "FlatGamma",
+      "FlatGammaCalo",
+      "CosmicSignal",
+      "ensembleMDS3c"
+    ],
+    "input_data": [
+      {
+        "dts.mu2e.{desc}.{campaign}.art": 1
+      }
+    ],
+    "pileup_datasets": [
+      {
+        "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+        "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+        "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+        "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+      }
+    ],
+    "dsconf": [
+      "{out_campaign}_best_v1_1"
+    ],
+    "pbeam": [
+      "Mix1BB"
+    ],
+    "owner": [
+      "mu2e"
+    ],
+    "simjob_setup": [
+      "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+    ],
+    "fcl": [
+      "Production/JobConfig/mixing/Mix.fcl"
+    ],
+    "merge_events": [
+      500
+    ],
+    "inloc": [
+      "tape"
+    ],
+    "outloc": [
+      {
+        "dig.mu2e.*.art": "tape"
+      }
+    ],
+    "fcl_overrides": [
+      {
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_1",
+        "physics.producers.PBISim.SDF": 0.8,
+        "outputs.Output.fileName": "dig.mu2e.{desc}.{dsconf}.sequence.art"
+      }
+    ]
+  },
+  {
+    "desc": "NoPrimary",
+    "input_data": [
+      {
+        "dts.mu2e.{desc}.{campaign}.art": 1
+      }
+    ],
+    "pileup_datasets": [
+      {
+        "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+        "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+        "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+        "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+      }
+    ],
+    "dsconf": [
+      "{out_campaign}_best_v1_1"
+    ],
+    "pbeam": [
+      "Mix1BB"
+    ],
+    "owner": [
+      "mu2e"
+    ],
+    "simjob_setup": [
+      "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+    ],
+    "fcl": [
+      "Production/JobConfig/mixing/Mix.fcl"
+    ],
+    "merge_events": [
+      500
+    ],
+    "inloc": [
+      "tape"
+    ],
+    "outloc": [
+      {
+        "dig.mu2e.*.art": "tape"
+      }
+    ],
+    "fcl_overrides": [
+      {
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_1",
+        "physics.producers.PBISim.SDF": 0.8,
+        "#include": "Production/JobConfig/mixing/NoPrimary.fcl",
+        "outputs.Output.fileName": "dig.mu2e.{desc}.{dsconf}.sequence.art"
+      }
+    ]
+  }
+]

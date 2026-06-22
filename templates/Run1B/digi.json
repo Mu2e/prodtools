@@ -1,6 +1,6 @@
 {
   "desc": ["CeEndpoint", "CosmicCRYAll", "FlatGamma", "FlateMinus"],
-  "dsconf": "{campaign}_best_v1_4-000",
+  "dsconf": "{out_campaign}_best_v1_4-000",
   "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
   "input_data": {"dts.mu2e.{desc}.{campaign}.art": 100},
   "fcl_overrides": {
@@ -19,5 +19,5 @@
   },
   "inloc": "disk",
   "outloc": {"*.art": "tape"},
-  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{campaign}/setup.sh"
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
 }
