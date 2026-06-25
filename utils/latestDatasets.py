@@ -144,20 +144,21 @@ def _dataset_exists(name):
         return False
 
 
-def _filter_unproduced(inputs, template, out_campaign=None, defer_desc=False):
+def _filter_unproduced(inputs, template, out_campaign=None, defer_desc=False,
+                       dsconf=None):
     """Drop inputs whose this-stage output already exists in SAM (the chain has
     already produced them). Output dataset names come from the synthesized entry.
 
-    out_campaign/defer_desc MUST match what emit_config uses, so the computed
-    output name is the actual target build (e.g. the ar reco output, not the
-    input's ap-build output). Diagnostics to stderr."""
+    out_campaign/defer_desc/dsconf MUST match what emit_config uses, so the
+    computed output name is the actual target build (e.g. the ar reco output, not
+    the input's ap-build output). Diagnostics to stderr."""
     from utils import chain_emit
     print(f"Checking produced outputs for {len(inputs)} datasets, please wait...",
           file=sys.stderr)
     kept = []
     for ds in inputs:
         entry = chain_emit.synthesize_entry(template, ds, out_campaign=out_campaign,
-                                            defer_desc=defer_desc)
+                                            defer_desc=defer_desc, dsconf=dsconf)
         produced = [o for o in chain_emit.output_datasets(entry) if _dataset_exists(o)]
         if produced:
             _vlog(f"# already produced (skipped): {ds} -> {','.join(produced)}")
@@ -224,10 +225,10 @@ def _emit(args):
         latest = _filter_complete(latest)
     if args.skip_produced:
         latest = _filter_unproduced(latest, template, out_campaign=out_campaign,
-                                    defer_desc=is_mix)
+                                    defer_desc=is_mix, dsconf=args.dsconf)
 
     config = chain_emit.emit_config(template, latest, out_campaign=out_campaign,
-                                    defer_desc=is_mix)
+                                    defer_desc=is_mix, dsconf=args.dsconf)
     print(json.dumps(config, indent=2))
     if skipped:
         _vlog(f"# skipped {len(skipped)} unparseable name(s)")
@@ -256,6 +257,11 @@ def main():
                         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "templates"),
                     help="root of per-campaign stage templates (default: <repo>/templates)")
+    ap.add_argument("--dsconf",
+                    help="override the template's output dsconf for --emit (e.g. "
+                         "MDC2025ar_best_v1_3). Pins the exact build so the emitted "
+                         "config and --skip-produced check the same build, instead "
+                         "of whatever version the template bakes.")
     ap.add_argument("--complete-only", action="store_true",
                     help="keep only datasets whose file count == producing cnf njobs "
                          "(works in list and --emit modes); inputs whose cnf has no "

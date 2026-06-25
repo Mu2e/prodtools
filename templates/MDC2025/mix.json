@@ -59,7 +59,10 @@
     ]
   },
   {
-    "desc": "NoPrimary",
+    "desc": [
+      "NoPrimary",
+      "MuCap1809keVCalo"
+    ],
     "input_data": [
       {
         "dts.mu2e.{desc}.{campaign}.art": 1

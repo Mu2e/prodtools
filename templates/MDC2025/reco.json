@@ -29,6 +29,8 @@
       "FlatePlusMix1BB",
       "NoPrimaryMix1BB",
       "ensembleMDS3cMix1BB",
+      "MuCap1809keVCaloMix1BB",
+      "MuCap1809keVCaloMix2BB",
       "CeMLeadingLogMix2BB",
       "CePLeadingLogMix2BB",
       "CosmicSignalMix2BB",

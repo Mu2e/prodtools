@@ -1,5 +1,10 @@
 {
-  "desc": "{desc}",
+  "desc": [
+    "CeEndpoint",
+    "CosmicCRYAll",
+    "FlatGamma",
+    "FlateMinus"
+  ],
   "dsconf": "{campaign}_best_v1_4-000",
   "tarball_append": "-reco",
   "fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",

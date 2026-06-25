@@ -144,15 +144,7 @@ def build_pileup_args(config):
                         f.write(f'{key}: "{val}"\n')
                     else:
                         f.write(f'{key}: {val}\n')
-        
-        # Add output filename overrides for mixing jobs (after base FCL include)
-        # This ensures they override the default values from the base templates
-        owner = _get_first_if_list(config.get('owner', 'mu2e'))
-        desc = _get_first_if_list(config.get('desc', 'unknown'))
-        dsconf = _get_first_if_list(config.get('dsconf', 'unknown'))
-        f.write(f'outputs.TriggeredOutput.fileName: "dig.{owner}.{desc}Triggered.{dsconf}.sequencer.art"\n')
-        f.write(f'outputs.TriggerableOutput.fileName: "dig.{owner}.{desc}Triggerable.{dsconf}.sequencer.art"\n')
-    
+
     return args
 
 def prepare_fields_for_mixing(config):

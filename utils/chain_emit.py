@@ -168,7 +168,8 @@ def _subst(obj, mapping):
     return obj
 
 
-def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=False):
+def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=False,
+                     dsconf=None):
     """Return a ``json2jobdef`` config entry for one discovered input dataset.
 
     Substitutes the per-dataset fields: ``{desc}`` → its description,
@@ -180,6 +181,12 @@ def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=Fals
     primaries from whatever campaign they were produced at but writes a
     separately-tagged build, so the caller passes the target build campaign and
     the template uses ``{out_campaign}`` for dsconf/simjob_setup.
+
+    ``dsconf`` overrides the template's dsconf outright (after substitution),
+    preserving the template's container shape (scalar vs list-form). Use it to
+    pin the exact build — e.g. ``MDC2025ar_best_v1_3`` — so the emitted config
+    and the skip-produced check both target that build instead of whatever
+    version the template happens to bake. ``None`` leaves the template's dsconf.
 
     ``defer_desc`` (mixing): do NOT pin ``desc`` or substitute ``{desc}``.
     Mixing derives its output desc as ``input_desc + pbeam`` at generation time
@@ -212,14 +219,39 @@ def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=Fals
         # Leave {desc} tokens (e.g. in the output fileName) unsubstituted for it
         # to resolve from the pbeam-augmented desc.
         entry.pop('desc', None)
-    return _subst(entry, mapping)
+    entry = _subst(entry, mapping)
+    if dsconf is not None and 'dsconf' in entry:
+        # Override the build outright, keeping the template's container shape.
+        entry['dsconf'] = [dsconf] if isinstance(entry['dsconf'], list) else dsconf
+    return entry
 
 
-def emit_config(template, input_datasets, out_campaign=None, defer_desc=False):
+def emit_config(template, input_datasets, out_campaign=None, defer_desc=False,
+                dsconf=None):
     """Synthesize a json2jobdef config (list of entries) for the given inputs."""
     return [synthesize_entry(template, ds, out_campaign=out_campaign,
-                             defer_desc=defer_desc)
+                             defer_desc=defer_desc, dsconf=dsconf)
             for ds in input_datasets]
+
+
+def _deferred_descs(entry):
+    """For a ``defer_desc`` (mixing) entry, the output desc is left as the literal
+    ``{desc}`` because json2jobdef derives it as ``input_desc + pbeam`` at
+    generation time. Reconstruct those concrete descs here so produced-output
+    checks can resolve the real names: parse the pinned input's description and
+    append each ``pbeam`` value (e.g. CeMLeadingLog + Mix1BB). Returns [] when
+    the entry isn't deferred / has no pbeam."""
+    indata = entry.get('input_data')
+    indata = indata[0] if isinstance(indata, list) and indata else indata
+    if not isinstance(indata, dict) or not indata:
+        return []
+    try:
+        input_desc = Mu2eName.parse(next(iter(indata))).description
+    except ValueError:
+        return []
+    pbeam = entry.get('pbeam')
+    pbeams = pbeam if isinstance(pbeam, list) else ([pbeam] if isinstance(pbeam, str) else [])
+    return [input_desc + pb for pb in pbeams]
 
 
 def output_datasets(entry, owner='mu2e'):
@@ -229,7 +261,12 @@ def output_datasets(entry, owner='mu2e'):
     the sequencer. Skips templates that resolve to a path (e.g. /dev/null).
 
     Handles both shapes: scalar fields (digi/reco/ntuple) and list-wrapped
-    jsonexpander fields (mixing), unwrapping ``[x]`` -> ``x``."""
+    jsonexpander fields (mixing), unwrapping ``[x]`` -> ``x``.
+
+    Mixing leaves ``{desc}`` literal in the output fileName (see ``defer_desc``).
+    When that token survives, expand it to the concrete ``input_desc + pbeam``
+    name(s) so the produced-output check matches real SAM datasets instead of a
+    literal ``dig.mu2e.{desc}...`` that can never exist."""
     unwrap = lambda v: v[0] if isinstance(v, list) and v else v
     dsconf = unwrap(entry.get('dsconf', '')) or ''
     out = []
@@ -240,7 +277,11 @@ def output_datasets(entry, owner='mu2e'):
         if len(parts) != 6:
             continue
         tier, _owner, desc, _version, _seq, ext = parts
-        out.append(f"{tier}.{owner}.{desc}.{dsconf}.{ext}")
+        if '{desc}' in desc:
+            for rd in _deferred_descs(entry):
+                out.append(f"{tier}.{owner}.{desc.replace('{desc}', rd)}.{dsconf}.{ext}")
+        else:
+            out.append(f"{tier}.{owner}.{desc}.{dsconf}.{ext}")
     return out
 
 

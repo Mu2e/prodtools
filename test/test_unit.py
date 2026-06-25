@@ -2839,6 +2839,74 @@ class TestChainEmit(unittest.TestCase):
         self.assertTrue(chain_emit.dataset_complete("d", lambda n: 50, lambda n: 50))
         self.assertFalse(chain_emit.dataset_complete("d", lambda n: 40, lambda n: 50))
 
+    # --- mixing: out_campaign / defer_desc / dsconf override ---
+
+    MIX_TEMPLATE = {
+        "desc": ["CeMLeadingLog", "FlatGamma"],
+        "dsconf": ["{out_campaign}_best_v1_1"],
+        "input_data": [{"dts.mu2e.{desc}.{campaign}.art": 1}],
+        "pbeam": ["Mix1BB"],
+        "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+        "fcl_overrides": [{
+            "outputs.Output.fileName": "dig.mu2e.{desc}.{dsconf}.sequence.art"}],
+        "inloc": ["tape"],
+        "simjob_setup": ["/cvmfs/.../SimJob/{out_campaign}/setup.sh"],
+    }
+
+    def test_out_campaign_decouples_build_from_input(self):
+        """Mixing reads an ap primary but writes the ar build: dsconf and
+        simjob_setup use {out_campaign}, not the input campaign."""
+        from utils import chain_emit
+        e = chain_emit.synthesize_entry(
+            self.MIX_TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025ar", defer_desc=True)
+        self.assertEqual(e['dsconf'], ["MDC2025ar_best_v1_1"])
+        self.assertIn("SimJob/MDC2025ar/", e['simjob_setup'][0])
+
+    def test_defer_desc_leaves_desc_literal(self):
+        """defer_desc drops the `desc` field and leaves {desc} unsubstituted so
+        json2jobdef can append pbeam (desc = input_desc + pbeam) at gen time."""
+        from utils import chain_emit
+        e = chain_emit.synthesize_entry(
+            self.MIX_TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025ar", defer_desc=True)
+        self.assertNotIn('desc', e)
+        self.assertIn('{desc}', e['fcl_overrides'][0]['outputs.Output.fileName'])
+
+    def test_output_datasets_resolves_deferred_desc_via_pbeam(self):
+        """output_datasets must expand the literal {desc} to input_desc+pbeam so
+        the produced-output (skip-produced) check matches real SAM names."""
+        from utils import chain_emit
+        e = chain_emit.synthesize_entry(
+            self.MIX_TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025ar", defer_desc=True)
+        self.assertEqual(
+            chain_emit.output_datasets(e),
+            ["dig.mu2e.CeMLeadingLogMix1BB.MDC2025ar_best_v1_1.art"])
+
+    def test_dsconf_override_pins_build_listform(self):
+        """--dsconf overrides the template dsconf outright, preserving the
+        list-form container, and flows into the resolved output name."""
+        from utils import chain_emit
+        e = chain_emit.synthesize_entry(
+            self.MIX_TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025ar", defer_desc=True,
+            dsconf="MDC2025ar_best_v1_3")
+        self.assertEqual(e['dsconf'], ["MDC2025ar_best_v1_3"])
+        self.assertEqual(
+            chain_emit.output_datasets(e),
+            ["dig.mu2e.CeMLeadingLogMix1BB.MDC2025ar_best_v1_3.art"])
+
+    def test_dsconf_override_scalar_shape(self):
+        """For scalar-dsconf templates (digi/reco) the override stays scalar."""
+        from utils import chain_emit
+        e = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.CeEndpoint.MDC2025ap.art",
+            dsconf="MDC2025ap_best_v1_9")
+        self.assertEqual(e['dsconf'], "MDC2025ap_best_v1_9")
+        self.assertEqual(chain_emit.output_datasets(e),
+                         ["dig.mu2e.CeEndpointOnSpill.MDC2025ap_best_v1_9.art"])
+
 
 # ---------------------------------------------------------------------------
 # 32. latest_per_description (latestDatasets.py)

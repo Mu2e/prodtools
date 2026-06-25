@@ -1,6 +1,25 @@
 [
   {
-    "desc": "{desc}",
+    "desc": [
+      "CosmicCRYAll",
+      "RPCExternalPhysical",
+      "IPAMuminusMichel",
+      "FlatGammaCalo",
+      "DIOtail95",
+      "CeMLeadingLog",
+      "FlatMuMinus",
+      "CePLeadingLog",
+      "FlatGamma",
+      "RPCExternal",
+      "FlatePlus",
+      "FlateMinus",
+      "RPCInternalPhysical",
+      "PbarResampling",
+      "RPCInternal",
+      "CosmicCalib",
+      "CosmicSignal",
+      "MuCap1809keVCalo"
+    ],
     "dsconf": "{out_campaign}_best_v1_1",
     "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
     "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
