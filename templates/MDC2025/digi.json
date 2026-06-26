@@ -17,8 +17,7 @@
       "PbarResampling",
       "RPCInternal",
       "CosmicCalib",
-      "CosmicSignal",
-      "MuCap1809keVCalo"
+      "CosmicSignal"
     ],
     "dsconf": "{out_campaign}_best_v1_1",
     "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
@@ -39,6 +38,21 @@
     "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
     "fcl_overrides": {
       "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_1"
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+  },
+  {
+    "desc": "MuCap1809keVCalo",
+    "dsconf": "{out_campaign}_best_v1_1",
+    "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+    "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
+    "fcl_overrides": {
+      "#include": "Production/JobConfig/mixing/NoPrimary.fcl",
+      "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
       "services.DbService.purpose": "Sim_best",
       "services.DbService.version": "v1_1"
     },

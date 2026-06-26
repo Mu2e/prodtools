@@ -415,10 +415,13 @@ def build_jobdef(config, job_args, json_output=False):
     # Build-time guard: ensure every outputs.*.fileName substitutes cleanly.
     # Catches missing fcl_overrides for outputs whose upstream defaults embed
     # a suffix on the desc token (e.g. description-CH) before the cnf is pushed.
-    try:
-        validate_output_filenames(parfile_name)
-    except ValueError as e:
-        sys.exit(f"json2jobdef: cnf failed output-filename validation: {e}")
+    # Skipped for generic tarballs: {desc}/sequencer are deferred to runtime
+    # (direct-input mode) by design, so they cannot resolve at build time.
+    if not config.get('generic_tarball'):
+        try:
+            validate_output_filenames(parfile_name)
+        except ValueError as e:
+            sys.exit(f"json2jobdef: cnf failed output-filename validation: {e}")
     
     if json_output:
         # Return structured data for machine consumption

@@ -378,5 +378,28 @@
             "*.art": "tape"
         },
         "sequential_aux": true
+    },
+    {
+        "desc": "CosmicCRYAll",
+        "dsconf": "Run1Ban",
+        "fcl": "Production/JobConfig/cosmic/S2Resampler.fcl",
+        "fcl_overrides": {
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "outputs.PrimaryOutput.fileName": "dts.owner.CosmicCRYAll.version.sequencer.art"
+        },
+        "resampler_name": "CosmicResampler",
+        "input_data": {"sim.mu2e.CosmicDSStopsCRYAll.MDC2025ab.art": 1},
+        "events": 100000,
+        "njobs": 1000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
     }
 ]

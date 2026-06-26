@@ -2030,6 +2030,45 @@ class TestJobOutputsOverride(unittest.TestCase):
             os.unlink(tar)
 
 
+class TestGenericTarballGuard(unittest.TestCase):
+    """A generic tarball deliberately leaves {desc} (and sequencer) unresolved
+    in its outfiles for runtime/direct-input substitution. The build-time
+    validate_output_filenames guard must NOT be run against it — it would see
+    the literal {desc}/sequencer and abort. These tests pin both halves: the
+    guard does raise on a deferred cnf (so skipping it is load-bearing), and
+    build_jobdef actually skips it when generic_tarball is set."""
+
+    def test_guard_raises_on_deferred_desc(self):
+        from utils.jobfcl import validate_output_filenames
+        jp = _generic_reco_jobpars()  # outfiles keep literal {desc}
+        tar = _make_tarball(jp, "#include \"OnSpill.fcl\"\n")
+        try:
+            with self.assertRaises(ValueError):
+                validate_output_filenames(tar)
+        finally:
+            os.unlink(tar)
+
+    def test_build_skips_guard_for_generic_tarball(self):
+        """build_jobdef must NOT call validate_output_filenames when
+        generic_tarball is set -- the deferred {desc}/sequencer cannot resolve
+        at build time, so running the guard would abort the build."""
+        from unittest.mock import patch
+        from utils import json2jobdef
+        with patch.object(json2jobdef, 'validate_output_filenames') as guard, \
+             patch.object(json2jobdef, 'create_jobdef'), \
+             patch.object(json2jobdef, 'get_parfile_name', return_value='cnf.x.0.tar'), \
+             patch.object(json2jobdef, 'get_fcl_name', return_value='cnf.x.0.fcl'), \
+             patch.object(json2jobdef, 'append_jobdef'):
+            cfg = {'desc': 'reco', 'dsconf': 'D', 'owner': 'mu2e',
+                   'simjob_setup': 's', 'inloc': 'tape', 'generic_tarball': True,
+                   'fcl': 'f.fcl', 'outloc': {'*.art': 'tape'}}
+            try:
+                json2jobdef.build_jobdef(cfg, job_args=[], json_output=True)
+            except Exception:
+                pass  # downstream packaging is mocked/partial; we only assert the guard
+            guard.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # 24. _replace_placeholders defer_keys (jobdef.py)
 # ---------------------------------------------------------------------------
@@ -3066,7 +3105,7 @@ class TestUniformityReport(unittest.TestCase):
         self.assertIn('CeMLeadingLog', out)
         self.assertIn('4,000', out)  # 2000/0.5522 = 3623 -> 4000
         # DIOtail95 eff exactly 0.5 -> 2000/0.5 = 4000
-        self.assertRegexpMatches(out, r'DIOtail95\s+0\.5000.*4,000')
+        self.assertRegex(out, r'DIOtail95\s+0\.5000.*4,000')
 
     def test_requires_campaign(self):
         from utils import pomsMonitor

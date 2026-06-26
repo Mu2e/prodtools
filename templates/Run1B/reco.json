@@ -8,7 +8,7 @@
   "dsconf": "{campaign}_best_v1_4-000",
   "tarball_append": "-reco",
   "fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
-  "input_data": {"dig.mu2e.{desc}.{campaign}_best_v1_4-000.art": 10},
+  "input_data": {"dig.mu2e.{desc}.{campaign}_best_v1_4-000.art": 1},
   "fcl_overrides": {
     "services.DbService.purpose": "Sim_best",
     "services.DbService.version": "v1_4",
