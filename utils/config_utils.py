@@ -8,6 +8,8 @@ including description extraction and auto-generation from input data.
 
 import copy
 
+from utils.job_common import Mu2eName
+
 
 def _get_first_if_list(value):
     """Helper: get first element if value is a list, otherwise return value."""
@@ -44,11 +46,10 @@ def prepare_fields_for_job(config, job_type='standard'):
         dataset_name = input_data
     
     # Dataset name format: tier.owner.desc.dsconf.ext (5 parts)
-    parts = dataset_name.split('.')
-    if len(parts) != 5:
+    n = Mu2eName.parse(dataset_name)
+    if not n.is_dataset:
         raise ValueError(f"Invalid dataset name format: '{dataset_name}'. Expected 5 dot-separated fields (tier.owner.desc.dsconf.ext)")
-    
-    dsdesc = parts[2]  # e.g., "CosmicSignal" from "dts.mu2e.CosmicSignal.MDC2025ac.art"
+    dsdesc = n.description  # e.g., "CosmicSignal" from "dts.mu2e.CosmicSignal.MDC2025ac.art"
     
     # For mixing jobs, append pbeam to the desc
     if job_type == 'mixing':

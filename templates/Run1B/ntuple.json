@@ -1,0 +1,12 @@
+{
+  "desc": "{desc}",
+  "dsconf": "{parent_dsconf}",
+  "fcl": "EventNtuple/fcl/from_mcs-Run1B.fcl",
+  "input_data": {"mcs.mu2e.{desc}-KL.{campaign}_best_v1_4-001.art": 1},
+  "fcl_overrides": {
+    "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+  },
+  "inloc": "tape",
+  "outloc": {"*.root": "tape"},
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_02_00/setup.sh"
+}

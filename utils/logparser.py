@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils.datasetFileList import get_dataset_files
+
 # Regex patterns
 TIMEREPORT_REGEX = re.compile(r"TimeReport CPU = ([0-9]*\.?[0-9]+) Real = ([0-9]*\.?[0-9]+)")
 MEMREPORT_REGEX = re.compile(r"MemReport\s+VmPeak\s*=\s*([0-9]*\.?[0-9]+)\s+VmHWM\s*=\s*([0-9]*\.?[0-9]+)")
@@ -29,15 +31,15 @@ def get_log_files(dataset, max_files=None):
     try:
         # Use get_dataset_files() which constructs paths directly without locate_files() calls
         # This is much faster than get_definition_files() which queries SAM for each file
-        from utils.datasetFileList import get_dataset_files
-        
+
         log_files = get_dataset_files(dataset)
         # Limit files if requested
         if max_files is not None:
             log_files = log_files[:max_files]
         return log_files
-        
-    except Exception:
+
+    except Exception as e:
+        print(f"Warning: get_log_files failed for {dataset}: {e}", file=sys.stderr)
         return []
 
 def parse_log_file(filepath):

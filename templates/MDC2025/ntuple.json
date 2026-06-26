@@ -1,0 +1,26 @@
+[
+  {
+    "desc": "{desc}",
+    "dsconf": "{parent_dsconf}",
+    "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+    "input_data": {"mcs.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
+    "fcl_overrides": {
+      "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+    },
+    "inloc": "disk",
+    "outloc": {"*.root": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
+  },
+  {
+    "desc": "CosmicCRYExtracted",
+    "dsconf": "{parent_dsconf}",
+    "fcl": "EventNtuple/fcl/from_mcs-extracted.fcl",
+    "input_data": {"mcs.mu2e.{desc}.{campaign}_best_v1_1.art": 1},
+    "fcl_overrides": {
+      "services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"
+    },
+    "inloc": "disk",
+    "outloc": {"*.root": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
+  }
+]

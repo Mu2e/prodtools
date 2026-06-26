@@ -9,16 +9,26 @@ import os
 import sys
 import glob
 import json
+import time
+from typing import Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.poms_db import get_db_session, Job, JobOutput, DatasetInfo
-from utils.samweb_wrapper import count_files, locate_file, locate_file_full, list_files, list_definition_files, describe_definition
+from utils.samweb_wrapper import count_files, locate_file, locate_file_full, list_files, list_definition_files, describe_definition, get_metadata
+from utils.job_common import Mu2eName
 from utils.jobiodetail import Mu2eJobIO
+from utils.jobquery import Mu2eJobPars
 from utils.logparser import process_dataset as parse_logs_for_dataset
 import re
 from datetime import datetime
+
+# Tarballs whose dCache replica hangs reads — skip to keep the build moving.
+# Remove entries once the underlying pool issue is resolved.
+_SKIP_TARBALLS = {
+    "cnf.mu2e.ensembleMDS3a.MDC2025af.0.tar",
+}
 
 
 def _extract_file_path(location):
@@ -42,8 +52,31 @@ def _get_dataset_stats(dataset_name):
                 int(result.get('total_file_size', 0) or 0)
             )
         return (0, 0, 0)
-    except Exception:
+    except Exception as e:
+        print(f"Warning: _get_dataset_stats failed for {dataset_name}: {e}", file=sys.stderr)
         return (0, 0, 0)
+
+
+def _get_dataset_gencount(dataset_name, nfiles):
+    """Total generated events for a dataset = dh.gencount(one file) * nfiles.
+
+    gencount is uniform per file within a production dataset, so a single
+    get-metadata is enough (avoids an O(nfiles) sum). Returns None if the
+    dataset has no files or no dh.gencount (e.g. non-generator tiers)."""
+    if not nfiles:
+        return None
+    try:
+        files = list_definition_files(dataset_name)
+        if not files:
+            return None
+        md = get_metadata(files[0])
+        per_file = md.get('dh.gencount') if isinstance(md, dict) else None
+        if per_file is None:
+            return None
+        return int(per_file) * int(nfiles)
+    except Exception as e:
+        print(f"Warning: _get_dataset_gencount failed for {dataset_name}: {e}", file=sys.stderr)
+        return None
 
 
 def _check_dataset_has_children(dataset_name):
@@ -66,34 +99,30 @@ def _check_dataset_has_children(dataset_name):
         # Check if any files are children of the first file
         children = list_files(f'ischildof: (file_name {first_file})')
         return len(children) > 0
-    except Exception:
+    except Exception as e:
+        print(f"Warning: _check_dataset_has_children failed for {dataset_name}: {e}", file=sys.stderr)
         return False
 
 
 def _jobdef_to_log_dataset(tarball_name):
     """Convert jobdef tarball name to log dataset name.
-    
+
     Args:
         tarball_name: Jobdef tarball name (e.g., "cnf.mu2e.FlatMuMinus.MDC2025ab.0.tar")
-    
+
     Returns:
-        str: Log dataset name (e.g., "log.mu2e.FlatMuMinus.MDC2025ab.log")
+        str: Log dataset name (e.g., "log.mu2e.FlatMuMinus.MDC2025ab.log"),
+             or None if tarball_name is not a cnf tarball.
     """
-    if not tarball_name or not tarball_name.startswith('cnf.'):
+    if not tarball_name:
         return None
-    # Remove .tar extension
-    if tarball_name.endswith('.tar'):
-        base = tarball_name[:-4]
-    else:
-        base = tarball_name
-    # Remove the index part (e.g., ".0")
-    parts = base.rsplit('.', 1)
-    if len(parts) == 2 and parts[1].isdigit():
-        base = parts[0]
-    # Replace cnf. with log. and add .log
-    if base.startswith('cnf.'):
-        return base.replace('cnf.', 'log.', 1) + '.log'
-    return None
+    try:
+        n = Mu2eName.parse(tarball_name)
+    except ValueError:
+        return None
+    if not n.is_tarball:
+        return None
+    return str(n.log_dataset())
 
 
 def _get_dataset_creation_date(dataset_name):
@@ -128,11 +157,12 @@ def _get_dataset_creation_date(dataset_name):
                     except ValueError:
                         continue
         return None
-    except Exception:
+    except Exception as e:
+        print(f"Warning: _get_dataset_creation_date failed for {dataset_name}: {e}", file=sys.stderr)
         return None
 
 
-def _normalize_location(raw: str | None) -> str:
+def _normalize_location(raw: Optional[str]) -> str:
     if not raw:
         return 'N/A'
     if raw.startswith('enstore'):
@@ -156,8 +186,8 @@ def _infer_dataset_location(dataset_name):
             full_path = entry.get('full_path')
             if full_path:
                 return _normalize_location(full_path)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: _infer_dataset_location failed for {dataset_name}: {e}", file=sys.stderr)
     return 'N/A'
 
 
@@ -180,7 +210,6 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
 
     all_json_files = sorted(glob.glob(f"{poms_dir}/{pattern}.json"))
     if since is not None:
-        import time
         cutoff = since.timestamp()
         json_files = [f for f in all_json_files if os.path.getmtime(f) >= cutoff]
         print(f"Loading {len(json_files)} JSON files modified since {since.strftime('%Y-%m-%d')} "
@@ -193,6 +222,10 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
     seen_tarballs = set()
     count = 0
     
+    # NB: deliberately uses bare entry.get(...) rather than utils.poms_entry
+    # helpers — this is a batch scanner across hundreds of POMS-map files,
+    # so a single malformed entry must be skipped, not raise. Same lenient
+    # boundary pattern as latestDatasets.parse_name.
     for json_file in json_files:
         with open(json_file, "r") as f:
             entries = json.load(f)
@@ -278,6 +311,9 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
         jobs_query = jobs_query[:limit]
         print(f"Processing first {limit} jobs only (test mode)\n")
     for job in jobs_query:
+        if job.tarball in _SKIP_TARBALLS:
+            print(f"Skipping {job.tarball} (in _SKIP_TARBALLS — bad dCache replica)")
+            continue
         try:
             file_path = _extract_file_path(locate_file(job.tarball))
             if not file_path:
@@ -289,6 +325,15 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
             outputs = Mu2eJobIO(full_path).job_outputs(0)
             if not outputs:
                 continue
+
+            # POMS map JSON entries don't carry `indef`; the input dataset
+            # is encoded inside the cnf tarball. Pull it from there so the
+            # static dashboard's lineage walker has parent edges.
+            try:
+                inputs = Mu2eJobPars(full_path).input_datasets()
+                job.indef = ','.join(inputs) if inputs else None
+            except Exception as e:
+                print(f"  Warning: input_datasets failed for {job.tarball}: {e}", file=sys.stderr)
 
             # Compute performance metrics once per jobdef (aggregate across outputs)
             # Skip logparser if metrics are already present
@@ -324,12 +369,16 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                     continue
                 # Format: tier.owner.description.dsconf.sequencer.extension
                 # Dataset: tier.owner.description.dsconf.extension (skip sequencer)
-                parts = output_file.split('.')
-                if len(parts) != 6:
+                try:
+                    out_name = Mu2eName.parse(output_file)
+                except ValueError:
                     continue
-                dataset_name = f"{parts[0]}.{parts[1]}.{parts[2]}.{parts[3]}.{parts[5]}"
+                if not out_name.is_file:
+                    continue
+                dataset_name = str(out_name.dataset)
 
                 nfiles, nevts, total_size = _get_dataset_stats(dataset_name)
+                gencount = _get_dataset_gencount(dataset_name, nfiles)
                 has_children = _check_dataset_has_children(dataset_name)
                 creation_date = _get_dataset_creation_date(dataset_name)
 
@@ -339,6 +388,7 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                     info = DatasetInfo(dataset_name=dataset_name)
                     session.add(info)
                 info.nfiles, info.nevts, info.total_size = nfiles, nevts, total_size
+                info.gencount = gencount
                 info.has_children = has_children
                 if creation_date:
                     info.creation_date = creation_date
@@ -363,8 +413,10 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
 
     try:
         session.commit()
-    except Exception:
+    except Exception as e:
+        print(f"ERROR: session.commit() failed in build_db; rolling back. {e}", file=sys.stderr)
         session.rollback()
+        raise
     if discovered:
         print(f"Discovered and cached {discovered} derived datasets")
 

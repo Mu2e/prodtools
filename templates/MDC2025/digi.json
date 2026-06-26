@@ -1,0 +1,63 @@
+[
+  {
+    "desc": [
+      "CosmicCRYAll",
+      "RPCExternalPhysical",
+      "IPAMuminusMichel",
+      "FlatGammaCalo",
+      "DIOtail95",
+      "CeMLeadingLog",
+      "FlatMuMinus",
+      "CePLeadingLog",
+      "FlatGamma",
+      "RPCExternal",
+      "FlatePlus",
+      "FlateMinus",
+      "RPCInternalPhysical",
+      "PbarResampling",
+      "RPCInternal",
+      "CosmicCalib",
+      "CosmicSignal"
+    ],
+    "dsconf": "{out_campaign}_best_v1_1",
+    "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+    "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
+    "fcl_overrides": {
+      "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_1"
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+  },
+  {
+    "desc": "CosmicCRYExtracted",
+    "dsconf": "{out_campaign}_best_v1_1",
+    "fcl": "Production/JobConfig/digitize/Extracted.fcl",
+    "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
+    "fcl_overrides": {
+      "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_1"
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+  },
+  {
+    "desc": "MuCap1809keVCalo",
+    "dsconf": "{out_campaign}_best_v1_1",
+    "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+    "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
+    "fcl_overrides": {
+      "#include": "Production/JobConfig/mixing/NoPrimary.fcl",
+      "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
+      "services.DbService.purpose": "Sim_best",
+      "services.DbService.version": "v1_1"
+    },
+    "inloc": "tape",
+    "outloc": {"*.art": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+  }
+]

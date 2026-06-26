@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Analysis utilities over the prodtools SQLite database."""
+from __future__ import annotations
 
 import os
 import sys
 import fnmatch
+from typing import Optional, Dict
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,14 +19,14 @@ def get_default_db_path() -> str:
     return os.path.join(repo_root, "poms_data.db")
 
 
-def _matches_pattern(job: Job, pattern: str | None) -> bool:
+def _matches_pattern(job: Job, pattern: Optional[str]) -> bool:
     if not pattern:
         return True
     source = os.path.basename(job.source_file) if job.source_file else ''
     return fnmatch.fnmatch(source, f"{pattern}.json")
 
 
-def _collect_jobs(session, pattern: str | None):
+def _collect_jobs(session, pattern: Optional[str]):
     jobs = session.query(Job).all()
     if pattern:
         jobs = [job for job in jobs if _matches_pattern(job, pattern)]
@@ -48,7 +50,7 @@ def _build_dataset_info_map(session, jobs):
     return {info.dataset_name: info for info in infos}
 
 
-_location_cache: dict[str, str] = {}
+_location_cache: Dict[str, str] = {}
 
 
 def _normalize_location_from_path(path: str) -> str:
@@ -109,8 +111,8 @@ def _get_outputs(session, job: Job, info_map: dict[str, DatasetInfo]) -> list:
 def list_jobs(
     session,
     *,
-    pattern: str | None = None,
-    campaign: str | None = None,
+    pattern: Optional[str] = None,
+    campaign: Optional[str] = None,
     print_header: bool = True,
     sort_by: str = "njobs",
     show_outputs: bool = False,

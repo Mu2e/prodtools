@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""For each unique description (3rd field), pick the latest dsconf (4th field).
+Wrapper script for latestDatasets utility module.
+"""
+
+import os
+import sys
+
+utils_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'utils')
+sys.path.insert(0, utils_dir)
+
+from latestDatasets import main
+
+if __name__ == '__main__':
+    main()

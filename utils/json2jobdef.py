@@ -7,6 +7,7 @@ Usage:
   - Direct file: python3 mu2e_poms_util/json2jobdef.py --help
 """
 import os, sys
+import logging
 import random
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,7 +21,8 @@ from utils.mixing_utils import *
 from utils.config_utils import get_tarball_desc, prepare_fields_for_job
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
-from utils.samweb_wrapper import list_files, count_files
+from utils.jobfcl import validate_output_filenames
+from utils.samweb_wrapper import list_files, count_files, locate_file
 
 
 def _write_random_selection(out_f, query: str, total_needed: int, seed_source: str):
@@ -192,23 +194,45 @@ def _create_inputs_file(config, exclude_files=None):
             for key in input_data.keys():
                 f.write(key + '\n')
         return
-    
-    # By default, include all files in the dataset. Older behavior applied an
-    # event_count>0 filter; that is now controlled by an explicit flag so that
-    # zero-event files are not silently dropped.
+
+    _write_sam_inputs(config, input_data, exclude_files)
+
+
+def _write_sam_inputs(config, input_data, exclude_files=None):
+    """Write inputs.txt by resolving each input_data dataset against SAM.
+
+    Each input_data value is either a plain merge_factor (int) or a dict
+    `{"count": N, "random": <bool>, "max_nfiles": M}`. With `random: True`,
+    a deterministic pseudo-random sample of `count * njobs` files is
+    selected; otherwise list_files() returns all matching files.
+    `max_nfiles` (optional, positive int) caps the per-dataset file count
+    written to inputs.txt — applied as a deterministic prefix slice of the
+    sorted file list (non-random branch) or as an upper bound on
+    `total_needed` (random branch). njobs is NOT recomputed; the entry
+    author is responsible for keeping `merge_factor * njobs <= max_nfiles`.
+
+    `_event_count_positive` flag in `config` toggles a `event_count>0`
+    filter on the SAM query (older behavior applied this implicitly; now
+    explicit so zero-event files aren't silently dropped).
+    """
     event_count_positive = bool(config.get('_event_count_positive'))
     query_template = "dh.dataset={}"
     if event_count_positive:
         query_template += " and event_count>0"
-    
+
     with open('inputs.txt', 'w') as out_f:
         for dataset, merge_factor in input_data.items():
             random_spec = {}
+            max_nfiles = None
             if isinstance(merge_factor, dict):
                 random_spec = merge_factor
+                max_nfiles = random_spec.get('max_nfiles')
+                if max_nfiles is not None:
+                    if not isinstance(max_nfiles, int) or max_nfiles <= 0:
+                        raise ValueError(f"input_data spec for {dataset}: max_nfiles must be a positive int, got {max_nfiles!r}")
                 merge_factor = merge_factor.get('count') or merge_factor.get('merge_factor')
                 if merge_factor is None:
-                    raise ValueError(f"input_data spec for {dataset} must include 'count' when using dict form")
+                    raise ValueError(f"input_data spec for {dataset} must include 'count' or 'merge_factor' when using dict form")
 
             query = query_template.format(dataset)
 
@@ -224,6 +248,8 @@ def _create_inputs_file(config, exclude_files=None):
                     njobs = max(1, available // max(per_job, 1))
 
                 total_needed = per_job * max(njobs, 1)
+                if max_nfiles is not None:
+                    total_needed = min(total_needed, max_nfiles)
                 seed_source = (
                     f"{config.get('owner','')}.{config.get('desc','')}.{config.get('dsconf','')}"
                     f".{dataset}.{per_job}.{njobs}"
@@ -231,6 +257,8 @@ def _create_inputs_file(config, exclude_files=None):
                 _write_random_selection(out_f, query, total_needed, seed_source)
             else:
                 files = list_files(query)
+                if max_nfiles is not None:
+                    files = sorted(files)[:max_nfiles]
                 for filepath in files:
                     if exclude_files and filepath in exclude_files:
                         continue
@@ -255,12 +283,11 @@ def _next_version(config):
 
     max_version = -1
     for fname in files:
-        parts = fname.split('.')
         try:
-            version = int(parts[-2])
-            max_version = max(max_version, version)
-        except (ValueError, IndexError):
+            version = Mu2eName.parse(fname).index
+        except ValueError:
             continue
+        max_version = max(max_version, version)
 
     return max_version + 1
 
@@ -375,16 +402,26 @@ def build_jobdef(config, job_args, json_output=False):
     cmd_parts.extend(['--embed', 'template.fcl'])
     
     # Always show the mu2ejobdef equivalent command when verbose logging is enabled
-    import logging
     if logging.getLogger().level <= logging.DEBUG:
         print(f"🐪 mu2ejobdef equivalent command: {' '.join(cmd_parts)}")
     
     # Now create jobdef using the template.fcl
     create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=json_output)
-    
+
     # Get the parfile name for both modes
     parfile_name = get_parfile_name(config)
     fcl_file = get_fcl_name(config)
+
+    # Build-time guard: ensure every outputs.*.fileName substitutes cleanly.
+    # Catches missing fcl_overrides for outputs whose upstream defaults embed
+    # a suffix on the desc token (e.g. description-CH) before the cnf is pushed.
+    # Skipped for generic tarballs: {desc}/sequencer are deferred to runtime
+    # (direct-input mode) by design, so they cannot resolve at build time.
+    if not config.get('generic_tarball'):
+        try:
+            validate_output_filenames(parfile_name)
+        except ValueError as e:
+            sys.exit(f"json2jobdef: cnf failed output-filename validation: {e}")
     
     if json_output:
         # Return structured data for machine consumption
@@ -500,7 +537,7 @@ def main():
     p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and run mkidxdef after generation')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
-    p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.txt)')
+    p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.json)')
     p.add_argument('--json-output', action='store_true', help='Output structured JSON instead of human-readable text')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
@@ -556,9 +593,8 @@ def main():
     
     # If --prod mode, create index definition after generation
     if args.prod:
-        from utils.prod_utils import create_index_definition
-        
-        jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.txt'
+
+        jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.json'
         print(f"\n{'='*60}")
         print(f"Creating index definition from {jobdefs_file}")
         print(f"{'='*60}")
@@ -579,6 +615,69 @@ def main():
         # Create index definition
         map_stem = Path(jobdefs_file).stem
         create_index_definition(map_stem, total_jobs, "etc.mu2e.index.000.txt")
+
+def _build_job_args(config):
+    """Dispatch on `determine_job_type(config)` and return the per-mode
+    `job_args` list passed to `build_jobdef`. Sets transient config keys
+    where the job-type wants them (e.g. `_max_events_to_skip` for resampler)."""
+    job_type = determine_job_type(config)
+
+    if job_type == 'resampler':
+        try:
+            input_data = config['input_data']
+            if not isinstance(input_data, dict):
+                raise ValueError(f"input_data must be a dict, got {type(input_data)}")
+            first_dataset = list(input_data.keys())[0]
+            nfiles, nevts = get_def_counts(first_dataset)
+            config['_max_events_to_skip'] = nevts // nfiles
+        except Exception as e:
+            print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+        merge_factor = calculate_merge_factor(config)
+        return ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
+
+    if job_type == 'merge':
+        merge_factor = calculate_merge_factor(config)
+        return ['--inputs', 'inputs.txt', '--merge-factor', str(merge_factor)]
+
+    if job_type == 'chunk':
+        # Chunk-on-grid: no inputs.txt, no --merge-factor. Per-job slice
+        # is materialized at runtime by runmu2e via tbs.chunk_mode.
+        return []
+
+    if job_type == 'mixing':
+        merge_factor = calculate_merge_factor(config)
+        return ['--inputs', 'inputs.txt', '--merge-factor', str(merge_factor)] + build_pileup_args(config)
+
+    # Stage1 / default: no special args
+    return []
+
+
+def _pushout_to_sam(parfile_name):
+    """If `parfile_name` exists locally and isn't already in SAM, push it.
+    Idempotent — repeat calls are no-ops once SAM has the file."""
+    if not Path(parfile_name).exists():
+        print(f"Warning: Local file {parfile_name} not found, skipping pushout")
+        return
+
+    if locate_file(parfile_name):
+        print(f"File {parfile_name} already exists on SAM, skipping push")
+        return
+
+    print(f"Pushing {parfile_name} to SAM...")
+    with open('outputs.txt', 'w') as f:
+        f.write(f"disk {parfile_name} none\n")
+    run('pushOutput outputs.txt', shell=True)
+
+
+def _cleanup_temp_files():
+    """Remove the well-known transient files left in the build workdir."""
+    for temp_file in ('inputs.txt', 'template.fcl',
+                      'mubeamCat.txt', 'elebeamCat.txt',
+                      'neutralsCat.txt', 'mustopCat.txt'):
+        if Path(temp_file).exists():
+            Path(temp_file).unlink()
+            print(f"Cleanup: {temp_file}")
+
 
 def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True,
                          jobdefs_list=None, extend=False, ignore_empty=False):
@@ -626,97 +725,27 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
         remaining = sum(1 for _ in open('inputs.txt')) if Path('inputs.txt').exists() else 0
         print(f"  Extend summary: {len(exclude_files)} excluded, {remaining} remaining input files")
     
-    job_args = []
-    
-    job_type = determine_job_type(config)
-    
-    if job_type == 'resampler':
-        # Resampler jobs: calculate MaxEventsToSkip parameter and merge factor
-        try:
-            # input_data should be a dict, use first dataset for calculation
-            input_data = config['input_data']
-            if not isinstance(input_data, dict):
-                raise ValueError(f"input_data must be a dict, got {type(input_data)}")
-            
-            first_dataset = list(input_data.keys())[0]
-            nfiles, nevts = get_def_counts(first_dataset)
-            skip = nevts // nfiles
-            # Store skip value for later addition to template
-            config['_max_events_to_skip'] = skip
-        except Exception as e:
-            print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
-        
-        # Get merge_factor from input_data dict
-        merge_factor = calculate_merge_factor(config)
-        job_args = ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
-        
-    elif job_type == 'merge':
-        # Merge jobs: simple file merging
-        merge_factor = calculate_merge_factor(config)
-        job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
+    job_args = _build_job_args(config)
 
-    elif job_type == 'chunk':
-        # Chunk-on-grid: no inputs.txt, no --merge-factor. The per-job
-        # slice is materialized at runtime by runmu2e. tbs.chunk_mode
-        # carries the source path + chunk size through jobpars.
-        job_args = []
-        
-    elif job_type == 'mixing':
-        # Mixing jobs: add MaxEventsToSkip parameter to template
-        merge_factor = calculate_merge_factor(config)
-        job_args = ['--inputs','inputs.txt','--merge-factor', str(merge_factor)]
-        job_args += build_pileup_args(config)
-        
-    else:
-        # Stage1 jobs: no special processing needed
-        job_args = []
-    
     # build_jobdef handles FCL template creation for non-mixing jobs
-    # Always fcl-analyze the ORIGINAL FCL file for job structure understanding
     result = build_jobdef(config, job_args, json_output=json_output)
-    
-    append_jobdef(config, jobdefs_list)    
-    # Get the parfile name for pushout operations
+
+    append_jobdef(config, jobdefs_list)
     parfile_name = get_parfile_name(config)
-    
-    # Handle pushout regardless of json_output setting
+
     if pushout:
-        # First check if the local file exists before attempting SAM operations
-        if not Path(parfile_name).exists():
-            print(f"Warning: Local file {parfile_name} not found, skipping pushout")
-        else:
-            # Push file to SAM if it doesn't already exist there
-            from utils.samweb_wrapper import locate_file
-            
-            # Check if file exists on SAM
-            loc = locate_file(parfile_name)
-            if not loc:
-                # File doesn't exist on SAM, push it
-                print(f"Pushing {parfile_name} to SAM...")
-                with open('outputs.txt', 'w') as f:
-                    f.write(f"disk {parfile_name} none\n")
-                run('pushOutput outputs.txt', shell=True)
-            else:
-                # File exists on SAM, don't push
-                print(f"File {parfile_name} already exists on SAM, skipping push")
-    
+        _pushout_to_sam(parfile_name)
+
     if not json_output:
-        # Only output human-readable text when not using JSON output
         print(json.dumps(config, indent=2, sort_keys=True))
-        
         write_fcl(parfile_name, config.get('inloc', 'tape'), 'root')
         print(f"Generated: {parfile_name}")
-    
-    # Clean up temporary files AFTER job definition is created (unless --no-cleanup is specified)
+
     if no_cleanup:
         print("Temporary files kept (--no-cleanup specified)")
     else:
-        temp_files = ['inputs.txt', 'template.fcl', 'mubeamCat.txt', 'elebeamCat.txt', 'neutralsCat.txt', 'mustopCat.txt']
-        for temp_file in temp_files:
-            if Path(temp_file).exists():
-                Path(temp_file).unlink()
-                print(f"Cleanup: {temp_file}")
-    
+        _cleanup_temp_files()
+
     return result
 
 def is_already_expanded(configs):
@@ -750,7 +779,6 @@ def load_json(json_path):
         return configs
     
     # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
-    from utils.mixing_utils import expand_configs
     return expand_configs(configs)
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):

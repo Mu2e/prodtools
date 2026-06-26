@@ -16,7 +16,11 @@
         {"dig.mu2e.FlatGammaMix1BBTriggerable.MDC2025af_best_v1_1.art": 1},
         {"dig.mu2e.NoPrimaryMix1BBTriggerable.MDC2025af_best_v1_1.art": 1}
     ],
-    "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+    "fcl_overrides": [{
+        "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_3"
+    }],
 	"inloc": ["tape"],
 	"outloc": [{"*.art": "disk"}],
 	"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"]
@@ -27,8 +31,11 @@
         "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
         "input_data":
             {"dig.mu2e.CosmicCRYExtractedTriggered.MDC2025ae_best_v1_3.art": 1},
-        "fcl_overrides":
-            {"outputs.KinematicLineOutput.fileName": "mcs.owner.CosmicCRYExtractedTriggered.version.sequencer.art"},
+        "fcl_overrides": {
+            "outputs.KinematicLineOutput.fileName": "mcs.owner.CosmicCRYExtractedTriggered.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_3"
+        },
         "inloc": "tape",
         "outloc": {"*.art": "tape"},
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
@@ -50,7 +57,11 @@
             {"dig.mu2e.FlatGammaMix1BBTriggerable.MDC2025af_best_v1_1.art": 1},
             {"dig.mu2e.NoPrimaryMix1BBTriggerable.MDC2025af_best_v1_1.art": 1}
         ],
-        "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+        "fcl_overrides": [{
+        "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_3"
+    }],
         "inloc": ["tape"],
         "outloc": [{"*.art": "disk"}],
         "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"]
@@ -61,8 +72,11 @@
             "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
             "input_data":
                 {"dig.mu2e.CosmicCRYExtractedTriggered.MDC2025ae_best_v1_3.art": 1},
-            "fcl_overrides":
-                {"outputs.KinematicLineOutput.fileName": "mcs.owner.CosmicCRYExtractedTriggered.version.sequencer.art"},
+            "fcl_overrides": {
+                "outputs.KinematicLineOutput.fileName": "mcs.owner.CosmicCRYExtractedTriggered.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            },
             "inloc": "tape",
             "outloc": {"*.art": "tape"},
             "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
@@ -75,7 +89,11 @@
                 {"dig.mu2e.FlatGammaMix1BB.MDC2025ag_best_v1_3.art": 1},
                 {"dig.mu2e.FlatGammaCaloMix1BB.MDC2025ag_best_v1_3.art": 1}
             ],
-            "fcl_overrides": [{"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"}],
+            "fcl_overrides": [{
+        "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_3"
+    }],
             "inloc": ["tape"],
             "outloc": [{"*.art": "disk"}],
             "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ag/setup.sh"]
@@ -85,7 +103,11 @@
             "desc": "OnSpillTriggeredReco",
             "generic_tarball": true,
             "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
-            "fcl_overrides": {"outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art"},
+            "fcl_overrides": {
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            },
             "inloc": "tape",
             "outloc": {"*.art": "disk"},
             "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
@@ -106,5 +128,133 @@
             "inloc": ["tape"],
             "outloc": [{"*.art": "disk"}],
             "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh"]
+        },
+        {
+            "dsconf": ["MDC2025am_best_v1_3"],
+            "tarball_append": "-reco",
+            "fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+            "input_data": [
+                {"dig.mu2e.CeEndpointTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CeMLeadingLogMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CeMLeadingLogTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CePLeadingLogTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CePlusEndpointTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CosmicCRYAllMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CosmicSignalTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.DIOtail95OnSpillTriggered.MDC2025af_best_v1_3.art": 1},
+                {"dig.mu2e.FlatGammaCaloMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.FlatGammaMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.FlateMinusMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.FlatePlusMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.NoPrimaryMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.RMCExternalOnSpillTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.RMCInternalOnSpillTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.RPCExternalPhysicalOnSpillTriggered.MDC2025af_best_v1_3.art": 1},
+                {"dig.mu2e.RPCInternalPhysicalOnSpillTriggered.MDC2025af_best_v1_3.art": 1}
+            ],
+            "fcl_overrides": [{
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            }],
+            "inloc": ["tape"],
+            "outloc": [{"*.art": "disk"}],
+            "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025am/setup.sh"]
+        },
+        {
+            "dsconf": "MDC2025am_best_v1_3",
+            "desc": "CosmicCRYExtractedTriggeredReco",
+            "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
+            "input_data":
+                {"dig.mu2e.CosmicCRYExtractedTriggered.MDC2025af_best_v1_1.art": 1},
+            "fcl_overrides": {
+                "outputs.KinematicLineOutput.fileName": "mcs.owner.CosmicCRYExtractedTriggered.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            },
+            "inloc": "tape",
+            "outloc": {"*.art": "tape"},
+            "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025am/setup.sh"
+        },
+        {
+            "dsconf": ["MDC2025am_best_v1_3"],
+            "tarball_append": "-reco",
+            "fcl": ["Production/JobConfig/recoMC/OffSpill.fcl"],
+            "input_data": [
+                {"dig.mu2e.CosmicSignalOffSpillTriggered.MDC2025ae_best_v1_3.art": 1}
+            ],
+            "fcl_overrides": [{
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}-LH.version.sequencer.art",
+                "outputs.CentralHelixOutput.fileName": "mcs.owner.{desc}-CH.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            }],
+            "inloc": ["tape"],
+            "outloc": [{"*.art": "disk"}],
+            "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025am/setup.sh"]
+        },
+        {
+            "dsconf": ["MDC2025an_best_v1_3"],
+            "tarball_append": "-reco",
+            "fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
+            "input_data": [
+                {"dig.mu2e.CeEndpointTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CeMLeadingLogMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CeMLeadingLogTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CePLeadingLogTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CePlusEndpointTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CosmicCRYAllMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.CosmicSignalTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.DIOtail95OnSpillTriggered.MDC2025af_best_v1_3.art": 1},
+                {"dig.mu2e.FlatGammaCaloMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.FlatGammaMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.FlateMinusMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.FlatePlusMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.NoPrimaryMix1BBTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.RMCExternalOnSpillTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.RMCInternalOnSpillTriggered.MDC2025af_best_v1_1.art": 1},
+                {"dig.mu2e.RPCExternalPhysicalOnSpillTriggered.MDC2025af_best_v1_3.art": 1},
+                {"dig.mu2e.RPCInternalPhysicalOnSpillTriggered.MDC2025af_best_v1_3.art": 1}
+            ],
+            "fcl_overrides": [{
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            }],
+            "inloc": ["tape"],
+            "outloc": [{"*.art": "disk"}],
+            "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025an/setup.sh"]
+        },
+        {
+            "dsconf": "MDC2025an_best_v1_3",
+            "desc": "CosmicCRYExtractedTriggeredReco",
+            "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
+            "input_data":
+                {"dig.mu2e.CosmicCRYExtractedTriggered.MDC2025af_best_v1_1.art": 1},
+            "fcl_overrides": {
+                "outputs.KinematicLineOutput.fileName": "mcs.owner.CosmicCRYExtractedTriggered.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            },
+            "inloc": "tape",
+            "outloc": {"*.art": "tape"},
+            "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025an/setup.sh"
+        },
+        {
+            "dsconf": ["MDC2025an_best_v1_3"],
+            "tarball_append": "-reco",
+            "fcl": ["Production/JobConfig/recoMC/OffSpill.fcl"],
+            "input_data": [
+                {"dig.mu2e.CosmicSignalOffSpillTriggered.MDC2025ae_best_v1_3.art": 1}
+            ],
+            "fcl_overrides": [{
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}-LH.version.sequencer.art",
+                "outputs.CentralHelixOutput.fileName": "mcs.owner.{desc}-CH.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_3"
+            }],
+            "inloc": ["tape"],
+            "outloc": [{"*.art": "disk"}],
+            "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025an/setup.sh"]
         }
 ]

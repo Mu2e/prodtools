@@ -25,6 +25,9 @@ from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
+from utils.config_utils import get_tarball_desc
+from utils.job_common import Mu2eName
+
 # Constants matching Perl mu2ejobdef exactly
 FILENAME_JSON = 'jobpars.json'
 FILENAME_FCL = 'mu2e.fcl'
@@ -226,7 +229,6 @@ def _validate_fcl_template(template_path: str) -> None:
 
 def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "", template_path: str = "") -> Dict:
     """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
-    from utils.config_utils import get_tarball_desc
     owner = config.get('owner') or os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e')
     desc = get_tarball_desc(config) or config['desc']
     dsconf = config['dsconf']
@@ -620,11 +622,12 @@ def get_output_dataset_names(config: Dict) -> List[str]:
                 pattern = _run_fhicl_get(
                     template_path, '--atom-as', f'outputs.{mod}.fileName')
                 resolved = _replace_placeholders(pattern, config)
-                parts = resolved.split('.')
-                if len(parts) >= 6:
-                    dataset = (f"{parts[0]}.{parts[1]}.{parts[2]}"
-                               f".{parts[3]}.{parts[5]}")
-                    datasets.append(dataset)
+                try:
+                    n = Mu2eName.parse(resolved)
+                except ValueError:
+                    continue
+                if n.is_file:
+                    datasets.append(str(n.dataset))
             except subprocess.CalledProcessError:
                 continue
     finally:
@@ -717,7 +720,6 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     
     # Use provided outdir (simple logic matching Perl version)
     # Use tarball_append if specified, otherwise use original desc
-    from utils.config_utils import get_tarball_desc
     final_desc = get_tarball_desc(config) or desc
     version = config.get('version', 0)
     final_outdir = Path(outdir) if outdir else None

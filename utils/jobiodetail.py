@@ -14,133 +14,11 @@ from typing import Dict, List, Optional, Union
 import hashlib
 import re
 
-from utils.job_common import Mu2eFilename, Mu2eJobBase
+from utils.job_common import Mu2eName, Mu2eJobBase
 
 class Mu2eJobIO(Mu2eJobBase):
     """Python port of mu2ejobiodetail functionality."""
-    
-    def __init__(self, jobdef: str):
-        """Initialize with job definition file."""
-        super().__init__(jobdef)
-        self.json_data = self._extract_json()
-    
 
-    
-
-    
-    def job_primary_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get primary input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        inputs = tbs.get('inputs')
-        
-        if not inputs:
-            return {}
-        
-        result = {}
-        # inputs is a dict with one key-value pair
-        for dataset, (merge, filelist) in inputs.items():
-            nf = len(filelist)
-            first = index * merge
-            last = min(first + merge - 1, nf - 1)
-            
-            if first > last:
-                raise ValueError(f"job_primary_inputs(): invalid index {index}")
-            
-            result[dataset] = filelist[first:last + 1]
-        
-        return result
-    
-    def job_aux_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get auxiliary input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        auxin = tbs.get('auxin')
-        
-        if not auxin:
-            return {}
-        
-        # Read sequential_aux setting from job definition, default to False if not specified
-        sequential_aux = tbs.get('sequential_aux', False)
-        
-        result = {}
-        for dataset, (nreq, infiles) in auxin.items():
-            # Zero means take all files
-            if nreq == 0:
-                nreq = len(infiles)
-            
-            if sequential_aux:
-                # Sequential selection with rollover (like primary inputs)
-                nf = len(infiles)
-                first = index * nreq
-                last = min(first + nreq - 1, nf - 1)
-                
-                if first >= nf:
-                    # Roll over: start from the beginning
-                    first = first % nf
-                    last = min(first + nreq - 1, nf - 1)
-                
-                if first > last:
-                    raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
-                
-                result[dataset] = infiles[first:last + 1]
-            else:
-                # Draw nreq "random" files without repetitions
-                sample = []
-                available_files = infiles.copy()
-                
-                for count in range(nreq):
-                    if not available_files:
-                        break
-                    
-                    # Deterministic random selection
-                    rnd = self._my_random(index, *available_files)
-                    file_index = rnd % len(available_files)
-                    sample.append(available_files[file_index])
-                    available_files.pop(file_index)
-               
-                result[dataset] = sample
-        
-        return result
-    
-    def job_sampling_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get sampling input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        samplinginput = tbs.get('samplinginput')
-        
-        if not samplinginput:
-            return {}
-        
-        result = {}
-        for dataset, (nreq, filelist) in samplinginput.items():
-            # Zero means take all files
-            if nreq == 0:
-                nreq = len(filelist)
-            
-            # Sequential selection like primary inputs
-            nf = len(filelist)
-            first = index * nreq
-            last = min(first + nreq - 1, nf - 1)
-            
-            if first > last:
-                raise ValueError(f"job_sampling_inputs(): invalid index {index}")
-            
-            result[dataset] = filelist[first:last + 1]
-        
-        return result
-    
-    def job_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get all input files for job index."""
-        primary = self.job_primary_inputs(index)
-        aux = self.job_aux_inputs(index)
-        sampling = self.job_sampling_inputs(index)
-        
-        # Merge all input types
-        result = {}
-        result.update(primary)
-        result.update(aux)
-        result.update(sampling)
-        
-        return result
-    
     def sequencer(self, index: int) -> str:
         """Get sequencer for job index."""
         primary_inputs = self.job_primary_inputs(index)
@@ -150,9 +28,8 @@ class Mu2eJobIO(Mu2eJobBase):
             sequencers = []
             for dataset, files in primary_inputs.items():
                 for filename in files:
-                    fn = Mu2eFilename(filename)
-                    sequencers.append(fn.sequencer)
-            
+                    sequencers.append(Mu2eName.parse(filename).sequencer)
+
             # Sort and return first
             sequencers.sort()
             return sequencers[0]
@@ -187,13 +64,7 @@ class Mu2eJobIO(Mu2eJobBase):
                 result[key] = template
                 continue
                 
-            fn = Mu2eFilename(template)
-            # Update sequencer in the filename
-            parts = fn.filename.split('.')
-            if len(parts) >= 5:
-                parts[4] = seq
-            fn.filename = '.'.join(parts)
-            result[key] = fn.basename()
+            result[key] = str(Mu2eName.parse(template).with_sequencer(seq))
         
         return result
     
@@ -251,15 +122,10 @@ def main():
         
         elif args.logfile:
             jobname = job_io.jobname()
-            fn = Mu2eFilename(jobname)
-            # Create log filename
-            parts = jobname.split('.')
-            if len(parts) >= 4:
-                # Format: log.owner.description.dsconf.sequencer.log
-                log_filename = f"log.{parts[1]}.{parts[2]}.{parts[3]}.{job_io.sequencer(args.index)}.log"
-                print(log_filename)
-            else:
-                print(f"log.{jobname}.{job_io.sequencer(args.index)}.log")
+            # jobname is the cnf tarball name; derive log.<owner>.<desc>.<dsconf>.<seq>.log
+            seq = job_io.sequencer(args.index)
+            log_name = Mu2eName.parse(jobname).as_tier('log').with_sequencer(seq).with_extension('log')
+            print(str(log_name))
     
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

@@ -36,6 +36,7 @@ This exposes:
 - `mu2ejobdef` — Perl reference (used by parity tests)
 - `samweb_client` — Python SAM client
 - `mdh` — Mu2e data handling
+- `jobsub_submit` — grid submission
 
 ### Optional: add prodtools to PATH
 
@@ -44,9 +45,9 @@ source bin/setup.sh
 ```
 
 Adds `prodtools/bin/` to `PATH` and `prodtools/` to `PYTHONPATH`, so you
-can run `json2jobdef`, `fcldump`, `runmu2e`, etc. from anywhere. For
-Run1B workflows that need local `fcl/` resolved by `MU2E_SEARCH_PATH`,
-use `source bin/setup_run1b.sh` instead.
+can run `json2jobdef`, `fcldump`, `runmu2e`, `submit_map`, etc. from
+anywhere. For Run1B workflows that need local `fcl/` resolved by
+`MU2E_SEARCH_PATH`, use `source bin/setup_run1b.sh` instead.
 
 ## 2. Overview
 
@@ -56,7 +57,9 @@ use `source bin/setup_run1b.sh` instead.
 - `jobdef` — low-level job definition creation (direct flags)
 - `jobfcl` — generate FCL for a specific index in a jobdef tarball
 - `fcldump` — generate FCL from dataset name, target file, or local tarball
-- `runmu2e` — execute production jobs from job definitions
+- `runmu2e` — execute production jobs from job definitions (worker entry)
+- `submit_map` — drive grid submissions from a POMS-map JSON
+  (`mu2ejobsub` or direct `jobsub_submit` backend)
 - `jsonexpander` — expand template JSONs into parameter cross-products
 - `jobquery` — inspect job parameter tarballs
 - `mkidxdef` — create SAM index definitions from a jobdefs list
@@ -70,10 +73,14 @@ use `source bin/setup_run1b.sh` instead.
 - `genFilterEff` — compute generation filter efficiency per dataset
 - `datasetFileList` — list files in a dataset or SAM definition
 - `listNewDatasets` — recently created datasets in SAM
+- `latestDatasets` — collapse a SAM defname list to the latest dsconf per description
+- `list_no_child_datasets` — datasets with no descendants (from the local DB)
 - `mkrecovery` — build a recovery SAM definition for missing files
 - `copy_to_stash` — copy a dataset into StashCache or resilient dCache
-- `listMcsDefs` / `listRelatedDefs` — enumerate related mcs/dig/dts defs
+- `add_inputs_from_list.py` — append datasets from a text file into
+  `evntuple.json`'s `input_data`
 - `plot_logs` — visualize log metrics merged with NERSC job counts
+- `plot_straw_hits.py` — plot tracker straw-hit occupancy from EventNtuple
 
 ## 3. Creating Job Definitions
 
@@ -113,7 +120,12 @@ json2jobdef --json data/Run1B/stage1.json --dsconf MDC2025ac
 
 - `cnf.<owner>.<desc>.<dsconf>.0.tar` — job definition tarball
 - `cnf.<owner>.<desc>.<dsconf>.0.fcl` — test FCL for index 0
-- `jobdefs_list.json` — list of generated jobdefs (use with `runmu2e`)
+- `jobdefs_list.json` — list of generated jobdefs (POMS-map format,
+  consumed by `runmu2e` and `submit_map`)
+
+If `owner` is not set in the JSON, it defaults to `$USER` (with
+`mu2epro` mapped to `mu2e`). Run as a regular user → user-owned cnf;
+run as `mu2epro` (via `/mu2epro-run`) → production cnf.
 
 **Useful flags:**
 
@@ -127,6 +139,7 @@ json2jobdef --json data/Run1B/stage1.json --dsconf MDC2025ac
   inputs; auto-increments the tarball version
 - `--ignore-empty` — skip entries whose input datasets have no files
   instead of failing
+- `--event-count-positive` — require positive event counts when sampling
 
 ### B. Resampler shape
 
@@ -204,6 +217,43 @@ Non-random form (all files, repeated to reach the count):
 ```json
 "input_data": {"sim.mu2e.PiTargetStops.MDC2025ac.art": 10}
 ```
+
+### Capping per-dataset file count: `max_nfiles`
+
+Optionally cap how many files are written to `inputs.txt` for a given
+dataset. Set inside the same nested-dict value as `count`/`random` (or
+alongside an explicit `merge_factor`):
+
+```json
+"input_data": {
+    "dts.mu2e.CosmicCRYSignalAll.MDC2020ar.art": {"merge_factor": 1, "max_nfiles": 500}
+}
+```
+
+Combined with random sampling:
+
+```json
+"input_data": {
+    "dts.mu2e.MuminusStopsCat.MDC2020at.art": {"count": 5, "random": true, "max_nfiles": 200}
+}
+```
+
+Semantics:
+
+- Must be a positive int. `0`, negative, or non-int → `ValueError` at
+  parse time.
+- **Non-random branch:** `files = sorted(files)[:max_nfiles]`. Sorted
+  first so the cap is deterministic across SAM-list reorderings.
+- **Random branch:** `total_needed = min(per_job × njobs, max_nfiles)`.
+  Bounds the deterministic pseudo-random sample size.
+- `njobs` is **NOT** recomputed. The entry author is responsible for
+  keeping `merge_factor × njobs ≤ max_nfiles`.
+
+Useful for smoke tests against real datasets, capping a contribution to
+a mix without splitting the source, or cheap "first N" subset runs
+without `samSplit`. Sibling top-level keys (e.g. `{"dts...": 1,
+"max_nfiles": 500}`) are **not** supported — the parser would treat
+`"max_nfiles"` as a dataset name.
 
 ## 5. FCL Generation
 
@@ -329,10 +379,11 @@ counts) to each expanded entry.
 
 ## 8. Production Execution
 
-`runmu2e` runs a single job from a jobdefs list. The job index is
-selected via the `fname` environment variable, encoded as
-`etc.mu2e.index.NNN.NNNNNNN.txt` — `NNN` is the job index (zero-padded);
-the last field is a per-index sub-counter used by POMS.
+`runmu2e` runs a single job from a jobdefs list — it is the worker-side
+entry. The job index is selected via the `fname` environment variable,
+encoded as `etc.mu2e.index.000.NNNNNNN.txt`. The seventh-field
+`NNNNNNN` (the **sequencer**) is the job index, zero-padded to 7
+digits. The fourth field `000` is a fixed description placeholder.
 
 ```bash
 # fname selects job index 0 out of the jobdefs list
@@ -345,9 +396,10 @@ runmu2e --jobdesc jobdefs_list.json --dry-run --nevts 5
 runmu2e --jobdesc jobdefs_list.json --nevts -1
 ```
 
-Flags: `--jobdesc` (required), `--dry-run`, `--nevts` (default -1 = all),
-`--copy-input` (use `mdh copy-file` to stage inputs locally when needed),
-`--mu2e-options` (extra flags passed through to `mu2e`).
+Flags: `--jobdesc` (required for POMS-mode invocation), `--dry-run`,
+`--nevts` (default -1 = all), `--copy-input` (use `mdh copy-file` to
+stage inputs locally when needed), `--mu2e-options` (extra flags passed
+through to `mu2e`).
 
 ### What `runmu2e` does
 
@@ -360,19 +412,29 @@ Flags: `--jobdesc` (required), `--dry-run`, `--nevts` (default -1 = all),
 4. Runs `mu2e -c <fcl> -n <nevts>`.
 5. Pushes outputs with `pushOutput` (skipped under `--dry-run`).
 
+### Direct mode
+
+When `MU2EGRID_JOBDEF` is set in the environment, `runmu2e`
+auto-detects "direct mode" and reads the per-process job index from an
+ops JSON shipped via `$CONDOR_DIR_INPUT` (no `fname` needed). This is
+the worker side of `submit_map --backend direct` and is documented
+under `submit_map` in §12.
+
 ### `inloc` values
 
 `inloc` selects how input files are referenced:
 
 - `tape`, `disk`, `scratch` — explicit dCache locations
-- `auto` — resolve per-file via SAMWeb
 - `resilient` — files on resilient dCache, read via xrootd on the grid
 - `stash` — files on StashCache, read via CVMFS on the grid
+- `dir:<path>` — files on a locally-mounted FS (typically cvmfs); read
+  via direct POSIX (`file:` protocol)
 - `none` — no input files (primary generation)
 
 ### Example jobdefs entry
 
-`runmu2e` consumes entries like this one from `jobdefs_list.json`:
+`runmu2e` consumes entries like this one from `jobdefs_list.json`
+(also called the POMS-map format):
 
 ```json
 {
@@ -500,6 +562,56 @@ pomsMonitorWeb
 Runs on `0.0.0.0:5000`. Provides an interactive dashboard, dataset
 status view, JSON editor, and a "reload DB from POMS JSONs" action.
 
+### `submit_map` — drive grid submissions from a POMS-map JSON
+
+Submits one or more cnf tarballs to the grid via `mu2ejobsub` (Phase 1,
+default) or `jobsub_submit` directly (Phase 2 direct mode, with per-job
+`pushOutput` on the worker). Reads the same POMS-map shape that
+`json2jobdef` writes to `jobdefs_list.json`.
+
+```bash
+# Phase 1: full map via the upstream Perl mu2ejobsub
+submit_map --map jobdefs_list.json
+
+# Just one entry, with a dry-run preview of the mu2ejobsub command
+submit_map --map jobdefs_list.json --entry 2 --dry-run
+
+# Phase 2: direct backend (Python → jobsub_submit → runmu2e direct mode)
+submit_map --map jobdefs_list.json --entry 2 --backend direct
+
+# Smoke test: one job (PROCESS=0) of a 10000-capacity cnf
+submit_map --map jobdefs_list.json --entry 2 --backend direct \
+           --first 0 --num 1
+```
+
+Backends:
+
+- `--backend mu2ejobsub` (default) — invokes the upstream Perl
+  `mu2ejobsub` per entry. The worker shim is `mu2egrid::impl/mu2ejobsub.sh`,
+  which stages outputs to `$WFOUTSTAGE` but does NOT call `pushOutput`.
+- `--backend direct` — calls `jobsub_submit` directly. The worker
+  bootstraps `bin/runjob.sh` → `runmu2e.py` direct mode. Per-job
+  `pushOutput` registers data and log files in SAM. Uses an auto-built
+  prodtools tarball (`/tmp/prodtools-<user>.tar`, cached by mtime)
+  shipped via `-f dropbox://`.
+
+Job-set selection (direct backend):
+
+- Default — submit every job index `0..njobs-1` from the cnf.
+- `--first N` — submit one job at index `N`.
+- `--first N --num M` — submit indices `[N, N+M)`.
+
+Other flags: `--wfproject`, `--role`, `--disk`, `--memory`,
+`--expected-lifetime`, `--wftop`, `--prodtools-tar`, `--verbose`,
+`--dry-run`.
+
+The direct backend requests one `--need-storage-modify` token per
+output area + tier the cnf actually writes to (data + log). Available
+scopes are pre-allocated per `(area, owner-class, tier, owner)` in
+htvault — `submit_map` derives the narrow paths automatically from the
+cnf's output filenames. v1 supports jobdef-mode entries only;
+template / direct-input / g4bl modes must use `--backend mu2ejobsub`.
+
 ### `famtree` — dataset family trees
 
 ```bash
@@ -573,9 +685,39 @@ listNewDatasets --filetype log --days 14
 listNewDatasets --user oksuzian
 listNewDatasets --size                # include average file size
 listNewDatasets --query "dh.dataset sim.mu2e.%.MDC2025ac%"
+listNewDatasets --completeness        # append nfiles / expected from POMS DB
 ```
 
-Flags: `--filetype`, `--days`, `--user`, `--size`, `--query`.
+Flags: `--filetype`, `--days`, `--user`, `--size`, `--query`,
+`--completeness`, `--no-rebuild`, `--db`, `--poms-dir`. The
+`--completeness` column needs `pyenv ana` (SQLAlchemy).
+
+### `latestDatasets` — collapse defname list to the latest dsconf per description
+
+```bash
+# Latest dsconf per description for all dig.mu2e definitions in MDC2025
+latestDatasets --defname 'dig.mu2e.%.MDC2025%.art'
+
+# Same, only print the defnames (no description/count columns)
+latestDatasets --defname 'dig.mu2e.%.MDC2025%.art' --names-only
+
+# Read names from stdin (pipe from another listing tool)
+listNewDatasets --filetype art --days 30 | latestDatasets --stdin --show-count
+```
+
+Flags: `--defname`, `--user`, `--stdin`, `--names-only`, `--show-count`.
+Mu2e dsconfs like `MDC2025af_best_v1_3` sort lexicographically by
+campaign letter then version, so lex order = "latest".
+
+### `list_no_child_datasets` — leaf datasets in the local DB
+
+```bash
+list_no_child_datasets
+```
+
+Lists datasets in `~/.prodtools/poms_data.db` that have no descendants
+recorded — useful for finding leaf production outputs. Re-run
+`pomsMonitor --build-db` first if the DB is stale.
 
 ### `mkrecovery` — recovery SAM definitions for missing files
 
@@ -594,8 +736,8 @@ mkrecovery jobdefs_list.json --jobdesc
 ```
 
 Creates a SAM definition named `<dataset>-recovery` containing
-`etc.mu2e.index.NNN.NNNNNNN.txt` files for the missing jobs, which you
-can submit through POMS.
+`etc.mu2e.index.000.NNNNNNN.txt` files for the missing jobs, which you
+can submit through POMS or feed to `submit_map`.
 
 ### `mkidxdef` — SAM index definitions from a jobdefs list
 
@@ -639,16 +781,16 @@ Flags: `--dataset`, `--dest` (`stash`|`resilient`, default `stash`),
 `--source` (`disk`|`tape`, default `disk`), `--limit`, `--dry-run`,
 `--list`, `--quiet`.
 
-### `listMcsDefs` / `listRelatedDefs` — enumerate related SAM defs
+### `add_inputs_from_list.py` — append datasets into `evntuple.json`
 
 ```bash
-listRelatedDefs mcs MDC2025af
-listRelatedDefs dig Run1Bai
-listRelatedDefs dts MDC2020ba
+python3 bin/add_inputs_from_list.py datasets.txt
 ```
 
-For every `<type>.*.<pattern>*.art` SAM definition, prints its `cnf`
-(tarball) and `log` siblings. `listMcsDefs` is an alias.
+Reads dataset names (one per line) from the text file and appends them
+to the `input_data` block of the campaign's `evntuple.json`. Useful for
+extending an in-flight ntuple-production campaign with newly available
+upstream datasets without hand-editing the JSON.
 
 ### `plot_logs` — visualize log metrics with NERSC job counts
 
@@ -663,6 +805,20 @@ python3 utils/plot_logs.py log.mu2e.PiBeam.MDC2025ac.csv data/nersc_runjobs.csv
 Produces a three-panel PNG (running jobs on NERSC-Perlmutter-CPU, CPU /
 real time from job logs, and memory metrics) with correlation statistics
 printed to stdout.
+
+### `plot_straw_hits.py` — tracker straw-hit occupancy plots
+
+```bash
+python3 bin/plot_straw_hits.py path/to/event_ntuple.root
+```
+
+Reads a `EventNtuple` ROOT file and writes:
+
+- `hits_per_plane.png` — hit count vs plane (0–35)
+- `hits_per_panel.png` — hit count vs panel within plane (0–5)
+- `hits_per_straw.png` — hit count vs straw within panel (0–95)
+- `occupancy_plane_panel.png` — 2D plane × panel occupancy
+- `occupancy_panel_straw.png` — 2D absolute panel × straw occupancy
 
 ## 13. Troubleshooting
 
@@ -685,6 +841,11 @@ Same fix — `muse setup ops` puts `mdh` on the path.
 Some `json2jobdef` paths need `muse setup SimJob` in addition to
 `muse setup ops`. Run it and retry.
 
+### `json2jobdef`: `max_nfiles must be a positive int`
+
+An `input_data` value dict had `max_nfiles: 0`, a negative value, or a
+non-int. Set it to a positive integer or remove the key.
+
 ### Parity tests: "MUSE_WORK_DIR environment variable is not set"
 
 Set up the SimJob environment before running parity tests:
@@ -696,9 +857,34 @@ cd test && ./parity_test.sh
 
 ### `runmu2e` does nothing useful / picks the wrong job
 
-`runmu2e` reads the job index from `fname`. Check the value:
+`runmu2e` reads the job index from `fname` (in POMS mode). Check the
+value:
 
 ```bash
 echo "$fname"
-# should be etc.mu2e.index.NNN.NNNNNNN.txt — NNN is the job index
+# should be etc.mu2e.index.000.NNNNNNN.txt — NNNNNNN (sequencer) is the
+# job index, zero-padded to 7 digits
 ```
+
+In direct mode the index comes from `$PROCESS` plus the ops JSON's
+`jobs` array; `fname` is unused.
+
+### `submit_map --backend direct`: `PermissionError: Unable to add 'storage.modify:...' scope`
+
+htvault rejected a token scope as too broad or wrong-shape. The error
+message lists every scope the submitter actually has — useful for
+discovery. `submit_map` derives narrow scopes per
+`(area, owner-class, tier, owner)` automatically; if you hit this
+error, `submit.py` may be deriving a path that doesn't match the
+pre-allocated list (e.g. a non-Mu2e tier, or a path whose tier-class
+isn't in `_TIER_TO_OWNER_CLASS`). Check the dry-run output first
+(`--dry-run` prints the full `jobsub_submit` command).
+
+### `submit_map --backend direct`: `gfal HTTP 403 - DESTINATION MAKE_PARENT - Permission refused`
+
+The submitter has the right scope grant from htvault but dCache still
+rejects the write. Common causes: the cnf was built with the wrong
+`owner` (e.g. `mu2e` while you're running as a regular user); the
+output `location` in the POMS-map points at an area you don't have
+write access to (production users only have `mu2epro` group write to
+`persistent/datasets/`).

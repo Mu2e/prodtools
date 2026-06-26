@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from samweb_wrapper import get_samweb_wrapper
+from job_common import Mu2eName
 
 
 class DatasetEffSummary:
@@ -120,13 +121,14 @@ def write_output(summaries, outfile, header='TABLE SimEfficiencies2', use_full_n
         
         for summary in summaries:
             # Extract dataset description (process field from dataset name)
-            # Format: type.mu2e.process.version.art
-            parts = summary.dsname.split('.')
-            if use_full_name or len(parts) < 3:
+            # Format: tier.owner.description.dsconf.ext
+            if use_full_name:
                 dstag = summary.dsname
             else:
-                # Use process field (index 2)
-                dstag = parts[2] if len(parts) > 2 else summary.dsname
+                try:
+                    dstag = Mu2eName.parse(summary.dsname).description
+                except ValueError:
+                    dstag = summary.dsname
             
             eff = summary.efficiency()
             

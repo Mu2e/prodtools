@@ -16,7 +16,7 @@ import re
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.job_common import Mu2eFilename, Mu2eJobBase
+from utils.job_common import Mu2eName, Mu2eJobBase, remove_storage_prefix
 import samweb_client  # type: ignore
 
 STASH_READ_ROOT = os.environ.get(
@@ -28,6 +28,36 @@ RESILIENT_ROOT = os.environ.get(
     "MU2E_RESILIENT",
     "/pnfs/mu2e/resilient"
 )
+
+
+_OUTPUT_FILENAME_KEY_RE = re.compile(r'^outputs\.\w+\.fileName$')
+_PLACEHOLDER_TOKEN_RE = re.compile(r'\b(description|desc|owner|version|sequencer)\b')
+
+
+def _check_output_filenames_substituted(outputs_dict: Dict[str, str], jobdef_name: str = "") -> None:
+    """Reject output fileNames that still contain unsubstituted placeholder
+    tokens. Fires when an upstream fcl declares an output with a suffix
+    glued to the desc token (e.g. description-CH) and the entry's
+    fcl_overrides didn't add an explicit {desc}-CH override. See memory
+    reference_reco_output_suffix_overrides."""
+    for key, filename in outputs_dict.items():
+        if not _OUTPUT_FILENAME_KEY_RE.match(key):
+            continue
+        m = _PLACEHOLDER_TOKEN_RE.search(filename)
+        if m:
+            raise ValueError(
+                f"jobfcl: {key} = {filename!r} contains unsubstituted placeholder "
+                f"{m.group(1)!r} (jobdef={jobdef_name}). Add an explicit override "
+                f"in the entry's fcl_overrides (e.g. \"mcs.owner.{{desc}}-CH.version.sequencer.art\")."
+            )
+
+
+def validate_output_filenames(jobdef_path: str, index: int = 0) -> None:
+    """Cheaply validate a cnf tarball's output filenames substitute cleanly.
+    Raises ValueError if any outputs.*.fileName has a literal placeholder
+    (description / owner / version / sequencer) surviving substitution."""
+    job_fcl = Mu2eJobFCL(jobdef_path)
+    _check_output_filenames_substituted(job_fcl.job_outputs(index), jobdef_name=jobdef_path)
 
 
 def _resilient_file_exists(pnfs_path: str) -> bool:
@@ -56,18 +86,13 @@ class Mu2eJobFCL(Mu2eJobBase):
         super().__init__(jobdef)
         self.inloc = inloc
         self.proto = proto
-        self.json_data = self._extract_json()
-        
+
         # Extract owner and dsconf directly from JSON fields
         # Use same default logic as mu2ejobdef.py for consistency
         default_owner = os.getenv('USER', 'mu2e').replace('mu2epro', 'mu2e')
         self.owner = self.json_data.get('owner', default_owner)
         self.dsconf = self.json_data.get('dsconf', 'unknown')
-        
-        # Read sequential_aux setting from job definition, default to False if not specified
-        tbs = self.json_data.get('tbs', {})
-        self.sequential_aux = tbs.get('sequential_aux', False)
-    
+
         # Cache the source type detection
         self._source_type = None
     
@@ -119,18 +144,14 @@ class Mu2eJobFCL(Mu2eJobBase):
         # Resolve stash path from filename — no SAM involved
         # If file not found on stash, fall back to SAM-based lookup
         if self.inloc == 'stash':
-            fn = Mu2eFilename(filename)
-            dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
-            ds_path = dataset.replace('.', '/')
+            ds_path = str(Mu2eName.parse(filename).dataset).replace('.', '/')
             stash_path = f"{STASH_READ_ROOT}/datasets/{ds_path}/{filename}"
             if os.path.exists(stash_path):
                 return stash_path
             # File not on stash — fall through to SAM lookup
 
         if self.inloc == 'resilient':
-            fn = Mu2eFilename(filename)
-            dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
-            ds_path = dataset.replace('.', '/')
+            ds_path = str(Mu2eName.parse(filename).dataset).replace('.', '/')
             resilient_path = f"{RESILIENT_ROOT}/datasets/{ds_path}/{filename}"
             if _resilient_file_exists(resilient_path):
                 return resilient_path
@@ -190,7 +211,6 @@ class Mu2eJobFCL(Mu2eJobBase):
             physical_path = self._locate_file(filename)
         
         # Clean up location format prefixes
-        from utils.job_common import remove_storage_prefix
         clean_path = remove_storage_prefix(physical_path)
         
         # Remove file location suffix like (2290@fm4794l8) if present
@@ -212,117 +232,6 @@ class Mu2eJobFCL(Mu2eJobBase):
         raise ValueError(
             f"Error: root protocol requested but a file pathname does not start with /pnfs: {clean_path}"
         )
-    
-    def job_primary_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get primary input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        inputs = tbs.get('inputs')
-        
-        if not inputs:
-            return {}
-        
-        result = {}
-        # inputs is a dict with one key-value pair
-        for dataset, (merge, filelist) in inputs.items():
-            nf = len(filelist)
-            first = index * merge
-            last = min(first + merge - 1, nf - 1)
-            
-            if first > last:
-                raise ValueError(f"job_primary_inputs(): invalid index {index}")
-            
-            result[dataset] = filelist[first:last + 1]
-        
-        return result
-    
-    def job_aux_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get auxiliary input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        auxin = tbs.get('auxin')
-        
-        if not auxin:
-            return {}
-        
-        result = {}
-        # Process auxiliary inputs in JSON order (which should be the correct order)
-        for dataset, (nreq, infiles) in auxin.items():
-            # Zero means take all files
-            if nreq == 0:
-                nreq = len(infiles)
-            
-            if self.sequential_aux:
-                # Sequential selection with rollover (like primary inputs)
-                nf = len(infiles)
-                first = index * nreq
-                last = min(first + nreq - 1, nf - 1)
-                
-                if first >= nf:
-                    # Roll over: start from the beginning
-                    first = first % nf
-                    last = min(first + nreq - 1, nf - 1)
-                
-                if first > last:
-                    raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
-                
-                result[dataset] = infiles[first:last + 1]
-            else:
-                # Draw nreq "random" files without repetitions (original behavior)
-                sample = []
-                available_files = infiles.copy()
-                
-                for count in range(nreq):
-                    if not available_files:
-                        break
-                    
-                    # Deterministic random selection
-                    rnd = self._my_random(index, *available_files)
-                    file_index = rnd % len(available_files)
-                    sample.append(available_files[file_index])
-                    available_files.pop(file_index)
-               
-                result[dataset] = sample
-        
-        return result
-    
-    def job_sampling_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get sampling input files for job index."""
-        tbs = self.json_data.get('tbs', {})
-        samplinginput = tbs.get('samplinginput')
-        
-        if not samplinginput:
-            return {}
-        
-        result = {}
-        for dataset, (nreq, filelist) in samplinginput.items():
-            # Zero means take all files
-            if nreq == 0:
-                nreq = len(filelist)
-            
-            # Sequential selection like primary inputs
-            nf = len(filelist)
-            first = index * nreq
-            last = min(first + nreq - 1, nf - 1)
-            
-            if first > last:
-                raise ValueError(f"job_sampling_inputs(): invalid index {index}")
-            
-            result[dataset] = filelist[first:last + 1]
-        
-        return result
-    
-    def job_inputs(self, index: int) -> Dict[str, List[str]]:
-        """Get all input files for job index."""
-        primary = self.job_primary_inputs(index)
-        aux = self.job_aux_inputs(index)
-        sampling = self.job_sampling_inputs(index)
-        
-        # Merge all input types
-        result = {}
-        result.update(primary)
-        result.update(aux)
-        result.update(sampling)
-        
-        return result
     
     def sequencer(self, index: int) -> str:
         """Get sequencer for job index."""
@@ -348,8 +257,7 @@ class Mu2eJobFCL(Mu2eJobBase):
         sequencers = []
         for dataset, files in primary_inputs.items():
             for filename in files:
-                fn = Mu2eFilename(filename)
-                sequencers.append(fn.sequencer)
+                sequencers.append(Mu2eName.parse(filename).sequencer)
         
         if not sequencers:
             raise ValueError("Error: get_sequencer(): no sequencers found in input files")
@@ -403,13 +311,8 @@ class Mu2eJobFCL(Mu2eJobBase):
                 result[key] = resolved_template
                 continue
 
-            # Update sequencer in the filename (fallback: parse and replace 5th field)
-            fn = Mu2eFilename(resolved_template)
-            parts = fn.filename.split('.')
-            if len(parts) >= 5:
-                parts[4] = seq
-            fn.filename = '.'.join(parts)
-            result[key] = fn.basename()
+            # Update sequencer in the filename (parse then re-emit with new seq)
+            result[key] = str(Mu2eName.parse(resolved_template).with_sequencer(seq))
 
         return result
     
@@ -532,8 +435,7 @@ class Mu2eJobFCL(Mu2eJobBase):
             if source is not None:
                 raise ValueError("Error: --target and --source are mutually exclusive")
             
-            fn = Mu2eFilename(target)
-            seq = fn.sequencer
+            seq = Mu2eName.parse(target).sequencer
             job_index = self.index_from_sequencer(seq)
             
             # Check that the target file matches what this job will produce
@@ -582,6 +484,7 @@ class Mu2eJobFCL(Mu2eJobBase):
         
         # Output files (add/replace outputs from job definition)
         outputs = self.job_outputs(index)
+        _check_output_filenames_substituted(outputs, jobdef_name=self.jobdef)
         for key, filename in outputs.items():
             # Always add the output from job definition (it may replace template values)
             config_lines.append(f'{key}: "{filename}"')

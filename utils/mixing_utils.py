@@ -41,9 +41,10 @@ PILEUP_MIXERS = {
 # Mixing-specific FCL includes
 MIXING_FCL_INCLUDES = {
     "Mix1BB": "Production/JobConfig/mixing/OneBB.fcl",
-    "Mix2BB": "Production/JobConfig/mixing/TwoBB.fcl", 
+    "Mix2BB": "Production/JobConfig/mixing/TwoBB.fcl",
     "MixLow": "Production/JobConfig/mixing/LowIntensity.fcl",
-    "MixSeq": "Production/JobConfig/mixing/NoPrimaryPBISequence.fcl"
+    "MixSeq": "Production/JobConfig/mixing/NoPrimaryPBISequence.fcl",
+    "MixFlat": "Production/JobConfig/mixing/FlatPBI.fcl",
 }
 
 def _map_dataset_to_mixer(dataset_name):
@@ -143,15 +144,7 @@ def build_pileup_args(config):
                         f.write(f'{key}: "{val}"\n')
                     else:
                         f.write(f'{key}: {val}\n')
-        
-        # Add output filename overrides for mixing jobs (after base FCL include)
-        # This ensures they override the default values from the base templates
-        owner = _get_first_if_list(config.get('owner', 'mu2e'))
-        desc = _get_first_if_list(config.get('desc', 'unknown'))
-        dsconf = _get_first_if_list(config.get('dsconf', 'unknown'))
-        f.write(f'outputs.TriggeredOutput.fileName: "dig.{owner}.{desc}Triggered.{dsconf}.sequencer.art"\n')
-        f.write(f'outputs.TriggerableOutput.fileName: "dig.{owner}.{desc}Triggerable.{dsconf}.sequencer.art"\n')
-    
+
     return args
 
 def prepare_fields_for_mixing(config):
@@ -161,7 +154,7 @@ def prepare_fields_for_mixing(config):
     
     # Extract desc field from input_data and pbeam
     input_data = _get_first_if_list(config['input_data'])
-    dsdesc = input_data.split('.')[2] if input_data else "unknown"
+    dsdesc = Mu2eName.parse(input_data).description if input_data else "unknown"
     
     pbeam = _get_first_if_list(config['pbeam'])
     modified_config['desc'] = dsdesc + pbeam

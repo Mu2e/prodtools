@@ -10,9 +10,12 @@ Thin wrapper over `bin/listNewDatasets --completeness` that does all
 the env setup so you can ask "what landed recently and is it
 complete?" with one command. Encodes:
 
-- `source setupmu2e-art.sh && muse setup ops && pyenv ana`
+- `source setupmu2e-art.sh && muse setup ops && source /cvmfs/.../bin/pyenv.sh ana`
   (the last is required for SQLAlchemy; without it
-  `--completeness` degrades to a warning)
+  `--completeness` degrades to a warning. We source `pyenv.sh`
+  directly rather than calling the `pyenv` shell function because
+  the function defined in `setupmu2e-art.sh` doesn't survive into
+  non-interactive subshells reliably.)
 - `python3 bin/listNewDatasets` (not `bash` — the wrapper has a
   Python shebang)
 - `--completeness` flag on by default (auto-rebuilds the POMS DB
@@ -81,7 +84,7 @@ the listNewDatasets call:
 ```bash
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \
   && muse setup ops > /dev/null 2>&1 \
-  && pyenv ana > /dev/null 2>&1 \
+  && source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana > /dev/null 2>&1 \
   && python3 <REPO>/bin/listNewDatasets --completeness --days <DAYS> <EXTRA_ARGS> 2>&1 \
      | grep -v -E '^(Skipping logparser|Loading [0-9]+ JSON files|Loaded [0-9]+ job definitions|Removed [0-9]+ jobs|Computing completion status|Marked [0-9]+ jobs as complete|Discovered and cached [0-9]+ derived datasets|Error listing definition files|Error describing definition|Warning: Could not count files|  Template mode:|^$)'
 ```

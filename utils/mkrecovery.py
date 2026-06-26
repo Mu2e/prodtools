@@ -5,7 +5,8 @@ import sys, os, json, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.jobiodetail import Mu2eJobIO
 from utils.samweb_wrapper import SAMWebWrapper, list_files, create_definition
-from utils.job_common import remove_storage_prefix
+from utils.job_common import Mu2eName, remove_storage_prefix
+from utils.poms_entry import tarball_of, njobs_of
 
 def find_missing_indices(tarball_path, dataset, njobs):
     """Find job indices for missing files in a dataset."""
@@ -31,12 +32,18 @@ def find_missing_indices(tarball_path, dataset, njobs):
     return missing_indices, missing_files
 
 def create_recovery_definition(defname, indices):
-    """Create SAM recovery definition from job indices."""
+    """Create SAM recovery definition from job indices. Returns True on
+    success; on failure prints the error and returns False (does not
+    re-raise — caller can decide whether to abort the recovery flow)."""
     etc_files = [f"etc.mu2e.index.000.{idx:07d}.txt" for idx in sorted(indices)]
     query = f"dh.dataset etc.mu2e.index.000.txt and file_name in ({', '.join(etc_files)})"
-    result = create_definition(defname, query)
-    print(f"Created SAM definition: {defname}" if result else f"Failed to create {defname} (may already exist)")
-    return result
+    try:
+        create_definition(defname, query)
+    except Exception as e:
+        print(f"Failed to create SAM definition {defname}: {e}")
+        return False
+    print(f"Created SAM definition: {defname}")
+    return True
 
 def locate_tarball(sam, tarball):
     """Locate and return full path to tarball."""
@@ -58,10 +65,13 @@ def extract_datasets_from_tarball(tarball_path, njobs):
         dataset_set = set()
         for idx in range(min(10, njobs)):
             for filename in job_io.job_outputs(idx).values():
-                # Extract dataset name from filename (e.g., dig.mu2e.Beam.MDC2020bc.art)
-                parts = filename.split('.')
-                if len(parts) >= 4:
-                    dataset_set.add('.'.join(parts[:4]) + '.art')
+                # Extract dataset name from filename (force .art extension to
+                # match historical behavior — outputs may have other exts).
+                try:
+                    n = Mu2eName.parse(filename)
+                except ValueError:
+                    continue
+                dataset_set.add(str(n.with_extension('art').dataset))
         output_datasets = list(dataset_set)
     
     return output_datasets
@@ -88,7 +98,10 @@ def main():
         print(f"Processing {len(entries)} entries from {args.input}\n{'='*60}\n")
         
         for i, entry in enumerate(entries):
-            tarball, njobs = entry['tarball'], entry['njobs']
+            tarball = tarball_of(entry)
+            njobs = njobs_of(entry)
+            if njobs is None:
+                raise ValueError(f"POMS entry {i} missing required field: 'njobs'")
             print(f'[{i+1}/{len(entries)}] {tarball}')
             
             # Locate tarball

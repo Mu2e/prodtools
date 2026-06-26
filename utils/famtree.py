@@ -30,6 +30,7 @@ import os
 import sys
 from samweb_wrapper import file_lineage, list_definition_files, get_samweb_wrapper
 from genFilterEff import process_dataset
+from job_common import Mu2eName
 
 def get_parents(file_name):
     """Get parent files using samweb file-lineage parents command, filtering out etc files."""
@@ -38,7 +39,7 @@ def get_parents(file_name):
 
 def get_dataset_name(file_name):
     """Return dataset name (drop run_subrun part) for 6-field names"""
-    return '.'.join(file_name.split('.')[:4] + [file_name.split('.')[-1]])
+    return str(Mu2eName.parse(file_name).dataset)
 
 def get_first_file_from_dataset(dataset_name):
     """Get the first file from a dataset name (without run/subrun)."""
@@ -94,6 +95,37 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extr
         # Dataset doesn't have gencount or other issue
         return None
 
+def topology_for_dataset(dataset_name):
+    """Return {dataset: [parent_dataset, ...]} subgraph rooted at dataset_name.
+
+    Walks SAM file-lineage from the first file of the dataset, aggregates
+    by 5-field dataset name (no run/subrun), recurses into unique parent
+    datasets. Used by the static pomsMonitor dashboard to cache lineage
+    topology — stable per dataset, so cron only walks new datasets.
+    Returns None if the dataset has no files.
+    """
+    visited = {}
+
+    def walk(file_name):
+        ds = get_dataset_name(file_name)
+        if ds in visited:
+            return
+        visited[ds] = []
+        ds_to_parent_file = {}
+        for p in get_parents(file_name):
+            pds = get_dataset_name(p)
+            ds_to_parent_file.setdefault(pds, p)
+        for pds, pfile in ds_to_parent_file.items():
+            visited[ds].append(pds)
+            walk(pfile)
+
+    first_file = get_first_file_from_dataset(dataset_name)
+    if not first_file:
+        return None
+    walk(first_file)
+    return visited
+
+
 def generate_mermaid_diagram(file_name, node_id=0):
     """Generate Mermaid diagram data for the family tree."""
     
@@ -136,19 +168,19 @@ def main():
     args = parser.parse_args()
     
     # Check if input is a dataset name (no run/subrun) or individual file
-    parts = args.filename.split('.')
-    
-    if len(parts) == 5:  # Dataset name: sim.mu2e.MuminusStopsCat.MDC2025ac.art
+    name = Mu2eName.parse(args.filename)
+
+    if name.is_dataset:  # Dataset name: sim.mu2e.MuminusStopsCat.MDC2025ac.art
         print(f"Dataset name detected: {args.filename}")
         actual_file = get_first_file_from_dataset(args.filename)
         if not actual_file:
             return
         print(f"Using first file: {actual_file}")
         file_to_process = actual_file
-    elif len(parts) == 6:  # Individual file: sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000000.art
+    elif name.is_file or name.is_tarball:  # Individual file: sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000000.art
         file_to_process = args.filename
     else:
-        print(f"Invalid filename format. Expected 5 fields (dataset) or 6 fields (file), got {len(parts)} fields.")
+        print(f"Invalid filename format: {args.filename}. Expected 5 fields (dataset) or 6 fields (file).")
         return
     
     # Generate Mermaid diagram parts
@@ -212,9 +244,10 @@ def main():
         mermaid_lines.append(f"    class {','.join(all_nodes)} boldLabel")
     mermaid_lines.append("```")
         
-    # Use original input for output filename (dataset name or file name)
-    dataset_name = '.'.join(args.filename.split('.')[:4])
-    out_path = f"{dataset_name}.md"
+    # Use original input for output filename (drop ext+sequencer for a stable stem)
+    n = Mu2eName.parse(args.filename)
+    stem = f"{n.tier}.{n.owner}.{n.description}.{n.dsconf}"
+    out_path = f"{stem}.md"
     with open(out_path, 'w') as f:
         for line in mermaid_lines:
             f.write(line + '\n')

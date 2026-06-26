@@ -1,0 +1,23 @@
+{
+  "desc": ["CeEndpoint", "CosmicCRYAll", "FlatGamma", "FlateMinus"],
+  "dsconf": "{out_campaign}_best_v1_4-000",
+  "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+  "input_data": {"dts.mu2e.{desc}.{campaign}.art": 100},
+  "fcl_overrides": {
+    "services.DbService.purpose": "Sim_best",
+    "services.DbService.version": "v1_4",
+    "services.DbService.nearestMatch": "true",
+    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+    "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+    "services.ProditionsService.strawElectronics.digitizationEnd": "1650",
+    "physics.producers.CaloShowerROMaker.digitizationEnd": "1650",
+    "physics.producers.CaloDigiMaker.digitizationEnd": "1650",
+    "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+    "#include": [
+      "Production/JobConfig/digitize/OnSpill_run1b_epilog.fcl"
+    ]
+  },
+  "inloc": "disk",
+  "outloc": {"*.art": "tape"},
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
+}
