@@ -9,7 +9,7 @@ including description extraction and auto-generation from input data.
 import copy
 from typing import List, NamedTuple, Optional
 
-from utils.job_common import Mu2eName
+from utils.job_common import Mu2eName, default_owner
 
 
 class InputSpec(NamedTuple):
@@ -128,6 +128,28 @@ def get_tarball_desc(config):
     """
     if 'tarball_append' not in config:
         return None
-    
+
     base_desc = config.get('desc') or prepare_fields_for_job(config, job_type='standard').get('desc')
     return base_desc + config['tarball_append']
+
+
+def cnf_name(config, extension='tar', desc=None, dataset=False):
+    """Canonical cnf name for a config — the single home of the cnf-name
+    contract: json2jobdef's parfile/dataset names and jobdef's written
+    tarball must be byte-identical, or a --prod push registers a map entry
+    whose tarball was never written. Mu2eName.build validates fields (a
+    desc/dsconf containing '.' fails loudly here instead of producing an
+    unparseable name downstream).
+
+    Args:
+        desc: already-resolved base description override (create_jobdef's
+              auto_description path); defaults to config['desc'].
+              tarball_append still wins via get_tarball_desc.
+        dataset: True for the 5-field dataset form (no version sequencer).
+    """
+    base = get_tarball_desc(config) or desc or config['desc']
+    kwargs = {} if dataset else {'sequencer': str(config.get('version', 0))}
+    return str(Mu2eName.build(tier='cnf',
+                              owner=config.get('owner') or default_owner(),
+                              description=base, dsconf=config['dsconf'],
+                              extension=extension, **kwargs))

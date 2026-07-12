@@ -156,6 +156,26 @@ def _push_with_retry(push_fn, *args, retries=3, base_delay=30, **kwargs):
     raise last_exc
 
 
+def _execute_mu2e(fcl, simjob_setup, args, prefix=''):
+    """Shared execute step for both backends: build the mu2e command, run
+    it, return True iff it failed. Callers push data only on success but
+    always push logs (so failures stay debuggable) — that split, and the
+    direct-mode extras (retry, manifest, log location), stay caller-side
+    because they differ by design."""
+    cmd = build_mu2e_cmd(fcl, simjob_setup, args)
+    print(f"{prefix}Executing: {cmd}")
+    print(f"{prefix}Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
+    print("=== Starting Mu2e execution ===")
+    try:
+        run(cmd, shell=False)
+        print("=== Mu2e execution completed successfully ===")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"=== Mu2e execution failed with exit code {e.returncode} ===")
+        # Don't re-raise — callers still upload logs (and decide on outputs)
+        return True
+
+
 def _direct_dispatch(args, ops, index):
     """Direct-mode equivalent of _dispatch_and_execute(mode='normal'):
     run process_jobdef → mu2e -c → manifest → push (with retries)."""
@@ -176,18 +196,7 @@ def _direct_dispatch(args, ops, index):
     # have no SAM parents — match the POMS-mode logic in _dispatch_and_execute.
     track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
 
-    cmd = build_mu2e_cmd(fcl, simjob_setup, args)
-    print(f"[direct] Executing: {cmd}")
-    print(f"[direct] cwd={os.getcwd()} fcl_exists={os.path.exists(fcl)}")
-    print("=== Starting Mu2e execution ===")
-
-    job_failed = False
-    try:
-        run(cmd, shell=False)
-        print("=== Mu2e execution completed successfully ===")
-    except subprocess.CalledProcessError as e:
-        job_failed = True
-        print(f"=== Mu2e execution failed with exit code {e.returncode} ===")
+    job_failed = _execute_mu2e(fcl, simjob_setup, args, prefix='[direct] ')
 
     # Append SHA256 manifest to the log BEFORE pushing.
     # mu2eClusterCheckAndMove parses the log for `mu2egrid manifest`.
@@ -300,19 +309,7 @@ def _dispatch_and_execute(mode, jobdesc, fname, args):
     # input) default to tracking parents.
     track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
 
-    cmd = build_mu2e_cmd(fcl, simjob_setup, args)
-    print(f"Executing: {cmd}")
-    print(f"Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
-    print("=== Starting Mu2e execution ===")
-
-    job_failed = False
-    try:
-        run(cmd, shell=False)
-        print("=== Mu2e execution completed successfully ===")
-    except subprocess.CalledProcessError as e:
-        job_failed = True
-        print(f"=== Mu2e execution failed with exit code {e.returncode} ===")
-        # Don't re-raise — we still want to upload logs and outputs
+    job_failed = _execute_mu2e(fcl, simjob_setup, args)
 
     if not args.dry_run:
         if not job_failed:

@@ -466,26 +466,54 @@ def process_direct_input(jobdesc, fname, args):
     if not n.is_file:
         fail(f"Error: Invalid filename format: {fname_base}. "
              f"Expected tier.owner.desc.dsconf.sequencer.ext")
-    desc = n.description
-    seq = n.sequencer
-
-    print(f"Direct-input mode: fname={fname}, desc={desc}, seq={seq}")
+    print(f"Direct-input mode: fname={fname}, desc={n.description}, seq={n.sequencer}")
 
     _fetch_file_local(tarball)
+    fcl = write_direct_input_fcl(Mu2eJobFCL(tarball), fname)
 
-    # Extract base FCL from tarball and resolve output filenames
-    job_fcl = Mu2eJobFCL(tarball)
+    # Extract setup script from tarball
+    simjob_setup = _extract_simjob_setup(tarball)
+
+    outputs = jobdesc_entry['outputs']
+    return fcl, simjob_setup, fname, outputs
+
+
+def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False):
+    """Write the direct-input FCL for `fname` from a generic cnf's base FCL:
+    base content + appended source.fileNames and per-output filename
+    overrides (FHiCL last-definition-wins).
+
+    Single home for the worker runtime (process_direct_input) and the
+    fcldump debug view, which had silently drifted apart. The flags ARE
+    that drift, now explicit:
+    - format_input: resolve fname to a full xroot/file URL via the resolver
+      (fcldump debug view); the worker writes the raw fname it fetched.
+    - filter_base: strip base-FCL lines the overrides re-define, so the
+      debug view shows no unresolved {desc} placeholders (cosmetic — the
+      appended overrides win either way).
+    Returns the written fcl filename."""
+    n = Mu2eName.parse(Path(fname).name)
+    if not n.is_file:
+        raise ValueError(
+            f"Invalid filename format: {fname}. "
+            f"Expected tier.owner.desc.dsconf.sequencer.ext"
+        )
     base_fcl = job_fcl._extract_fcl()
-    outputs_map = job_fcl.job_outputs(0, override_desc=desc, override_seq=seq)
+    outputs_map = job_fcl.job_outputs(0, override_desc=n.description,
+                                      override_seq=n.sequencer)
+    source_name = job_fcl._format_filename(fname) if format_input else fname
+    if filter_base:
+        override_keys = set(outputs_map.keys()) | {'source.fileNames'}
+        base_fcl = '\n'.join(
+            line for line in base_fcl.splitlines()
+            if not any(line.lstrip().startswith(k) for k in override_keys)
+        )
 
-    # Write FCL: base content + direct-input overrides appended
-    # FHiCL last-definition-wins semantics handle the override
-    fname_stem = Path(fname).stem  # strip .art
-    fcl = f"{fname_stem}.fcl"
+    fcl = f"{Path(fname).stem}.fcl"
     with open(fcl, 'w') as f:
         f.write(base_fcl)
         f.write("\n# Direct-input overrides:\n")
-        f.write(f'source.fileNames: ["{fname}"]\n')
+        f.write(f'source.fileNames: ["{source_name}"]\n')
         for key, filename in outputs_map.items():
             f.write(f'{key}: "{filename}"\n')
 
@@ -493,12 +521,7 @@ def process_direct_input(jobdesc, fname, args):
     print(f"\n--- {fcl} content ---")
     with open(fcl) as f:
         print(f.read())
-
-    # Extract setup script from tarball
-    simjob_setup = _extract_simjob_setup(tarball)
-
-    outputs = jobdesc_entry['outputs']
-    return fcl, simjob_setup, fname, outputs
+    return fcl
 
 
 def resolve_map_index(jobdesc, job_index):

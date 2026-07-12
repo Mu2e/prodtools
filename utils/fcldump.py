@@ -4,8 +4,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
-from pathlib import Path
-from utils.prod_utils import write_fcl
+from utils.prod_utils import write_fcl, write_direct_input_fcl
 from utils.job_common import Mu2eName
 from utils.jobfcl import Mu2eJobFCL
 # Dataset→cnf resolution lives in jobdef_lookup so other tools (latestDatasets
@@ -17,47 +16,13 @@ from utils.jobdef_lookup import (list_jobdefs, find_matching_jobdef, set_verbose
 def write_fcl_direct_input(tarball, fname, loc='tape', proto='root'):
     """Generate FCL for direct-input mode: generic tarball + specific input file.
 
-    Parses desc and sequencer from fname, resolves output filenames, and writes
-    a FCL that appends source.fileNames and output overrides to the base FCL.
+    Debug view of the worker's direct-input FCL (write_direct_input_fcl):
+    the input resolves to a full xroot/file URL and overridden base lines
+    are stripped so no unresolved {desc} placeholders show.
     """
-    n = Mu2eName.parse(Path(fname).name)
-    if not n.is_file:
-        raise ValueError(
-            f"Invalid filename format: {fname}. "
-            f"Expected tier.owner.desc.dsconf.sequencer.ext"
-        )
-    desc = n.description
-    seq = n.sequencer
-
     job_fcl = Mu2eJobFCL(tarball, inloc=loc, proto=proto)
-    base_fcl = job_fcl._extract_fcl()
-    outputs_map = job_fcl.job_outputs(0, override_desc=desc, override_seq=seq)
-
-    # Resolve the input file to a full xroot/file path via SAM
-    formatted_fname = job_fcl._format_filename(fname)
-
-    # Strip lines from the base FCL that will be overridden below (avoids
-    # showing unresolved {desc} placeholders from the generic tarball)
-    override_keys = set(outputs_map.keys()) | {'source.fileNames'}
-    filtered_lines = [
-        line for line in base_fcl.splitlines()
-        if not any(line.lstrip().startswith(k) for k in override_keys)
-    ]
-    filtered_fcl = '\n'.join(filtered_lines)
-
-    fcl = f"{Path(fname).stem}.fcl"
-    with open(fcl, 'w') as f:
-        f.write(filtered_fcl)
-        f.write("\n# Direct-input overrides:\n")
-        f.write(f'source.fileNames: ["{formatted_fname}"]\n')
-        for key, filename in outputs_map.items():
-            f.write(f'{key}: "{filename}"\n')
-
-    print(f"Wrote {fcl}")
-    print(f"\n--- {fcl} content ---")
-    with open(fcl) as f:
-        print(f.read())
-    return fcl
+    return write_direct_input_fcl(job_fcl, fname,
+                                  format_input=True, filter_base=True)
 
 
 def main():

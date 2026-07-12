@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
-from utils.config_utils import get_tarball_desc, prepare_fields_for_job, normalize_input_data
+from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
 from utils.poms_entry import firstjob_of, validate_window
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
@@ -266,9 +266,7 @@ def _next_version(config):
     Queries SAM for existing files in the tarball dataset and returns
     max(existing versions) + 1, or 0 if none exist.
     """
-    desc = get_tarball_desc(config) or config['desc']
-    dataset = str(Mu2eName.build(tier='cnf', owner=config['owner'], description=desc,
-                                 dsconf=config['dsconf'], extension='tar'))
+    dataset = cnf_name(config, 'tar', dataset=True)
 
     try:
         files = files_in_dataset(dataset)
@@ -313,19 +311,9 @@ def _compute_extend_exclusions(config):
     return exclude_files
 
 
-def _cnf_name(config, extension):
-    """Canonical cnf name for this config via Mu2eName.build (validates
-    fields — a desc/dsconf containing '.' fails loudly here instead of
-    producing an unparseable name downstream)."""
-    desc = get_tarball_desc(config) or config['desc']
-    return str(Mu2eName.build(
-        tier='cnf', owner=config['owner'], description=desc,
-        dsconf=config['dsconf'], sequencer=str(config.get('version', 0)),
-        extension=extension))
-
 def get_parfile_name(config):
-    """Generate consistent parfile name from config."""
-    return _cnf_name(config, 'tar')
+    """Generate consistent parfile name from config (see config_utils.cnf_name)."""
+    return cnf_name(config, 'tar')
 
 def validate_required_fields(config):
     """Validate that config has all required fields."""

@@ -25,7 +25,7 @@ from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
-from utils.config_utils import get_tarball_desc
+from utils.config_utils import cnf_name, get_tarball_desc
 from utils.job_common import Mu2eName, default_owner, tbs_capacity
 
 # Constants matching Perl mu2ejobdef exactly
@@ -214,22 +214,13 @@ def _reorder(d: Dict, order: List[str]) -> Dict:
 
 def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "") -> Dict:
     """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
-    owner = config.get('owner') or default_owner()
-    desc = get_tarball_desc(config) or config['desc']
-    dsconf = config['dsconf']
-
-    # Build proper jobname like Perl version (cnf.owner.desc.dsconf.VERSION.tar)
-    version = config.get('version', 0)
-    jobname = str(Mu2eName.build(tier='cnf', owner=owner, description=desc,
-                                 dsconf=dsconf, sequencer=str(version), extension='tar'))
-
     # Base structure - use Perl field ordering exactly: code, setup, tbs, jobname
     # This matches the actual observed Perl output order
     return {
         "code": code,
         "setup": config['simjob_setup'],
         "tbs": _reorder(tbs, ['seed', 'subrunkey', 'event_id', 'outfiles']),
-        "jobname": jobname
+        "jobname": cnf_name(config, 'tar')
     }
 
 
@@ -685,12 +676,9 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
         tbs['njobs'] = embedded_njobs
     
     # Use provided outdir (simple logic matching Perl version)
-    # Use tarball_append if specified, otherwise use original desc
-    final_desc = get_tarball_desc(config) or desc
-    version = config.get('version', 0)
+    # desc carries the auto_description resolution; tarball_append wins inside cnf_name
     final_outdir = Path(outdir) if outdir else None
-    out_name = str(Mu2eName.build(tier='cnf', owner=owner, description=final_desc,
-                                  dsconf=dsconf, sequencer=str(version), extension='tar'))
+    out_name = cnf_name(config, 'tar', desc=desc)
     out = final_outdir / out_name if final_outdir else Path(out_name)
 
     if out.exists():
