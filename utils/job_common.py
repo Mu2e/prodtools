@@ -46,8 +46,8 @@ class Mu2eName:
     (`.dataset`, `.with_sequencer`, `.as_tier`, ...) return new
     Mu2eName instances rather than mutating in place.
 
-    The legacy `Mu2eFilename` symbol is an alias of this class, preserved
-    to keep the Perl-parity contract on `relpathname()` traceable.
+    `relpathname()` reproduces the Perl Mu2eFilename hash-prefixed path
+    (SHA256 of the basename) for parity with the legacy tooling.
     """
 
     __slots__ = ("filename", "tier", "owner", "description", "dsconf",
