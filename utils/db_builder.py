@@ -54,19 +54,34 @@ def _get_dataset_stats(dataset_name):
         return (0, 0, 0)
 
 
-def _get_dataset_gencount(dataset_name, nfiles):
+# Sentinel: "first file not supplied". Lets the build loop fetch a dataset's
+# first file ONCE and pass it into all three probes below (each only needs
+# files[0]), while standalone callers (db_analyzer, tests) still self-fetch.
+_UNSET = object()
+
+
+def _first_file(dataset_name):
+    """First file of a dataset's SAM definition, or None. list_definition_files
+    swallows SAM errors to [], so this never raises."""
+    files = list_definition_files(dataset_name)
+    return files[0] if files else None
+
+
+def _get_dataset_gencount(dataset_name, nfiles, first_file=_UNSET):
     """Total generated events for a dataset = dh.gencount(one file) * nfiles.
 
     gencount is uniform per file within a production dataset, so a single
     get-metadata is enough (avoids an O(nfiles) sum). Returns None if the
-    dataset has no files or no dh.gencount (e.g. non-generator tiers)."""
+    dataset has no files or no dh.gencount (e.g. non-generator tiers).
+    Pass first_file to reuse a file the caller already fetched."""
     if not nfiles:
         return None
     try:
-        files = list_definition_files(dataset_name)
-        if not files:
+        if first_file is _UNSET:
+            first_file = _first_file(dataset_name)
+        if not first_file:
             return None
-        md = get_metadata(files[0])
+        md = get_metadata(first_file)
         per_file = md.get('dh.gencount') if isinstance(md, dict) else None
         if per_file is None:
             return None
@@ -76,26 +91,22 @@ def _get_dataset_gencount(dataset_name, nfiles):
         return None
 
 
-def _check_dataset_has_children(dataset_name):
-    """Check if a dataset has children by checking if the first file has child files.
-    
+def _check_dataset_has_children(dataset_name, first_file=_UNSET):
+    """True if the dataset's first file has any child files. Pass first_file
+    to reuse a file the caller already fetched.
+
     Args:
         dataset_name: Dataset name (e.g., "dts.mu2e.FlatePlus.MDC2020bb.art")
-    
+
     Returns:
         bool: True if the dataset has children, False otherwise
     """
     try:
-        # Get first file from dataset definition
-        files = list_definition_files(dataset_name)
-        if not files:
+        if first_file is _UNSET:
+            first_file = _first_file(dataset_name)
+        if not first_file:
             return False
-        
-        first_file = files[0]
-        
-        # Check if any files are children of the first file
-        children = children_of_file(first_file)
-        return len(children) > 0
+        return len(children_of_file(first_file)) > 0
     except Exception as e:
         print(f"Warning: _check_dataset_has_children failed for {dataset_name}: {e}", file=sys.stderr)
         return False
@@ -169,12 +180,14 @@ def _normalize_location(raw: Optional[str]) -> str:
     return 'N/A'
 
 
-def _infer_dataset_location(dataset_name):
+def _infer_dataset_location(dataset_name, first_file=_UNSET):
+    """Normalized storage location (dcache/enstore/N/A) from the dataset's
+    first file. Pass first_file to reuse a file the caller already fetched."""
     try:
-        files = list_definition_files(dataset_name)
-        if not files:
+        if first_file is _UNSET:
+            first_file = _first_file(dataset_name)
+        if not first_file:
             return 'N/A'
-        first_file = files[0]
         locations = locate_file_strict(first_file)
         for entry in locations:
             loc = entry.get('location') or entry.get('location_type')
@@ -389,8 +402,13 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                 dataset_name = str(out_name.dataset)
 
                 nfiles, nevts, total_size = _get_dataset_stats(dataset_name)
-                gencount = _get_dataset_gencount(dataset_name, nfiles)
-                has_children = _check_dataset_has_children(dataset_name)
+                # Fetch the dataset's first file ONCE — the gencount, children,
+                # and location probes each only need files[0]; without this each
+                # re-listed the whole dataset (2x n_datasets extra SAM round-trips
+                # per rebuild, each transferring thousands of filenames).
+                first_file = _first_file(dataset_name)
+                gencount = _get_dataset_gencount(dataset_name, nfiles, first_file)
+                has_children = _check_dataset_has_children(dataset_name, first_file)
                 creation_date = _get_dataset_creation_date(dataset_name)
 
                 # Upsert dataset_info
@@ -404,7 +422,7 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                 if creation_date:
                     info.creation_date = creation_date
                 if not info.location or info.location == 'N/A':
-                    info.location = _infer_dataset_location(dataset_name)
+                    info.location = _infer_dataset_location(dataset_name, first_file)
 
                 # Ensure job_outputs row exists
                 job_output = session.query(JobOutput).filter_by(job_id=job.id, dataset=dataset_name).first()

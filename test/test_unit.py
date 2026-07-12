@@ -3147,6 +3147,34 @@ class TestGetDatasetGencount(unittest.TestCase):
                           side_effect=Exception('SAM down')):
             self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
 
+    def test_supplied_first_file_skips_the_list_fetch(self):
+        """When the build loop passes first_file, the probes must NOT re-list
+        the dataset (the round-trip the optimization eliminates)."""
+        from utils import db_builder
+        with patch.object(db_builder, 'list_definition_files') as lst, \
+             patch.object(db_builder, 'get_metadata',
+                          return_value={'dh.gencount': 5000}), \
+             patch.object(db_builder, 'children_of_file', return_value=['c.art']), \
+             patch.object(db_builder, 'locate_file_strict',
+                          return_value=[{'location_type': 'dcache:/pnfs/x'}]):
+            self.assertEqual(
+                db_builder._get_dataset_gencount('ds', 2000, 'f0.art'), 5000 * 2000)
+            self.assertTrue(db_builder._check_dataset_has_children('ds', 'f0.art'))
+            self.assertEqual(
+                db_builder._infer_dataset_location('ds', 'f0.art'), 'dcache')
+            lst.assert_not_called()  # first_file supplied -> zero list-files calls
+
+    def test_omitted_first_file_still_self_fetches(self):
+        """Standalone callers (db_analyzer, tests) that omit first_file keep
+        the self-fetch behavior."""
+        from utils import db_builder
+        with patch.object(db_builder, 'list_definition_files',
+                          return_value=['f0.art']) as lst, \
+             patch.object(db_builder, 'get_metadata',
+                          return_value={'dh.gencount': 5000}):
+            self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)
+            lst.assert_called_once()
+
 
 @requires_sqlalchemy
 class TestUniformityReport(unittest.TestCase):
