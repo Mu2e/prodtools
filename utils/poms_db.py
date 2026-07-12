@@ -75,20 +75,6 @@ class DatasetInfo(Base):
     avg_vmhwm_gb = Column(Float)    # Average high-water-mark memory in GB
     
     @property
-    def avg_size_mb(self):
-        """Average file size in MB."""
-        if self.nfiles and self.nfiles > 0:
-            return round(self.total_size / self.nfiles / 1e6, 2)
-        return 0
-
-    @property
-    def gen_per_file(self):
-        """Generated events per file (the production `events`-per-job knob)."""
-        if self.gencount and self.nfiles:
-            return self.gencount / self.nfiles
-        return None
-
-    @property
     def filter_eff(self):
         """Filter efficiency = passed events / generated events."""
         if self.gencount and self.gencount > 0 and self.nevts is not None:

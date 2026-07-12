@@ -327,10 +327,6 @@ def get_parfile_name(config):
     """Generate consistent parfile name from config."""
     return _cnf_name(config, 'tar')
 
-def get_fcl_name(config):
-    """Generate consistent FCL filename from config."""
-    return _cnf_name(config, 'fcl')
-
 def validate_required_fields(config):
     """Validate that config has all required fields."""
     for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
@@ -460,12 +456,10 @@ def append_jobdef(config, jobdefs_file=None):
     try:
         firstjob = firstjob_of(config)
     except ValueError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        fail(f"Error: {e}")
     if firstjob and is_generic:
-        print("Error: firstjob requires a fixed job count (njobs); "
-              "generic tarball entries have no index window")
-        sys.exit(1)
+        fail("Error: firstjob requires a fixed job count (njobs); "
+             "generic tarball entries have no index window")
 
     # Generic tarballs have no pre-determined job count — omit njobs so
     # runmu2e detects direct-input mode (absence of njobs is the trigger)
@@ -482,8 +476,7 @@ def append_jobdef(config, jobdefs_file=None):
             try:
                 validate_window(firstjob, njobs, capacity)
             except ValueError as e:
-                print(f"Error: {e} for {parfile_name}")
-                sys.exit(1)
+                fail(f"Error: {e} for {parfile_name}")
             jobdef_entry["firstjob"] = firstjob
             print(f"Windowed entry: cnf indices {firstjob}..{firstjob + njobs - 1}")
     

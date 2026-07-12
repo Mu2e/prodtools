@@ -39,7 +39,7 @@ def q_dataset(dataset: str, with_events: bool = False,
     return q
 
 
-def q_definition(defname: str, with_events: bool = False) -> str:
+def _q_definition(defname: str, with_events: bool = False) -> str:
     """Dimension string selecting the files of a SAM definition."""
     q = f"defname: {defname}"
     if with_events:
@@ -59,7 +59,7 @@ def q_dataset_files_named(dataset: str, filenames: List[str]) -> str:
     return f"dh.dataset {dataset} and file_name in ({', '.join(filenames)})"
 
 
-def q_dataset_like(pattern: str, sequencer: Optional[str] = None) -> str:
+def _q_dataset_like(pattern: str, sequencer: Optional[str] = None) -> str:
     """Files whose dataset matches a SAM `like` pattern (% wildcards),
     optionally pinned to one sequencer."""
     q = f"dh.dataset like '{pattern}'"
@@ -68,12 +68,12 @@ def q_dataset_like(pattern: str, sequencer: Optional[str] = None) -> str:
     return q
 
 
-def q_parents_of_dataset(dataset: str) -> str:
+def _q_parents_of_dataset(dataset: str) -> str:
     """Files that are parents of any file in `dataset`."""
     return f"isparentof: (dh.dataset {dataset})"
 
 
-def q_children_of_file(filename: str) -> str:
+def _q_children_of_file(filename: str) -> str:
     """Files that are children of `filename`."""
     return f"ischildof: (file_name {filename})"
 
@@ -125,31 +125,6 @@ class SAMWebWrapper:
             print(f"Error locating file {filename}: {e}")
             return ""
     
-    def locate_file_full(self, filename: str) -> List[Dict]:
-        """Locate a file and return full location details.
-        
-        Returns:
-            List of location dictionaries with keys like 'location_type', 'full_path', etc.
-        """
-        try:
-            return self.client.locateFile(filename)
-        except Exception as e:
-            print(f"Error locating file {filename}: {e}")
-            return []
-    
-    def locate_files(self, filenames: List[str]) -> Dict[str, List[Dict]]:
-        """Locate multiple files in batch (equivalent to samweb locate-files).
-        
-        Returns:
-            Dict mapping filename to list of location dictionaries.
-            Each location dict has keys: 'location_type', 'full_path', 'location', 'date', 'label', 'system'.
-        """
-        try:
-            return self.client.locateFiles(filenames)
-        except Exception as e:
-            print(f"Error locating files: {e}")
-            return {}
-    
     def create_definition(self, definition_name: str, query: str) -> None:
         """Create a definition (equivalent to samweb create-definition).
         Raises samweb exceptions (e.g., DefinitionAlreadyExists, SAMWebHTTPError)
@@ -184,26 +159,6 @@ class SAMWebWrapper:
             return self.client.listFiles(query)
         except Exception as e:
             print(f"Error listing definition files for {definition_name}: {e}")
-            return []
-    
-    def list_definitions(self, defname: str = None) -> List[str]:
-        """List all definitions (equivalent to samweb list-definitions).
-        
-        Args:
-            defname: Optional pattern to filter definitions (supports % wildcard)
-        """
-        try:
-            if defname:
-                result = self.client.listDefinitions(defname=defname)
-            else:
-                result = self.client.listDefinitions()
-            
-            # Convert filter object to list if needed
-            if hasattr(result, '__iter__') and not isinstance(result, list):
-                return list(result)
-            return result
-        except Exception as e:
-            print(f"Error listing definitions: {e}")
             return []
     
     def get_metadata(self, filename: str) -> Dict:
@@ -252,19 +207,19 @@ class SAMWebWrapper:
 
     def definition_file_count(self, defname: str, with_events: bool = False) -> int:
         """Number of files in a SAM definition."""
-        return self.client.countFiles(q_definition(defname, with_events))
+        return self.client.countFiles(_q_definition(defname, with_events))
 
     def parents_of_dataset(self, dataset: str) -> List[str]:
         """Files that are parents of any file in `dataset`."""
-        return self.client.listFiles(q_parents_of_dataset(dataset))
+        return self.client.listFiles(_q_parents_of_dataset(dataset))
 
     def children_of_file(self, filename: str) -> List[str]:
         """Files that are children of `filename`."""
-        return self.client.listFiles(q_children_of_file(filename))
+        return self.client.listFiles(_q_children_of_file(filename))
 
     def files_like(self, pattern: str, sequencer: Optional[str] = None) -> List[str]:
         """Files whose dataset matches a SAM `like` pattern."""
-        return self.client.listFiles(q_dataset_like(pattern, sequencer))
+        return self.client.listFiles(_q_dataset_like(pattern, sequencer))
 
     def locate_file_strict(self, filename: str) -> List[Dict]:
         """locate_file_full without the error swallowing — for the worker
@@ -315,10 +270,6 @@ def locate_file(filename: str) -> str:
     """Locate a file."""
     return get_samweb_wrapper().locate_file(filename)
 
-def locate_file_full(filename: str) -> List[Dict]:
-    """Locate a file and return full location details."""
-    return get_samweb_wrapper().locate_file_full(filename)
-
 def create_definition(definition_name: str, query: str) -> None:
     """Create a definition. Raises on failure."""
     get_samweb_wrapper().create_definition(definition_name, query)
@@ -334,13 +285,6 @@ def describe_definition(definition_name: str) -> str:
 def list_definition_files(definition_name: str) -> List[str]:
     """List files in a definition."""
     return get_samweb_wrapper().list_definition_files(definition_name)
-
-def list_definitions(defname: str = None) -> List[str]:
-    """List all definitions.
-    Args:
-        defname: Optional pattern to filter definitions (supports % wildcard)
-    """
-    return get_samweb_wrapper().list_definitions(defname)
 
 def get_metadata(filename: str) -> Dict:
     """Get metadata for a file."""

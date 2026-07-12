@@ -21,7 +21,7 @@ from .samweb_wrapper import (
     create_definition,
     delete_definition,
     describe_definition,
-    locate_file_full,
+    locate_file_strict,
     locate_files_strict,
     dataset_summary,
     definition_file_count,
@@ -106,13 +106,20 @@ def _fetch_file_local(filename, src_location='disk'):
         raise RuntimeError(f"mdh copy-file did not produce {filename} in cwd")
 
 
+def fail(msg):
+    """Print an error to stdout and exit 1 — the canonical fail-loud exit.
+    (stdout, not stderr: grid logs interleave both, and the historical
+    print+exit pattern this replaces wrote to stdout.)"""
+    print(msg)
+    sys.exit(1)
+
+
 def _require_fields(entry, required_fields, mode_name):
     """Fail loudly (sys.exit 1) if any required field is missing from entry.
     Used by validate_jobdesc per-mode validation."""
     for field in required_fields:
         if field not in entry:
-            print(f"Error: {mode_name} requires '{field}' field")
-            sys.exit(1)
+            fail(f"Error: {mode_name} requires '{field}' field")
 
 
 def _extract_simjob_setup(tarball, jp=None):
@@ -293,8 +300,7 @@ def validate_jobdesc(jobdesc):
     """
     # Validate list is not empty
     if not jobdesc:
-        print("Error: No job descriptions found in jobdesc file")
-        sys.exit(1)
+        fail("Error: No job descriptions found in jobdesc file")
 
     # firstjob (cnf-index window) is only meaningful on njobs-bearing
     # entries — anywhere else it would be silently ignored and the entry
@@ -303,15 +309,13 @@ def validate_jobdesc(jobdesc):
     # for every mode, not just at map-write time.
     for i, entry in enumerate(jobdesc):
         if 'firstjob' in entry and 'njobs' not in entry:
-            print(f"Error: jobdesc entry {i} has 'firstjob' but no 'njobs' — "
-                  f"index windows require a fixed job count")
-            sys.exit(1)
+            fail(f"Error: jobdesc entry {i} has 'firstjob' but no 'njobs' — "
+                 f"index windows require a fixed job count")
 
     # Check if g4bl runner (has runner: 'g4bl' field)
     if jobdesc[0].get('runner') == 'g4bl':
         if len(jobdesc) > 1:
-            print("Error: g4bl runner requires exactly one entry in jobdesc list")
-            sys.exit(1)
+            fail("Error: g4bl runner requires exactly one entry in jobdesc list")
         entry = jobdesc[0]
         # The map (jobdesc) only carries dispatch fields. The runtime config
         # (desc/dsconf/main_input/events_per_job) lives inside the tarball's
@@ -323,17 +327,15 @@ def validate_jobdesc(jobdesc):
         elif entry.get('embed_dir'):
             required_fields = ['desc', 'dsconf', 'main_input', 'events_per_job', 'outputs']
         else:
-            print("Error: g4bl runner requires either 'tarball' or 'embed_dir'")
-            sys.exit(1)
+            fail("Error: g4bl runner requires either 'tarball' or 'embed_dir'")
         _require_fields(entry, required_fields, 'g4bl runner')
         return 'g4bl'
 
     # Check if template mode (has fcl_template field)
     if 'fcl_template' in jobdesc[0]:
         if len(jobdesc) > 1:
-            print("Error: Template mode (fcl_template) requires exactly one entry in jobdesc list")
-            print(f"Found {len(jobdesc)} entries. Template mode processes one file at a time.")
-            sys.exit(1)
+            fail("Error: Template mode (fcl_template) requires exactly one entry in jobdesc list\n"
+                 f"Found {len(jobdesc)} entries. Template mode processes one file at a time.")
         entry = jobdesc[0]
         _require_fields(jobdesc[0],
                         ['fcl_template', 'setup_script', 'inloc', 'outputs'],
@@ -343,9 +345,8 @@ def validate_jobdesc(jobdesc):
     # Check if direct-input mode: tarball present but no njobs
     if 'tarball' in jobdesc[0] and 'njobs' not in jobdesc[0]:
         if len(jobdesc) > 1:
-            print("Error: Direct-input mode requires exactly one entry in jobdesc list")
-            print(f"Found {len(jobdesc)} entries.")
-            sys.exit(1)
+            fail("Error: Direct-input mode requires exactly one entry in jobdesc list\n"
+                 f"Found {len(jobdesc)} entries.")
         _require_fields(jobdesc[0],
                         ['tarball', 'inloc', 'outputs'],
                         'Direct-input mode')
@@ -359,8 +360,7 @@ def validate_jobdesc(jobdesc):
             if 'tarball' in entry:
                 print(f"[INFO] entry {i} ({entry['tarball']}) has no njobs (generic tarball) - skipped in normal dispatch")
                 continue
-            print(f"Error: Normal mode requires 'njobs' field in jobdesc entry {i}")
-            sys.exit(1)
+            fail(f"Error: Normal mode requires 'njobs' field in jobdesc entry {i}")
         _require_fields(entry, ['tarball', 'inloc', 'outputs'], f'Normal mode (jobdesc entry {i})')
 
     return False
@@ -462,12 +462,10 @@ def process_direct_input(jobdesc, fname, args):
     try:
         n = Mu2eName.parse(fname_base)
     except ValueError as exc:
-        print(f"Error: Invalid filename format: {fname_base}: {exc}")
-        sys.exit(1)
+        fail(f"Error: Invalid filename format: {fname_base}: {exc}")
     if not n.is_file:
-        print(f"Error: Invalid filename format: {fname_base}. "
-              f"Expected tier.owner.desc.dsconf.sequencer.ext")
-        sys.exit(1)
+        fail(f"Error: Invalid filename format: {fname_base}. "
+             f"Expected tier.owner.desc.dsconf.sequencer.ext")
     desc = n.description
     seq = n.sequencer
 
@@ -544,16 +542,14 @@ def process_jobdef(jobdesc, fname, args):
     try:
         job_index, _ = _job_index_from_fname(fname)
     except RuntimeError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        fail(f"Error: {e}")
 
     # Find which job description this job index belongs to
     jobdesc_entry, jobdesc_index, job_index_num = resolve_map_index(jobdesc, job_index)
 
     if jobdesc_entry is None:
         total_jobs = sum(d.get('njobs', 0) for d in jobdesc)
-        print(f"Error: Job index {job_index} out of range. Total jobs available: {total_jobs}")
-        sys.exit(1)
+        fail(f"Error: Job index {job_index} out of range. Total jobs available: {total_jobs}")
 
     print(f"Job {job_index} uses definition {jobdesc_index}")
     print(f"Global job index: {job_index}, Local job index within definition: {job_index_num}")
@@ -614,7 +610,7 @@ def process_jobdef(jobdesc, fname, args):
         for file in all_files:
             locations = located.get(file)
             if not isinstance(locations, list) or not locations:
-                locations = locate_file_full(file)
+                locations = locate_file_strict(file)
             if not locations or 'location_type' not in locations[0]:
                 raise RuntimeError(f"Could not detect location for file: {file}")
             file_inloc = locations[0]['location_type']

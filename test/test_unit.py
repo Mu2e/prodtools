@@ -47,7 +47,7 @@ requires_sqlalchemy = unittest.skipUnless(
     _HAVE_SQLALCHEMY,
     "requires SQLAlchemy (source pyenv.sh ana after muse setup ops)")
 
-from utils.job_common import Mu2eFilename, remove_storage_prefix, Mu2eJobBase
+from utils.job_common import Mu2eName, remove_storage_prefix, Mu2eJobBase
 
 
 # ---------------------------------------------------------------------------
@@ -130,13 +130,13 @@ def _empty_event_jobpars(run=1430, events=1000, owner='mu2e', dsconf='TestConf')
 
 
 # ---------------------------------------------------------------------------
-# 1. Mu2eFilename (job_common.py)
+# 1. Mu2eName Perl-parity contract (job_common.py, formerly Mu2eName)
 # ---------------------------------------------------------------------------
 
-class TestMu2eFilename(unittest.TestCase):
+class TestMu2eNameParity(unittest.TestCase):
 
     def test_parse_standard_filename(self):
-        fn = Mu2eFilename("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
+        fn = Mu2eName("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
         self.assertEqual(fn.tier, "dts")
         self.assertEqual(fn.owner, "mu2e")
         self.assertEqual(fn.description, "CeEndpoint")
@@ -145,41 +145,41 @@ class TestMu2eFilename(unittest.TestCase):
         self.assertEqual(fn.extension, "art")
 
     def test_parse_sim_filename(self):
-        fn = Mu2eFilename("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000000.art")
+        fn = Mu2eName("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000000.art")
         self.assertEqual(fn.tier, "sim")
         self.assertEqual(fn.sequencer, "001430_00000000")
         self.assertEqual(fn.dsconf, "MDC2025ac")
 
     def test_parse_nts_filename(self):
-        fn = Mu2eFilename("nts.mu2e.CosmicCRYExtracted.MDC2020av.001205_00000000.root")
+        fn = Mu2eName("nts.mu2e.CosmicCRYExtracted.MDC2020av.001205_00000000.root")
         self.assertEqual(fn.tier, "nts")
         self.assertEqual(fn.extension, "root")
 
-    def test_basename_returns_filename(self):
+    def test_str_returns_filename(self):
         name = "dig.mu2e.CosmicCRYAllMix1BB.MDC2025af.001430_00000076.art"
-        fn = Mu2eFilename(name)
-        self.assertEqual(fn.basename(), name)
+        fn = Mu2eName(name)
+        self.assertEqual(str(fn), name)
 
     def test_invalid_filename_raises(self):
         with self.assertRaises(ValueError):
-            Mu2eFilename("too.few.parts")
+            Mu2eName("too.few.parts")
 
     def test_invalid_filename_seven_parts_raises(self):
         with self.assertRaises(ValueError):
-            Mu2eFilename("a.b.c.d.e.f.g")  # only 5 or 6 fields are valid
+            Mu2eName("a.b.c.d.e.f.g")  # only 5 or 6 fields are valid
 
     def test_parse_six_parts_ok(self):
-        fn = Mu2eFilename("a.b.c.d.e.f")
+        fn = Mu2eName("a.b.c.d.e.f")
         self.assertEqual(fn.tier, "a")
         self.assertEqual(fn.extension, "f")
 
     def test_dataset_derivation(self):
         """Dataset name can be derived from filename by dropping sequencer."""
-        fn = Mu2eFilename("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
+        fn = Mu2eName("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
         self.assertEqual(str(fn.dataset), "dts.mu2e.CeEndpoint.Run1Bab.art")
 
     def test_dataset_derivation_sim(self):
-        fn = Mu2eFilename("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000007.art")
+        fn = Mu2eName("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000007.art")
         self.assertEqual(str(fn.dataset), "sim.mu2e.MuminusStopsCat.MDC2025ac.art")
 
 
@@ -190,13 +190,9 @@ class TestMu2eFilename(unittest.TestCase):
 class TestMu2eName(unittest.TestCase):
     """Exercise the unified parse/build/derivation surface of Mu2eName.
 
-    Mu2eFilename is an alias of Mu2eName; this class pins the new behavior
-    while TestMu2eFilename keeps the historical contract intact.
+    TestMu2eNameParity above pins the historical (Perl Mu2eName)
+    contract; this class pins the extended interface.
     """
-
-    def test_alias(self):
-        from utils.job_common import Mu2eName, Mu2eFilename as MF
-        self.assertIs(Mu2eName, MF)
 
     # parse / discriminators
 
@@ -493,7 +489,7 @@ class TestMyRandom(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestLocateFile(unittest.TestCase):
-    """Tests for _locate_file without SAM (uses dir: prefix)."""
+    """Tests for resolver.locate without SAM (uses dir: prefix)."""
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
@@ -507,22 +503,22 @@ class TestLocateFile(unittest.TestCase):
 
     def test_dir_prefix_no_sam(self):
         job = self.Cls(self.tar, inloc='dir:/data/inputs', proto='file')
-        path = job._locate_file("myfile.art")
+        path = job._resolver.locate("myfile.art")
         self.assertEqual(path, "/data/inputs/myfile.art")
 
     def test_dir_prefix_trailing_slash_stripped(self):
         job = self.Cls(self.tar, inloc='dir:/data/inputs/', proto='file')
-        path = job._locate_file("myfile.art")
+        path = job._resolver.locate("myfile.art")
         self.assertEqual(path, "/data/inputs/myfile.art")
 
     def test_dir_prefix_with_subdirectory(self):
         job = self.Cls(self.tar, inloc='dir:/a/b/c', proto='file')
-        path = job._locate_file("x.art")
+        path = job._resolver.locate("x.art")
         self.assertEqual(path, "/a/b/c/x.art")
 
 
 class TestLocateFileSAM(unittest.TestCase):
-    """Tests for _locate_file when SAM is involved (mocked)."""
+    """Tests for resolver.locate when SAM is involved (mocked)."""
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
@@ -541,7 +537,7 @@ class TestLocateFileSAM(unittest.TestCase):
         ]
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
             job = self.Cls(self.tar, inloc='tape', proto='file')
-            path = job._locate_file("f.art")
+            path = job._resolver.locate("f.art")
         self.assertEqual(path, '/pnfs/mu2e/tape/phy-sim/f.art')
 
     def test_disk_location_preferred(self):
@@ -551,7 +547,7 @@ class TestLocateFileSAM(unittest.TestCase):
         ]
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
             job = self.Cls(self.tar, inloc='disk', proto='file')
-            path = job._locate_file("f.art")
+            path = job._resolver.locate("f.art")
         self.assertEqual(path, '/pnfs/mu2e/persistent/datasets/phy-sim/f.art')
 
     def test_fallback_to_first_when_no_match(self):
@@ -561,21 +557,21 @@ class TestLocateFileSAM(unittest.TestCase):
         ]
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
             job = self.Cls(self.tar, inloc='disk', proto='file')
-            path = job._locate_file("f.art")
+            path = job._resolver.locate("f.art")
         self.assertEqual(path, '/pnfs/mu2e/tape/phy-sim/f.art')
 
     def test_no_locations_raises(self):
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=[]):
             job = self.Cls(self.tar, inloc='tape', proto='file')
             with self.assertRaises(ValueError):
-                job._locate_file("f.art")
+                job._resolver.locate("f.art")
 
     def test_sam_exception_raises(self):
         with patch('utils.samweb_wrapper.locate_file_strict',
                    side_effect=Exception("SAM unavailable")):
             job = self.Cls(self.tar, inloc='tape', proto='file')
             with self.assertRaises(ValueError):
-                job._locate_file("f.art")
+                job._resolver.locate("f.art")
 
 
 class TestFormatFilename(unittest.TestCase):
@@ -1028,16 +1024,16 @@ class TestMu2eDSName(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 10. datasetFileList Mu2eFilename hash paths
+# 10. datasetFileList Mu2eName hash paths
 # ---------------------------------------------------------------------------
 
 class TestDatasetFileListFilename(unittest.TestCase):
 
     def setUp(self):
-        # datasetFileList no longer re-exports Mu2eFilename; pull directly
+        # datasetFileList no longer re-exports Mu2eName; pull directly
         # from job_common (where the alias still points at Mu2eName).
-        from utils.job_common import Mu2eFilename
-        self.Cls = Mu2eFilename
+        from utils.job_common import Mu2eName
+        self.Cls = Mu2eName
 
     def test_relpathname_has_three_parts(self):
         fn = self.Cls("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
@@ -1083,14 +1079,14 @@ class TestStashPathDerivation(unittest.TestCase):
 
     The formula is:
         STASH_READ_ROOT/datasets/<tier>/<owner>/<description>/<dsconf>/<ext>/<filename>
-    derived purely from the filename via Mu2eFilename.
+    derived purely from the filename via Mu2eName.
     """
 
     STASH_ROOT = "/cvmfs/mu2e.osgstorage.org/pnfs/fnal.gov/usr/mu2e/persistent/stash"
 
     def _stash_path(self, filename: str) -> str:
         """Reference implementation of stash path building (not yet in code)."""
-        fn = Mu2eFilename(filename)
+        fn = Mu2eName(filename)
         dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
         ds_path = dataset.replace('.', '/')
         return f"{self.STASH_ROOT}/datasets/{ds_path}/{filename}"
@@ -1133,7 +1129,7 @@ class TestStashPathDerivation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 12. jobfcl stash integration (_locate_file and _format_filename)
+# 12. jobfcl stash integration (resolver.locate and _format_filename)
 # ---------------------------------------------------------------------------
 
 STASH_READ_DEFAULT = "/cvmfs/mu2e.osgstorage.org/pnfs/fnal.gov/usr/mu2e/persistent/stash"
@@ -1141,7 +1137,7 @@ STASH_WRITE_DEFAULT = "/pnfs/mu2e/persistent/stash"
 
 
 class TestLocateFileStash(unittest.TestCase):
-    """_locate_file with inloc='stash' — path derived from filename (SAM only as fallback)."""
+    """resolver.locate with inloc='stash' — path derived from filename (SAM only as fallback)."""
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
@@ -1162,13 +1158,13 @@ class TestLocateFileStash(unittest.TestCase):
         with patch('utils.samweb_wrapper.locate_file_strict') as mock_locate:
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
-            job._locate_file("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
+            job._resolver.locate("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
         mock_locate.assert_not_called()
 
     def test_stash_path_structure(self):
         job = self.Cls(self.tar, inloc='stash', proto='file')
         fname = "dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art"
-        path = job._locate_file(fname)
+        path = job._resolver.locate(fname)
         expected = (
             f"{STASH_READ_DEFAULT}/datasets/dts/mu2e/CeEndpoint/Run1Bab/art/{fname}"
         )
@@ -1177,7 +1173,7 @@ class TestLocateFileStash(unittest.TestCase):
     def test_stash_path_sim_file(self):
         job = self.Cls(self.tar, inloc='stash', proto='file')
         fname = "sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000007.art"
-        path = job._locate_file(fname)
+        path = job._resolver.locate(fname)
         self.assertIn("/datasets/sim/mu2e/MuminusStopsCat/MDC2025ac/art/", path)
         self.assertTrue(path.endswith(fname))
 
@@ -1190,7 +1186,7 @@ class TestLocateFileStash(unittest.TestCase):
             importlib.reload(jfcl_mod)
             job = jfcl_mod.Mu2eJobFCL(self.tar, inloc='stash', proto='file')
             fname = "dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art"
-            path = job._locate_file(fname)
+            path = job._resolver.locate(fname)
             self.assertTrue(path.startswith(custom_root))
             # Restore
             importlib.reload(jfcl_mod)
@@ -1484,16 +1480,6 @@ class TestVersionField(unittest.TestCase):
         from utils.json2jobdef import get_parfile_name
         self.assertEqual(get_parfile_name(self._cfg(version=5)), 'cnf.mu2e.TestDesc.TestConf.5.tar')
 
-    # --- get_fcl_name ---
-
-    def test_fcl_name_default_version(self):
-        from utils.json2jobdef import get_fcl_name
-        self.assertEqual(get_fcl_name(self._cfg()), 'cnf.mu2e.TestDesc.TestConf.0.fcl')
-
-    def test_fcl_name_with_version(self):
-        from utils.json2jobdef import get_fcl_name
-        self.assertEqual(get_fcl_name(self._cfg(version=3)), 'cnf.mu2e.TestDesc.TestConf.3.fcl')
-
     # --- version + tarball_append ---
 
     def test_version_with_tarball_append(self):
@@ -1554,7 +1540,7 @@ class TestWriteFclFilenameDerivation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestStashFallback(unittest.TestCase):
-    """When inloc='stash' and the file is not on CVMFS, _locate_file falls back to SAM."""
+    """When inloc='stash' and the file is not on CVMFS, resolver.locate falls back to SAM."""
 
     _TAPE_DIR = '/pnfs/mu2e/tape/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'
     _FNAME = 'dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art'
@@ -1582,7 +1568,7 @@ class TestStashFallback(unittest.TestCase):
                    return_value=self._sam_locations()) as mock_locate:
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
-            job._locate_file(self._FNAME)
+            job._resolver.locate(self._FNAME)
         mock_locate.assert_called_once_with(self._FNAME)
 
     def test_fallback_returns_sam_path(self):
@@ -1591,7 +1577,7 @@ class TestStashFallback(unittest.TestCase):
                    return_value=self._sam_locations()):
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
-            path = job._locate_file(self._FNAME)
+            path = job._resolver.locate(self._FNAME)
         self.assertEqual(path, self._TAPE_DIR)
 
     def test_fallback_raises_when_sam_has_no_locations(self):
@@ -1600,7 +1586,7 @@ class TestStashFallback(unittest.TestCase):
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
             with self.assertRaises(ValueError):
-                job._locate_file(self._FNAME)
+                job._resolver.locate(self._FNAME)
 
     def test_fallback_format_filename_applies_xroot(self):
         """_format_filename with proto='root' converts the SAM tape path to an xroot URL."""
@@ -2051,7 +2037,6 @@ class TestGenericTarballGuard(unittest.TestCase):
         with patch.object(json2jobdef, 'validate_output_filenames') as guard, \
              patch.object(json2jobdef, 'create_jobdef'), \
              patch.object(json2jobdef, 'get_parfile_name', return_value='cnf.x.0.tar'), \
-             patch.object(json2jobdef, 'get_fcl_name', return_value='cnf.x.0.fcl'), \
              patch.object(json2jobdef, 'append_jobdef'):
             cfg = {'desc': 'reco', 'dsconf': 'D', 'owner': 'mu2e',
                    'simjob_setup': 's', 'inloc': 'tape', 'generic_tarball': True,
@@ -2456,7 +2441,7 @@ class TestSequencerRunNumber(unittest.TestCase):
             os.unlink(tar)
 
     def test_runNumber_bypasses_filename_parsing(self):
-        # Input filename that would fail Mu2eFilename parsing — verifies
+        # Input filename that would fail Mu2eName parsing — verifies
         # the short-circuit fires before the fallback path.
         from utils.jobfcl import Mu2eJobFCL
         jp = _pbi_sequence_jobpars(run=1430, files=["not-a-mu2e-name.txt"])
@@ -3118,7 +3103,7 @@ class TestSkipProduced(unittest.TestCase):
 
 @requires_sqlalchemy
 class TestDatasetInfoGencount(unittest.TestCase):
-    """DatasetInfo.gen_per_file and .filter_eff derived from gencount."""
+    """DatasetInfo.filter_eff derived from gencount."""
 
     def _info(self, **kw):
         from utils.poms_db import DatasetInfo
@@ -3128,16 +3113,9 @@ class TestDatasetInfoGencount(unittest.TestCase):
         i = self._info(nfiles=2000, nevts=2761, gencount=5000)
         self.assertAlmostEqual(i.filter_eff, 2761 / 5000)
 
-    def test_gen_per_file(self):
-        i = self._info(nfiles=2000, nevts=2761, gencount=10_000_000)
-        self.assertEqual(i.gen_per_file, 5000)
-
     def test_filter_eff_none_without_gencount(self):
         self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=None).filter_eff)
         self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=0).filter_eff)
-
-    def test_gen_per_file_none_without_gencount(self):
-        self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=None).gen_per_file)
 
 
 @requires_sqlalchemy

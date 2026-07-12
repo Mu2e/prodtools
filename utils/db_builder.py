@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.poms_db import get_db_session, Job, JobOutput, DatasetInfo
 from utils.samweb_wrapper import (
-    locate_file_full,
+    locate_file_strict,
     list_definition_files,
     describe_definition,
     get_metadata,
@@ -175,7 +175,7 @@ def _infer_dataset_location(dataset_name):
         if not files:
             return 'N/A'
         first_file = files[0]
-        locations = locate_file_full(first_file)
+        locations = locate_file_strict(first_file)
         for entry in locations:
             loc = entry.get('location') or entry.get('location_type')
             if loc:

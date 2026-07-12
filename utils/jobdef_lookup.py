@@ -19,7 +19,7 @@ import os
 import sys
 
 from utils.job_common import Mu2eName
-from utils.samweb_wrapper import list_definitions
+from utils.samweb_wrapper import definitions_matching
 from utils.datasetFileList import get_dataset_files, get_definition_files
 
 
@@ -45,7 +45,7 @@ def list_jobdefs(dsconf):
     _log(f"Searching for job definitions with pattern: cnf.mu2e.*.{dsconf}.tar")
 
     try:
-        definitions = list_definitions(defname=pattern)
+        definitions = definitions_matching(defname=pattern)
 
         if not definitions:
             _log(f"No job definitions found for dsconf: {dsconf}")

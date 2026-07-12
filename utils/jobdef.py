@@ -202,36 +202,33 @@ def _validate_fcl_template(template_path: str) -> None:
         raise ValueError(f"FCL template missing required physics sections: {missing_keys}")
 
 
+def _reorder(d: Dict, order: List[str]) -> Dict:
+    """Copy keys in the given preferred order, then append the rest
+    (Perl mu2ejobdef key-order parity)."""
+    ordered = {k: d[k] for k in order if k in d}
+    for key, value in d.items():
+        if key not in ordered:
+            ordered[key] = value
+    return ordered
+
+
 def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "") -> Dict:
     """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
     owner = config.get('owner') or default_owner()
     desc = get_tarball_desc(config) or config['desc']
     dsconf = config['dsconf']
-    
+
     # Build proper jobname like Perl version (cnf.owner.desc.dsconf.VERSION.tar)
     version = config.get('version', 0)
     jobname = str(Mu2eName.build(tier='cnf', owner=owner, description=desc,
                                  dsconf=dsconf, sequencer=str(version), extension='tar'))
-
-    # Reorder TBS fields to match Perl exactly: seed, subrunkey, event_id, outfiles
-    ordered_tbs = {}
-    perl_tbs_order = ['seed', 'subrunkey', 'event_id', 'outfiles']
-    
-    for key in perl_tbs_order:
-        if key in tbs:
-            ordered_tbs[key] = tbs[key]
-    
-    # Add any remaining keys not in the standard order
-    for key, value in tbs.items():
-        if key not in ordered_tbs:
-            ordered_tbs[key] = value
 
     # Base structure - use Perl field ordering exactly: code, setup, tbs, jobname
     # This matches the actual observed Perl output order
     return {
         "code": code,
         "setup": config['simjob_setup'],
-        "tbs": ordered_tbs,
+        "tbs": _reorder(tbs, ['seed', 'subrunkey', 'event_id', 'outfiles']),
         "jobname": jobname
     }
 
@@ -555,19 +552,8 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         tbs['chunk_mode'] = config['chunk_mode']
 
     # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
-    ordered_tbs = {}
-    perl_order = ['outfiles', 'subrunkey', 'auxin', 'inputs', 'event_id', 'seed', 'samplinginput']
-    
-    for key in perl_order:
-        if key in tbs:
-            ordered_tbs[key] = tbs[key]
-    
-    # Add any remaining keys not in the standard order
-    for key, value in tbs.items():
-        if key not in ordered_tbs:
-            ordered_tbs[key] = value
-
-    return ordered_tbs
+    return _reorder(tbs, ['outfiles', 'subrunkey', 'auxin', 'inputs',
+                          'event_id', 'seed', 'samplinginput'])
 
 
 def get_output_dataset_names(config: Dict) -> List[str]:

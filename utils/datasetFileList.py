@@ -14,13 +14,15 @@ from pathlib import Path
 try:
     from .job_common import Mu2eName
     from .file_resolver import path_from_sam_location
-    from .samweb_wrapper import get_samweb_wrapper
+    from .samweb_wrapper import (files_in_dataset, list_definition_files,
+                                 locate_files_strict)
 except ImportError:
     # When running as standalone script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from utils.job_common import Mu2eName
     from utils.file_resolver import path_from_sam_location
-    from utils.samweb_wrapper import get_samweb_wrapper
+    from utils.samweb_wrapper import (files_in_dataset, list_definition_files,
+                                      locate_files_strict)
 
 
 def _dataset_dir(dsname: str, location: str) -> str:
@@ -110,8 +112,7 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     stdloc = ['disk', 'tape', 'scratch']
     
     # Get files from SAM
-    samweb = get_samweb_wrapper()
-    fns = samweb.files_in_dataset(dataset_name)
+    fns = files_in_dataset(dataset_name)
 
     if not fns:
         raise RuntimeError(f"No files with dh.dataset={dataset_name} are registered in SAM.")
@@ -150,15 +151,12 @@ def get_definition_files(definition_name: str) -> List[str]:
     Returns:
         List of full file paths
     """
-    samweb = get_samweb_wrapper()
-    fns = sorted(samweb.list_definition_files(definition_name))
+    fns = sorted(list_definition_files(definition_name))
 
     # One SAM round-trip for the whole definition (thousands of files for
-    # log datasets) instead of one locate per file.
-    try:
-        locations_map = samweb.locate_files(fns) if fns else {}
-    except Exception:
-        locations_map = {}
+    # log datasets) instead of one locate per file. Fail loud: a SAM
+    # outage must not masquerade as an empty file list.
+    locations_map = locate_files_strict(fns) if fns else {}
 
     file_paths = []
     for f in fns:
@@ -178,8 +176,7 @@ def main():
     
     # Handle --basename mode (just print filenames)
     if args.basename:
-        samweb = get_samweb_wrapper()
-        fns = samweb.files_in_dataset(dsname)
+        fns = files_in_dataset(dsname)
         for f in sorted(fns):
             try:
                 print(f)

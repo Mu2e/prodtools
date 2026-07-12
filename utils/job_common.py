@@ -182,17 +182,10 @@ class Mu2eName:
 
     # path / parity ----------------------------------------------------------
 
-    def basename(self) -> str:
-        return self.filename
-
     def relpathname(self) -> str:
         """SHA256 hash-prefixed relative path, matching Perl Mu2eFilename->relpathname()."""
         h = hashlib.sha256(self.filename.encode()).hexdigest()
         return f"{h[:2]}/{h[2:4]}/{self.filename}"
-
-
-# Legacy alias — preserves the Perl-parity association on the original symbol.
-Mu2eFilename = Mu2eName
 
 
 def log_storage_location(outputs) -> str:
