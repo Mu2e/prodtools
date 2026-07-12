@@ -9,6 +9,7 @@
 <!-- entries added by wiki-ingest -->
 
 ### Decisions
+- [[2026-07-12-hygiene-tiers-and-kept-duplication]] — tiers 1+2 consolidations (drifted fcl writer, cnf-name contract) + the deliberate-duplication do-not-fix list _(2026-07-12)_
 - [[2026-04-21-extend-jobdef-per-index-overrides]] — add `event_id_per_index` to tbs; per-index linear overrides `offset + index × step` for any fcl key _(ingested 2026-04-21)_
 - [[2026-04-21-fold-pbi-into-json2jobdef]] — delete the `gen_pbi_sequence` utility; add a `split_lines` input_data shape to `json2jobdef` _(ingested 2026-04-21)_
 - [[2026-04-29-remove-poms-from-submit-loop]] — phased plan to drop POMS: Phase 1 keeps `mu2ejobsub` and adds Python `submit_map` + local SQLite state; Phase 2 replaces `mu2ejobsub` with direct `jobsub_submit` _(proposed 2026-04-29)_
@@ -26,6 +27,7 @@
 
 ### Runs
 <!-- entries added by wiki-ingest -->
+- [[2026-07-11-noprimary-run1ban-001-remake]] — remake NoPrimary.Run1Ban at 100× stats (10B empty frames) as new-name `Run1Ban-001`; new POMS map MDC2025-033; mix.json merge 10→1 for the 200k-ev/file granularity _(2026-07-11)_
 
 ### Sources
 - [[pbi-sequence-workflow]] — full PBI chain (stage 1 dts → stage 2 mix dig → stage 3 reco mcs) via `json2jobdef` + `runmu2e` _(2026-04-25)_

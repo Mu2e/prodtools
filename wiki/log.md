@@ -642,3 +642,23 @@ Production/CampaignConfig/mdc2025_*.cfg; one static stage_main_runjobdef
 serves every MDC2025-NNN.json via %(map)s; MDC2025 recovery config lives
 ONLY in the POMS DB (web-UI check = new open question #5). Page:
 [[poms-reference]] updated; stale prodtools/poms/ pointer corrected.
+
+## [2026-07-11] run | NoPrimary.Run1Ban-001 remake (100× stats, 10B events)
+Pages written: 2026-07-11-noprimary-run1ban-001-remake
+Pages updated: none
+Push: json2jobdef --prod RC=0 → cnf.mu2e.NoPrimary.Run1Ban-001.0.tar in SAM,
+new POMS map MDC2025-033.json (njobs 50000), idx iMDC2025-033. New dataset
+name (option B, non-destructive) forced by name collision + 200k-vs-5k
+ev/file granularity change; mix.json NoPrimary entries repointed to -001,
+merge 10→1 (200k ev/file makes merge-10 = 2M ev/mixing-job). PENDING: POMS
+campaign stage for the new map number to dispatch the 50k jobs.
+
+## [2026-07-12] decision | hygiene tiers 1+2 applied; kept-duplication list recorded
+Pages written: 2026-07-12-hygiene-tiers-and-kept-duplication
+Commits: 3a6b961 (tier 1: dead symbols, locate/definitions dedup, q_* privatized,
+fail()/_reorder helpers), af681e1 (tier 2: write_direct_input_fcl unifies the
+DRIFTED worker/fcldump direct-input writers; config_utils.cnf_name single-homes
+the cnf-name contract, byte-verified vs pushed NoPrimary.Run1Ban-001 cnf;
+runmu2e._execute_mu2e). Net −150 lines, 322/322 tests. Tier 3 deferred
+(prod_utils runner-family relocation, validation-ladder tabling, campaign-regex
+unification-after-parity-check, bin stubs).
