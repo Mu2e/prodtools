@@ -73,3 +73,16 @@ Applying this mechanically:
 - Item 8 (`--names-only`): passes all three, with same-day corroborating
   evidence that the underlying logic is already a no-op → RETIRE.
   `--show-count` fails leg 3 (real, used capability) → KEEP.
+
+## Gate outcome (2026-07-18, user ruling)
+
+| # | Item | Approved? |
+|---|------|-----------|
+| 1 | mkidxdef CLI + module | **RETIRE approved** |
+| 2 | Flask app | **RETIRE approved** — user chose "decommission + retire"; wiki page must record the cgi-bin removal steps (ops action on the web host, done by the user) |
+| 3 | JSON-editor feature | **RETIRE approved** (same ruling as item 2) |
+| 4 | pomsMonitor flags (all sub-rows) | KEEP confirmed |
+| 5 | latestDatasets / listNewDatasets | KEEP both confirmed, no fold (Task 6 = no-op) |
+| 6 | datasetFileList CLI | KEEP confirmed (Task 4 step 3 does not apply) |
+| 7 | setup_run1b.sh | **RETIRE approved** |
+| 8 | latestDatasets --names-only | **RETIRE approved** (--show-count stays) |
