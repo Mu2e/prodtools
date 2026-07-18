@@ -32,8 +32,8 @@ from typing import List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.file_resolver import sam_physical_path
-from utils.samweb_wrapper import files_in_dataset
+from utils.file_resolver import sam_physical_path, path_from_sam_locations
+from utils.samweb_wrapper import files_in_dataset, locate_files_strict
 from utils import file_resolver
 
 
@@ -116,6 +116,15 @@ def _copy_dataset(
     if limit is not None:
         files = files[:limit]
 
+    # One batch SAM locate for the whole copy list (vs one HTTP round-trip
+    # per file — resilient staging copies 10k+ pileup files). Files missing
+    # from the batch result fall back to the per-file call, so error
+    # semantics per file are unchanged.
+    try:
+        locations_map = locate_files_strict(files)
+    except Exception:
+        locations_map = {}
+
     n_ok = 0
     n_fail = 0
 
@@ -125,7 +134,12 @@ def _copy_dataset(
 
         # Get source path from SAM, preferring the requested location type
         try:
-            src = sam_physical_path(filename, prefer_location=source_loc)
+            locs = locations_map.get(filename)
+            if locs:
+                src = path_from_sam_locations(filename, locs,
+                                              prefer_location=source_loc)
+            else:
+                src = sam_physical_path(filename, prefer_location=source_loc)
         except Exception as e:
             print(f"  SKIP {filename}: could not locate ({e})", file=sys.stderr)
             n_fail += 1

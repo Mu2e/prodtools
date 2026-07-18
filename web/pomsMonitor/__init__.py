@@ -35,8 +35,9 @@ sys.path.insert(0, PRODTOOLS_DIR)
 # samweb_client is not installed in the public-web conda env. Stub it so
 # prodtools' eager `from utils import jobfcl` chain can complete; routes
 # that actually call SAM at request time will fail at instantiation.
-# `/api/jobs` already swallows that failure (try/except around
-# locate_file). `/api/dataset/<name>` (famtree) is hard-disabled below.
+# `/api/jobs` already swallows that failure (setup-script resolution
+# catches per tarball). `/api/dataset/<name>` (famtree) is hard-disabled
+# below.
 if "samweb_client" not in sys.modules:
     _stub = types.ModuleType("samweb_client")
 
@@ -64,18 +65,9 @@ _loader.exec_module(_mod)
 
 app = _mod.app
 
-# Override DB path if requested. The Flask app re-resolves the DB on
-# every request via ``_get_session`` → ``get_default_db_path``. Note
-# that ``bin/pomsMonitorWeb`` does ``from utils.db_analyzer import
-# get_default_db_path`` at import time, binding the original function
-# into its own module namespace — so patching only ``db_analyzer`` is
-# not enough; we also patch the binding inside the loaded module.
-_db_override = os.environ.get("POMS_DB_PATH")
-if _db_override:
-    from utils import db_analyzer
-    _override_fn = lambda: _db_override
-    db_analyzer.get_default_db_path = _override_fn
-    _mod.get_default_db_path = _override_fn
+# DB path override needs no patching here: ``POMS_DB_PATH`` is honored
+# inside ``utils.poms_entry.default_db_path`` itself, which every
+# ``get_default_db_path`` caller resolves through on each request.
 
 # --- Read-only hardening -------------------------------------------------
 #

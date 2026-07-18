@@ -1313,7 +1313,8 @@ class TestStashUtils(unittest.TestCase):
         ]
 
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
-             patch('utils.samweb_wrapper.locate_file_strict', return_value=mock_locations), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}), \
              patch('os.makedirs') as mock_mkdir, \
              patch('subprocess.run') as mock_run:
             n = stash_utils.copy_dataset_to_stash(
@@ -1340,7 +1341,8 @@ class TestStashUtils(unittest.TestCase):
         mock_run_result.returncode = 0
 
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
-             patch('utils.samweb_wrapper.locate_file_strict', return_value=mock_locations), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}), \
              patch('os.makedirs'), \
              patch('subprocess.run', return_value=mock_run_result) as mock_run:
             n = stash_utils.copy_dataset_to_stash(
@@ -1367,7 +1369,8 @@ class TestStashUtils(unittest.TestCase):
         mock_run_result.returncode = 0
 
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
-             patch('utils.samweb_wrapper.locate_file_strict', return_value=mock_locations), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}) as mock_loc, \
              patch('os.makedirs'), \
              patch('subprocess.run', return_value=mock_run_result) as mock_run:
             stash_utils.copy_dataset_to_stash(
@@ -1377,6 +1380,9 @@ class TestStashUtils(unittest.TestCase):
                 dry_run=False,
                 verbose=False,
             )
+        # one batch locate for the (limited) copy list, not one per file
+        mock_loc.assert_called_once()
+        self.assertEqual(len(mock_loc.call_args[0][0]), 3)
 
         self.assertEqual(mock_run.call_count, 3)
 
@@ -2042,7 +2048,7 @@ class TestGenericTarballGuard(unittest.TestCase):
                    'simjob_setup': 's', 'inloc': 'tape', 'generic_tarball': True,
                    'fcl': 'f.fcl', 'outloc': {'*.art': 'tape'}}
             try:
-                json2jobdef.build_jobdef(cfg, job_args=[], json_output=True)
+                json2jobdef.build_jobdef(cfg, job_args=[])
             except Exception:
                 pass  # downstream packaging is mocked/partial; we only assert the guard
             guard.assert_not_called()
@@ -3124,8 +3130,8 @@ class TestGetDatasetGencount(unittest.TestCase):
 
     def test_multiplies_per_file_by_nfiles(self):
         from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files',
-                          return_value=['f0.art', 'f1.art']), \
+        with patch.object(db_builder, 'first_file_in_definition',
+                          return_value='f0.art'), \
              patch.object(db_builder, 'get_metadata',
                           return_value={'dh.gencount': 5000}) as gm:
             self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)
@@ -3133,7 +3139,7 @@ class TestGetDatasetGencount(unittest.TestCase):
 
     def test_none_when_no_gencount_field(self):
         from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files', return_value=['f0.art']), \
+        with patch.object(db_builder, 'first_file_in_definition', return_value='f0.art'), \
              patch.object(db_builder, 'get_metadata', return_value={'event_count': 5}):
             self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
 
@@ -3143,33 +3149,38 @@ class TestGetDatasetGencount(unittest.TestCase):
 
     def test_none_on_exception(self):
         from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files',
+        with patch.object(db_builder, 'first_file_in_definition',
                           side_effect=Exception('SAM down')):
             self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
 
     def test_supplied_first_file_skips_the_list_fetch(self):
-        """When the build loop passes first_file, the probes must NOT re-list
-        the dataset (the round-trip the optimization eliminates)."""
-        from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files') as lst, \
+        """When the build loop passes first_file, the probes must NOT re-fetch
+        the dataset's first file (the round-trip the optimization eliminates).
+        infer_dataset_location now lives in file_resolver and does a lazy
+        `from .samweb_wrapper import ...` at call time, so its fetch is
+        patched on samweb_wrapper."""
+        from utils import db_builder, file_resolver, samweb_wrapper
+        with patch.object(db_builder, 'first_file_in_definition') as lst, \
+             patch.object(samweb_wrapper, 'first_file_in_definition') as lst2, \
              patch.object(db_builder, 'get_metadata',
                           return_value={'dh.gencount': 5000}), \
              patch.object(db_builder, 'children_of_file', return_value=['c.art']), \
-             patch.object(db_builder, 'locate_file_strict',
+             patch.object(samweb_wrapper, 'locate_file_strict',
                           return_value=[{'location_type': 'dcache:/pnfs/x'}]):
             self.assertEqual(
                 db_builder._get_dataset_gencount('ds', 2000, 'f0.art'), 5000 * 2000)
             self.assertTrue(db_builder._check_dataset_has_children('ds', 'f0.art'))
             self.assertEqual(
-                db_builder._infer_dataset_location('ds', 'f0.art'), 'dcache')
-            lst.assert_not_called()  # first_file supplied -> zero list-files calls
+                file_resolver.infer_dataset_location('ds', 'f0.art'), 'dcache')
+            lst.assert_not_called()   # first_file supplied -> zero fetches
+            lst2.assert_not_called()
 
     def test_omitted_first_file_still_self_fetches(self):
         """Standalone callers (db_analyzer, tests) that omit first_file keep
         the self-fetch behavior."""
         from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files',
-                          return_value=['f0.art']) as lst, \
+        with patch.object(db_builder, 'first_file_in_definition',
+                          return_value='f0.art') as lst, \
              patch.object(db_builder, 'get_metadata',
                           return_value={'dh.gencount': 5000}):
             self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)

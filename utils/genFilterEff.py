@@ -16,8 +16,15 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from samweb_wrapper import get_samweb_wrapper
-from job_common import Mu2eName
+# Package-first imports with bare fallback: keeps one module identity
+# when loaded as utils.genFilterEff (web dashboard, cron) while still
+# supporting the bin/ stubs that put utils/ itself on the path.
+try:
+    from utils.samweb_wrapper import get_samweb_wrapper
+    from utils.job_common import Mu2eName
+except ImportError:
+    from samweb_wrapper import get_samweb_wrapper
+    from job_common import Mu2eName
 
 
 class DatasetEffSummary:
@@ -81,20 +88,27 @@ def process_dataset(dsname, samweb, chunk_size=100, max_files=None, verbosity=2)
     if verbosity > 0:
         print(f"Processing dataset  {dsname}, using {num_files_to_use} out of {num_files_total} files")
     
-    # Process files in chunks
+    # Process files in chunks — one SAM round-trip per chunk
     for num_processed in range(0, num_files_to_use, chunk_size):
         end_idx = min(num_processed + chunk_size, num_files_to_use)
         chunk = file_list[num_processed:end_idx]
-        
-        # Get metadata for chunk
-        for filename in chunk:
+
+        try:
+            chunk_metadata = samweb.metadata_for_files(chunk)
+        except Exception as e:
+            # Batch failed (SAM hiccup): fall back to per-file fetches so
+            # one bad chunk doesn't lose the whole sample
+            print(f"Warning: batch metadata failed ({e}); retrying per file", file=sys.stderr)
+            chunk_metadata = [samweb.get_metadata(f) for f in chunk]
+
+        for metadata in chunk_metadata:
             try:
-                metadata = samweb.get_metadata(filename)
                 summary.fill(metadata)
             except Exception as e:
-                print(f"Warning: Error processing file {filename}: {e}", file=sys.stderr)
+                print(f"Warning: Error processing file "
+                      f"{metadata.get('file_name', 'unknown')}: {e}", file=sys.stderr)
                 continue
-        
+
         if verbosity > 1:
             eff = summary.efficiency()
             print(f"\teff = {eff:.4f} ({summary.passedevents} / {summary.genevents}) "

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """SQLAlchemy models for POMS monitoring."""
 
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, Text, DateTime, Float
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
-from datetime import datetime
-
-from utils.job_common import Mu2eName
 
 Base = declarative_base()
 
@@ -30,16 +27,6 @@ class Job(Base):
     
     # Relationships
     outputs = relationship("JobOutput", back_populates="job", cascade="all, delete-orphan")
-    
-    @property
-    def campaign(self):
-        """Extract campaign (dsconf base, e.g. MDC2025af) from tarball name."""
-        if not self.tarball:
-            return None
-        try:
-            return Mu2eName.parse(self.tarball).dsconf_base
-        except ValueError:
-            return None
 
 
 class JobOutput(Base):

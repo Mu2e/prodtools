@@ -7,7 +7,7 @@ Generates FCL configuration files for Mu2e jobs.
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional, Union
+from typing import Dict, Optional
 import re
 
 # Allow running this file directly: make package root importable

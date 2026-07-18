@@ -672,3 +672,18 @@ consumes them). 342/342 tests before and after. Re-evaluated the rest of
 tier 3: validation-ladder tabling and bin-stub symlinks have stale premises
 (rules already tabled + coverage exists; stubs not byte-identical) — marked
 skip. Campaign-regex co-location and json_data typed accessors remain open.
+
+## [2026-07-18] update | /simplify pass applied across utils+bin+web
+Pages added: 2026-07-18-simplify-pass-consolidations
+Four-agent reuse/simplification/efficiency/altitude sweep; ~26 findings
+applied, 342/342 green. New single homes: poms_entry map-dir/pattern +
+default_db_path (POMS_DB_PATH honored in-function, WSGI monkey-patch gone),
+config_utils.mixing_desc, file_resolver location classifier +
+path_from_sam_locations, famtree.output_stem, Mu2eJobBase.setup. New
+samweb_wrapper batch surface: metadata_for_files, first_file_in_definition,
+definition_creation_date. Batch SAM adoption in copy_to_stash, /api/jobs,
+mkrecovery (single scan per entry), build_lineage (known-set walk).
+render_static now fails loudly on template drift. Dead json_output mode and
+~10 unused imports removed. Skipped as behavior decisions: ntd tier-prefix
+whitelist in job_outputs, Job.indef dual grammar, runmu2e normal-mode
+double parse.

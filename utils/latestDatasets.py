@@ -85,11 +85,6 @@ def _narrow_to_latest_release(names):
     return [n for n in names if rel.get(n) == latest]
 
 
-def _dataset_file_count(name):
-    """Number of files in a SAM dataset (completeness numerator)."""
-    return dataset_file_count(name)
-
-
 def _filter_complete(names):
     """Keep only datasets that are complete (file count == producing cnf njobs).
     Datasets whose cnf has no inherent job count (open-ended generators) are kept
@@ -118,7 +113,7 @@ def _filter_complete(names):
             kept.append(ds)
             continue
         try:
-            if _dataset_file_count(ds) == njobs:
+            if dataset_file_count(ds) == njobs:
                 kept.append(ds)
             else:
                 _vlog(f"# incomplete (skipped): {ds}")
@@ -131,7 +126,7 @@ def _filter_complete(names):
 def _dataset_exists(name):
     """True if the SAM dataset has at least one file."""
     try:
-        return _dataset_file_count(name) > 0
+        return dataset_file_count(name) > 0
     except Exception:
         return False
 
@@ -300,15 +295,11 @@ def main():
         unproduced = set(_filter_unproduced([r[2] for r in rows], digi_tmpl))
         rows = [r for r in rows if r[2] in unproduced]
 
-    if args.names_only:
-        for _, _, latest_name, _ in rows:
-            print(latest_name)
-    else:
-        for description, latest_dsconf, latest_name, count in rows:
-            if args.show_count:
-                print(f"{count:3d}  {latest_name}")
-            else:
-                print(latest_name)
+    # Bare name output unless --show-count adds the count column
+    # (--names-only is accepted as an explicit alias of the default).
+    show_count = args.show_count and not args.names_only
+    for _, _, latest_name, count in rows:
+        print(f"{count:3d}  {latest_name}" if show_count else latest_name)
 
     if skipped:
         _vlog(f"# skipped {len(skipped)} name(s) with <5 dotted fields")

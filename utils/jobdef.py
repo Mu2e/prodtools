@@ -25,7 +25,7 @@ from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
-from utils.config_utils import cnf_name, get_tarball_desc
+from utils.config_utils import cnf_name
 from utils.job_common import Mu2eName, default_owner, tbs_capacity
 
 # Constants matching Perl mu2ejobdef exactly
@@ -470,29 +470,23 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                 samplingintable[inputkey] = [nreq, filelist]
             tbs['samplinginput'] = samplingintable
 
-    # Handle output files using the resolved template path (like Perl's $templateresolved)
-    output_modules = _get_output_modules(template_path)
-    if output_modules:
-        outfiles = {}
-        
-        for mod in output_modules:
-            if mod and mod != '':  # skip empty entries
-                output_key = f'outputs.{mod}.fileName'
-                
-                # Get template from FCL file (like Perl does)
-                filename_pattern = _get_fcl_value(template_path, output_key)
-                
-                if filename_pattern and filename_pattern.strip():
-                    # Use shared helper to add to local outfiles dict
-                    defer_keys = config.get('_defer_keys', set()) if config else set()
-                    tmp_container = {'outfiles': outfiles}
-                    _add_outfile(tmp_container, output_key, filename_pattern, config, defer_keys=defer_keys)
-                else:
-                    # No template pattern found - this shouldn't happen in a properly resolved template
-                    # Fail like Perl does when output filename is not defined
-                    raise ValueError(f"Error: {output_key} is not defined")
-        if outfiles:
-            tbs['outfiles'] = outfiles
+    # Handle output files using the resolved template path (like Perl's
+    # $templateresolved). _get_output_modules returns only active,
+    # non-empty module names; _add_outfile creates tbs['outfiles'] on
+    # first add.
+    for mod in _get_output_modules(template_path):
+        output_key = f'outputs.{mod}.fileName'
+
+        # Get template from FCL file (like Perl does)
+        filename_pattern = _get_fcl_value(template_path, output_key)
+
+        if filename_pattern and filename_pattern.strip():
+            defer_keys = config.get('_defer_keys', set()) if config else set()
+            _add_outfile(tbs, output_key, filename_pattern, config, defer_keys=defer_keys)
+        else:
+            # No template pattern found - this shouldn't happen in a properly resolved template
+            # Fail like Perl does when output filename is not defined
+            raise ValueError(f"Error: {output_key} is not defined")
 
     # Handle TFileService (like Perl's separate TFileService handling)
     try:

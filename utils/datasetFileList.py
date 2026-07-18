@@ -8,7 +8,6 @@ import os
 import sys
 import argparse
 from typing import List, Optional
-from pathlib import Path
 
 # Handle both module and standalone imports
 try:
@@ -94,17 +93,21 @@ Options:
         --help               Print this message.
 """)
 
-def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List[str]:
+def get_dataset_files(dataset_name: str, location: Optional[str] = None,
+                      max_files: Optional[int] = None) -> List[str]:
     """
     Get all files in a dataset as a list of full paths.
-    
+
     Args:
         dataset_name: Dataset name to query
         location: Optional location ('disk', 'tape', 'scratch'). If None, auto-detects.
-        
+        max_files: If set, build paths for only the first max_files names
+            (sorted order) — per-file path construction is capped at the
+            source instead of sliced by the caller afterwards.
+
     Returns:
         List of full paths to all files in the dataset
-        
+
     Raises:
         RuntimeError: If dataset not found or multiple locations exist
     """
@@ -134,7 +137,11 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     locroot = _dataset_dir(dataset_name, fileloc)
     file_paths = []
 
-    for f in sorted(fns):
+    fns = sorted(fns)
+    if max_files is not None:
+        fns = fns[:max_files]
+
+    for f in fns:
         relpath = Mu2eName.parse(f).relpathname()
         full_path = f"{locroot}/{relpath}"
         file_paths.append(full_path)

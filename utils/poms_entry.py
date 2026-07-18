@@ -23,9 +23,26 @@ bare `entry[...]` or `entry.get(...)` so a malformed POMS-map is caught
 at the boundary, not as a downstream crash.
 """
 
+import os
 from typing import Optional
 
 from utils.job_common import Mu2eName
+
+# Where production POMS maps live and which basenames are map files.
+# Shared by the DB builder, the staleness check, and the dashboards —
+# one home so a rebuild and its staleness glob cannot drift apart.
+DEFAULT_POMS_DIR = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map"
+POMS_MAP_PATTERN = "MDC202*"
+
+
+def default_db_path() -> str:
+    """Default path of the poms_data.db SQLite cache (repo root), or the
+    POMS_DB_PATH env override — web deployments point it at a copied DB."""
+    env_path = os.environ.get("POMS_DB_PATH")
+    if env_path:
+        return env_path
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo_root, "poms_data.db")
 
 
 def tarball_of(entry: dict) -> str:

@@ -262,10 +262,13 @@ def process_direct_input(jobdesc, fname, args):
     print(f"Direct-input mode: fname={fname}, desc={n.description}, seq={n.sequencer}")
 
     _fetch_file_local(tarball)
-    fcl = write_direct_input_fcl(Mu2eJobFCL(tarball), fname)
+    job_fcl = Mu2eJobFCL(tarball)
+    fcl = write_direct_input_fcl(job_fcl, fname)
 
-    # Extract setup script from tarball
-    simjob_setup = _extract_simjob_setup(tarball)
+    # Extract setup script from the already-parsed tarball (setup() lives
+    # on Mu2eJobBase, so the Mu2eJobFCL instance serves — no second
+    # gunzip+parse of jobpars.json)
+    simjob_setup = _extract_simjob_setup(tarball, jp=job_fcl)
 
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, fname, outputs
@@ -398,7 +401,8 @@ def build_mu2e_cmd(fcl, simjob_setup, args):
 
 def process_g4bl_jobdef(jobdesc_entry, fname, args):
     """Run a G4Beamline simulation job. Returns
-    (outputs, histo_file, log_file, succeeded).
+    (outputs, log_file, succeeded) — the histogram file is picked up by
+    the outputs glob patterns, not returned.
 
     Two source modes:
     - `tarball`: extract the cnf.*.tar (built by g4bl_jobdef build tool) to a
@@ -514,7 +518,7 @@ def process_g4bl_jobdef(jobdesc_entry, fname, args):
     proc.stdout.close()
     rc = proc.wait()
 
-    return jobdesc_entry['outputs'], histo_file, log_file, (rc == 0)
+    return jobdesc_entry['outputs'], log_file, (rc == 0)
 
 def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     """Handle data file management and submission using wildcard patterns from JSON outputs.
@@ -846,7 +850,7 @@ def _dispatch_and_execute(mode, jobdesc, fname, args):
     # debuggable in SAM.
     if mode == 'g4bl':
         try:
-            outputs, _histo_file, log_file, succeeded = process_g4bl_jobdef(jobdesc[0], fname, args)
+            outputs, log_file, succeeded = process_g4bl_jobdef(jobdesc[0], fname, args)
         except RuntimeError as e:
             print(f"=== g4bl prep failed: {e} ===")
             return True

@@ -15,7 +15,6 @@ backend to actually invoke jobsub_submit with the resulting argv.
 import os
 import re
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

@@ -15,14 +15,7 @@ if __name__ == '__main__':
 
 from samweb_wrapper import list_files, dataset_summary, q_recent_files
 from job_common import Mu2eName
-
-
-DEFAULT_POMS_DIR = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map"
-
-
-def _default_db_path() -> str:
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(repo_root, "poms_data.db")
+from poms_entry import DEFAULT_POMS_DIR, POMS_MAP_PATTERN, default_db_path
 
 
 def _db_is_stale(db_path: str, poms_dir: str, lookback_days: int) -> Tuple[bool, str]:
@@ -33,7 +26,7 @@ def _db_is_stale(db_path: str, poms_dir: str, lookback_days: int) -> Tuple[bool,
     db_mtime = os.path.getmtime(db_path)
     cutoff = time.time() - lookback_days * 86400
     newer = []
-    for f in glob.glob(os.path.join(poms_dir, "MDC202*.json")):
+    for f in glob.glob(os.path.join(poms_dir, f"{POMS_MAP_PATTERN}.json")):
         m = os.path.getmtime(f)
         if m > db_mtime and m > cutoff:
             newer.append(os.path.basename(f))
@@ -56,7 +49,7 @@ def _ensure_db_fresh(db_path: str, poms_dir: str, days: int, no_rebuild: bool) -
     from db_builder import build_db
     cutoff_dt = datetime.now() - timedelta(days=days)
     t0 = time.time()
-    build_db("MDC202*", db_path, poms_dir=poms_dir, since=cutoff_dt)
+    build_db(POMS_MAP_PATTERN, db_path, poms_dir=poms_dir, since=cutoff_dt)
     print(f"Rebuild took {time.time() - t0:.1f}s.")
 
 
@@ -77,7 +70,7 @@ class DatasetLister:
         self.ext = f".{filetype}"
         self.completeness = completeness
         self.no_rebuild = no_rebuild
-        self.db_path = db_path or _default_db_path()
+        self.db_path = db_path or default_db_path()
         self.poms_dir = poms_dir
         self._db_session = None  # opened lazily in run() if completeness enabled
         
@@ -133,10 +126,8 @@ class DatasetLister:
         Returns a short formatted string suitable for the table column."""
         if self._db_session is None:
             return "-"
-        try:
-            from poms_db import Job, JobOutput, DatasetInfo
-        except ImportError:
-            return "-"
+        # poms_db is already loaded by run() (which opened _db_session)
+        from poms_db import Job, JobOutput, DatasetInfo
         out = self._db_session.query(JobOutput).filter_by(dataset=dataset).first()
         if not out:
             return "—"  # not produced via POMS

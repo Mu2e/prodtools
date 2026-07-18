@@ -16,6 +16,7 @@ resolution work without the Mu2e ops environment.
 
 import os
 import re
+import sys
 from typing import Optional
 
 from .job_common import Mu2eName, remove_storage_prefix
@@ -166,6 +167,23 @@ def path_from_sam_location(filename, location):
     return path
 
 
+def path_from_sam_locations(filename, locations, prefer_location=None):
+    """Pick a record from a locate result (preferring `prefer_location`
+    when given, else the first record) and return its physical path — the
+    record-selection half of sam_physical_path, shared with batch-locate
+    consumers (stash copy, dashboards). Raises ValueError when the
+    locations list is empty or the record is malformed."""
+    if not locations:
+        raise ValueError(f"no SAM locations for {filename}")
+    chosen = locations[0]
+    if prefer_location:
+        preferred = [loc for loc in locations
+                     if loc.get('location_type') == prefer_location]
+        if preferred:
+            chosen = preferred[0]
+    return path_from_sam_location(filename, chosen)
+
+
 def sam_physical_path(filename, prefer_location=None):
     """Readable physical path for `filename` from its SAM locations (one
     locate call). Prefers records whose location_type matches
@@ -178,16 +196,50 @@ def sam_physical_path(filename, prefer_location=None):
     because its output must stay byte-identical.
     """
     from .samweb_wrapper import locate_file_strict
-    locations = locate_file_strict(filename)
-    if not locations:
-        raise ValueError(f"no SAM locations for {filename}")
-    chosen = locations[0]
-    if prefer_location:
-        preferred = [loc for loc in locations
-                     if loc.get('location_type') == prefer_location]
-        if preferred:
-            chosen = preferred[0]
-    return path_from_sam_location(filename, chosen)
+    return path_from_sam_locations(filename, locate_file_strict(filename),
+                                   prefer_location)
+
+
+def classify_sam_location(raw: Optional[str]) -> str:
+    """Normalize a SAM location string (location / location_type /
+    full_path) to the storage system it names: 'enstore', 'dcache', or
+    'N/A' for anything else."""
+    if not raw:
+        return 'N/A'
+    if raw.startswith('enstore'):
+        return 'enstore'
+    if raw.startswith('dcache'):
+        return 'dcache'
+    return 'N/A'
+
+
+# Sentinel for infer_dataset_location's first_file: "not supplied" (fetch
+# it) is distinct from None ("known to have no files" — skip the fetch).
+_UNSET = object()
+
+
+def infer_dataset_location(dataset_name, first_file=_UNSET) -> str:
+    """Normalized storage location (dcache/enstore/N/A) of a dataset from
+    its first file's SAM location records. Pass first_file to reuse a
+    file the caller already fetched. Fail-soft: the dashboard consumers
+    treat an unknown location as 'N/A', not fatal."""
+    from .samweb_wrapper import first_file_in_definition, locate_file_strict
+    try:
+        if first_file is _UNSET:
+            first_file = first_file_in_definition(dataset_name)
+        if not first_file:
+            return 'N/A'
+        for entry in locate_file_strict(first_file):
+            loc = entry.get('location') or entry.get('location_type')
+            if loc:
+                return classify_sam_location(loc)
+            full_path = entry.get('full_path')
+            if full_path:
+                return classify_sam_location(full_path)
+    except Exception as e:
+        print(f"Warning: infer_dataset_location failed for {dataset_name}: {e}",
+              file=sys.stderr)
+    return 'N/A'
 
 
 # ---------------------------------------------------------------------------

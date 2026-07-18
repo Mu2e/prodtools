@@ -10,12 +10,14 @@ from typing import Optional, Dict
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from .poms_db import Job, JobOutput, DatasetInfo
+from .poms_db import Job, DatasetInfo
+from .poms_entry import default_db_path
 
 
 def get_default_db_path() -> str:
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(repo_root, "poms_data.db")
+    """Path of the poms_data.db cache — see poms_entry.default_db_path
+    (env-overridable via POMS_DB_PATH)."""
+    return default_db_path()
 
 
 def _matches_pattern(job: Job, pattern: Optional[str]) -> bool:
@@ -32,7 +34,9 @@ def _collect_jobs(session, pattern: Optional[str]):
     return jobs
 
 
-def _build_dataset_info_map(session, jobs):
+def build_dataset_info_map(session, jobs):
+    """One .in_() query for all of `jobs`' output datasets → {name: DatasetInfo}.
+    Public: the web dashboard uses it in place of a per-output query."""
     dataset_names = {
         output.dataset
         for job in jobs
@@ -53,19 +57,19 @@ _location_cache: Dict[str, str] = {}
 
 
 def _infer_location(dataset: str) -> str:
-    """Cached wrapper around db_builder._infer_dataset_location (the single
-    home of the enstore/dcache classifier + SAM inference walk). Imports
-    lazily so the dashboard's import of this module stays light."""
+    """Cached wrapper around file_resolver.infer_dataset_location (the
+    single home of the enstore/dcache classifier + SAM inference walk).
+    Imports lazily so the dashboard's import of this module stays light."""
     if dataset not in _location_cache:
-        from .db_builder import _infer_dataset_location
-        _location_cache[dataset] = _infer_dataset_location(dataset)
+        from .file_resolver import infer_dataset_location
+        _location_cache[dataset] = infer_dataset_location(dataset)
     return _location_cache[dataset]
 
 
 def _normalize_location_from_path(path: str) -> str:
-    """Lazy delegate to db_builder._normalize_location (single home)."""
-    from .db_builder import _normalize_location
-    return _normalize_location(path)
+    """Lazy delegate to file_resolver.classify_sam_location (single home)."""
+    from .file_resolver import classify_sam_location
+    return classify_sam_location(path)
 
 
 def _get_outputs(session, job: Job, info_map: dict[str, DatasetInfo]) -> list:
@@ -147,7 +151,7 @@ def list_jobs(
     elif sort_by == "source_file":
         jobs.sort(key=lambda j: j.source_file or '')
 
-    info_map = _build_dataset_info_map(session, jobs)
+    info_map = build_dataset_info_map(session, jobs)
     total = sum(job.njobs or 0 for job in jobs)
 
     if campaign:

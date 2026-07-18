@@ -276,6 +276,10 @@ class Mu2eJobBase:
         self.owner = self.json_data.get('owner', default_owner())
         self.dsconf = self.json_data.get('dsconf', 'unknown')
 
+    def setup(self):
+        """The SimJob setup-script path recorded in jobpars.json."""
+        return self.json_data.get('setup', '')
+
     def _extract_member(self, suffix: str) -> bytes:
         """Return the bytes of the first tar member whose name ends with ``suffix``.
 

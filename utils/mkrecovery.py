@@ -6,7 +6,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.jobquery import Mu2eJobPars
 from utils.samweb_wrapper import (
     create_definition,
-    dataset_file_count,
     files_in_dataset,
     q_dataset_files_named,
 )
@@ -14,7 +13,31 @@ from utils.job_common import Mu2eName
 from utils.file_resolver import sam_physical_path
 from utils.poms_entry import tarball_of, njobs_of, firstjob_of
 
-def find_missing_indices(tarball_path, dataset, njobs, firstjob=0):
+def build_file_maps(job_io, datasets, njobs, firstjob=0):
+    """One pass over the cnf's index window building, for each dataset in
+    `datasets`, its {filename: window-relative index} map. job_outputs
+    returns every output stream per call, so a single scan serves all of
+    an entry's datasets (previously one full njobs-scan per dataset —
+    and one fresh tarball parse each, megabytes for mixing cnfs).
+
+    Structured dataset compare — a substring test would false-match
+    sibling dsconfs where one is a prefix of the other (e.g. ..._v1_4 vs
+    ..._v1_4-000).
+    """
+    wanted = set(datasets)
+    maps = {ds: {} for ds in datasets}
+    for job_idx in range(njobs):
+        for filename in job_io.job_outputs(firstjob + job_idx).values():
+            try:
+                ds = str(Mu2eName.parse(filename).dataset)
+            except ValueError:
+                continue
+            if ds in wanted:
+                maps[ds][filename] = job_idx
+    return maps
+
+def find_missing_indices(tarball_path, dataset, njobs, firstjob=0,
+                         file_to_job=None, actual_files=None):
     """Find job indices for missing files in a dataset.
 
     A windowed entry (firstjob > 0) covers cnf indices
@@ -22,28 +45,21 @@ def find_missing_indices(tarball_path, dataset, njobs, firstjob=0):
     (0-based slot within the entry) so callers can map them to global
     recovery indices with a plain `cumulative + idx` — no caller does
     offset arithmetic.
+
+    Pass file_to_job (from build_file_maps) and/or actual_files to reuse
+    a scan / SAM listing the caller already has; otherwise both are
+    fetched here.
     """
-    job_io = Mu2eJobPars(tarball_path)
-    # Build mapping from filename to window-relative index. Structured
-    # compare — a substring test would false-match sibling dsconfs where
-    # one is a prefix of the other (e.g. ..._v1_4 vs ..._v1_4-000).
-    file_to_job = {}
-    for job_idx in range(njobs):
-        for filename in job_io.job_outputs(firstjob + job_idx).values():
-            try:
-                if str(Mu2eName.parse(filename).dataset) == dataset:
-                    file_to_job[filename] = job_idx
-            except ValueError:
-                continue
-    
-    expected_files = set(file_to_job.keys())
-    actual_files = set(files_in_dataset(dataset))
+    if file_to_job is None:
+        job_io = Mu2eJobPars(tarball_path)
+        file_to_job = build_file_maps(job_io, [dataset], njobs, firstjob)[dataset]
+
+    expected_files = set(file_to_job)
+    if actual_files is None:
+        actual_files = set(files_in_dataset(dataset))
     missing_files = expected_files - actual_files
-    
-    if not missing_files:
-        return set(), missing_files
-    
-    # Get unique job indices for missing files
+
+    # Unique window-relative job indices for missing files
     missing_indices = {file_to_job[f] for f in missing_files}
     return missing_indices, missing_files
 
@@ -89,9 +105,10 @@ def locate_tarball(tarball):
     except Exception:
         return None
 
-def extract_datasets_from_tarball(tarball_path, njobs):
-    """Extract output dataset names from job definition tarball."""
-    job_pars = Mu2eJobPars(tarball_path)
+def extract_datasets_from_tarball(job_pars, njobs):
+    """Extract output dataset names from an already-parsed job definition
+    (a Mu2eJobPars instance — parsing is the expensive part, so the caller
+    parses once and shares the instance with build_file_maps)."""
     output_datasets = job_pars.output_datasets()
     
     # If output_datasets is empty, extract from actual output files
@@ -157,9 +174,11 @@ def main():
                 cumulative += njobs
                 continue
 
-            # Extract output datasets from job definition
+            # Extract output datasets from job definition (parse the
+            # tarball ONCE per entry; build_file_maps below reuses it)
             try:
-                output_datasets = extract_datasets_from_tarball(tarball_path, njobs)
+                job_io = Mu2eJobPars(tarball_path)
+                output_datasets = extract_datasets_from_tarball(job_io, njobs)
             except Exception as e:
                 print(f'  WARNING: Could not extract datasets from tarball: {e}', file=out)
                 cumulative += njobs
@@ -170,16 +189,22 @@ def main():
                 cumulative += njobs
                 continue
 
+            # One index scan for all of the entry's datasets
+            file_maps = build_file_maps(job_io, output_datasets, njobs, firstjob)
+
             # Process each dataset
             for dataset_name in output_datasets:
                 try:
-                    nfiles = dataset_file_count(dataset_name)
+                    actual_files = set(files_in_dataset(dataset_name))
                 except Exception as e:
                     print(f'    {dataset_name}: Could not query SAM ({e})', file=out)
-                    nfiles = 0
+                    raise
+                nfiles = len(actual_files)
 
                 print(f'    {dataset_name}: {nfiles}/{njobs} files', file=out)
-                missing_indices, missing_files = find_missing_indices(tarball_path, dataset_name, njobs, firstjob)
+                missing_indices, missing_files = find_missing_indices(
+                    tarball_path, dataset_name, njobs, firstjob,
+                    file_to_job=file_maps[dataset_name], actual_files=actual_files)
 
                 if not missing_indices:
                     print(f'      Complete', file=out)

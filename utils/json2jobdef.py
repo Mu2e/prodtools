@@ -24,7 +24,6 @@ from utils.jobdef import create_jobdef, get_output_dataset_names
 from utils.jobfcl import validate_output_filenames
 from utils.samweb_wrapper import (
     list_files,
-    count_files,
     locate_file,
     files_in_dataset,
     parents_of_dataset,
@@ -32,12 +31,8 @@ from utils.samweb_wrapper import (
 )
 
 
-def _write_random_selection(out_f, query: str, total_needed: int, seed_source: str):
-    """Write deterministic pseudo-random selection of files."""
-    files = list_files(query)
-    if not files:
-        raise ValueError(f"No files returned for query: {query}")
-
+def _write_random_selection(out_f, files, total_needed: int, seed_source: str):
+    """Write deterministic pseudo-random selection from a fetched file list."""
     # Sort before shuffling to make output deterministic independent of SAM order
     ordered = sorted(files)
     rng = random.Random(seed_source)
@@ -239,9 +234,15 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
                 except (TypeError, ValueError):
                     njobs = 1
 
+                # One SAM evaluation serves both the njobs derivation and
+                # the selection (previously count_files + list_files ran
+                # the same query twice)
+                files = list_files(query)
+                if not files:
+                    raise ValueError(f"No files returned for query: {query}")
+
                 if njobs == -1:
-                    available = count_files(query)
-                    njobs = max(1, available // max(per_job, 1))
+                    njobs = max(1, len(files) // max(per_job, 1))
 
                 total_needed = per_job * max(njobs, 1)
                 if spec.max_nfiles is not None:
@@ -250,7 +251,7 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
                     f"{config.get('owner','')}.{config.get('desc','')}.{config.get('dsconf','')}"
                     f".{spec.source}.{per_job}.{njobs}"
                 )
-                _write_random_selection(out_f, query, total_needed, seed_source)
+                _write_random_selection(out_f, files, total_needed, seed_source)
             else:
                 files = list_files(query)
                 if spec.max_nfiles is not None:
@@ -348,7 +349,7 @@ def determine_job_type(config):
     else:
         return 'stage1'
 
-def build_jobdef(config, job_args, json_output=False):
+def build_jobdef(config, job_args):
     # Create jobdef using the embed approach with custom template to preserve fcl_overrides
     # For mixing jobs, template.fcl is already created by build_pileup_args
     # For non-mixing jobs, create the template here
@@ -388,7 +389,7 @@ def build_jobdef(config, job_args, json_output=False):
     cmd_parts.extend(['--embed', 'template.fcl'])
 
     # Now create jobdef using the template.fcl
-    create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=json_output)
+    create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=True)
 
     # Get the parfile name for both modes
     parfile_name = get_parfile_name(config)
@@ -404,24 +405,19 @@ def build_jobdef(config, job_args, json_output=False):
         except ValueError as e:
             sys.exit(f"json2jobdef: cnf failed output-filename validation: {e}")
     
-    if json_output:
-        # Return structured data for machine consumption
-        result = {
-            'success': True,
-            'perl_commands': [
-                {
-                    'type': 'mu2ejobdef',
-                    'command': ' '.join(cmd_parts),
-                    'desc': config['desc'],
-                    'simjob_setup': config['simjob_setup']
-                }
-            ]
-        }
-        return result
-    else:
-        # Human-readable output (create_jobdef already echoed the mu2ejobdef
-        # equivalent when quiet=False)
-        return None
+    # Structured result for machine consumption (parity_test consumes
+    # perl_commands to run the Perl mu2ejobdef comparison)
+    return {
+        'success': True,
+        'perl_commands': [
+            {
+                'type': 'mu2ejobdef',
+                'command': ' '.join(cmd_parts),
+                'desc': config['desc'],
+                'simjob_setup': config['simjob_setup']
+            }
+        ]
+    }
 
 def append_jobdef(config, jobdefs_file=None):
     """
@@ -569,7 +565,6 @@ def main():
         config['_event_count_positive'] = args.event_count_positive
         process_single_entry(
             config,
-            json_output=True,
             pushout=args.pushout,
             no_cleanup=args.no_cleanup,
             jobdefs_list=args.jobdefs,
@@ -634,16 +629,17 @@ def _pushout_to_sam(parfile_name):
 
 
 def _cleanup_temp_files():
-    """Remove the well-known transient files left in the build workdir."""
+    """Remove the well-known transient files left in the build workdir.
+    Catalog names are derived from PILEUP_MIXERS (mixing_utils), the same
+    table build_pileup_args writes them from."""
     for temp_file in ('inputs.txt', 'template.fcl',
-                      'mubeamCat.txt', 'elebeamCat.txt',
-                      'neutralsCat.txt', 'mustopCat.txt'):
+                      *(f"{mixer_type}Cat.txt" for mixer_type in PILEUP_MIXERS)):
         if Path(temp_file).exists():
             Path(temp_file).unlink()
             print(f"Cleanup: {temp_file}")
 
 
-def process_single_entry(config, json_output=True, pushout=False, no_cleanup=True,
+def process_single_entry(config, pushout=False, no_cleanup=True,
                          jobdefs_list=None, extend=False, ignore_empty=False):
     """Process a single configuration entry (original behavior)"""
     validate_required_fields(config)
@@ -684,18 +680,13 @@ def process_single_entry(config, json_output=True, pushout=False, no_cleanup=Tru
     job_args = _build_job_args(config)
 
     # build_jobdef handles FCL template creation for non-mixing jobs
-    result = build_jobdef(config, job_args, json_output=json_output)
+    result = build_jobdef(config, job_args)
 
     append_jobdef(config, jobdefs_list)
     parfile_name = get_parfile_name(config)
 
     if pushout:
         _pushout_to_sam(parfile_name)
-
-    if not json_output:
-        print(json.dumps(config, indent=2, sort_keys=True))
-        write_fcl(parfile_name, config.get('inloc', 'tape'), 'root')
-        print(f"Generated: {parfile_name}")
 
     if no_cleanup:
         print("Temporary files kept (--no-cleanup specified)")
@@ -780,7 +771,6 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
         # Use the existing process_single_entry function
         process_single_entry(
             config,
-            json_output=True,
             pushout=args.pushout,
             no_cleanup=True,
             jobdefs_list=args.jobdefs,

@@ -4,8 +4,6 @@ anaTimeReport - Analyze Mu2e log performance metrics
 """
 
 import sys, argparse, re, json, os
-from pathlib import Path
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Allow running this file directly: make package root importable
@@ -29,14 +27,11 @@ def get_log_files(dataset, max_files=None):
         List of log file paths, or empty list if dataset not found
     """
     try:
-        # Use get_dataset_files() which constructs paths directly without locate_files() calls
-        # This is much faster than get_definition_files() which queries SAM for each file
-
-        log_files = get_dataset_files(dataset)
-        # Limit files if requested
-        if max_files is not None:
-            log_files = log_files[:max_files]
-        return log_files
+        # Use get_dataset_files() which constructs paths directly without
+        # locate_files() calls; max_files caps path construction at the
+        # source (a log dataset holds one file per job — up to 100k names
+        # for a 10-log sample otherwise).
+        return get_dataset_files(dataset, max_files=max_files)
 
     except Exception as e:
         print(f"Warning: get_log_files failed for {dataset}: {e}", file=sys.stderr)

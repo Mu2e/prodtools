@@ -9,16 +9,14 @@ import os
 import sys
 import glob
 import json
-from typing import Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.poms_db import get_db_session, Job, JobOutput, DatasetInfo
 from utils.samweb_wrapper import (
-    locate_file_strict,
-    list_definition_files,
-    describe_definition,
+    first_file_in_definition,
+    definition_creation_date,
     get_metadata,
     dataset_summary,
     definition_file_count,
@@ -26,10 +24,9 @@ from utils.samweb_wrapper import (
 )
 from utils.job_common import Mu2eName
 from utils.jobquery import Mu2eJobPars
-from utils.file_resolver import sam_physical_path
+from utils.file_resolver import sam_physical_path, infer_dataset_location
+from utils.poms_entry import DEFAULT_POMS_DIR, POMS_MAP_PATTERN, default_db_path
 from utils.logparser import process_dataset as parse_logs_for_dataset
-import re
-from datetime import datetime
 
 # Tarballs whose dCache replica hangs reads — skip to keep the build moving.
 # Remove entries once the underlying pool issue is resolved.
@@ -60,13 +57,6 @@ def _get_dataset_stats(dataset_name):
 _UNSET = object()
 
 
-def _first_file(dataset_name):
-    """First file of a dataset's SAM definition, or None. list_definition_files
-    swallows SAM errors to [], so this never raises."""
-    files = list_definition_files(dataset_name)
-    return files[0] if files else None
-
-
 def _get_dataset_gencount(dataset_name, nfiles, first_file=_UNSET):
     """Total generated events for a dataset = dh.gencount(one file) * nfiles.
 
@@ -78,7 +68,7 @@ def _get_dataset_gencount(dataset_name, nfiles, first_file=_UNSET):
         return None
     try:
         if first_file is _UNSET:
-            first_file = _first_file(dataset_name)
+            first_file = first_file_in_definition(dataset_name)
         if not first_file:
             return None
         md = get_metadata(first_file)
@@ -103,7 +93,7 @@ def _check_dataset_has_children(dataset_name, first_file=_UNSET):
     """
     try:
         if first_file is _UNSET:
-            first_file = _first_file(dataset_name)
+            first_file = first_file_in_definition(dataset_name)
         if not first_file:
             return False
         return len(children_of_file(first_file)) > 0
@@ -133,81 +123,13 @@ def _jobdef_to_log_dataset(tarball_name):
     return str(n.log_dataset())
 
 
-def _get_dataset_creation_date(dataset_name):
-    """Get creation date from SAM definition.
-    
-    Args:
-        dataset_name: Dataset name (e.g., "dts.mu2e.FlatePlus.MDC2020bb.art")
-    
-    Returns:
-        datetime: Creation date as datetime object or None
-    """
-    try:
-        description = describe_definition(dataset_name)
-        # Parse "Creation Date: 2025-09-03T11:46:14+00:00"
-        match = re.search(r'Creation Date:\s+(.+)', description)
-        if match:
-            date_str = match.group(1).strip()
-            # Parse ISO format datetime (e.g., "2025-09-03T11:46:14+00:00")
-            # Remove timezone offset and parse as naive datetime
-            # SQLite doesn't store timezone info, so we'll store as UTC naive datetime
-            if '+' in date_str:
-                date_str = date_str.split('+')[0]
-            elif date_str.endswith('Z'):
-                date_str = date_str[:-1]
-            try:
-                return datetime.fromisoformat(date_str)
-            except ValueError:
-                # Try parsing with common formats
-                for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
-                    try:
-                        return datetime.strptime(date_str, fmt)
-                    except ValueError:
-                        continue
-        return None
-    except Exception as e:
-        print(f"Warning: _get_dataset_creation_date failed for {dataset_name}: {e}", file=sys.stderr)
-        return None
-
-
-def _normalize_location(raw: Optional[str]) -> str:
-    if not raw:
-        return 'N/A'
-    if raw.startswith('enstore'):
-        return 'enstore'
-    if raw.startswith('dcache'):
-        return 'dcache'
-    return 'N/A'
-
-
-def _infer_dataset_location(dataset_name, first_file=_UNSET):
-    """Normalized storage location (dcache/enstore/N/A) from the dataset's
-    first file. Pass first_file to reuse a file the caller already fetched."""
-    try:
-        if first_file is _UNSET:
-            first_file = _first_file(dataset_name)
-        if not first_file:
-            return 'N/A'
-        locations = locate_file_strict(first_file)
-        for entry in locations:
-            loc = entry.get('location') or entry.get('location_type')
-            if loc:
-                return _normalize_location(loc)
-            full_path = entry.get('full_path')
-            if full_path:
-                return _normalize_location(full_path)
-    except Exception as e:
-        print(f"Warning: _infer_dataset_location failed for {dataset_name}: {e}", file=sys.stderr)
-    return 'N/A'
-
-
 def _is_output_complete(session, output, njobs):
     """Check if an output dataset is complete (nfiles >= njobs)."""
     info = session.query(DatasetInfo).filter_by(dataset_name=output.dataset).one_or_none()
     return info and info.nfiles and info.nfiles >= njobs
 
 
-def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map", limit: int = None, since=None) -> None:
+def build_db(pattern: str, db_path: str, poms_dir: str = DEFAULT_POMS_DIR, limit: int = None, since=None) -> None:
     """Create and populate the SQLite DB from POMS JSONs matching pattern.
 
     - Creates DB and tables if missing
@@ -338,10 +260,7 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
             print(f"Skipping {job.tarball} (in _SKIP_TARBALLS — bad dCache replica)")
             continue
         try:
-            try:
-                full_path = sam_physical_path(job.tarball)
-            except Exception:
-                continue
+            full_path = sam_physical_path(job.tarball)
             if not os.path.exists(full_path):
                 continue
 
@@ -364,27 +283,19 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
             if job.avg_real_h is not None and job.avg_vmhwm_gb is not None:
                 print(f"Skipping logparser for {job.tarball} (metrics already present)")
             else:
-                job_real_vals = []
-                job_vmhwm_vals = []
-                
-                # Parse logs for the jobdef (convert tarball name to log dataset name)
+                # Metrics come from one sampled log dataset per jobdef
+                # (convert tarball name to log dataset name)
                 log_dataset = _jobdef_to_log_dataset(job.tarball)
                 if log_dataset:
                     try:
                         metrics = parse_logs_for_dataset(log_dataset, max_logs=10)
                         if isinstance(metrics, dict):
                             if metrics.get('Real [h]') is not None:
-                                job_real_vals.append(float(metrics.get('Real [h]')))
+                                job.avg_real_h = round(float(metrics['Real [h]']), 2)
                             if metrics.get('VmHWM [GB]') is not None:
-                                job_vmhwm_vals.append(float(metrics.get('VmHWM [GB]')))
+                                job.avg_vmhwm_gb = round(float(metrics['VmHWM [GB]']), 2)
                     except Exception:
                         pass
-                
-                # Save aggregated metrics to the Job (per jobdef)
-                if job_real_vals:
-                    job.avg_real_h = round(sum(job_real_vals) / len(job_real_vals), 2)
-                if job_vmhwm_vals:
-                    job.avg_vmhwm_gb = round(sum(job_vmhwm_vals) / len(job_vmhwm_vals), 2)
 
             for output_file in outputs.values():
                 # Extract dataset name from filename (skip /dev/null and non-standard files)
@@ -406,10 +317,10 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                 # and location probes each only need files[0]; without this each
                 # re-listed the whole dataset (2x n_datasets extra SAM round-trips
                 # per rebuild, each transferring thousands of filenames).
-                first_file = _first_file(dataset_name)
+                first_file = first_file_in_definition(dataset_name)
                 gencount = _get_dataset_gencount(dataset_name, nfiles, first_file)
                 has_children = _check_dataset_has_children(dataset_name, first_file)
-                creation_date = _get_dataset_creation_date(dataset_name)
+                creation_date = definition_creation_date(dataset_name)
 
                 # Upsert dataset_info
                 info = session.query(DatasetInfo).filter_by(dataset_name=dataset_name).one_or_none()
@@ -422,7 +333,7 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
                 if creation_date:
                     info.creation_date = creation_date
                 if not info.location or info.location == 'N/A':
-                    info.location = _infer_dataset_location(dataset_name, first_file)
+                    info.location = infer_dataset_location(dataset_name, first_file)
 
                 # Ensure job_outputs row exists
                 job_output = session.query(JobOutput).filter_by(job_id=job.id, dataset=dataset_name).first()
@@ -463,12 +374,9 @@ def build_db(pattern: str, db_path: str, poms_dir: str = "/exp/mu2e/app/users/mu
 if __name__ == "__main__":
     import argparse
 
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    default_db = os.path.join(repo_root, "poms_data.db")
-
     parser = argparse.ArgumentParser(description="Build/populate prodtools DB from POMS JSONs")
-    parser.add_argument("--pattern", default="MDC202*", help="POMS JSON file pattern")
-    parser.add_argument("--db", default=default_db, help="SQLite DB file path")
+    parser.add_argument("--pattern", default=POMS_MAP_PATTERN, help="POMS JSON file pattern")
+    parser.add_argument("--db", default=default_db_path(), help="SQLite DB file path")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of jobs to process (for testing)")
     args = parser.parse_args()
 

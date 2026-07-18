@@ -13,10 +13,12 @@ from utils._guards import require_packages
 require_packages('sqlalchemy', 'flask')
 
 from flask import Flask, jsonify, request, redirect
-from utils.poms_db import get_db_session, Job, DatasetInfo
-from utils.db_analyzer import get_default_db_path
+from utils.poms_db import get_db_session, Job
+from utils.db_analyzer import get_default_db_path, build_dataset_info_map
 from utils.db_builder import build_db
-from utils.samweb_wrapper import locate_file
+from utils.samweb_wrapper import locate_files_strict
+from utils.file_resolver import sam_physical_path, path_from_sam_locations
+from utils.poms_entry import POMS_MAP_PATTERN
 from utils.jobquery import Mu2eJobPars
 import subprocess
 import json
@@ -27,6 +29,40 @@ app = Flask(__name__,
 
 # Global DB session
 db_session = None
+
+# tarball -> setup script. cnf tarballs are immutable (versioned names),
+# so the extraction — a SAM locate plus a tarball decompress per cnf —
+# happens once per process instead of on every /api/jobs request.
+_setup_cache = {}
+
+
+def _setup_scripts(tarballs):
+    """Resolve the embedded setup script for each cnf tarball. Cache
+    misses are located in ONE batch SAM round-trip (vs one per job row),
+    falling back to a per-tarball locate if the batch call fails."""
+    todo = [t for t in tarballs if t not in _setup_cache]
+    locations = {}
+    if todo:
+        try:
+            locations = locate_files_strict(todo)
+        except Exception:
+            locations = {}
+    for tarball in todo:
+        setup = ''
+        try:
+            locs = locations.get(tarball)
+            if locs:
+                full_path = path_from_sam_locations(tarball, locs)
+            else:
+                full_path = sam_physical_path(tarball)
+            if os.path.exists(full_path):
+                setup = Mu2eJobPars(full_path).setup() or ''
+        except Exception:
+            # Leave setup empty when SAM or the tarball is unavailable
+            # (e.g. the read-only WSGI deployment stubs samweb_client).
+            pass
+        _setup_cache[tarball] = setup
+    return _setup_cache
 
 def _get_session():
     """Get or refresh database session to pick up any external changes."""
@@ -39,7 +75,7 @@ def _get_session():
     db_session = get_db_session(get_default_db_path())
     return db_session
 
-def _rebuild_db(pattern: str = 'MDC202*'):
+def _rebuild_db(pattern: str = POMS_MAP_PATTERN):
     """Rebuild the persistent DB from POMS JSONs and refresh the session."""
     build_db(pattern, get_default_db_path())
     return _get_session()
@@ -72,7 +108,7 @@ def json_editor():
 def api_reload():
     """API endpoint to reload MDC JSON files."""
     try:
-        _rebuild_db('MDC202*')
+        _rebuild_db()
         return jsonify({'success': True, 'message': 'Database rebuilt successfully'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -82,12 +118,15 @@ def api_jobs():
     """API endpoint for all job definitions."""
     # Refresh session to pick up any external database changes
     session = _get_session()
+    all_jobs = session.query(Job).all()
+    info_map = build_dataset_info_map(session, all_jobs)
+    setup_map = _setup_scripts([job.tarball for job in all_jobs if job.tarball])
     jobs = []
-    for job in session.query(Job).all():
+    for job in all_jobs:
         njobs = job.njobs or 0
         outputs = []
         for output in job.outputs:
-            info = session.query(DatasetInfo).filter_by(dataset_name=output.dataset).one_or_none()
+            info = info_map.get(output.dataset)
             nfiles = int(info.nfiles or 0) if info else 0
             nevts = int(info.nevts or 0) if info else 0
             
@@ -111,29 +150,8 @@ def api_jobs():
                 'location': (info.location or 'N/A') if info else 'N/A'
             })
         
-        # Extract setup script from tarball if available
-        setup_script = ''
-        if job.tarball:
-            try:
-                location = locate_file(job.tarball)
-                # Extract file path from location (handle dict or string)
-                if isinstance(location, dict):
-                    file_path = location.get('full_path', '')
-                    file_path = file_path.split(':', 1)[1] if ':' in file_path else file_path
-                elif isinstance(location, str):
-                    file_path = location.split(':', 1)[1] if ':' in location else location
-                else:
-                    file_path = None
-                
-                if file_path:
-                    full_path = os.path.join(file_path, job.tarball)
-                    if os.path.exists(full_path):
-                        jp = Mu2eJobPars(full_path)
-                        setup_script = jp.setup() or ''
-            except Exception:
-                # If extraction fails, leave setup_script empty
-                pass
-        
+        setup_script = setup_map.get(job.tarball, '') if job.tarball else ''
+
         jobs.append({
             'njobs': njobs,
             'tarball': job.tarball or '',
@@ -171,15 +189,15 @@ def api_dataset_info(dataset_name):
         if result.returncode != 0:
             return jsonify({'success': False, 'output': result.stderr.strip()})
         
-        # Look for the .md file that famtree created
-        # famtree uses first 4 parts of dataset name (without extension) for filename
-        # e.g., nts.mu2e.CeEndpointMix1BBTriggered.MDC2025-000.root -> nts.mu2e.CeEndpointMix1BBTriggered.MDC2025-000.md
-        parts = dataset_name.split('.')
-        if len(parts) >= 4:
-            # Take first 4 parts, remove extension if present
-            base_name = '.'.join(parts[:4])
-        else:
-            # Fallback: remove common extensions
+        # Look for the .md file that famtree created — its stem rule is
+        # famtree.output_stem (lazy import: this route is disabled in the
+        # WSGI deployment, where famtree's SAM deps are stubbed)
+        from utils.famtree import output_stem
+        try:
+            base_name = output_stem(dataset_name)
+        except ValueError:
+            # Unparseable name: famtree would have failed too; fall back to
+            # a bare extension strip so we still probe for an .md file
             base_name = dataset_name.replace('.art', '').replace('.root', '')
         md_filename = f'{base_name}.md'
         

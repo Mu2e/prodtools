@@ -148,13 +148,26 @@ _LOADJOBS_JS = r"""function loadJobs() {
         }"""
 
 
+def _must_sub(pattern, repl, html, what):
+    """re.sub(count=1) that FAILS the render when the pattern no longer
+    matches monitor.html — a silent no-op here would ship a static page
+    still wired to Flask routes, with the cron exiting 0."""
+    new, n = re.subn(pattern, repl, html, count=1)
+    if n != 1:
+        raise SystemExit(
+            f"_rewrite_html: pattern for {what} not found in monitor.html "
+            f"(template drifted; update render_static.py)")
+    return new
+
+
 def _rewrite_html(html: str, refreshed_at: str) -> str:
     """Make the dashboard self-contained for static hosting.
 
     Hardening pass: rewrite the absolute fetch, swap the famtree
     handler for a lineage-cache walker, swap loadJobs for a parallel
     fetch, neuter dead handlers (Reload, json-editor link), strip
-    dead UI, and stamp the refresh time.
+    dead UI, and stamp the refresh time. Functional swaps go through
+    _must_sub so template drift fails the cron loudly.
     """
     html = html.replace("fetch('/api/jobs')", "fetch('jobs.json')")
 
@@ -168,39 +181,39 @@ def _rewrite_html(html: str, refreshed_at: str) -> str:
     # Source-file column: the link target (/json-editor) is gone in
     # static, so render the basename as plain text rather than a
     # styled-as-clickable element that does nothing.
-    html = re.sub(
+    html = _must_sub(
         r"var sourceLink = job\.source_file \?[\s\S]*?: '';",
         "var sourceLink = sourceName;",
-        html,
+        html, "sourceLink rewrite",
     )
 
     # Stub openJsonInEditor + reloadData (the button is gone but the
     # functions are still referenced from the row renderer's onclick
     # template-string until we ship a richer rewrite).
-    html = re.sub(
+    html = _must_sub(
         r'function reloadData\(\)\s*\{[\s\S]*?\n        \}',
         'function reloadData() { /* removed in static deploy */ }',
-        html,
+        html, "reloadData stub",
     )
-    html = re.sub(
+    html = _must_sub(
         r'function openJsonInEditor\([^)]*\)\s*\{[\s\S]*?\n        \}',
         'function openJsonInEditor() { /* removed in static deploy */ }',
-        html,
+        html, "openJsonInEditor stub",
     )
 
     # Swap server-backed famtree for the lineage-cache walker.
     # NOTE: pass the replacement via lambda to bypass re.sub's backslash
     # interpretation — otherwise `\n` in the JS becomes a real newline
     # and breaks string literals like `lines.join('\n')`.
-    html = re.sub(
+    html = _must_sub(
         r"function showDatasetInfo\(datasetName\)[\s\S]*?\n        \}",
-        lambda _m: _LINEAGE_JS, html, count=1,
+        lambda _m: _LINEAGE_JS, html, "showDatasetInfo swap",
     )
 
     # Swap loadJobs() for a parallel jobs.json+lineage.json fetcher.
-    html = re.sub(
+    html = _must_sub(
         r"function loadJobs\(\)\s*\{[\s\S]*?\n        \}",
-        lambda _m: _LOADJOBS_JS, html, count=1,
+        lambda _m: _LOADJOBS_JS, html, "loadJobs swap",
     )
 
     # "Last refreshed" banner under the H1.

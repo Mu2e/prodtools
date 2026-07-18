@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.db_builder import build_db
 from utils.db_analyzer import list_jobs, get_default_db_path, ignore_dataset, unignore_dataset, list_ignored
 from utils.poms_db import get_db_session
+from utils.poms_entry import POMS_MAP_PATTERN
 from utils.job_common import Mu2eName
 
 
@@ -78,7 +79,8 @@ def uniformity_report(session, campaign, target, round_to=1000):
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze POMS jobdesc JSON files")
-    parser.add_argument('--pattern', default='MDC202*', help='POMS JSON file pattern (default: MDC202*)')
+    parser.add_argument('--pattern', default=POMS_MAP_PATTERN,
+                        help=f'POMS JSON file pattern (default: {POMS_MAP_PATTERN})')
     parser.add_argument('--db', default=get_default_db_path(), help='SQLite DB file path')
     parser.add_argument('--build-db', action='store_true', help='Refresh the database before analysis')
     parser.add_argument('--list', action='store_true', help='List all job definitions')

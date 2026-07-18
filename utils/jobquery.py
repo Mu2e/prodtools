@@ -34,7 +34,7 @@ class Mu2eJobPars(Mu2eJobBase):
         # Extract from TBS inputs and auxin sections
         tbs = self.json_data.get('tbs', {})
         datasets = set()
-        
+
         def extract_dataset_from_files(file_list):
             """Extract dataset name from first file in list (always .art ext)."""
             if not file_list:
@@ -44,25 +44,15 @@ class Mu2eJobPars(Mu2eJobBase):
             except ValueError:
                 return None
             return str(n.with_extension('art').dataset)
-        
-        # Get datasets from inputs
-        inputs = tbs.get('inputs', {})
-        for key, value in inputs.items():
-            if isinstance(value, list) and len(value) >= 2:
-                _, file_list = value
-                dataset = extract_dataset_from_files(file_list)
-                if dataset:
-                    datasets.add(dataset)
-        
-        # Get datasets from auxiliary inputs
-        auxin = tbs.get('auxin', {})
-        for key, value in auxin.items():
-            if isinstance(value, list) and len(value) >= 2:
-                _, file_list = value
-                dataset = extract_dataset_from_files(file_list)
-                if dataset:
-                    datasets.add(dataset)
-        
+
+        for section in ('inputs', 'auxin'):
+            for value in tbs.get(section, {}).values():
+                if isinstance(value, list) and len(value) >= 2:
+                    _, file_list = value
+                    dataset = extract_dataset_from_files(file_list)
+                    if dataset:
+                        datasets.add(dataset)
+
         return list(datasets)
     
     def input_files(self):
@@ -80,10 +70,6 @@ class Mu2eJobPars(Mu2eJobBase):
     def output_datasets(self):
         """Get list of output datasets"""
         return self.json_data.get('output_datasets', [])
-    
-    def setup(self):
-        """Get the setup file path"""
-        return self.json_data.get('setup', '')
     
     def codesize(self):
         """Get the size of the compressed code tarball"""

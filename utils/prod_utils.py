@@ -1,7 +1,6 @@
 import glob
 import json
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -10,7 +9,7 @@ from pathlib import Path
 from .config_utils import normalize_input_data
 from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
-from .poms_entry import firstjob_of, njobs_of
+from .poms_entry import firstjob_of, inloc_of, njobs_of, outputs_of, tarball_of
 from .samweb_wrapper import (
     create_definition,
     delete_definition,
@@ -115,11 +114,12 @@ def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
 
     return fcl
 
-def get_def_counts(dataset, include_empty=False):
-    """Get file count and event count for a dataset."""
+def get_def_counts(dataset):
+    """Get file count (events>0 files only) and event count for a dataset.
+    Exits when the dataset has no such files."""
 
     # Count files
-    nfiles = definition_file_count(dataset, with_events=not include_empty)
+    nfiles = definition_file_count(dataset, with_events=True)
 
     # Count events
     result = dataset_summary(dataset)
@@ -133,8 +133,8 @@ def max_events_to_skip(dataset):
     """MaxEventsToSkip for a resampler/mixer reading `dataset`: mean events
     per file (floor), so per-job skips stay within one file's budget.
     Single home of the derivation (mixing pre_lines + resampler post_lines)."""
-    nfiles, nevts = get_def_counts(dataset)
-    return nevts // nfiles if nfiles > 0 else 0
+    nfiles, nevts = get_def_counts(dataset)  # exits if nfiles == 0
+    return nevts // nfiles
 
 def calculate_merge_factor(fields):
     """Calculate merge factor from input_data dict.
@@ -201,11 +201,11 @@ def summarize_and_index(jobdefs_file, prod=True):
     total_jobs = sum(j.get('njobs', 0) for j in jobdefs)
 
     for i, j in enumerate(jobdefs):
-        outputs = ", ".join(f"{o['dataset']}→{o['location']}" for o in j['outputs'])
+        outputs = ", ".join(f"{o['dataset']}→{o['location']}" for o in outputs_of(j))
         njobs = njobs_of(j, 0)
         firstjob = firstjob_of(j)
         window = f", cnf window={firstjob}..{firstjob + njobs - 1}" if firstjob else ""
-        print(f"[{i}] {j['tarball']}: {njobs} jobs, input={j['inloc']}, outputs={outputs}{window}")
+        print(f"[{i}] {tarball_of(j)}: {njobs} jobs, input={inloc_of(j)}, outputs={outputs}{window}")
 
     print(f"\nTotal: {total_jobs} jobs")
 
@@ -338,8 +338,6 @@ def push_output(output_specs, output_file="output.txt", simjob_setup=None):
     push_cmd = f"pushOutput {output_file}"
     if simjob_setup:
         push_cmd = f"source {simjob_setup} && {push_cmd}"
-    result = run(push_cmd, shell=True)
-    if result != 0:
-        print(f"Warning: pushOutput returned exit code {result}")
-    return result
+    # run() returns 0 or raises CalledProcessError — no nonzero returns
+    return run(push_cmd, shell=True)
 

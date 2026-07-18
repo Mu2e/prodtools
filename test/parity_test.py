@@ -43,7 +43,7 @@ def create_jobdef(config, json_file_path):
     print(f"  🐍 json2jobdef command: {json2jobdef_cmd}")
     
     # Call process_single_entry directly with JSON output
-    result = process_single_entry(config, json_output=True, no_cleanup=True)
+    result = process_single_entry(config, no_cleanup=True)
     
     if not result or not result.get('perl_commands'):
         print(f"  ⚠️  No mu2ejobdef commands found in result for: {config['desc']}")

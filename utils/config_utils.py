@@ -71,6 +71,14 @@ def _get_first_if_list(value):
     return value[0] if isinstance(value, list) and value else value
 
 
+def mixing_desc(input_desc: str, pbeam: str) -> str:
+    """Derived desc for a mixing job: input description + beam-intensity
+    tag. Single home of the rule — prepare_fields_for_job derives it at
+    generation time and chain_emit reconstructs it for --skip-produced
+    matching; the two must agree or skip-dedup fails open."""
+    return input_desc + pbeam
+
+
 def prepare_fields_for_job(config, job_type='standard'):
     """Prepare job configuration by auto-generating desc from input_data and optional pbeam.
     
@@ -109,7 +117,7 @@ def prepare_fields_for_job(config, job_type='standard'):
     # For mixing jobs, append pbeam to the desc
     if job_type == 'mixing':
         pbeam = _get_first_if_list(config.get('pbeam', ''))
-        modified_config['desc'] = dsdesc + pbeam
+        modified_config['desc'] = mixing_desc(dsdesc, pbeam)
     else:
         # For standard jobs (digi, reco, ntuple, etc.), just use the dataset name
         modified_config['desc'] = dsdesc

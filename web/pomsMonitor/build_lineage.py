@@ -28,10 +28,11 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "utils"))
 
+# Package-qualified imports only — mixing them with bare `samweb_wrapper`
+# imports used to load the module twice (two SAMWebClient singletons).
 from utils.famtree import topology_for_dataset, get_dataset_efficiency
-from samweb_wrapper import get_samweb_wrapper
+from utils.samweb_wrapper import get_samweb_wrapper
 
 
 def _unique_outputs(db_path):
@@ -64,7 +65,9 @@ def _walk_topology(cache, todo, cache_path):
     for i, ds in enumerate(todo, 1):
         t0 = time.time()
         try:
-            topo = topology_for_dataset(ds)
+            # cache.keys() is a live view: ancestors cached earlier in this
+            # same run also stop the walk
+            topo = topology_for_dataset(ds, known=cache.keys())
         except Exception as e:
             print(f"  [{i}/{len(todo)}] ERROR topo {ds}: {e}", flush=True)
             cache[ds] = {"parents": [], "stats": None}

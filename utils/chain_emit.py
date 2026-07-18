@@ -15,6 +15,7 @@ import json
 import os
 import re
 
+from utils.config_utils import _get_first_if_list, mixing_desc
 from utils.job_common import Mu2eName
 
 _FAMILY_RE = re.compile(r"^(MDC\d{4}|Run\d+[A-Z]?)")
@@ -254,7 +255,7 @@ def _deferred_descs(entry):
         return []
     pbeam = entry.get('pbeam')
     pbeams = pbeam if isinstance(pbeam, list) else ([pbeam] if isinstance(pbeam, str) else [])
-    return [input_desc + pb for pb in pbeams]
+    return [mixing_desc(input_desc, pb) for pb in pbeams]
 
 
 def output_datasets(entry, owner='mu2e'):
@@ -270,10 +271,9 @@ def output_datasets(entry, owner='mu2e'):
     When that token survives, expand it to the concrete ``input_desc + pbeam``
     name(s) so the produced-output check matches real SAM datasets instead of a
     literal ``dig.mu2e.{desc}...`` that can never exist."""
-    unwrap = lambda v: v[0] if isinstance(v, list) and v else v
-    dsconf = unwrap(entry.get('dsconf', '')) or ''
+    dsconf = _get_first_if_list(entry.get('dsconf', '')) or ''
     out = []
-    for key, val in (unwrap(entry.get('fcl_overrides', {})) or {}).items():
+    for key, val in (_get_first_if_list(entry.get('fcl_overrides', {})) or {}).items():
         if not key.endswith('fileName') or not isinstance(val, str) or '/' in val:
             continue
         # Templates carry literal placeholder tokens (owner/version/sequencer);
