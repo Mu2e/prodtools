@@ -2,7 +2,7 @@
 title: Hygiene tiers 1+2 — what was consolidated, and duplication kept on purpose
 tags: [decision, hygiene, refactor, samweb, fcl]
 sources: []
-updated: 2026-07-12
+updated: 2026-07-17
 ---
 
 # Hygiene tiers 1+2 (2026-07-12) — and the do-not-"fix" list
@@ -60,19 +60,37 @@ Future audits will re-flag these; they are deliberate:
 
 ## Deferred (tier 3 + decisions), in rough value order
 
-- Relocate the ~450-line single-caller "runner family"
-  (`process_template/process_direct_input/process_jobdef/build_mu2e_cmd/
-  process_g4bl_jobdef/push_data/push_logs`) out of prod_utils next to
-  runmu2e → prod_utils 900→450 lines of genuinely shared helpers.
-  Mechanical but must repoint test patch targets.
-- Table-drive `_validate_options_for_source_type` (90 lines, **no unit
-  coverage** — parity_test only) and `validate_jobdesc` ladders.
+- ~~Relocate the ~450-line single-caller "runner family" out of
+  prod_utils next to runmu2e~~ — **DONE 2026-07-17** (commit `bff51a4`).
+  The 7 runner functions + private helpers (`_job_index_from_fname`,
+  `_extract_simjob_setup`, `replace_file_extensions`) +
+  `validate_jobdesc`/`_require_fields` moved into runmu2e.py with
+  byte-identical bodies (verified against HEAD). prod_utils: 921→345
+  lines; runmu2e: 359→933. `_fetch_file_local` and `resolve_map_index`
+  stayed in prod_utils — `submit.py` also consumes them (two-consumer,
+  not family-private). Test import/patch targets repointed (patch
+  `utils.runmu2e.write_fcl`/`run` for process_jobdef tests now);
+  342/342 green before and after.
+- Table-drive `_validate_options_for_source_type` + `validate_jobdesc`
+  ladders — **RE-EVALUATED 2026-07-17: skip.** The rules half of
+  `_validate_options_for_source_type` is already a table (only the
+  per-option elif checks remain), and `validate_jobdesc` gained unit
+  coverage (test sections 22 + firstjob guards) — the original "no
+  unit coverage" premise is stale. Residual value is cosmetic on
+  parity-guarded code.
 - **Three non-equivalent campaign regexes** (`job_common._CAMPAIGN_RE`,
-  `chain_emit._FAMILY_RE`, `jobsub_argv.campaign_from_tarball`) for the
-  same concept — unify only after a parity check over real dsconfs.
-- 6–9 identical bin/ stubs → symlinks (trade: grep-ability).
+  `chain_emit._FAMILY_RE`, `jobsub_argv.campaign_from_tarball`) —
+  still open, but note they parse three *different* concepts
+  (campaign-with-version / family / wfproject token), one usage site
+  each. "Unify" = co-locate as named siblings, behavior unchanged;
+  gate on a parity sweep over the real dsconf population.
+- ~~6–9 identical bin/ stubs → symlinks~~ — **premise stale (checked
+  2026-07-17): no two bin/ stubs are byte-identical** (each names a
+  different utils module). The real change would be argv0-dispatch;
+  ~60 lines saved, costs grep-ability in the worker-bundled tree. Skip.
 - `Mu2eJobBase.json_data` raw access at 6 sites vs typed accessors
-  (fail-loud `tbs` would be a behavior change).
+  (fail-loud `tbs` would be a behavior change). Still open, needs a
+  behavior decision.
 
 ## Related
 

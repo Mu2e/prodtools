@@ -662,3 +662,13 @@ the cnf-name contract, byte-verified vs pushed NoPrimary.Run1Ban-001 cnf;
 runmu2e._execute_mu2e). Net −150 lines, 322/322 tests. Tier 3 deferred
 (prod_utils runner-family relocation, validation-ladder tabling, campaign-regex
 unification-after-parity-check, bin stubs).
+
+## [2026-07-17] update | tier-3 runner-family relocation executed
+Pages updated: 2026-07-12-hygiene-tiers-and-kept-duplication
+Commit: bff51a4 — the 7 runner functions + private helpers + validate_jobdesc
+moved prod_utils→runmu2e (byte-identical bodies; prod_utils 921→345,
+runmu2e 359→933; _fetch_file_local/resolve_map_index stayed — submit.py
+consumes them). 342/342 tests before and after. Re-evaluated the rest of
+tier 3: validation-ladder tabling and bin-stub symlinks have stale premises
+(rules already tabled + coverage exists; stubs not byte-identical) — marked
+skip. Campaign-regex co-location and json_data typed accessors remain open.
