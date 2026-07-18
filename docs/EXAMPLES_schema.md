@@ -68,9 +68,9 @@ When regenerating, read in this order:
     works, that base FCL stays unexpanded.
 10. **Parity Tests** — `test/parity_test.sh` usage.
 11. **Additional Tools** — one subsection per script in `bin/` that has
-    user-facing CLI: `pomsMonitor`, `pomsMonitorWeb`, `famtree`,
+    user-facing CLI: `pomsMonitor`, `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
-    `latestDatasets`, `mkrecovery`, `mkidxdef`, `jobquery`,
+    `latestDatasets`, `mkrecovery`, `jobquery`,
     `submit_map`, `copy_to_stash`. Ops scripts
     (`install_prodtools.sh`, `update_pomsmonitor_web`) get a one-line
     mention. Each subsection: one-line purpose, 1–3 example invocations,

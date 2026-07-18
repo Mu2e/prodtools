@@ -26,11 +26,10 @@ source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
 muse setup ops
 ```
 
-Optional helpers:
+Optional helper:
 
 ```bash
-source bin/setup.sh        # adds prodtools bin/ to PATH, repo root to PYTHONPATH
-source bin/setup_run1b.sh  # same, plus a Run1B SimJob musing
+source bin/setup.sh   # adds prodtools bin/ to PATH, repo root to PYTHONPATH
 ```
 
 `muse setup ops` provides Python 3, `samweb`, and `fhicl-get`. `muse setup
@@ -40,8 +39,7 @@ Offline environment for `fhicl-get`, so source the SimJob musing that the
 entry's `simjob_setup` names.
 
 Tools that read the POMS SQLite database (`pomsMonitor`,
-`listNewDatasets --completeness`, `pomsMonitorWeb`) additionally need
-SQLAlchemy:
+`listNewDatasets --completeness`) additionally need SQLAlchemy:
 
 ```bash
 source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana
@@ -57,7 +55,6 @@ Core production tools:
 - `fcldump` — resolve a dataset/target to its producing cnf and dump the FCL
 - `runmu2e` — worker entry point: FCL generation, `mu2e` execution, pushOutput
 - `submit_map` — submit all entries of a POMS-map JSON to the grid
-- `mkidxdef` — (re)create the SAM index definition for a jobdefs list
 - `mkrecovery` — find job indices whose outputs are missing from SAM
 
 Analysis / diagnostic tools:
@@ -69,7 +66,7 @@ Analysis / diagnostic tools:
 - `datasetFileList` — physical file paths for a dataset or SAM definition
 - `listNewDatasets` — recently produced datasets, with completeness
 - `latestDatasets` — latest dsconf per description; chain-emit configs
-- `pomsMonitor` / `pomsMonitorWeb` — campaign status from the POMS DB
+- `pomsMonitor` — campaign status from the POMS DB
 - `copy_to_stash` — copy a dataset into stash (CVMFS) or resilient dCache
 
 ## 3. Creating Job Definitions (`json2jobdef`, `jobdef`)
@@ -100,7 +97,7 @@ Notes:
 
 - `--index N` indexes the *flattened* (entry × list-field) expansion, not
   the JSON array position. Prefer `--dsconf` (bulk) or `--desc --dsconf`.
-- `--prod` implies `--pushout` and runs the index-definition step after
+- `--prod` implies `--pushout` and creates the SAM index definitions after
   generation. Re-running `--prod` is idempotent — use it to finish a
   partially-failed push.
 - `--extend` excludes input files already consumed by the previous version
@@ -404,13 +401,8 @@ Key flags: `--pattern`, `--db`, `--build-db`, `--list`, `--campaign`,
 (`--ignore-reason`), `--unignore DATASET`, `--list-ignored`,
 `--uniformity` (`--target`, `--round`).
 
-### `pomsMonitorWeb`
-
-Flask dashboard over the same DB (port 5000; needs SQLAlchemy + Flask):
-
-```bash
-pomsMonitorWeb
-```
+The static production dashboard is rendered from the same DB by
+`update_pomsmonitor_web` (see the ops scripts note below).
 
 ### `famtree`
 
@@ -480,7 +472,7 @@ latestDatasets --defname 'dig.mu2e.%.MDC2025%.art' --show-count
 latestDatasets --emit reco --campaign MDC2025ap --skip-produced
 ```
 
-Flags: `--defname`, `--user`, `--stdin`, `--names-only`, `--show-count`,
+Flags: `--defname`, `--user`, `--stdin`, `--show-count`,
 `--emit {digi,reco,ntuple,mix}`, `--campaign`, `--templates-dir`,
 `--dsconf`, `--complete-only`, `--skip-produced`, `-v/--verbose`.
 
@@ -515,15 +507,6 @@ Two index spaces — pick the one your submission path consumes:
 - `--print-indices` prints **absolute cnf** indices (`firstjob + relative`),
   one per line under a `# <tarball>` header, for `submit_map
   --indices-file`. Diagnostics go to stderr so stdout stays pipeable.
-
-### `mkidxdef`
-
-(Re)create the SAM index definition for a jobdefs list. Normally invoked
-by `json2jobdef --prod`; standalone use:
-
-```bash
-mkidxdef --jobdefs jobdefs_list.json --prod
-```
 
 ### `jobquery`
 
@@ -606,7 +589,9 @@ directories.
 
 Operations scripts: `install_prodtools.sh` packages a versioned prodtools
 release for cvmfs publication; `update_pomsmonitor_web` rebuilds the POMS
-DB and regenerates the static dashboard site.
+DB and regenerates the static dashboard site (the dashboard is a static
+page — `web/pomsMonitor/render_static.py` stamps `monitor_static.html`
+and builds `jobs.json` directly from the DB).
 
 ## 12. Troubleshooting
 
@@ -634,7 +619,7 @@ DB and regenerates the static dashboard site.
 - `Could not locate file: <name>` — SAM has no location for an input
   file; check the entry's `inloc` against where the files actually live
   (`samweb locate-file <name>`).
-- `Package 'sqlalchemy' is required` — run
-  `source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana` after
-  `muse setup ops` (needed by pomsMonitor, listNewDatasets
-  --completeness, pomsMonitorWeb).
+- `error: SQLAlchemy not found. Run 'pyenv ana' after 'muse setup ops'.` —
+  run `source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana` after
+  `muse setup ops` (needed by pomsMonitor and listNewDatasets
+  --completeness).
