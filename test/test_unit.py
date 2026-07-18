@@ -4043,6 +4043,79 @@ class TestSubmissionLedger(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# submit_map ledger hook (utils/submit.py) — direct-backend recovery
+# ---------------------------------------------------------------------------
+class TestSubmitLedgerHook(unittest.TestCase):
+    """Direct-backend ledger hook in utils/submit.py."""
+
+    def test_parse_jobsub_id_full_form(self):
+        from utils.submit import _parse_jobsub_id
+        out = ("Transferring files...\n"
+               "1 job(s) submitted to cluster 12345678.\n"
+               "Use job id 12345678.0@jobsub03.fnal.gov to retrieve output\n")
+        self.assertEqual(_parse_jobsub_id(out),
+                         '12345678.0@jobsub03.fnal.gov')
+
+    def test_parse_jobsub_id_absent(self):
+        from utils.submit import _parse_jobsub_id
+        self.assertIsNone(_parse_jobsub_id("submitted to cluster 12345678\n"))
+
+    def test_run_submit_carries_jobsub_id(self):
+        from utils import submit
+        fake = MagicMock(
+            returncode=0, stderr='',
+            stdout='1 job(s) submitted to cluster 12345678.\n'
+                   'Use job id 12345678.0@jobsub03.fnal.gov to retrieve output\n')
+        with patch('utils.submit.subprocess.run', return_value=fake):
+            r = submit._run_submit(['jobsub_submit'], 'cnf.tar', 3)
+        self.assertEqual(r['status'], 'submitted')
+        self.assertEqual(r['jobsub_id'], '12345678.0@jobsub03.fnal.gov')
+
+    def _opts(self, db, parent=None):
+        import argparse
+        return argparse.Namespace(ledger_db=db, ledger_parent=parent,
+                                  no_ledger=False, map='/tmp/m.json')
+
+    def test_record_in_ledger_absolute_indices(self):
+        import tempfile
+        from utils import submit, submission_ledger
+        db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        entry = {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 3, 'firstjob': 100}
+        result = {'tarball': 'cnf.mu2e.T.C.0.tar', 'cluster_id': '1',
+                  'jobsub_id': '1.0@js.fnal.gov', 'njobs': 3,
+                  'status': 'submitted'}
+        submit._record_in_ledger(entry, 100, [0, 1, 2], result, self._opts(db))
+        row = submission_ledger.open_rows(db)[0]
+        self.assertEqual(row['indices'], [100, 101, 102])
+        self.assertEqual(row['entry'], entry)
+        self.assertEqual(row['jobsub_id'], '1.0@js.fnal.gov')
+        self.assertEqual(row['map_path'], '/tmp/m.json')
+
+    def test_record_in_ledger_parent_chains(self):
+        import tempfile
+        from utils import submit, submission_ledger
+        db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        rid = submission_ledger.record_submission(
+            db, tarball='t', entry={}, indices=[0, 1],
+            jobsub_id='1.0@js', cluster_id='1')
+        result = {'tarball': 't', 'cluster_id': '2', 'jobsub_id': '2.0@js',
+                  'njobs': 1, 'status': 'submitted'}
+        submit._record_in_ledger({}, 0, [1], result, self._opts(db, parent=rid))
+        rows = submission_ledger.open_rows(db)
+        self.assertEqual(rows[1]['attempt'], 2)
+        self.assertEqual(rows[1]['parent_id'], rid)
+
+    def test_ledger_failure_does_not_raise(self):
+        from utils import submit
+        result = {'tarball': 't', 'cluster_id': '1', 'jobsub_id': None,
+                  'njobs': 1, 'status': 'submitted'}
+        # nonexistent directory → sqlite3.OperationalError inside, warning out
+        submit._record_in_ledger(
+            {}, 0, [0], result,
+            self._opts('/nonexistent-dir-recovery-test/s.db'))  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

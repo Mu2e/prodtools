@@ -34,6 +34,7 @@ from utils.job_common import Mu2eName, log_storage_location
 from utils.poms_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
                               firstjob_of, validate_window)
 from utils import jobsub_argv as _jobsub_argv
+from utils import submission_ledger
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RUNJOB_SH = REPO_ROOT / 'bin' / 'runjob.sh'
@@ -157,6 +158,7 @@ def _run_submit(cmd, tarball_name, njobs):
     return {
         'tarball': tarball_name,
         'cluster_id': cluster_id,
+        'jobsub_id': _parse_jobsub_id(result.stdout),
         'njobs': njobs,
         'status': 'submitted',
     }
@@ -178,6 +180,45 @@ def _parse_cluster_id(stdout):
         if m:
             return m.group(1)
     return None
+
+
+def _parse_jobsub_id(stdout):
+    """Full jobsub id (cluster.proc@schedd) from the 'Use job id ...'
+    line. The numeric cluster alone can't be drain-checked — jobsub_q
+    needs the schedd."""
+    m = re.search(r'job\s+id\s+(\d+(?:\.\d+)?@\S+)', stdout, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _record_in_ledger(entry, firstjob, jobset, result, opts):
+    """Append a ledger row for a successful direct submission.
+
+    jobset is entry-relative; the ledger stores ABSOLUTE cnf indices
+    (firstjob + i). For --indices submissions jobset is already absolute
+    and firstjob is 0, so the same expression holds.
+
+    Never raises: the submission already happened, so a ledger failure
+    is reported with everything needed to insert the row manually.
+    """
+    absolute = [firstjob + i for i in jobset]
+    try:
+        row_id = submission_ledger.record_submission(
+            opts.ledger_db,
+            tarball=result['tarball'],
+            entry=entry,
+            indices=absolute,
+            jobsub_id=result.get('jobsub_id'),
+            cluster_id=result['cluster_id'],
+            map_path=opts.map,
+            parent_id=opts.ledger_parent,
+        )
+        print(f"Ledger: row {row_id} recorded in {opts.ledger_db}")
+    except Exception as e:
+        print(f"WARNING: ledger write failed ({e}) — the submission DID "
+              f"go through (cluster {result['cluster_id']}). Record "
+              f"manually: tarball={result['tarball']} indices={absolute} "
+              f"jobsub_id={result.get('jobsub_id')} "
+              f"parent={opts.ledger_parent} db={opts.ledger_db}")
 
 
 def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
@@ -431,7 +472,10 @@ def submit_entry_direct(entry, idx, opts):
             'status': 'dry_run',
         }
 
-    return _run_submit(cmd, tarball_name, len(jobset))
+    result = _run_submit(cmd, tarball_name, len(jobset))
+    if result['status'] == 'submitted' and not opts.no_ledger:
+        _record_in_ledger(entry, firstjob, jobset, result, opts)
+    return result
 
 
 def submit_entry(entry, idx, opts):
@@ -617,6 +661,20 @@ def main():
                         help='[direct] File of ABSOLUTE cnf indices, whitespace/'
                              'comma separated, `#` comments ignored. Consumes '
                              '`mkrecovery --print-indices` output directly.')
+    parser.add_argument('--ledger-db', default=submission_ledger.DEFAULT_DB,
+                        help='[direct] Submission-ledger sqlite DB '
+                             f'(default: {submission_ledger.DEFAULT_DB}, '
+                             'env MU2E_SUBMISSION_DB). Every successful '
+                             'direct submission is recorded for the '
+                             'recovery loop (bin/recover).')
+    parser.add_argument('--ledger-parent', type=int, default=None,
+                        help='[direct] Ledger row id this submission '
+                             'recovers (set by bin/recover; chains '
+                             'attempt counting).')
+    parser.add_argument('--no-ledger', action='store_true',
+                        help='[direct] Do not record this submission in '
+                             'the ledger (ad-hoc/test submissions the '
+                             'recovery loop must not watch).')
     parser.add_argument('--wftop', default=None,
                         help='[direct] Outstage top dir (default: '
                              '/pnfs/mu2e/persistent/users for Production, '
