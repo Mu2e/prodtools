@@ -4305,6 +4305,38 @@ class TestRecoverLoop(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 recover.verify_row(row, sam_lister=lambda ds: [])
 
+    def test_resubmit_drops_firstjob_and_writes_indices(self):
+        from utils import recover
+        row = {'id': 7, 'tarball': 'cnf.mu2e.T.C.0.tar',
+               'entry': {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 5,
+                         'firstjob': 100, 'inloc': 'tape'},
+               'indices': [100, 102], 'attempt': 1, 'jobsub_id': '1.0@js'}
+        captured = {}
+
+        def fake_runner(cmd, **kwargs):
+            captured['cmd'] = cmd
+            return MagicMock(returncode=0)
+
+        ok = recover.resubmit(row, [100, 102], '/tmp/led.db',
+                              runner=fake_runner)
+        self.assertTrue(ok)
+        cmd = captured['cmd']
+        self.assertIn('--backend', cmd)
+        self.assertIn('direct', cmd)
+        self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
+        self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
+        map_path = cmd[cmd.index('--map') + 1]
+        entry = json.loads(Path(map_path).read_text())[0]
+        self.assertNotIn('firstjob', entry)
+        self.assertEqual(entry['njobs'], 5)
+        idx_path = cmd[cmd.index('--indices-file') + 1]
+        lines = Path(idx_path).read_text().splitlines()
+        self.assertEqual(lines[0], '# cnf.mu2e.T.C.0.tar')
+        self.assertEqual(lines[1:], ['100', '102'])
+        recover.resubmit(row, [100], '/tmp/led.db', dry_run=True,
+                         runner=fake_runner)
+        self.assertIn('--dry-run', captured['cmd'])
+
 
 # ---------------------------------------------------------------------------
 # Entry point
