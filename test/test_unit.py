@@ -4116,6 +4116,29 @@ class TestSubmitLedgerHook(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 13. mkrecovery scoped index scan (utils/mkrecovery.py)
+# ---------------------------------------------------------------------------
+
+class TestBuildFileMapsScoped(unittest.TestCase):
+    def test_scoped_scan_matches_windowed_scan(self):
+        from utils.jobquery import Mu2eJobPars
+        from utils.mkrecovery import build_file_maps
+        files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(6)]
+        tar = _make_tarball(_root_input_jobpars(files))
+        try:
+            jp = Mu2eJobPars(tar)
+            ds = 'sim.mu2e.TestDesc.TestConf.art'
+            full = build_file_maps(jp, [ds], njobs=6)[ds]
+            self.assertEqual(len(full), 6)
+            scoped = build_file_maps(jp, [ds], njobs=0, indices=[1, 4])[ds]
+            expect = {f: i for f, i in full.items() if i in (1, 4)}
+            self.assertEqual(scoped, expect)
+            self.assertEqual(sorted(set(scoped.values())), [1, 4])
+        finally:
+            os.unlink(tar)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

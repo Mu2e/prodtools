@@ -13,12 +13,18 @@ from utils.job_common import Mu2eName
 from utils.file_resolver import sam_physical_path
 from utils.poms_entry import tarball_of, njobs_of, firstjob_of
 
-def build_file_maps(job_io, datasets, njobs, firstjob=0):
+def build_file_maps(job_io, datasets, njobs, firstjob=0, indices=None):
     """One pass over the cnf's index window building, for each dataset in
     `datasets`, its {filename: window-relative index} map. job_outputs
     returns every output stream per call, so a single scan serves all of
     an entry's datasets (previously one full njobs-scan per dataset —
     and one fresh tarball parse each, megabytes for mixing cnfs).
+
+    With `indices` given, scan exactly those indices instead of
+    range(njobs) — map values are the indices as passed (the recovery
+    loop passes ABSOLUTE cnf indices with firstjob=0, so values come
+    back in the caller's own index space). njobs is ignored in that
+    case.
 
     Structured dataset compare — a substring test would false-match
     sibling dsconfs where one is a prefix of the other (e.g. ..._v1_4 vs
@@ -26,7 +32,8 @@ def build_file_maps(job_io, datasets, njobs, firstjob=0):
     """
     wanted = set(datasets)
     maps = {ds: {} for ds in datasets}
-    for job_idx in range(njobs):
+    scope = indices if indices is not None else range(njobs)
+    for job_idx in scope:
         for filename in job_io.job_outputs(firstjob + job_idx).values():
             try:
                 ds = str(Mu2eName.parse(filename).dataset)
