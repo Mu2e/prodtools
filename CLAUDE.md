@@ -6,7 +6,7 @@ Instructions for Claude Code when working in this repo.
 
 Before answering any question about running the prodtools commands
 (`json2jobdef`, `jobfcl`, `fcldump`, `runmu2e`, `jobdef`,
-`jobquery`, `mkidxdef`, `pomsMonitor`, `famtree`, `logparser`,
+`jobquery`, `pomsMonitor`, `famtree`, `logparser`,
 `genFilterEff`, `datasetFileList`, `listNewDatasets`, `mkrecovery`,
 `copy_to_stash`), read `EXAMPLES.md` at the repo
 root. It is the authoritative reference for CLI flags, JSON config

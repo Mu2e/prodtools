@@ -6,9 +6,11 @@
 #   1. rebuild the SQLite DB from the production POMS maps
 #   2. re-render index.html + jobs.json from that DB
 #
-# CRITICAL: render reads the dashboard HTML from --prodtools-dir. It MUST be
-# this repo (rich monitor.html), NOT the web cgi-bin checkout (stale/lean),
-# or the page regresses to an older layout. We pin it to this repo's root.
+# CRITICAL: render reads web/pomsMonitor/monitor_static.html (the static-native
+# template; the Flask app + monitor.html it used to serve are retired) from
+# --prodtools-dir. It MUST be this repo, NOT the web cgi-bin checkout
+# (stale), or the page regresses to an older layout. --prodtools-dir is kept
+# for cron back-compat (see render_static.py); we pin it to this repo's root.
 #
 # Runs as the invoking user (the web files under .../pomsMonitor/ and the DB
 # are owned by the deployer, not mu2epro). Needs pyenv ana for SQLAlchemy.
@@ -80,6 +82,6 @@ python3 "$REPO/web/pomsMonitor/render_static.py" \
 sz=$(stat -c%s "$OUT/index.html")
 if [ "$sz" -lt 25000 ]; then
     echo "WARNING: index.html is only ${sz} B (<25 KB) — looks like the lean page." >&2
-    echo "         Check --prodtools-dir points at the repo with the rich monitor.html." >&2
+    echo "         Check --prodtools-dir points at the repo with web/pomsMonitor/monitor_static.html." >&2
 fi
 echo "=== done: index.html ${sz} B, jobs.json $(stat -c%s "$OUT/jobs.json") B ==="

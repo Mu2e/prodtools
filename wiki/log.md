@@ -687,3 +687,17 @@ render_static now fails loudly on template drift. Dead json_output mode and
 ~10 unused imports removed. Skipped as behavior decisions: ntd tier-prefix
 whitelist in job_outputs, Job.indef dual grammar, runmu2e normal-mode
 double parse.
+
+## [2026-07-18] decision | tool-retirement pass — verdicts applied, ops decommission recorded
+Pages written: 2026-07-18-tool-retirement
+Evidence-first 11-task pass (`docs/superpowers/plans/2026-07-18-tool-retirement-verdicts.md`)
+retired `bin/mkidxdef`+`utils/mkidxdef.py` (`950106c`), `bin/setup_run1b.sh`
+(`f5a84ab`), `latestDatasets --names-only` (`a911300`), and — after the user's
+"decommission + retire" ruling on a live cgi-bin deployment the design spec
+had assumed was unused — the Flask app + JSON-editor UI (`cd955de`). Kept:
+all `pomsMonitor` flags, `latestDatasets`/`listNewDatasets` (distinct
+charters, no fold), `datasetFileList` (real code callers). Byte-diff gate
+(Task 8) surfaced a real `setup_script`-emptying bug in the old WSGI stub;
+user accepted the corrected (slower, working) behavior. cgi-bin
+deregistration is a human, out-of-repo step, not yet done — runbook in
+`web/pomsMonitor/README.md` and quoted on the new page. 344/344 tests green.
