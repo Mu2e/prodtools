@@ -230,8 +230,36 @@ def _read_cnf_facts(tarball_path):
             [v for v in out.values() if v and "/" not in v])
 
 
+def _parse_indices(spec, path):
+    """Parse --indices / --indices-file into a sorted unique list of ints.
+
+    Returns None when neither is given. Accepts comma- and/or
+    whitespace-separated values; in a file, `#` starts a comment (so
+    `mkrecovery --print-indices` output, which headers each tarball with
+    `# <tarball>`, pipes straight in).
+    """
+    if spec and path:
+        raise ValueError("--indices and --indices-file are mutually exclusive")
+    if spec:
+        raw = spec.replace(',', ' ').split()
+    elif path:
+        raw = []
+        for line in Path(path).read_text().splitlines():
+            line = line.split('#', 1)[0]
+            raw.extend(line.replace(',', ' ').split())
+    else:
+        return None
+    try:
+        parsed = {int(x) for x in raw}
+    except ValueError as e:
+        raise ValueError(f"--indices: not an integer ({e})")
+    if not parsed:
+        raise ValueError("--indices: no indices given")
+    return sorted(parsed)
+
+
 def _compute_jobset(opts, njobs_total, firstjob=0, entry_njobs=None):
-    """Resolve --first/--num into the list of job indices to submit.
+    """Resolve --first/--num/--indices into the list of job indices to submit.
 
     Indices are entry-relative (PROCESS space, starting at 0) — a windowed
     entry's `firstjob` offset is applied worker-side by `resolve_map_index`
@@ -242,7 +270,25 @@ def _compute_jobset(opts, njobs_total, firstjob=0, entry_njobs=None):
     Default: every index 0..size-1 (== mu2ejobsub --all).
     --first N alone: 1 job at index N.
     --first N --num M: indices [N, N+M).
+    --indices K1,K2,...: exactly those ABSOLUTE cnf indices (recovery). Only
+      valid on a non-windowed entry, because the values ARE the cnf indices
+      (the caller ships firstjob=0 so worker-side `local == global`); a
+      contiguous window cannot express a scattered set.
     """
+    if opts.indices is not None:
+        if firstjob:
+            raise ValueError(
+                "--indices takes absolute cnf indices and cannot be combined "
+                f"with a windowed entry (firstjob={firstjob}); drop firstjob "
+                "from the recovery map entry")
+        if opts.first is not None or opts.num is not None:
+            raise ValueError("--indices cannot be combined with --first/--num")
+        if opts.indices[0] < 0:
+            raise ValueError(f"--indices: negative index {opts.indices[0]}")
+        if njobs_total and opts.indices[-1] >= njobs_total:
+            raise ValueError(
+                f"--indices: {opts.indices[-1]} >= cnf capacity {njobs_total}")
+        return list(opts.indices)
     if firstjob:
         validate_window(firstjob, entry_njobs, njobs_total)
         size = entry_njobs
@@ -282,8 +328,12 @@ def submit_entry_direct(entry, idx, opts):
     if opts.dry_run and not tarball_path.is_file():
         # Capacity stand-in when the cnf isn't inspectable: the window end
         # (== njobs for plain entries), so validate_window never spuriously
-        # fails a dry run.
+        # fails a dry run. --indices addresses cnf indices far past the
+        # recovery entry's own njobs, so widen the stand-in to cover them —
+        # otherwise the real capacity check below rejects a valid dry run.
         njobs_total = firstjob_of(entry) + njobs_of(entry, default=1)
+        if opts.indices is not None:
+            njobs_total = max(njobs_total, opts.indices[-1] + 1)
         input_datasets = []
         output_filenames = []
     else:
@@ -299,14 +349,27 @@ def submit_entry_direct(entry, idx, opts):
     print(f"  inloc:   {inloc_of(entry)}")
     if firstjob and jobset:
         print(f"  window:  cnf indices {firstjob + jobset[0]}..{firstjob + jobset[-1]} (firstjob={firstjob})")
+    if opts.indices is not None and jobset:
+        print(f"  indices: {len(jobset)} absolute cnf indices (recovery), "
+              f"{jobset[0]}..{jobset[-1]}")
     print(f"  jobset:  {jobset if len(jobset) <= 10 else f'[{jobset[0]}..{jobset[-1]}] ({len(jobset)} indices)'}")
     print(f"{'='*60}")
+
+    # `--indices` values ARE cnf indices, but the worker reaches a cnf index via
+    # resolve_map_index (`local = global - cumulative + firstjob`, gated on
+    # `global < cumulative + njobs`). So the SHIPPED entry must sit at firstjob=0
+    # and span past the largest index for `local == global` to hold. Only the ops
+    # copy is rewritten — the on-disk map keeps its own njobs, so a recovery map
+    # never has to store the "bare submit re-runs everything" njobs.
+    ops_entry = entry
+    if opts.indices is not None:
+        ops_entry = {**entry, 'firstjob': 0, 'njobs': jobset[-1] + 1}
 
     # Synthesize ops JSON (jobs[] + inspec + jobdesc) and write to /tmp.
     # /tmp is the same FS jobsub_lite uses for its dropbox staging, so
     # this is fine for both local-test and mu2epro runs.
     ops = _jobsub_argv.build_ops_json(
-        entry=entry,
+        entry=ops_entry,
         jobset=jobset,
         input_datasets=input_datasets,
     )
@@ -544,6 +607,16 @@ def main():
                              'submits one job at this index.')
     parser.add_argument('--num', type=int, default=None,
                         help='[direct] Number of consecutive jobs from --first.')
+    parser.add_argument('--indices', default=None,
+                        help='[direct] Comma/space-separated ABSOLUTE cnf indices '
+                             'to submit (recovery) — one cluster, one job per '
+                             'index. --first/--num can only carve a contiguous '
+                             'range; this expresses a scattered set. Requires a '
+                             'non-windowed entry (no firstjob).')
+    parser.add_argument('--indices-file', default=None,
+                        help='[direct] File of ABSOLUTE cnf indices, whitespace/'
+                             'comma separated, `#` comments ignored. Consumes '
+                             '`mkrecovery --print-indices` output directly.')
     parser.add_argument('--wftop', default=None,
                         help='[direct] Outstage top dir (default: '
                              '/pnfs/mu2e/persistent/users for Production, '
@@ -568,6 +641,12 @@ def main():
                         help='Pass --verbose to mu2ejobsub (mu2ejobsub backend only)')
 
     args = parser.parse_args()
+
+    try:
+        args.indices = _parse_indices(args.indices, args.indices_file)
+    except (ValueError, OSError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     if not Path(args.map).is_file():
         print(f"Error: map file not found: {args.map}")

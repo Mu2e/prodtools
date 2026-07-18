@@ -3599,9 +3599,9 @@ class TestComputeJobsetWindow(unittest.TestCase):
     """Direct backend: jobset stays entry-relative (PROCESS space); a
     windowed entry sizes it from the entry's njobs and validates capacity."""
 
-    def _opts(self, first=None, num=None):
+    def _opts(self, first=None, num=None, indices=None):
         from types import SimpleNamespace
-        return SimpleNamespace(first=first, num=num)
+        return SimpleNamespace(first=first, num=num, indices=indices)
 
     def test_plain_uses_cnf_njobs(self):
         from utils.submit import _compute_jobset
@@ -3637,6 +3637,135 @@ class TestComputeJobsetWindow(unittest.TestCase):
             _compute_jobset(self._opts(first=1, num=2), 0,
                             firstjob=5000, entry_njobs=4),
             [1, 2])
+
+    def test_indices_returns_exact_scattered_set(self):
+        """--indices is the whole point: a set --first/--num cannot express."""
+        from utils.submit import _compute_jobset
+        self.assertEqual(
+            _compute_jobset(self._opts(indices=[14719, 15944, 24301]), 0),
+            [14719, 15944, 24301])
+
+    def test_indices_on_open_ended_cnf(self):
+        """capacity 0 = open-ended: no upper bound to check against."""
+        from utils.submit import _compute_jobset
+        self.assertEqual(_compute_jobset(self._opts(indices=[99999]), 0), [99999])
+
+    def test_indices_within_closed_capacity(self):
+        from utils.submit import _compute_jobset
+        self.assertEqual(_compute_jobset(self._opts(indices=[0, 9]), 10), [0, 9])
+
+    def test_indices_beyond_closed_capacity_raises(self):
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(indices=[0, 10]), 10)
+
+    def test_indices_rejects_windowed_entry(self):
+        """Indices are absolute; a firstjob offset would double-count."""
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(indices=[5001]), 0,
+                            firstjob=5000, entry_njobs=10)
+
+    def test_indices_rejects_first_num(self):
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(first=1, indices=[5]), 0)
+
+    def test_indices_negative_raises(self):
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(indices=[-1, 5]), 0)
+
+
+class TestParseIndices(unittest.TestCase):
+    """--indices/--indices-file parsing: sorted, deduped, comment-tolerant."""
+
+    def test_none_when_neither_given(self):
+        from utils.submit import _parse_indices
+        self.assertIsNone(_parse_indices(None, None))
+
+    def test_comma_and_whitespace_separated(self):
+        from utils.submit import _parse_indices
+        self.assertEqual(_parse_indices('3,1 2', None), [1, 2, 3])
+
+    def test_sorts_and_dedupes(self):
+        from utils.submit import _parse_indices
+        self.assertEqual(_parse_indices('5,1,5,1', None), [1, 5])
+
+    def test_mutually_exclusive(self):
+        from utils.submit import _parse_indices
+        with self.assertRaises(ValueError):
+            _parse_indices('1', '/tmp/whatever')
+
+    def test_non_integer_raises(self):
+        from utils.submit import _parse_indices
+        with self.assertRaises(ValueError):
+            _parse_indices('1,abc', None)
+
+    def test_empty_spec_raises(self):
+        from utils.submit import _parse_indices
+        with self.assertRaises(ValueError):
+            _parse_indices(' , ', None)
+
+    def test_file_ignores_comments_and_blanks(self):
+        """Consumes `mkrecovery --print-indices` output, whose `# <tarball>`
+        headers must not parse as indices."""
+        import tempfile
+        from utils.submit import _parse_indices
+        with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as f:
+            f.write("# cnf.mu2e.MuStopPileup.Run1Ban-001.0.tar\n"
+                    "14719\n"
+                    "\n"
+                    "15944  # trailing comment\n")
+            path = f.name
+        try:
+            self.assertEqual(_parse_indices(None, path), [14719, 15944])
+        finally:
+            os.unlink(path)
+
+
+class TestIndicesOpsEntryContract(unittest.TestCase):
+    """The worker-side half of --indices: submit_entry_direct ships
+    `{**entry, firstjob: 0, njobs: max+1}`, which must make resolve_map_index
+    an identity (local == the absolute cnf index) for every submitted index."""
+
+    def test_resolve_map_index_is_identity(self):
+        from utils.prod_utils import resolve_map_index
+        indices = [14719, 15944, 24301]
+        ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0,
+                     'njobs': indices[-1] + 1}          # mirrors submit.py
+        for k in indices:
+            entry, _, local = resolve_map_index([ops_entry], k)
+            self.assertIsNotNone(entry, f"index {k} unreachable")
+            self.assertEqual(local, k)
+
+    def test_njobs_without_the_plus_one_drops_the_max_index(self):
+        """Pins the +1: resolve_map_index gates on `global < njobs`, so
+        njobs == max would put the largest index out of range."""
+        from utils.prod_utils import resolve_map_index
+        ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0, 'njobs': 24301}
+        self.assertEqual(resolve_map_index([ops_entry], 24301), (None, None, None))
+
+
+class TestMkrecoveryPrintIndices(unittest.TestCase):
+    """print_indices emits ABSOLUTE cnf indices (firstjob + window-relative)."""
+
+    def test_adds_firstjob_offset_and_headers(self):
+        import contextlib
+        from utils.mkrecovery import print_indices
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_indices('cnf.mu2e.X.0.tar', 15000, {944, 991})
+        self.assertEqual(buf.getvalue().splitlines(),
+                         ['# cnf.mu2e.X.0.tar', '15944', '15991'])
+
+    def test_zero_firstjob_is_identity(self):
+        import contextlib
+        from utils.mkrecovery import print_indices
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_indices('cnf.mu2e.X.0.tar', 0, {7})
+        self.assertEqual(buf.getvalue().splitlines(), ['# cnf.mu2e.X.0.tar', '7'])
 
 
 class TestMu2ejobsubArgvFirstjob(unittest.TestCase):

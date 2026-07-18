@@ -47,6 +47,24 @@ def find_missing_indices(tarball_path, dataset, njobs, firstjob=0):
     missing_indices = {file_to_job[f] for f in missing_files}
     return missing_indices, missing_files
 
+def print_indices(tarball, firstjob, missing_indices):
+    """Emit ABSOLUTE cnf indices, one per line, for `submit_map --indices-file`.
+
+    `find_missing_indices` returns WINDOW-RELATIVE indices, so the absolute cnf
+    index is `firstjob + relative`. NOTE this is a different index space from
+    the recovery SAM definition, which carries GLOBAL indices (cumulative +
+    relative) for the POMS `fname` path — direct-backend `--indices` wants cnf
+    indices, POMS wants global ones.
+
+    The `# <tarball>` header keeps a multi-entry dump attributable (indices only
+    mean anything against their own cnf) and is skipped by the --indices-file
+    parser.
+    """
+    print(f"# {tarball}")
+    for idx in sorted(missing_indices):
+        print(firstjob + idx)
+
+
 def create_recovery_definition(defname, indices):
     """Create SAM recovery definition from job indices. Returns True on
     success; on failure prints the error and returns False (does not
@@ -100,17 +118,27 @@ def main():
     p.add_argument('--firstjob', type=int, default=0,
                    help='Cnf-index window start for single tarball mode (default 0)')
     p.add_argument('--jobdesc', action='store_true', help='Process jobdesc JSON file with global indices')
+    p.add_argument('--print-indices', action='store_true',
+                   help='Print the missing ABSOLUTE cnf indices to stdout instead '
+                        'of creating a SAM recovery definition (read-only — makes '
+                        'no SAM writes). Feeds `submit_map --indices-file`. '
+                        'Diagnostics go to stderr so stdout stays pipeable.')
     args = p.parse_args()
-    
+
+    # In --print-indices mode stdout carries ONLY indices, so every diagnostic
+    # goes to stderr; otherwise both go to stdout as before.
+    out = sys.stderr if args.print_indices else sys.stdout
+
     if args.jobdesc:
         # Process jobdesc JSON file
         with open(args.input) as f:
             entries = json.load(f)
-        
+
         json_basename = os.path.basename(args.input).replace('.json', '')
         all_missing_indices, cumulative = set(), 0
-        
-        print(f"Processing {len(entries)} entries from {args.input}\n{'='*60}\n")
+        per_entry_absolute = []
+
+        print(f"Processing {len(entries)} entries from {args.input}\n{'='*60}\n", file=out)
         
         for i, entry in enumerate(entries):
             tarball = tarball_of(entry)
@@ -119,51 +147,60 @@ def main():
             if njobs is None:
                 raise ValueError(f"POMS entry {i} missing required field: 'njobs'")
             print(f'[{i+1}/{len(entries)}] {tarball}'
-                  + (f' (window {firstjob}..{firstjob + njobs - 1})' if firstjob else ''))
-            
+                  + (f' (window {firstjob}..{firstjob + njobs - 1})' if firstjob else ''),
+                  file=out)
+
             # Locate tarball
             tarball_path = locate_tarball(tarball)
             if not tarball_path or not os.path.exists(tarball_path):
-                print(f'  ERROR: Could not locate tarball')
+                print(f'  ERROR: Could not locate tarball', file=out)
                 cumulative += njobs
                 continue
-            
+
             # Extract output datasets from job definition
             try:
                 output_datasets = extract_datasets_from_tarball(tarball_path, njobs)
             except Exception as e:
-                print(f'  WARNING: Could not extract datasets from tarball: {e}')
+                print(f'  WARNING: Could not extract datasets from tarball: {e}', file=out)
                 cumulative += njobs
                 continue
-            
+
             if not output_datasets:
-                print(f'  WARNING: No output datasets found in job definition')
+                print(f'  WARNING: No output datasets found in job definition', file=out)
                 cumulative += njobs
                 continue
-            
+
             # Process each dataset
             for dataset_name in output_datasets:
                 try:
                     nfiles = dataset_file_count(dataset_name)
                 except Exception as e:
-                    print(f'    {dataset_name}: Could not query SAM ({e})')
+                    print(f'    {dataset_name}: Could not query SAM ({e})', file=out)
                     nfiles = 0
-                
-                print(f'    {dataset_name}: {nfiles}/{njobs} files')
+
+                print(f'    {dataset_name}: {nfiles}/{njobs} files', file=out)
                 missing_indices, missing_files = find_missing_indices(tarball_path, dataset_name, njobs, firstjob)
 
                 if not missing_indices:
-                    print(f'      Complete')
+                    print(f'      Complete', file=out)
                 else:
-                    print(f'      Missing: {len(missing_files)} files (expected {njobs}, found {nfiles})')
+                    print(f'      Missing: {len(missing_files)} files (expected {njobs}, found {nfiles})',
+                          file=out)
                     # window-relative → global recovery indices
                     all_missing_indices.update(cumulative + idx for idx in missing_indices)
-            
+                    per_entry_absolute.append((tarball, firstjob, set(missing_indices)))
+
             cumulative += njobs
-            print()
-        
-        # Create global recovery definition
-        if all_missing_indices:
+            print(file=out)
+
+        if args.print_indices:
+            # Absolute cnf indices, grouped per tarball (they are only
+            # meaningful against their own cnf — feed one group per submit).
+            for tarball, firstjob, missing in per_entry_absolute:
+                print_indices(tarball, firstjob, missing)
+            if not per_entry_absolute:
+                print("No missing files across all entries!", file=out)
+        elif all_missing_indices:
             print(f"{'='*60}\nCreating global recovery dataset\n{'='*60}")
             print(f"Total missing indices: {len(all_missing_indices)}")
             create_recovery_definition(f"{json_basename}-recovery", all_missing_indices)
@@ -176,9 +213,14 @@ def main():
             p.error("--dataset and --njobs required for single tarball mode")
         
         missing_indices, missing_files = find_missing_indices(args.input, args.dataset, args.njobs, args.firstjob)
-        print(f"Missing: {len(missing_files)} of {args.njobs}")
-        
-        if missing_indices:
+        print(f"Missing: {len(missing_files)} of {args.njobs}", file=out)
+
+        if args.print_indices:
+            if missing_indices:
+                print_indices(args.input, args.firstjob, missing_indices)
+            else:
+                print("No missing files!", file=out)
+        elif missing_indices:
             create_recovery_definition(f"{args.dataset.replace('.art', '')}-recovery", missing_indices)
         else:
             print("No missing files!")

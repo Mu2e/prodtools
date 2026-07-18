@@ -58,7 +58,7 @@ Core production tools:
 - `runmu2e` — worker entry point: FCL generation, `mu2e` execution, pushOutput
 - `submit_map` — submit all entries of a POMS-map JSON to the grid
 - `mkidxdef` — (re)create the SAM index definition for a jobdefs list
-- `mkrecovery` — build recovery SAM definitions for missing job indices
+- `mkrecovery` — find job indices whose outputs are missing from SAM
 
 Analysis / diagnostic tools:
 
@@ -260,6 +260,10 @@ fcldump --local-jobdef cnf.mu2e.reco.Run1Ban_best_v1_4-000.0.tar \
 fcldump --list-dsconf Run1Ban_best_v1_5-000
 ```
 
+Flags: `--dataset`, `--target`, `--local-jobdef`, `--fname`,
+`--list-dsconf`, `--index N` (default 0), `--loc` (default `tape`),
+`--proto` (default `root`).
+
 Note: one cnf often produces outputs whose descriptions carry suffixes
 glued onto the cnf desc (`Triggered`/`Triggerable` at digi/mix, `-LH`/
 `-CH`/`-KL` at reco). `fcldump --dataset` handles the resolution; when it
@@ -323,13 +327,16 @@ inputs locally with `mdh` instead of streaming).
 
 - The `etc.mu2e.index.000.NNNNNNN.txt` filename encodes the job index:
   the seventh-field `NNNNNNN` (the sequencer) is the global job index,
-  zero-padded to 7 digits. The `000` field is a fixed description
-  placeholder, not the index.
+  zero-padded to 7 digits. `mkrecovery` writes these as
+  `etc.mu2e.index.000.{idx:07d}.txt`. The `000` field is a fixed
+  description placeholder, not the index.
 - The global index is mapped across the entries of the jobdesc JSON in
-  order; each entry consumes `njobs` indices.
+  order; each entry consumes `njobs` indices. Within an entry,
+  `local = global - cumulative + firstjob`.
 - Direct mode (no `fname`): `submit_map --backend direct` sets
   `MU2EGRID_JOBDEF` and related environment variables; workers derive the
-  index from `$PROCESS`. See section 11, `submit_map`.
+  index from `$PROCESS` via the ops JSON's `jobs` lookup table. See
+  section 11, `submit_map`.
 
 ## 8. Sequential vs. Pseudo-Random Auxiliary Input Selection
 
@@ -410,7 +417,7 @@ pomsMonitorWeb
 Dataset ancestry as a Mermaid diagram (auto-excludes `etc*.txt` files):
 
 ```bash
-famtree dts.mu2e.RPCExternal.MDC2020aw.art
+famtree dts.mu2e.MuStopPileupCat.Run1Ban.art
 famtree mcs.mu2e.CeEndpointMix1BBTriggered.Run1Ban_best_v1_5-000.art --stats --max-files 20
 ```
 
@@ -466,7 +473,7 @@ Flags: `--filetype`, `--days N`, `--user`, `--size`, `--query`,
 ### `latestDatasets`
 
 Latest dsconf per description; also emits ready-to-run json2jobdef
-configs for the next chain stage from `templates/<family>/<stage>.json`:
+configs for the next chain stage from `templates/<campaign>/<stage>.json`:
 
 ```bash
 latestDatasets --defname 'dig.mu2e.%.MDC2025%.art' --show-count
@@ -475,23 +482,39 @@ latestDatasets --emit reco --campaign MDC2025ap --skip-produced
 
 Flags: `--defname`, `--user`, `--stdin`, `--names-only`, `--show-count`,
 `--emit {digi,reco,ntuple,mix}`, `--campaign`, `--templates-dir`,
-`--dsconf`, `--complete-only`, `--skip-produced`, `-v`.
+`--dsconf`, `--complete-only`, `--skip-produced`, `-v/--verbose`.
 
 ### `mkrecovery`
 
-Recovery SAM definitions for missing job indices:
+Find job indices whose outputs are missing from SAM. Expected filenames
+come from the cnf itself, diffed against the dataset in SAM — so it is
+robust to naming and multi-output stages in a way a filename scan is not.
 
 ```bash
-# Whole POMS-map JSON (global indices)
+# Whole POMS-map JSON — creates a recovery SAM definition
 mkrecovery /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-032.json --jobdesc
 
-# Single tarball
-mkrecovery cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar \
-    --dataset dig.mu2e.NoPrimaryMix1BBTriggered.Run1Ban_best_v1_5-000.art --njobs 2000
+# Single tarball, windowed entry
+mkrecovery cnf.mu2e.MuStopPileup.Run1Ban-001.0.tar \
+    --dataset dts.mu2e.MuStopPileup.Run1Ban-001.art --njobs 5000 --firstjob 15000
+
+# Print the missing cnf indices instead (read-only — makes no SAM writes)
+mkrecovery /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-032.json \
+    --jobdesc --print-indices > gaps.txt
 ```
 
-Writes `etc.mu2e.index.000.{idx:07d}.txt` entries into a recovery
-definition consumable via `fname` (section 7).
+Flags: `input` (tarball path or jobdesc JSON), `--dataset` and `--njobs`
+(both required in single-tarball mode), `--firstjob F` (cnf-index window
+start, default 0), `--jobdesc`, `--print-indices`.
+
+Two index spaces — pick the one your submission path consumes:
+
+- Default writes `etc.mu2e.index.000.{idx:07d}.txt` entries into a
+  `<name>-recovery` SAM definition carrying **global** indices (cumulative
+  across jobdesc entries), for the POMS `fname` path (section 7).
+- `--print-indices` prints **absolute cnf** indices (`firstjob + relative`),
+  one per line under a `# <tarball>` header, for `submit_map
+  --indices-file`. Diagnostics go to stderr so stdout stays pipeable.
 
 ### `mkidxdef`
 
@@ -515,6 +538,9 @@ Flags: `--jobname`, `--njobs`, `--input-datasets`, `--input-files`,
 `--output-datasets`, `--output-files DATASET[:size]`, `--codesize`,
 `--extract-code`, `--setup`.
 
+`--njobs` reports the cnf's own capacity from `tbs.njobs`; `0` means
+open-ended (the POMS-map entry is authoritative).
+
 ### `submit_map`
 
 Submit all (or selected) entries of a POMS-map JSON:
@@ -523,16 +549,43 @@ Submit all (or selected) entries of a POMS-map JSON:
 submit_map --map MDC2025-032.json --dry-run
 submit_map --map MDC2025-032.json --entry 3
 submit_map --map MDC2025-032.json --backend direct --first 0 --num 10
+
+# Recovery: exactly these cnf indices, one cluster, one job per index
+submit_map --map Run1Ban-pileuprecover.json --backend direct \
+    --indices-file gaps.txt --expected-lifetime 48h --memory 4000MB
 ```
 
 Flags: `--map` (required), `--entry N`, `--backend {mu2ejobsub,direct}`
-(default `mu2ejobsub`), `--first N` / `--num M` (direct), `--wftop`,
-`--wfproject`, `--role`, `--disk`, `--memory`, `--expected-lifetime`,
-`--prodtools-tar`, `--dry-run`, `--verbose`.
+(default `mu2ejobsub`), `--first N` / `--num M` (direct), `--indices
+K1,K2,...` / `--indices-file FILE` (direct), `--wftop`, `--wfproject`,
+`--role`, `--disk` (default `30GB`), `--memory` (default `2000MB`),
+`--expected-lifetime` (default `24h`), `--prodtools-tar`, `--dry-run`,
+`--verbose`.
 
 The direct backend builds the `jobsub_submit` argv itself, ships the
 repo's `utils/` + `bin/` as a dropbox tarball, and runs per-job
 `pushOutput` on the worker.
+
+Statistics expansion (`firstjob` windows):
+
+- The per-job seed is `baseSeed = 1 + cnf index` (flat — no version, run,
+  or dsconf term). To extend a dataset's statistics, reuse the existing
+  tarball at fresh indices via a window: a POMS-map entry with
+  `"firstjob": F, "njobs": M` runs cnf indices `[F, F+M)`, giving fresh
+  seeds `F+1..` and fresh sequencers.
+- Do NOT bump `version`/`run` for a same-input expansion — that restarts
+  the cnf index at 0 and duplicates physics.
+- Only open-ended cnfs (no `tbs.njobs` cap) can be windowed past their
+  original count; closed cnfs are capacity-checked.
+
+Job selection within an entry:
+
+- `--first`/`--num` carve a contiguous slice, **entry-relative**: the
+  entry's `firstjob` is added worker-side, so `--first 944` on a
+  `firstjob=15000` entry runs cnf index 15944.
+- `--indices` takes **absolute cnf indices** for a scattered recovery set
+  that no contiguous range can express, and requires a non-windowed entry.
+  It submits one cluster with one job per index.
 
 ### `copy_to_stash`
 
@@ -569,6 +622,15 @@ DB and regenerates the static dashboard site.
   `description`/`owner`/`version`/`sequencer` token after substitution;
   add an explicit per-output `fcl_overrides` entry (typical for suffixed
   outputs like `{desc}-CH`).
+- `window [F, F+M) exceeds cnf capacity N` — a `firstjob` window runs past
+  a closed cnf's `tbs.njobs`. Only open-ended cnfs (capacity 0) accept any
+  window.
+- `--first N --num M out of range for jobset size=S` — the carve falls
+  outside the entry's window (`size` is the entry's `njobs` when windowed,
+  else the cnf capacity).
+- `--indices takes absolute cnf indices and cannot be combined with a
+  windowed entry` — drop `firstjob` from the recovery map entry; `--indices`
+  values are already absolute.
 - `Could not locate file: <name>` — SAM has no location for an input
   file; check the entry's `inloc` against where the files actually live
   (`samweb locate-file <name>`).
