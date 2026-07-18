@@ -3964,6 +3964,83 @@ class TestJobsPayload(unittest.TestCase):
             sorted(['njobs', 'tarball', 'source_file', 'setup_script',
                     'complete', 'avg_real_h', 'avg_vmhwm_gb', 'outputs']))
 
+# ---------------------------------------------------------------------------
+# Submission ledger (utils/submission_ledger.py) — direct-backend recovery
+# ---------------------------------------------------------------------------
+class TestSubmissionLedger(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 5, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+
+    def _record(self, indices=(0, 1, 2), parent=None):
+        return self.sl.record_submission(
+            self.db, tarball=self.entry['tarball'], entry=self.entry,
+            indices=list(indices), jobsub_id='12345678.0@jobsub03.fnal.gov',
+            cluster_id='12345678', map_path='/tmp/map.json', parent_id=parent)
+
+    def test_record_and_read_roundtrip(self):
+        rid = self._record()
+        rows = self.sl.open_rows(self.db)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row['id'], rid)
+        self.assertEqual(row['state'], 'active')
+        self.assertEqual(row['attempt'], 1)
+        self.assertIsNone(row['parent_id'])
+        self.assertEqual(row['indices'], [0, 1, 2])
+        self.assertEqual(row['entry'], self.entry)
+        self.assertEqual(row['jobsub_id'], '12345678.0@jobsub03.fnal.gov')
+        self.assertEqual(row['cluster_id'], '12345678')
+
+    def test_indices_stored_sorted(self):
+        self._record(indices=(7, 2, 5))
+        self.assertEqual(self.sl.open_rows(self.db)[0]['indices'], [2, 5, 7])
+
+    def test_child_attempt_increments(self):
+        rid = self._record()
+        child = self._record(indices=(2,), parent=rid)
+        rows = {r['id']: r for r in self.sl.open_rows(self.db)}
+        self.assertEqual(rows[child]['attempt'], 2)
+        self.assertEqual(rows[child]['parent_id'], rid)
+
+    def test_unknown_parent_rejected(self):
+        with self.assertRaises(ValueError):
+            self._record(parent=999)
+
+    def test_close_row_removes_from_open(self):
+        rid = self._record()
+        self.sl.close_row(self.db, rid, 'complete', note='all verified')
+        self.assertEqual(self.sl.open_rows(self.db), [])
+        allr = self.sl.all_rows(self.db)
+        self.assertEqual(allr[0]['state'], 'complete')
+        self.assertEqual(allr[0]['note'], 'all verified')
+        self.assertIsNotNone(allr[0]['closed_utc'])
+
+    def test_close_invalid_state_rejected(self):
+        rid = self._record()
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'bogus')
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'active')
+
+    def test_close_nonactive_row_rejected(self):
+        rid = self._record()
+        self.sl.close_row(self.db, rid, 'complete')
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'exhausted')
+
+    def test_missing_db_dir_fails_loudly(self):
+        import sqlite3
+        with self.assertRaises(sqlite3.OperationalError):
+            self.sl.record_submission(
+                '/nonexistent-dir-recovery-test/sub.db', tarball='t',
+                entry={}, indices=[0], jobsub_id=None, cluster_id='1')
+
 
 # ---------------------------------------------------------------------------
 # Entry point
