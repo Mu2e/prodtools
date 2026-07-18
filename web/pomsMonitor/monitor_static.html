@@ -248,13 +248,6 @@
     <h1>Mu2e Production Monitor</h1>
     <p style="color:#666; margin: -8px 0 16px 0; font-size: 0.7em;">Read-only static snapshot &middot; Last refreshed: @@REFRESHED_AT@@</p>
     
-    <div class="nav" style="margin-bottom: 20px;">
-        
-        
-        
-        
-    </div>
-    
     <div class="toolbar">
         <div class="group">
             <label for="datasetFilter">Search</label>
@@ -331,8 +324,6 @@
                 displayJobs(arr[0]);
             }).catch(function(err) { showError(err.message); });
         }
-
-        function reloadData() { /* removed in static deploy */ }
 
         function displayJobs(data) {
             var colNames = ['NJOBS', 'LOC', '<EVENTS>', '<FILE SIZE [MB]>', 'DATE', 'Real [h]', 'VmHWM [GB]', 'OUTPUT DATASET', 'JOBDESC', 'TARBALL', 'SETUP'];
@@ -505,8 +496,6 @@
             document.getElementById('campaignFilter').value = 'all';
             filterDatasets();
         }
-
-        function openJsonInEditor() { /* removed in static deploy */ }
 
         function showDatasetInfo(datasetName) {
             var modal = document.getElementById('diagramModal');

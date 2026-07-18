@@ -701,3 +701,15 @@ charters, no fold), `datasetFileList` (real code callers). Byte-diff gate
 user accepted the corrected (slower, working) behavior. cgi-bin
 deregistration is a human, out-of-repo step, not yet done — runbook in
 `web/pomsMonitor/README.md` and quoted on the new page. 344/344 tests green.
+
+## [2026-07-18] update | 2026-07-18-tool-retirement (ops decommission gap: cron also reads the stale checkout)
+Pages updated: 2026-07-18-tool-retirement
+Reason: final whole-branch review caught that `cron_run_inspect_datasets.sh`
+runs `db_builder.py`/`build_lineage.py`/`render_static.py` from the same
+synced `cgi-bin/prodtools/` checkout (pinned `3ad4069`) the WSGI shim used —
+not just the retired Flask app. The prior runbook wording ("checkout can
+stay") was wrong: until synced past this branch, the nightly cron keeps
+running the old Flask-test-client render path with the `setup_script` bug.
+Runbook in `web/pomsMonitor/README.md` and this page's Ops-decommission
+section both gained an explicit sync-checkout step (before/with the
+`wsgi.py` deregistration) plus a post-sync `setup_script` verification.

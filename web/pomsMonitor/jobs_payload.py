@@ -19,6 +19,8 @@ from utils.samweb_wrapper import locate_files_strict
 from utils.file_resolver import sam_physical_path, path_from_sam_locations
 from utils.jobquery import Mu2eJobPars
 
+# cnf tarballs are immutable, so setup-script extraction is cached for the
+# life of the process — once per tarball instead of once per job row.
 _setup_cache = {}
 
 

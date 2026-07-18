@@ -78,17 +78,40 @@ A live cgi-bin Flask instance predates this static renderer:
   `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/prodtools/`, pinned at commit
   `3ad4069` (2026-04-29).
 
+**That same synced checkout is also what `cron_run_inspect_datasets.sh`
+runs `db_builder.py` / `build_lineage.py` / `render_static.py` from**
+(see `PRODTOOLS_DIR` in the cron header). Until it is synced past this
+retirement branch, the nightly cron keeps executing the *old*
+Flask-test-client render path — with the `setup_script`-stubbing bug —
+and the deleted Flask app files stay live on disk there, even after
+`wsgi.py` is deregistered.
+
 To retire it:
 
-1. Remove the `from pomsMonitor import app as pomsMonitor` registration
+1. Sync `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/prodtools/` to a
+   commit at or past this retirement branch (or repoint
+   `cron_run_inspect_datasets.sh`'s `PRODTOOLS_DIR` at a maintained
+   checkout instead). Do this **before or together with** step 2 below
+   — deregistering `wsgi.py` alone does not fix the cron's render
+   path. The new static-native render path imports `jobs_payload.py`,
+   which needs a *working* `samweb_client` in the cron's environment
+   (the old path only "worked" there because the WSGI shim stubbed
+   `samweb_client` at import time — that stub was the bug being fixed,
+   not a dependency to preserve).
+2. Remove the `from pomsMonitor import app as pomsMonitor` registration
    line from `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/wsgi.py`.
-2. `rm -r /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/`.
+3. `rm -r /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/`.
+4. Verify post-sync: after the next cron run, the published
+   `jobs.json` under
+   `htdocs/computing/ops/production/pomsMonitor/` shows populated
+   `setup_script` values (non-empty strings), confirming the cron is
+   on the fixed render path and not the stubbed one.
 
-The synced `cgi-bin/prodtools/` checkout can stay (other cgi-bin apps
-may still reference it) — once deregistered from `wsgi.py` it simply
-stops serving the `/pomsMonitor` dashboard/editor URLs. Only the
-static artifacts under `htdocs/computing/ops/production/pomsMonitor/`
-serve the dashboard from here on.
+Only the static artifacts under
+`htdocs/computing/ops/production/pomsMonitor/` serve the dashboard
+from here on; the `cgi-bin/prodtools/` checkout is a code source for
+the cron, not something that "can stay" unmaintained — it must track
+the repo or the nightly render silently regresses.
 
 ## Note: the old render path silently dropped `setup_script`
 

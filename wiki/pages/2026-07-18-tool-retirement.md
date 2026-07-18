@@ -170,22 +170,42 @@ have a recorded gate outcome.
 The static renderer replaces the Flask app's cron/build path, but a
 **live cgi-bin WSGI deployment predates it** and is not touched by
 deleting files from this repo — it runs from a separately synced
-checkout (`cgi-bin/prodtools/`, pinned at commit `3ad4069`). The
-decommission runbook lives in `web/pomsMonitor/README.md` ("Decommission
-(perform on the web host, not in this repo)") and is **not yet
-executed** — it is a human, out-of-repo action:
+checkout (`cgi-bin/prodtools/`, pinned at commit `3ad4069`). That same
+synced checkout is also what `cron_run_inspect_datasets.sh` runs
+`db_builder.py` / `build_lineage.py` / `render_static.py` from
+(`PRODTOOLS_DIR` in the cron header) — so until it is synced past this
+retirement branch, the nightly cron keeps executing the *old*
+Flask-test-client render path (with the `setup_script`-stubbing bug
+described below) and the deleted Flask app files stay live on disk
+there, even after `wsgi.py` is deregistered. The decommission runbook
+lives in `web/pomsMonitor/README.md` ("Decommission (perform on the
+web host, not in this repo)") and is **not yet executed** — it is a
+human, out-of-repo action:
 
-1. Remove the `from pomsMonitor import app as pomsMonitor` registration
+1. Sync `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/prodtools/` to a
+   commit at or past this retirement branch (or repoint the cron's
+   `PRODTOOLS_DIR` at a maintained checkout instead), **before or
+   together with** step 2 — deregistering `wsgi.py` alone does not fix
+   the cron's render path. The new static-native render path needs a
+   *working* `samweb_client` in the cron's environment: the old path
+   only "worked" there because the WSGI shim stubbed `samweb_client`
+   at import time, and that stub was the bug (see "Found along the
+   way" below), not a dependency to preserve.
+2. Remove the `from pomsMonitor import app as pomsMonitor` registration
    line from `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/wsgi.py`.
-2. `rm -r /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/`.
+3. `rm -r /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/`.
+4. Verify post-sync: after the next cron run, the published
+   `jobs.json` under `htdocs/computing/ops/production/pomsMonitor/`
+   shows populated `setup_script` values (non-empty strings) —
+   confirms the cron is on the fixed render path, not the stubbed one.
 
-The synced `cgi-bin/prodtools/` checkout itself can stay (other
-cgi-bin apps may reference it); once deregistered from `wsgi.py` it
-simply stops serving the `/pomsMonitor` dashboard/editor URLs. From
-that point on, only the static artifacts under
-`htdocs/computing/ops/production/pomsMonitor/` (produced by
-`bin/update_pomsmonitor_web` and the `cron_run_inspect_datasets.sh`
-nightly cron) serve the dashboard.
+The synced `cgi-bin/prodtools/` checkout is a code source for the
+cron, not something that can be left unmaintained once `wsgi.py` is
+deregistered — it must track the repo or the nightly render silently
+regresses to the old, buggy path. From that point on, only the static
+artifacts under `htdocs/computing/ops/production/pomsMonitor/`
+(produced by `bin/update_pomsmonitor_web` and the
+`cron_run_inspect_datasets.sh` nightly cron) serve the dashboard.
 
 ## Found along the way
 

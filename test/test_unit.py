@@ -3926,6 +3926,7 @@ class TestValidateJobdescFirstjob(unittest.TestCase):
 # 35. jobs_payload: static dashboard data builder (web/pomsMonitor/jobs_payload.py)
 # ---------------------------------------------------------------------------
 
+@requires_sqlalchemy
 class TestJobsPayload(unittest.TestCase):
     """build_jobs_payload replaces the Flask /api/jobs route for render_static."""
 

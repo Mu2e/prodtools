@@ -40,7 +40,9 @@ def render(out_dir: str, prodtools_dir: str, db_path: str) -> None:
 
     jobs_data = jobs_payload.build_jobs_payload(db_path)
     if not jobs_data:
-        print("WARNING: jobs payload is empty", file=sys.stderr)
+        raise SystemExit(
+            "jobs payload is empty — refusing to overwrite the published "
+            "dashboard (check --db)")
     jobs_body = json.dumps(jobs_data, separators=(',', ':')).encode('utf-8')
 
     with open(_TEMPLATE, encoding='utf-8') as f:
