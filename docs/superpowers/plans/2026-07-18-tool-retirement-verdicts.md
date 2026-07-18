@@ -86,3 +86,15 @@ Applying this mechanically:
 | 6 | datasetFileList CLI | KEEP confirmed (Task 4 step 3 does not apply) |
 | 7 | setup_run1b.sh | **RETIRE approved** |
 | 8 | latestDatasets --names-only | **RETIRE approved** (--show-count stays) |
+
+## Task 8 gate amendment (2026-07-18, user ruling)
+
+The byte-diff gate surfaced a pre-existing production bug: the old render
+path imports the Flask app through the WSGI shim, whose unconditional
+`samweb_client` stub silently emptied every `setup_script` in the published
+jobs.json. User ruling: **accept the corrected behavior**. Gate criterion
+amended to: index.html timestamp-normalized identical; jobs.json identical
+except `setup_script` transitions '' → real value (rigorous field-level
+comparison, zero other diffs). Operational note: cron renders now do real
+SAM+tarball resolution (~minutes slower); the published dashboard gains a
+working setup-script column.
