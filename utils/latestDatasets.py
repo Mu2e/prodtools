@@ -228,8 +228,6 @@ def main():
     ap.add_argument("--user", help="filter samweb list-definitions by --user")
     ap.add_argument("--stdin", action="store_true",
                     help="read definition names from stdin instead of querying samweb")
-    ap.add_argument("--names-only", action="store_true",
-                    help="print only the latest defname per group (no description/count columns)")
     ap.add_argument("--show-count", action="store_true",
                     help="include a column with how many dsconfs were collapsed per description")
     ap.add_argument("--emit", choices=("digi", "reco", "ntuple", "mix"),
@@ -296,8 +294,7 @@ def main():
         rows = [r for r in rows if r[2] in unproduced]
 
     # Bare name output unless --show-count adds the count column
-    # (--names-only is accepted as an explicit alias of the default).
-    show_count = args.show_count and not args.names_only
+    show_count = args.show_count
     for _, _, latest_name, count in rows:
         print(f"{count:3d}  {latest_name}" if show_count else latest_name)
 
