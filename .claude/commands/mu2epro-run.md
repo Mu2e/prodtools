@@ -83,12 +83,27 @@ You are given `$ARGUMENTS`. Follow these steps:
    inside one `ksu` invocation so the sourced environment is live when
    the prodtools command executes:
 
+   The `unset MUSE_WORK_DIR` line is **required**: `ksu` inherits the
+   caller's environment, so if this session already has a `muse setup
+   SimJob <other>` active (common), `muse setup SimJob <MUSING_VERSION>`
+   aborts with `ERROR - Muse already setup for directory .../<other>`
+   and the `&&` chain dies before the command runs. The guard in
+   `museSetup.sh` keys on exactly one variable — a non-empty
+   `MUSE_WORK_DIR` — so unsetting just that clears it. Unset **only**
+   `MUSE_WORK_DIR`: do NOT `unset MUSE_*` (that wipes `MUSE_DIR`, and
+   `muse` is a function `source ${MUSE_DIR}/bin/muse`, so it degrades to
+   `source /bin/muse: No such file or directory`), and do NOT reset
+   `PATH` (`muse` lives on the inherited PATH). Auth env
+   (`KRB5CCNAME`, `XDG_RUNTIME_DIR`, `BEARER_TOKEN_FILE`, `HOME`) is
+   untouched.
+
    For `MUSING=SimJob`:
    ```bash
    timeout 600 ksu mu2epro -e /bin/bash -c '
    WORKDIR=$(mktemp -d /tmp/mu2epro_run.XXXXXX)
    cd "$WORKDIR"
    echo "=== mu2epro workdir: $WORKDIR ==="
+   unset MUSE_WORK_DIR
    source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh \
      && muse setup ops \
      && muse setup SimJob <MUSING_VERSION> \
@@ -107,6 +122,7 @@ You are given `$ARGUMENTS`. Follow these steps:
    WORKDIR=$(mktemp -d /tmp/mu2epro_run.XXXXXX)
    cd "$WORKDIR"
    echo "=== mu2epro workdir: $WORKDIR ==="
+   unset MUSE_WORK_DIR
    source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh \
      && muse setup ops \
      && source /cvmfs/mu2e.opensciencegrid.org/Musings/<MUSING>/<MUSING_VERSION>/setup.sh \
@@ -129,6 +145,11 @@ You are given `$ARGUMENTS`. Follow these steps:
 
 ## Notes
 
+- **For grid submission (`submit_map --backend direct`), use
+  `/mu2epro-submit` instead** — this skill does NOT set
+  `USER`/`LOGNAME`/`HOME`/`XDG_RUNTIME_DIR`, which the direct backend
+  requires (else `condor_vault_storer` fails / wrong submitter). `/mu2epro-submit`
+  bakes in that env fix plus dry-run + jobsub_q verification.
 - `ksu` requires that `oksuzian@FNAL.GOV` is listed in
   `~mu2epro/.k5users` for `/bin/bash`. If auth fails, report the error
   verbatim — do not retry automatically.
