@@ -193,8 +193,8 @@ def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
 def summarize_and_index(jobdefs_file, prod=True):
     """Print the per-entry summary of a jobdefs/POMS-map JSON and (when
     `prod`) recreate its SAM index definition. Shared by `json2jobdef
-    --prod` and the standalone `mkidxdef` CLI. Tolerates njobs-less
-    (generic) entries — they contribute 0 to the index size."""
+    --prod`. Tolerates njobs-less (generic) entries — they contribute 0
+    to the index size."""
     with open(jobdefs_file, 'r') as f:
         jobdefs = json.load(f)
 

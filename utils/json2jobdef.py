@@ -528,7 +528,7 @@ def main():
     p.add_argument('--dsconf', type=str, help='Dataset configuration')
     p.add_argument('--index', type=int, help='Entry index in JSON list')
     p.add_argument('--pushout', action='store_true', help='Enable SAM pushOutput')
-    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and run mkidxdef after generation')
+    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and create SAM index definitions after generation')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.json)')

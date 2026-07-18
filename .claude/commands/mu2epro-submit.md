@@ -157,7 +157,7 @@ gives fresh seeds/sequencers on the SAME tarball — no rebuild/retire (see
   (0 = open-ended); the map entry's `njobs` (+ optional `firstjob`) is the
   window. `submit_map` validates the window against cnf capacity.
 - Outputs push per-job from the worker (pushOutput) to each entry's
-  `outputs[].location`; there is no separate mkidxdef/POMS step for the
-  direct backend.
+  `outputs[].location`; the direct backend does not use SAM index
+  definitions separately.
 - Do NOT chain this with commands that write into the user's repo — mu2epro
   cannot write there; read repo files by absolute path.
