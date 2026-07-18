@@ -1,133 +1,101 @@
-# Deploying `pomsMonitorWeb` on mu2e-exp.fnal.gov
+# `web/pomsMonitor/` — static dashboard renderer
 
-Read-only Flask deployment that runs alongside `dqmTimeline` under the
-Mu2e public web's WSGI infrastructure. The same Flask `app` defined in
-`bin/pomsMonitorWeb` serves both local dev (`pomsMonitorWeb` on
-`http://localhost:5000`) and the public web — this shim just disables
-the write routes and reroutes the DB path.
+This directory is a plain script directory. There is no Flask app, no
+WSGI shim, no package `__init__.py`, and no live JSON-editor UI. The
+dashboard is produced entirely offline by two Python scripts and
+published as static files (`index.html` + `jobs.json` + `lineage.json`)
+that any web server can serve with zero server-side logic.
 
-## Install
+## Contents
 
-1. Copy this directory to:
-   ```
-   /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/
-   ```
+- `render_static.py` — renders `index.html` (from the
+  `monitor_static.html` template, stamp-substituted with a
+  "Last refreshed" timestamp) and `jobs.json` (from
+  `jobs_payload.build_jobs_payload`). Exits non-zero on failure,
+  including an empty jobs payload — cron-friendly.
+- `jobs_payload.py` — builds the `/api/jobs`-shaped JSON catalog
+  (Job + JobOutput + DatasetInfo) straight from the SQLite DB. No
+  Flask, no HTTP — a plain function call.
+- `build_lineage.py` — walks SAM to build/update `lineage.json`
+  (`{dataset: {parents, stats}}`), the family-tree cache the static
+  page's famtree popup reads instead of calling a live
+  `/api/dataset/<name>` endpoint. Idempotent/incremental; owned
+  independently of `render_static.py`, which never touches it.
+- `monitor_static.html` — the frozen, static-native dashboard
+  template. `/api/jobs` is a sibling `jobs.json` fetch; the famtree
+  popup reads the pre-rendered `lineage.json`; write-mode UI (Reload
+  button, JSON Editor / JobDesc Generator nav) is stripped — the page
+  is read-only by construction, not by a server-side guard.
+- `cron_run_inspect_datasets.sh` — cron entry point (see below).
+- (also referenced from `bin/`) `bin/update_pomsmonitor_web` — a
+  standalone rebuild-and-render wrapper for ad hoc/manual refreshes.
 
-2. Edit `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/wsgi.py` to import the
-   app object alongside the existing `dqmTimeline`:
-   ```python
-   from hello import app as hello
-   from dqmTimeline import server as dqmTimeline
-   from pomsMonitor import app as pomsMonitor
-   ```
+## The two crons
 
-3. **Dependencies in the conda env.** The env at
-   `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/venv/current/` (a conda env
-   built from `ana_v2.5.0.yml`, conda-forge + `Mu2e/pyutils` via pip)
-   has Flask + SQLAlchemy via `dash`, but **not** `samweb_client`.
-   The shim works around this by stubbing `samweb_client` at import
-   time, so the WSGI process boots without it. Routes that don't need
-   SAM (dashboard, JSON browser, `/api/jobs`) work; `/api/dataset/<name>`
-   (famtree) is hard-disabled with HTTP 403 since it would otherwise
-   raise on the first request.
+1. **`bin/update_pomsmonitor_web`** (repo `bin/`, run as the invoking
+   user). Two required steps — refreshing the DB alone leaves the
+   static HTML stale:
+   1. `pomsMonitor --build-db --pattern "$PATTERN" --db "$DB"` —
+      rebuild the SQLite DB from the production POMS maps.
+   2. `render_static.py --out "$OUT" --prodtools-dir "$REPO" --db "$DB"`
+      — re-render `index.html` + `jobs.json` from that DB.
+   Backs up the previous `index.html`/`jobs.json` before overwriting
+   and warns if the rendered page looks anomalously small (regression
+   guard against picking up a stale template).
 
-   To re-enable famtree later, install `samweb_client` into the conda
-   env and remove `api_dataset_info` from `_DISABLED_ENDPOINTS` in
-   `__init__.py`:
-   ```bash
-   /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/venv/current/bin/pip install \
-       --extra-index-url https://scisoft.fnal.gov/python samweb_client
-   ```
-   The conda env is owned by `nobody`; the maintainer (see
-   `venv/notes.txt`) needs to run this or add `samweb_client` to the
-   `pip:` block in `ana_v2.5.0.yml` for the next env rebuild.
+2. **`cron_run_inspect_datasets.sh`** (this directory, mu2epro's
+   datasetMon nightly cron). Extended (2026-05) beyond its original
+   `inspect_datasets.py` payload to also refresh the dashboard:
+   1. Rebuild SQLite from POMS map JSONs (`db_builder.py`).
+   2. Refresh lineage topology + stats (`build_lineage.py`,
+      incremental).
+   3. Re-render `index.html` + `jobs.json` (`render_static.py`).
 
-4. Set environment in the Apache vhost (or a `.htaccess` for the
-   directory). Recommended defaults:
-   ```apache
-   SetEnv PRODTOOLS_DIR /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v2.0.1
-   SetEnv POMS_DB_PATH /web/sites/m/mu2e-exp.fnal.gov/data/poms_data.db
-   ```
-   The DB path must be readable by the web user (`nobody`).
+## Paths (from the cron headers)
 
-## DB freshness
-
-The Flask app reads the SQLite DB on every request — no live build.
-Schedule a cron job on any host that can `ksu mu2epro` and write to
-the public-web data directory:
-
-```cron
-# Hourly refresh, runs as mu2epro under pyenv ana for SQLAlchemy.
-15 * * * *  /usr/bin/ksu mu2epro -e -c '\
-  source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh && \
-  muse setup ops && \
-  pyenv ana && \
-  pomsMonitor --build-db --pattern "MDC202*" \
-              --db /web/sites/m/mu2e-exp.fnal.gov/data/poms_data.db'
+```
+prodtools deploy : /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/prodtools/
+SQLite DB        : /web/sites/m/mu2e-exp.fnal.gov/data/poms_data.db
+static dashboard : /web/sites/m/mu2e-exp.fnal.gov/htdocs/computing/ops/production/pomsMonitor/
 ```
 
-`pomsMonitor --build-db` walks the production POMS-map directory
-(`/exp/mu2e/app/users/mu2epro/production_manager/poms_map/`) and the
-SAM API for current dataset stats, so it must run from an mu2epro-
-adjacent account with both filesystem and SAM read access.
-
-## Disabled endpoints
-
-This shim returns **HTTP 403** for four routes:
-
-| Route                              | Reason for disabling                        |
-| ---------------------------------- | ------------------------------------------- |
-| `POST /api/reload`                 | Would rebuild DB at request time (heavy + races) |
-| `POST /api/json2jobdef`            | Executes `bash -c <user input>` — unsafe   |
-| `POST /api/json-file/<path>`       | Would overwrite JSON configs in prodtools  |
-| `GET  /api/dataset/<name>`         | Famtree — needs `samweb_client` (not in conda env) |
-
-To edit JSON configs or generate jobdefs, use the prodtools CLI
-locally. The web UI is read-only by design.
-
-## Routes that work
-
-- `GET /` → redirect to `/monitor`
-- `GET /monitor` → main dashboard HTML
-- `GET /api/jobs` → JSON catalog of every Job + JobOutput + DatasetInfo
-- `GET /api/dataset/<name>` → Mermaid family tree (needs samweb_client)
-- `GET /api/json-files` → read-only list of `data/*.json` paths
-- `GET /api/json-file/<path>` → read-only fetch of a `data/*.json`
-
-## URL
-
-Routes mount at whatever path the Apache config gives this app. With
-the default `wsgi.py` import, the URL is most likely
-`https://mu2e.fnal.gov/pomsMonitor/`. Confirm with the existing
-`dqmTimeline` URL layout when deploying.
-
-## Reverting / debugging
-
-The shim is two files (`__init__.py` + this `README.md`). To revert:
-
-1. Remove the `from pomsMonitor import ...` line from `wsgi.py`.
-2. `rm -r /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/`.
-
-To test the import locally before deploying (any host with `muse
-setup ops` + `pyenv ana` available — these supply samweb + sqlalchemy
-+ flask):
+Published artifacts must be group-writable by `mu2e` (mu2epro's
+primary group):
 
 ```bash
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-pyenv ana
-PRODTOOLS_DIR=/exp/mu2e/app/users/mu2epro/.../prodtools \
-PYTHONPATH=/exp/mu2e/app/users/mu2epro/.../prodtools/web:$PYTHONPATH \
-python3 -c "
-from pomsMonitor import app
-for rule in sorted(app.url_map.iter_rules(), key=lambda r: r.rule):
-    methods = ','.join(sorted(rule.methods - {'HEAD', 'OPTIONS'}))
-    view = app.view_functions[rule.endpoint]
-    flag = ' [DISABLED]' if view.__name__ == '_forbidden' else ''
-    print(f'  {methods:8s} {rule.rule:40s} {rule.endpoint}{flag}')
-"
+chgrp -R mu2e /web/sites/m/mu2e-exp.fnal.gov/data/poms_data.db \
+              /web/sites/m/mu2e-exp.fnal.gov/htdocs/computing/ops/production/pomsMonitor
+chmod -R g+w /web/sites/m/mu2e-exp.fnal.gov/data/poms_data.db \
+             /web/sites/m/mu2e-exp.fnal.gov/htdocs/computing/ops/production/pomsMonitor
 ```
 
-A working install prints 12 routes, four of them flagged `[DISABLED]`
-(`api_reload`, `api_json2jobdef`, `api_save_json_file`,
-`api_dataset_info`).
+## Decommission (perform on the web host, not in this repo)
+
+A live cgi-bin Flask instance predates this static renderer:
+
+- `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/pomsMonitor.wsgi`
+  imported a synced repo copy at
+  `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/prodtools/`, pinned at commit
+  `3ad4069` (2026-04-29).
+
+To retire it:
+
+1. Remove the `from pomsMonitor import app as pomsMonitor` registration
+   line from `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/wsgi.py`.
+2. `rm -r /web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/`.
+
+The synced `cgi-bin/prodtools/` checkout can stay (other cgi-bin apps
+may still reference it) — once deregistered from `wsgi.py` it simply
+stops serving the `/pomsMonitor` dashboard/editor URLs. Only the
+static artifacts under `htdocs/computing/ops/production/pomsMonitor/`
+serve the dashboard from here on.
+
+## Note: the old render path silently dropped `setup_script`
+
+The retired WSGI shim stubbed `samweb_client` at import time (the
+conda env lacked it), so any code path touching that stub — including
+the old live-request render — silently emptied every `setup_script`
+value in the published `jobs.json`. The static `jobs_payload.py` +
+`render_static.py` path does not go through that stub, so the
+`setup_script` column now populates correctly. This was caught by
+Task 8's byte-diff verification between the old and new render paths.
