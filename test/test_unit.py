@@ -4138,6 +4138,174 @@ class TestBuildFileMapsScoped(unittest.TestCase):
             os.unlink(tar)
 
 
+class TestRecoverLoop(unittest.TestCase):
+    """utils/recover.py — drain gate, verify, cap semantics."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.entry = {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 3}
+        self.rid = sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[0, 1, 2], jobsub_id='1.0@js.fnal.gov', cluster_id='1')
+        self.row = sl.open_rows(self.db)[0]
+
+    def _process(self, qstate='drained', missing=(), partial=(),
+                 resub_ok=True, max_attempts=3, dry_run=False,
+                 verify_exc=None):
+        from utils import recover
+        calls = {}
+
+        def fake_verify(row):
+            if verify_exc:
+                raise verify_exc
+            return list(missing), list(partial)
+
+        def fake_resubmit(row, miss, db_path):
+            calls['resubmit'] = (row['id'], list(miss), db_path)
+            if resub_ok:
+                self.sl.record_submission(
+                    db_path, tarball=row['tarball'], entry=row['entry'],
+                    indices=list(miss), jobsub_id='2.0@js.fnal.gov',
+                    cluster_id='2', parent_id=row['id'])
+            return resub_ok
+
+        action = recover.process_row(
+            self.row, self.db, max_attempts, dry_run=dry_run,
+            queue_state_fn=lambda jid: qstate,
+            verify_fn=fake_verify, resubmit_fn=fake_resubmit)
+        return action, calls
+
+    def test_running_skips(self):
+        action, calls = self._process(qstate='running')
+        self.assertEqual(action, 'running')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_held_reports_and_skips(self):
+        action, calls = self._process(qstate='held')
+        self.assertEqual(action, 'held')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_queue_error_skips(self):
+        action, _ = self._process(qstate='error')
+        self.assertEqual(action, 'queue-error')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_complete_closes_row(self):
+        action, _ = self._process(missing=())
+        self.assertEqual(action, 'complete')
+        self.assertEqual(self.sl.all_rows(self.db)[0]['state'], 'complete')
+
+    def test_missing_resubmits_and_marks_recovered(self):
+        action, calls = self._process(missing=(1,))
+        self.assertEqual(action, 'resubmitted')
+        self.assertEqual(calls['resubmit'], (self.rid, [1], self.db))
+        rows = self.sl.all_rows(self.db)
+        self.assertEqual(rows[0]['state'], 'recovered')
+        self.assertEqual(rows[1]['state'], 'active')
+        self.assertEqual(rows[1]['attempt'], 2)
+        self.assertEqual(rows[1]['indices'], [1])
+
+    def test_cap_exhausts_without_resubmit(self):
+        action, calls = self._process(missing=(1,), max_attempts=1)
+        self.assertEqual(action, 'exhausted')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.all_rows(self.db)[0]['state'], 'exhausted')
+
+    def test_dry_run_never_submits(self):
+        action, calls = self._process(missing=(1,), dry_run=True)
+        self.assertEqual(action, 'would-resubmit')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_verify_error_keeps_row_active(self):
+        action, _ = self._process(verify_exc=RuntimeError('no tarball'))
+        self.assertEqual(action, 'verify-error')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_resubmit_failure_keeps_row_active(self):
+        action, _ = self._process(missing=(1,), resub_ok=False)
+        self.assertEqual(action, 'resubmit-error')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_missing_jobsub_id_reported(self):
+        rid2 = self.sl.record_submission(
+            self.db, tarball='t2', entry={}, indices=[0],
+            jobsub_id=None, cluster_id='9')
+        row2 = [r for r in self.sl.open_rows(self.db) if r['id'] == rid2][0]
+        from utils import recover
+        action = recover.process_row(
+            row2, self.db, 3,
+            queue_state_fn=lambda jid: self.fail('must not be called'),
+            verify_fn=lambda r: ([], []),
+            resubmit_fn=lambda r, m, d: self.fail('must not be called'))
+        self.assertEqual(action, 'queue-error')
+
+    def test_queue_state_parsing(self):
+        from utils import recover
+        def r(stdout, rc=0):
+            return MagicMock(returncode=rc, stdout=stdout, stderr='')
+        self.assertEqual(
+            recover.queue_state('x', runner=lambda *a, **k: r('')), 'drained')
+        self.assertEqual(
+            recover.queue_state('x', runner=lambda *a, **k: r('2\n1\n')),
+            'running')
+        self.assertEqual(
+            recover.queue_state('x', runner=lambda *a, **k: r('2\n5\n')),
+            'held')
+        self.assertEqual(
+            recover.queue_state('x', runner=lambda *a, **k: r('', rc=1)),
+            'error')
+
+    def test_verify_row_missing_and_partial(self):
+        from utils import recover
+        files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(3)]
+        jpars = _root_input_jobpars(files)
+        jpars['tbs']['outfiles']['outputs.SecondOutput.fileName'] = \
+            "dig.mu2e.TestDesc.TestConf.sequencer.art"
+        tar = _make_tarball(jpars)
+        try:
+            row = {'id': 1, 'tarball': 'cnf.mu2e.T.C.0.tar',
+                   'indices': [0, 1, 2], 'entry': {}, 'attempt': 1,
+                   'jobsub_id': 'x'}
+            dig_ds = 'dig.mu2e.TestDesc.TestConf.art'
+            from utils.jobquery import Mu2eJobPars
+            jp = Mu2eJobPars(tar)
+
+            def fake_lister(ds):
+                out = []
+                for i in (0, 1, 2):
+                    for f in jp.job_outputs(i).values():
+                        if str(Mu2eName.parse(f).dataset) != ds:
+                            continue
+                        if i == 2:
+                            continue          # idx 2: nothing landed
+                        if i == 1 and ds == dig_ds:
+                            continue          # idx 1: dig stream missing
+                        out.append(f)
+                return out
+
+            with patch.object(recover, 'locate_tarball', return_value=tar):
+                missing, partial = recover.verify_row(
+                    row, sam_lister=fake_lister)
+            self.assertEqual(missing, [1, 2])
+            self.assertEqual(partial, [1])
+        finally:
+            os.unlink(tar)
+
+    def test_verify_row_unlocatable_tarball_raises(self):
+        from utils import recover
+        row = {'id': 1, 'tarball': 'cnf.mu2e.gone.C.0.tar',
+               'indices': [0], 'entry': {}, 'attempt': 1, 'jobsub_id': 'x'}
+        with patch.object(recover, 'locate_tarball', return_value=None):
+            with self.assertRaises(RuntimeError):
+                recover.verify_row(row, sam_lister=lambda ds: [])
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
