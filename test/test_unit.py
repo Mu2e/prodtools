@@ -1402,7 +1402,7 @@ class TestStashUtils(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 14. prod_utils: stash skips copy_input
+# 14. runmu2e: stash skips copy_input
 # ---------------------------------------------------------------------------
 
 class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
@@ -1412,7 +1412,7 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
     """
 
     def test_stash_does_not_call_mdh_copy(self):
-        from utils import prod_utils
+        from utils import runmu2e
 
         files = ["sim.mu2e.Test.TestConf.001440_00000000.art"]
         jp = _root_input_jobpars(files, merge=1)
@@ -1430,13 +1430,13 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
 
         mock_fcl = tar.replace('.tar', '.fcl')
 
-        with patch('utils.prod_utils.write_fcl', return_value=mock_fcl) as mock_wfcl, \
-             patch('utils.prod_utils.run') as mock_run, \
+        with patch('utils.runmu2e.write_fcl', return_value=mock_fcl) as mock_wfcl, \
+             patch('utils.runmu2e.run') as mock_run, \
              patch('utils.jobquery.Mu2eJobPars') as mock_pars:
 
             mock_pars.return_value.setup.return_value = "/cvmfs/test/setup.sh"
 
-            prod_utils.process_jobdef(
+            runmu2e.process_jobdef(
                 jobdesc,
                 fname="cnf.mu2e.Test.TestConf.0.fcl",
                 args=args,
@@ -1827,44 +1827,44 @@ class TestGetOutputDatasetNames(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 22. validate_jobdesc — three-way mode detection (prod_utils.py)
+# 22. validate_jobdesc — three-way mode detection (runmu2e.py)
 # ---------------------------------------------------------------------------
 
 class TestValidateJobdesc(unittest.TestCase):
 
     def test_template_mode(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'fcl_template': 'base.fcl', 'setup_script': '/s/setup.sh',
                'inloc': 'tape', 'outputs': []}]
         self.assertEqual(validate_jobdesc(jd), 'template')
 
     def test_direct_input_mode(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
                'inloc': 'tape', 'outputs': []}]
         self.assertEqual(validate_jobdesc(jd), 'direct_input')
 
     def test_normal_mode(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
                'inloc': 'tape', 'outputs': []}]
         self.assertFalse(validate_jobdesc(jd))
 
     def test_direct_input_is_truthy(self):
         """'direct_input' string must be truthy for backward-compatible if-checks."""
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
                'inloc': 'tape', 'outputs': []}]
         self.assertTrue(validate_jobdesc(jd))
 
     def test_normal_mode_is_falsy(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
                'inloc': 'tape', 'outputs': []}]
         self.assertFalse(validate_jobdesc(jd))
 
     def test_direct_input_multiple_entries_exits(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [
             {'tarball': 'a.tar', 'inloc': 'tape', 'outputs': []},
             {'tarball': 'b.tar', 'inloc': 'tape', 'outputs': []},
@@ -1873,21 +1873,21 @@ class TestValidateJobdesc(unittest.TestCase):
             validate_jobdesc(jd)
 
     def test_direct_input_missing_outputs_exits(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar', 'inloc': 'tape'}]
         with self.assertRaises(SystemExit):
             validate_jobdesc(jd)
 
     def test_normal_mode_missing_njobs_exits(self):
         """Entry without tarball: falls through to normal-mode validation which requires njobs."""
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'inloc': 'tape', 'outputs': []}]  # no tarball, no njobs
         with self.assertRaises(SystemExit):
             validate_jobdesc(jd)
 
     def test_normal_mode_with_generic_entry_ignored(self):
         """Normal-mode jobdesc with a trailing generic tarball (no njobs) is valid."""
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [
             {'tarball': 'a.tar', 'njobs': 100, 'inloc': 'tape', 'outputs': []},
             {'tarball': 'b.tar', 'njobs': 200, 'inloc': 'tape', 'outputs': []},
@@ -1897,7 +1897,7 @@ class TestValidateJobdesc(unittest.TestCase):
         self.assertFalse(validate_jobdesc(jd))
 
     def test_empty_list_exits(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         with self.assertRaises(SystemExit):
             validate_jobdesc([])
 
@@ -2230,7 +2230,7 @@ class TestReplacePlaceholdersDeferKeys(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 25. process_direct_input (prod_utils.py)
+# 25. process_direct_input (runmu2e.py)
 # ---------------------------------------------------------------------------
 
 class TestProcessDirectInput(unittest.TestCase):
@@ -2252,7 +2252,7 @@ class TestProcessDirectInput(unittest.TestCase):
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def _run(self, fname):
-        from utils.prod_utils import process_direct_input
+        from utils.runmu2e import process_direct_input
         jobdesc = [{
             'tarball': self._tar,
             'inloc': 'tape',
@@ -2333,7 +2333,7 @@ class TestProcessDirectInput(unittest.TestCase):
         self.assertIn('/cvmfs/', simjob_setup)
 
     def test_bad_fname_format_exits(self):
-        from utils.prod_utils import process_direct_input
+        from utils.runmu2e import process_direct_input
         jobdesc = [{'tarball': self._tar, 'inloc': 'tape', 'outputs': []}]
         with self.assertRaises(SystemExit):
             process_direct_input(jobdesc, "only.four.parts.art", MagicMock())
@@ -3898,14 +3898,14 @@ class TestValidateJobdescFirstjob(unittest.TestCase):
     (maps are hand-edited; a silently-dropped window duplicates physics)."""
 
     def test_firstjob_without_njobs_rejected(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         bad = [{'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
                 'outputs': [], 'firstjob': 5000}]
         with self.assertRaises(SystemExit):
             validate_jobdesc(bad)
 
     def test_firstjob_with_njobs_accepted(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         ok = [{'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
                'outputs': [], 'firstjob': 5000, 'njobs': 10}]
         self.assertEqual(validate_jobdesc(ok), False)  # normal mode
