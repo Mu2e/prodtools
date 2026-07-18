@@ -342,5 +342,20 @@
 			"*.art": "tape"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh"
+	},
+	{
+		"desc": "PolyMuonStopSelector",
+		"dsconf": "Run1Bap",
+		"input_data": {"sim.mu2e.PolyStops.Run1Ban-001.art": 2500},
+		"fcl": "Production/JobConfig/pileup/PolyMuonStopSelector.fcl",
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.muminusout.fastCloning": false,
+			"outputs.muplusout.fastCloning": false
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh"
 	}
 ]

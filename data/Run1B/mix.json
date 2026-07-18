@@ -479,7 +479,7 @@
   ,
   {
     "input_data": [
-      {"dts.mu2e.NoPrimary.Run1Ban.art": 1}
+      {"dts.mu2e.NoPrimary.Run1Ban-001.art": 1}
     ],
     "pileup_datasets": [{
       "dts.mu2e.MuBeamFlashCat.Run1Ban.art": 1,
@@ -520,7 +520,7 @@
   ,
   {
     "input_data": [
-      {"dts.mu2e.NoPrimary.Run1Ban.art": 10}
+      {"dts.mu2e.NoPrimary.Run1Ban-001.art": 1}
     ],
     "pileup_datasets": [{
       "dts.mu2e.MuBeamFlashCat.Run1Ban.art": 1,
