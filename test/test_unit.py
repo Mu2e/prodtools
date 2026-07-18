@@ -3923,6 +3923,48 @@ class TestValidateJobdescFirstjob(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 35. jobs_payload: static dashboard data builder (web/pomsMonitor/jobs_payload.py)
+# ---------------------------------------------------------------------------
+
+class TestJobsPayload(unittest.TestCase):
+    """build_jobs_payload replaces the Flask /api/jobs route for render_static."""
+
+    @classmethod
+    def setUpClass(cls):
+        d = os.path.join(os.path.dirname(__file__), '..', 'web', 'pomsMonitor')
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        import jobs_payload
+        cls.jp = jobs_payload
+
+    def test_empty_db_yields_empty_list_and_closes_session(self):
+        mock_session = MagicMock()
+        mock_session.query.return_value.all.return_value = []
+        with patch.object(self.jp, 'get_db_session', return_value=mock_session), \
+             patch.object(self.jp, 'build_dataset_info_map', return_value={}):
+            self.assertEqual(self.jp.build_jobs_payload('/nonexistent.db'), [])
+        mock_session.close.assert_called_once()
+
+    def test_job_row_shape_matches_api_jobs(self):
+        job = MagicMock(njobs=3, tarball='', source_file='x.json',
+                        complete=True, avg_real_h=None, avg_vmhwm_gb=None,
+                        outputs=[])
+        mock_session = MagicMock()
+        mock_session.query.return_value.all.return_value = [job]
+        with patch.object(self.jp, 'get_db_session', return_value=mock_session), \
+             patch.object(self.jp, 'build_dataset_info_map', return_value={}):
+            payload = self.jp.build_jobs_payload('/nonexistent.db')
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]['njobs'], 3)
+        self.assertEqual(payload[0]['setup_script'], '')
+        self.assertEqual(payload[0]['outputs'], [])
+        self.assertEqual(
+            sorted(payload[0].keys()),
+            sorted(['njobs', 'tarball', 'source_file', 'setup_script',
+                    'complete', 'avg_real_h', 'avg_vmhwm_gb', 'outputs']))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
