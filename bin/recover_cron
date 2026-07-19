@@ -5,8 +5,10 @@
 #
 # Order matters:
 #   1. locking — handled inside `recover` itself (a per-DB lockfile
-#      beside the DB, held for the process lifetime); overlapping runs
-#      here just exit cleanly rather than double-submitting.
+#      beside the DB, held for the process lifetime); an overlapping run
+#      exits 1 with a "another recover run holds ..." message rather
+#      than double-submitting (same nonzero class as the token gate —
+#      read the log line to tell them apart).
 #   2. Mu2e env (quiet; failures still surface via the python run)
 #   3. token gate — no valid bearer token -> report and exit non-zero.
 #      NEVER fetch or refresh a token here (standing rule: token
