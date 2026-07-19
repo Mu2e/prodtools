@@ -179,3 +179,67 @@ def process_row(row, db_path, max_attempts, dry_run=False,
         return 'resubmitted'
     print(f"row {rid}: resubmit FAILED — row stays active")
     return 'resubmit-error'
+
+
+def print_status(db_path):
+    """Read-only ledger table (safe under any account — status checks
+    never need mu2epro)."""
+    rows = submission_ledger.all_rows(db_path)
+    if not rows:
+        print(f"Ledger is empty ({db_path}).")
+        return
+    print(f"{'id':>4} {'state':<10} {'att':>3} {'parent':>6} {'#idx':>5}  "
+          f"{'created':<20} tarball")
+    for r in rows:
+        print(f"{r['id']:>4} {r['state']:<10} {r['attempt']:>3} "
+              f"{str(r['parent_id'] or ''):>6} {len(r['indices']):>5}  "
+              f"{r['created_utc']:<20} {r['tarball']}")
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description='Verify-and-resubmit recovery loop for direct-backend '
+                    'submissions (ledger written by submit_map).')
+    p.add_argument('--db', default=submission_ledger.DEFAULT_DB,
+                   help=f'Submission-ledger sqlite DB (default: '
+                        f'{submission_ledger.DEFAULT_DB}, env '
+                        f'MU2E_SUBMISSION_DB)')
+    p.add_argument('--status', action='store_true',
+                   help='Print the ledger table and exit (read-only)')
+    p.add_argument('--dry-run', action='store_true',
+                   help='Drain-check + verify + report; no submissions, '
+                        'no row state changes')
+    p.add_argument('--row', type=int, default=None,
+                   help='Process only this ledger row id')
+    p.add_argument('--max-attempts', type=int, default=DEFAULT_MAX_ATTEMPTS,
+                   help=f'Attempt cap per chain (default '
+                        f'{DEFAULT_MAX_ATTEMPTS}); at the cap the row is '
+                        f'marked exhausted for a human')
+    args = p.parse_args()
+
+    if args.status:
+        print_status(args.db)
+        return
+
+    rows = submission_ledger.open_rows(args.db)
+    if args.row is not None:
+        rows = [r for r in rows if r['id'] == args.row]
+        if not rows:
+            sys.exit(f"no active row {args.row} in {args.db}")
+    if not rows:
+        print(f"No active submissions ({args.db}).")
+        return
+
+    summary = {}
+    for row in rows:
+        action = process_row(row, args.db, args.max_attempts,
+                             dry_run=args.dry_run)
+        summary[action] = summary.get(action, 0) + 1
+    print("recover summary: "
+          + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
+    if summary.get('held') or summary.get('exhausted'):
+        sys.exit(2)
+
+
+if __name__ == '__main__':
+    main()

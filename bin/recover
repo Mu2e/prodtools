@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# recover - verify-and-resubmit loop for direct-backend submissions
+# Wrapper for utils/recover.py
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/recover.py"
+
+# Pass help through without environment setup
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    exec python3 "$PYTHON_SCRIPT" "$@"
+fi
+
+# Set up Mu2e environment (needed for samweb, jobsub_q, httokendecode)
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+
+exec python3 "$PYTHON_SCRIPT" "$@"

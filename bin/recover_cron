@@ -1,0 +1,36 @@
+#!/bin/bash
+# Cron entry point for the direct-backend recovery loop. Install in
+# mu2epro's crontab (hourly), e.g.:
+#   17 * * * * /path/to/prodtools/bin/recover_cron
+#
+# Order matters:
+#   1. flock — overlapping runs must not double-submit
+#   2. Mu2e env (quiet; failures still surface via the python run)
+#   3. token gate — no valid bearer token -> report and exit non-zero.
+#      NEVER fetch or refresh a token here (standing rule: token
+#      problems are reported, not remediated).
+#   4. recover, appended to a dated log beside the DB
+set -e
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DB="${MU2E_SUBMISSION_DB:-/exp/mu2e/data/users/mu2epro/prodtools/submissions.db}"
+DBDIR="$(dirname "$DB")"
+LOCK="$DBDIR/recover.lock"
+LOG="$DBDIR/recover-$(date +%Y%m%d).log"
+
+exec 9>"$LOCK"
+if ! flock -n 9; then
+    echo "recover_cron: another run holds $LOCK — exiting" >&2
+    exit 0
+fi
+
+{
+    echo "=== recover_cron $(date -u +%FT%TZ) ==="
+    source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh >/dev/null 2>&1 || true
+    muse setup ops >/dev/null 2>&1 || true
+    if ! httokendecode >/dev/null 2>&1; then
+        echo "ERROR: no valid bearer token — not submitting, not remediating."
+        exit 1
+    fi
+    python3 "$REPO/utils/recover.py" --db "$DB"
+} >>"$LOG" 2>&1

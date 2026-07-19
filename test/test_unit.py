@@ -4337,6 +4337,59 @@ class TestRecoverLoop(unittest.TestCase):
                          runner=fake_runner)
         self.assertIn('--dry-run', captured['cmd'])
 
+class TestRecoverCLI(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+
+    def test_print_status_empty(self):
+        from utils import recover
+        import io as _io
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf):
+            recover.print_status(self.db)
+        self.assertIn('empty', buf.getvalue().lower())
+
+    def test_print_status_lists_rows(self):
+        from utils import recover
+        import io as _io
+        rid = self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry={}, indices=[0, 1],
+            jobsub_id='1.0@js', cluster_id='1')
+        self.sl.close_row(self.db, rid, 'complete')
+        self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T2.C.0.tar', entry={}, indices=[3],
+            jobsub_id='2.0@js', cluster_id='2')
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf):
+            recover.print_status(self.db)
+        out = buf.getvalue()
+        self.assertIn('complete', out)
+        self.assertIn('active', out)
+        self.assertIn('cnf.mu2e.T2.C.0.tar', out)
+
+    def test_main_exit_2_on_attention(self):
+        from utils import recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(recover, 'process_row', return_value='held'), \
+             patch.object(sys, 'argv', ['recover', '--db', self.db]):
+            with self.assertRaises(SystemExit) as cm:
+                recover.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_main_exit_0_when_clean(self):
+        from utils import recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(recover, 'process_row', return_value='complete'), \
+             patch.object(sys, 'argv', ['recover', '--db', self.db]):
+            recover.main()  # returns without SystemExit
+
 
 # ---------------------------------------------------------------------------
 # Entry point
