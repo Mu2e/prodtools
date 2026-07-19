@@ -75,6 +75,13 @@ def _connect(db_path):
     con.row_factory = sqlite3.Row
     con.execute(_SCHEMA)
     con.execute(_CAMPAIGN_SCHEMA)
+    # Closes the SELECT-then-INSERT race in create_campaign: a paused
+    # campaign still owns its index space (enqueue-after-pause then
+    # resume would feed two campaigns into the same indices = double
+    # submit), so the live set is active+paused, not just active.
+    con.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS campaigns_live_tarball "
+        "ON campaigns(tarball) WHERE state IN ('active','paused')")
     return con
 
 
@@ -169,19 +176,25 @@ def create_campaign(db_path, *, tarball, entry, slice_size, map_path=None):
 
     entry is snapshotted verbatim — the caller has already merged any
     CLI resource overrides, so slices reproduce what was asked for. A
-    second ACTIVE campaign for the same tarball is refused: that is the
-    double-submit guard.
+    second ACTIVE or PAUSED campaign for the same tarball is refused:
+    that is the double-submit guard. A paused campaign still owns its
+    index space — enqueueing on top of it and later resuming both would
+    feed two campaigns into the same indices. The
+    campaigns_live_tarball unique index (see _connect) backstops this
+    check against the SELECT-then-INSERT race.
     """
     if slice_size < 1:
         raise ValueError(f"slice_size must be >= 1, got {slice_size}")
     con = _connect(db_path)
     try:
         dup = con.execute(
-            "SELECT id FROM campaigns WHERE tarball = ? AND state = 'active'",
+            "SELECT id, state FROM campaigns WHERE tarball = ? "
+            "AND state IN ('active', 'paused')",
             (tarball,)).fetchone()
         if dup:
             raise ValueError(
-                f"active campaign {dup['id']} already exists for {tarball}")
+                f"{dup['state']} campaign {dup['id']} already exists for "
+                f"{tarball}")
         cur = con.execute(
             'INSERT INTO campaigns '
             '(created_utc, state, map_path, tarball, entry_json, cursor, '

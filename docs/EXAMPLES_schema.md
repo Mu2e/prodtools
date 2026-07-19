@@ -53,7 +53,10 @@ When regenerating, read in this order:
    `"disk"` / `"expected_lifetime"` (jobsub-format strings) — mention that
    `json2jobdef` copies them from the JSON config into the map entry
    verbatim, and cross-reference the `submit_map` subsection for the
-   precedence rule.
+   precedence rule. State plainly that these keys are honored ONLY by
+   `submit_map --backend direct`; the default `mu2ejobsub` backend
+   (`build_mu2ejobsub_argv`) ignores entry keys entirely — CLI flags
+   (`--memory`/`--disk`/`--expected-lifetime`) are the only lever there.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -91,6 +94,18 @@ When regenerating, read in this order:
       also prints the resolved queue cap in effect for the top-up phase.
 12. **Troubleshooting** — only entries that correspond to real error
     messages produced by current code. Remove stale ones.
+
+    - The duplicate-campaign entry (`active`/`paused` campaign already
+      exists for `<tarball>`) must recommend `--cancel-campaign` ONLY —
+      never "pause then re-enqueue" (pausing does not free the tarball;
+      a paused campaign is refused exactly like an active one, and even
+      if it weren't, two campaigns feeding the same index space is the
+      double-submit bug this guard exists to prevent). It must also warn
+      that re-enqueueing the same tarball after `--cancel-campaign`
+      starts the new campaign's cursor at 0 — it has no memory of what
+      the cancelled campaign already fed — so the operator should check
+      `recover --status` / the ledger for that tarball first, to avoid
+      re-submitting already-covered indices.
 
 ## Tribal knowledge to preserve (non-derivable from code)
 
@@ -136,12 +151,16 @@ reading the code:
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
   `48h`) live in the POMS-map entry itself, or in the jobdef JSON config
   that produces it — `json2jobdef` copies them into the entry verbatim.
-  Precedence at submission is CLI flag > entry key > built-in default
+  These keys are honored ONLY by `submit_map --backend direct`.
+  Precedence there is CLI flag > entry key > built-in default
   (`2000MB` / `30GB` / `24h`). The *effective* values are frozen into
   the ledger row / campaign row snapshot at submission time, so a later
   recovery or cron-fed slice reproduces exactly what the jobs originally
   ran with — a CLI `--memory` no longer silently downgrades to the
-  built-in default on resubmit.
+  built-in default on resubmit. The default `--backend mu2ejobsub` path
+  ignores the entry keys entirely (`build_mu2ejobsub_argv` reads only
+  `opts.memory`/`opts.disk`/`opts.expected_lifetime` — CLI flags, never
+  the entry) — this is deliberate scope, not a gap to fix.
 - Sliced campaigns: `submit_map --enqueue` snapshots map entries into
   the campaigns table and submits nothing; `recover`'s top-up phase
   (runs after its recovery pass, inside the same hourly cron tick) then
@@ -150,7 +169,16 @@ reading the code:
   `--max-queued` flag > `MU2E_MAX_QUEUED` env > `10000` built-in
   default. A submit failure during top-up pauses the campaign rather
   than blind-retrying; an operator investigates and issues
-  `--resume-campaign`.
+  `--resume-campaign`. `--enqueue` refuses a second campaign for the
+  same tarball while an `active` OR `paused` one exists — a paused
+  campaign still owns its index space, so "pause then enqueue" is not a
+  workaround (only `--cancel-campaign` frees the tarball, and
+  re-enqueueing after cancel restarts the cursor at 0 — see the
+  troubleshooting entry). Before every slice, top-up also checks the
+  ledger for indices already covering the slice's window (any state —
+  proves a submission happened even if the campaign row's cursor advance
+  was lost to a crash); an overlap pauses the campaign with a
+  crash-window note instead of resubmitting.
 - Every direct-backend submission attempt — manual, cron-fed slice, or
   recovery resubmit — appends a block to `submit-YYYYMMDD.log` beside
   the ledger DB (one file per UTC day, plain appends, no rotation).

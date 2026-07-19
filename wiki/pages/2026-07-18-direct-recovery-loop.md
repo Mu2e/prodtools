@@ -157,9 +157,14 @@ yet, so a DB failure at enqueue time is a hard error rather than a
 warn-and-continue. `--slice-size` (default 1000) is frozen into the
 row. Direct backend only; mutually exclusive with
 `--first`/`--num`/`--indices`/`--indices-file`. An entry with no fixed
-`njobs` (`generic_tarball`) can't be enqueued — a campaign needs a job
-count to slice against. A second `--enqueue` for a tarball that already
-has an *active* campaign is refused outright — no silent double-feed.
+`njobs`, or `njobs < 1`, (`generic_tarball`, or `njobs: 0`) can't be
+enqueued — a campaign needs a positive job count to slice against. A
+second `--enqueue` for a tarball that already has an *active OR
+paused* campaign is refused outright — no silent double-feed. *(added
+at final review: the guard originally checked `active` only; a paused
+campaign still owns its index space, so "pause then enqueue" would have
+been an undetected double-submit path — see the crash-window discussion
+below for the closely related overlap guard.)*
 
 **Top-up semantics.** Every `recover` invocation (the same hourly cron
 tick that does recovery) runs the top-up phase *after* the recovery
@@ -190,6 +195,63 @@ between runs — deliberately not stored in the DB, so the effective cap
 is always readable straight off the crontab line, and `recover
 --status` prints it every time.
 
+**Crash-window semantics** *(added at final review)*. A campaign's
+cursor and its jobs' ledger rows are written by two different
+statements inside the same `submit_map` child process: `jobsub_submit`
+runs, the ledger row gets written (`_record_in_ledger`), and only then
+does the parent `top_up` loop call `advance_campaign` to move the
+cursor forward. If the parent process dies between "submit_map wrote
+the ledger row" and "top_up advanced the cursor" — or between
+`advance_campaign` and the subsequent `set_campaign_state('complete')`
+on a campaign's last slice — the DB is left in a state where jobs went
+out but the campaign's own bookkeeping doesn't yet reflect it. The next
+tick's naive behavior would be to resubmit that same slice: the
+deterministic-payload worst case, duplicate physics events.
+
+Two independent guards close this, both exercised by the crash-window
+unit tests in `TestTopUp`:
+
+- **Overlap guard.** Before submitting any slice, `top_up` checks the
+  submission ledger (`_slice_overlaps_ledger`, ANY row state — a
+  `complete`/`recovered` row still proves a submission happened) for
+  indices already inside the slice's absolute window
+  `[firstjob+cursor, firstjob+cursor+n)`. A hit pauses the campaign
+  with a `'ledger already covers indices in this slice — crash-window
+  suspected...'` note instead of submitting. This also catches a human
+  manually running `--first/--num` on a tarball that has a live
+  campaign. It is deliberately not a false-positive source for the
+  recovery loop's own resubmits: a resubmitted index is always inside a
+  window the cursor has already advanced *past*, so it can never
+  intersect a *future* slice's window.
+- **Self-heal.** A campaign whose `cursor` already equals its `njobs`
+  but is still `active` (the crash landed between the cursor-advance
+  write and the completion write) is closed `complete` on the next tick
+  with a `'fully submitted (self-heal)'` note, instead of sitting
+  `active` forever with nothing left to feed.
+
+**Reconcile procedure** for an overlap-paused campaign: compare the
+ledger rows for the campaign's tarball (`recover --status`, or
+`sqlite3 <db> "select * from submissions where tarball=...;"`) against
+the campaign's `cursor` to work out how far the cursor should actually
+be. `advance_campaign` has no CLI today — the fix is a manual
+`sqlite3` `UPDATE campaigns SET cursor=... WHERE id=...`, matching the
+"reconcile is deliberately human" pattern already used for a
+submit-failure pause (see below). Only then `--resume-campaign`.
+Resuming without reconciling risks the very double-submit the guard
+exists to prevent, since the guard only checks the *next* slice window,
+not retroactively fixing the cursor.
+
+**Residual window.** The overlap guard shrinks but does not eliminate
+the crash window: a child `submit_map` process can still die after
+`jobsub_submit` succeeds but *before its own ledger write* — the same
+residual gap the recovery pass's resubmits already live with (see
+"Firstjob-drop rule" above and the pre-existing `submit_map` caveat in
+"Semantics and limits" below). In that specific sub-window there is no
+ledger row yet to overlap against, so a subsequent tick could still
+re-submit. This is a known, accepted residual, not a gap this design
+closes — it is the reason the pre-activation checklist below gained an
+item to exercise it on a real DB before the cron goes live.
+
 **Pause / resume / cancel.**
 
 ```bash
@@ -200,20 +262,32 @@ recover --cancel-campaign 7   # close; already-submitted rows still recovered
 
 These are mutating (same per-DB lock as a full pass) and exit
 immediately after acting — not valid combined with `--dry-run`.
-`paused` means one of two things: a submit failure during top-up (the
-loop pauses the campaign automatically rather than blind-retrying —
-deterministic payloads make an unverified resubmit the exact Run1Ban
-failure shape: queued-but-unrecorded jobs plus a later duplicate
-resubmit), or an operator hold via `--pause-campaign`. Either way the
-loop skips it until a human clears it. Before `--resume-campaign` after
-an automatic pause, check the submit log and `jobsub_q` for whether the
-failed attempt actually queued jobs — the ledger hook only fires on
-success, so a partial failure leaves indices that look unsubmitted but
-might not be. `cancelled` (via `--cancel-campaign`) closes the campaign
+`paused` means one of three things *(third added at final review)*: a
+submit failure during top-up (the loop pauses the campaign
+automatically rather than blind-retrying — deterministic payloads make
+an unverified resubmit the exact Run1Ban failure shape:
+queued-but-unrecorded jobs plus a later duplicate resubmit); the
+crash-window overlap guard above firing (the ledger already covers part
+of the next slice — reconcile the cursor before resuming, see the
+crash-window section); or an operator hold via `--pause-campaign`.
+Either way the loop skips it until a human clears it. Before
+`--resume-campaign` after an automatic (submit-failure) pause, check
+the submit log and `jobsub_q` for whether the failed attempt actually
+queued jobs — the ledger hook only fires on success, so a partial
+failure leaves indices that look unsubmitted but might not be.
+`cancelled` (via `--cancel-campaign`) closes the campaign
 only; ledger rows already written for it continue through the recovery
 loop to verified completion exactly as if the campaign were still
 active — cancelling stops new slices, it does not abandon jobs already
-in flight.
+in flight. `cancelled` does **not** free the tarball's index history —
+re-enqueueing the same tarball afterward starts a brand-new campaign
+row at `cursor=0`, with no memory of what the cancelled campaign
+already fed. In practice `_slice_overlaps_ledger` (crash-window guard
+above) will catch a naive re-enqueue-and-run the moment its first slice
+overlaps the cancelled campaign's already-submitted indices and pause
+it — but check `recover --status` / the ledger for that tarball before
+re-enqueueing rather than relying on the guard to catch it after the
+fact.
 
 `complete` means "fully submitted" — every index has gone out as a
 ledger row — **not** "fully verified". Verification remains the
@@ -313,7 +387,7 @@ recover --status
 
 ## Pre-activation checklist
 
-These four items must be checked off **before** the cron line above
+These five items must be checked off **before** the cron line above
 goes into mu2epro's crontab. They need live services (a real jobsub_lite
 install, a real drained cluster, a real pushOutput run) and are
 deliberately **not** covered by the unit test suite, which only injects
@@ -353,6 +427,18 @@ fakes for `jobsub_q`, SAM listing, and the submit subprocess.
   overshoots the farm-footprint cap it's meant to enforce. Confirm with
   a real `--user mu2epro` query against a live queue before relying on
   the count for anything unattended.
+- **Crash-window behavior verified on a test DB** *(added at final
+  review)*. On a scratch/test `MU2E_SUBMISSION_DB`, run a campaign
+  through top-up and kill the parent `recover` process between a
+  child `submit_map`'s ledger write (jobs queued, ledger row present)
+  and the parent's own `advance_campaign` call — timing this by hand or
+  with a short sleep/breakpoint in a copy of `top_up`. The next
+  `recover` tick must **pause the campaign with the crash-window
+  overlap note**, not silently resubmit the same slice. This is the
+  live-system half of the guard the unit tests (`TestTopUp`
+  `test_overlap_*`) only exercise with a fake queue-count function and
+  fake submit subprocess — it has not been run against a real
+  `jobsub_submit`/`submit_map` child process end to end.
 
 ## Semantics and limits
 

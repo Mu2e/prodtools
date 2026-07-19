@@ -94,7 +94,8 @@ Design points:
   operator pause; the loop skips it, a human resumes. `cancelled` =
   operator close; already-submitted rows still get recovered normally.
 - **Double-submit guard.** Enqueueing a tarball that already has an
-  *active* campaign is refused with a hard error.
+  *active OR paused* campaign is refused with a hard error. *(scope
+  widened to include `paused` at final review — see Edge cases.)*
 - API (explicit db path, mirroring the submissions API):
   `create_campaign(...) -> id`, `active_campaigns() -> [Row]`,
   `advance_campaign(id, new_cursor)`,
@@ -237,8 +238,38 @@ Today: built-in defaults in `utils/jobsub_argv.py`
   attempt actually queued jobs; if it did, the ledger row is missing
   (hook fires only on success) and the indices will look unsubmitted —
   resolving that is deliberately human.
-- **Duplicate enqueue** (active campaign for the same tarball) → hard
-  error at enqueue time.
+- **Duplicate enqueue** (active OR paused campaign for the same
+  tarball) → hard error at enqueue time. *(added at final review: the
+  guard originally checked `active` only; a paused campaign still owns
+  its index space, so "pause then enqueue" was an undetected
+  double-submit path — closed by widening the guard and backstopping
+  the SELECT-then-INSERT race with a partial unique index on
+  `campaigns(tarball) WHERE state IN ('active','paused')`.)*
+- **Cursor crash window** *(added at final review)*: the cursor advance
+  (`advance_campaign`) and the completion close
+  (`set_campaign_state('complete')`) are separate writes from the
+  ledger row a child `submit_map` process writes on successful submit —
+  a parent `top_up` process dying between them leaves the DB in a state
+  where jobs already went out but the campaign's own bookkeeping
+  doesn't yet reflect it. Closed by two mechanisms: (1) an **overlap
+  guard** — before submitting a slice, check the ledger (any row state)
+  for indices already inside the slice's absolute window; a hit pauses
+  the campaign with a crash-window note instead of submitting, rather
+  than blindly resubmitting; (2) a **self-heal** — a campaign whose
+  cursor already equals `njobs` but is still `active` closes itself
+  `complete` on the next tick instead of staying stuck. Neither is a
+  false-positive source against the recovery loop's own resubmits: a
+  resubmitted index is always inside a window the cursor has already
+  advanced past, so it can never intersect a *future* slice's window.
+  A **residual window** remains: a child `submit_map` process can still
+  die after `jobsub_submit` succeeds but *before its own ledger write*
+  — in that narrow sub-window there is no ledger row yet for the
+  overlap guard to catch, so a subsequent tick could still re-submit.
+  This is the same residual gap the recovery pass's resubmits already
+  live with; it is accepted, not closed by this design, and is called
+  out explicitly in the pre-activation checklist (wiki page) as
+  something to exercise against a real submit path before the cron
+  goes live.
 - **Windowed entries** slice naturally via `--first/--num`; `firstjob`
   survives in the snapshot untouched.
 - **Cancel** closes the campaign only; ledger rows already written

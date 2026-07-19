@@ -4078,6 +4078,16 @@ class TestCampaignLedger(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._create()
 
+    def test_duplicate_paused_tarball_refused(self):
+        """A paused campaign still owns its index space: enqueue-after-
+        pause then resume would feed two campaigns into the same
+        indices (double submit) — refuse it just like an active one."""
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        with self.assertRaises(ValueError) as cm:
+            self._create()
+        self.assertIn('paused', str(cm.exception))
+
     def test_reenqueue_allowed_after_close(self):
         cid = self._create()
         self.sl.set_campaign_state(self.db, cid, 'cancelled')
@@ -4190,6 +4200,45 @@ class TestEntryResources(unittest.TestCase):
         self.assertNotIn('disk', entry)           # absent key stays absent
 
 
+class TestSubmitEntryDirectResourceWiring(unittest.TestCase):
+    """submit_entry_direct must actually pass the EFFECTIVE resources
+    (entry key, no CLI flag) into build_jobsub_argv — the precedence
+    logic itself is covered above (_effective_resources), this closes
+    the gap that nothing proved submit_entry_direct wires it through."""
+
+    def test_entry_memory_reaches_build_jobsub_argv(self):
+        import argparse
+        from utils.submit import submit_entry_direct
+
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}], 'memory': '4000MB'}
+        opts = argparse.Namespace(
+            dry_run=True, indices=None, first=None, num=None,
+            prodtools_tar=None, role=None, wftop=None, wfproject=None,
+            disk=None, memory=None, expected_lifetime=None,
+            no_ledger=True, ledger_db='/tmp/unused-resource-wiring.db',
+            ledger_parent=None, map='/tmp/m.json', verbose=False)
+
+        captured = {}
+
+        def fake_build_jobsub_argv(**kwargs):
+            captured.update(kwargs)
+            return ['--fake-argv']
+
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   side_effect=fake_build_jobsub_argv), \
+             patch('utils.submit._bundle_prodtools',
+                   return_value=Path('/tmp/fake-prodtools.tar')):
+            result = submit_entry_direct(entry, 0, opts)
+
+        self.assertEqual(result['status'], 'dry_run')
+        # entry key, no CLI flag -> _effective_resources picks the entry
+        self.assertEqual(captured['memory'], '4000MB')
+        self.assertIsNone(captured['disk'])
+        self.assertIsNone(captured['expected_lifetime'])
+
+
 # ---------------------------------------------------------------------------
 # submit_map --enqueue (utils/submit.py) — sliced-campaign submission
 # ---------------------------------------------------------------------------
@@ -4252,6 +4301,15 @@ class TestEnqueue(unittest.TestCase):
                    'outputs': []}   # no njobs
         with self.assertRaises(SystemExit):
             _enqueue_entries([(0, generic)], '/tmp/m.json', self._opts())
+
+    def test_enqueue_zero_njobs_refused(self):
+        """njobs_of(entry) is None misses njobs: 0 — a zero-job campaign
+        is nonsensical and must be refused just like the missing case."""
+        from utils.submit import _enqueue_entries
+        zero = {'tarball': 'cnf.mu2e.Z.C.0.tar', 'njobs': 0,
+                'inloc': 'tape', 'outputs': []}
+        with self.assertRaises(SystemExit):
+            _enqueue_entries([(0, zero)], '/tmp/m.json', self._opts())
 
     def test_enqueue_db_failure_is_hard_error(self):
         from utils.submit import _enqueue_entries
@@ -4493,6 +4551,91 @@ class TestTopUp(unittest.TestCase):
         c = self.sl.active_campaigns(self.db)[0]
         self.assertEqual(c['cursor'], 0)            # DB untouched
         self.assertEqual(c['state'], 'active')
+
+    # -- crash-window / ledger-overlap guard (Fix 2) -----------------------
+
+    def test_overlap_pauses_without_submitting(self):
+        """A ledger row already covering part of the next slice window
+        (crash-window: parent submit_map died after jobsub_submit
+        succeeded but before its own ledger write) must pause the
+        campaign rather than resubmit — never a blind double-submit."""
+        from utils.recover import top_up
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        cid = self._campaign(tarball=tarball, njobs=10, slice=4)
+        self.sl.record_submission(
+            self.db, tarball=tarball, entry={}, indices=[2],
+            jobsub_id='9.0@js', cluster_id='9')  # inside [0,4)
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'paused')
+        self.assertEqual(c['cursor'], 0)
+        self.assertIn('crash-window', c['note'])
+        self.assertEqual(s['campaign-paused'], 1)
+
+    def test_overlap_below_cursor_does_not_block(self):
+        """Ledger rows for the same tarball covering only windows BELOW
+        the cursor (e.g. the recovery loop's own resubmits of already-
+        submitted-but-missing indices) must not block a future slice —
+        those indices can never intersect [cursor, cursor+n)."""
+        from utils.recover import top_up
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        cid = self._campaign(tarball=tarball, njobs=10, slice=4)
+        self.sl.advance_campaign(self.db, cid, 4)  # simulate prior slice
+        self.sl.record_submission(
+            self.db, tarball=tarball, entry={}, indices=[0, 1, 2, 3],
+            jobsub_id='9.0@js', cluster_id='9')  # all below cursor=4
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [(cid, 4, 4), (cid, 8, 2)])
+        self.assertNotIn('campaign-paused', s)
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'complete')
+
+    def test_overlap_dry_run_reports_and_writes_nothing(self):
+        from utils.recover import top_up
+        def boom(camp, n, db_path):
+            raise AssertionError("submit_fn must not be called in dry-run")
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        self._campaign(tarball=tarball, njobs=10, slice=4)
+        self.sl.record_submission(
+            self.db, tarball=tarball, entry={}, indices=[1],
+            jobsub_id='9.0@js', cluster_id='9')  # inside [0,4)
+        s = top_up(self.db, cap=100, dry_run=True, count_fn=lambda: 0,
+                   submit_fn=boom)
+        self.assertEqual(s['would-pause-overlap'], 1)
+        self.assertNotIn('would-slice', s)
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['cursor'], 0)            # DB untouched
+        self.assertEqual(c['state'], 'active')
+
+    # -- self-heal fully-submitted-but-unclosed campaigns (Fix 3) ----------
+
+    def test_self_heal_closes_stuck_complete_campaign(self):
+        """cursor == njobs but state still 'active' (crash between
+        advance_campaign and set_campaign_state('complete') on a prior
+        tick) must self-heal to 'complete', not stay stuck forever."""
+        from utils.recover import top_up
+        cid = self._campaign(njobs=6, slice=4)
+        self.sl.advance_campaign(self.db, cid, 6)  # fully submitted already
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])            # nothing left to submit
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'complete')
+        self.assertIn('self-heal', c['note'])
+        self.assertEqual(s['campaign-complete'], 1)
+
+    def test_self_heal_dry_run_leaves_active(self):
+        from utils.recover import top_up
+        cid = self._campaign(njobs=6, slice=4)
+        self.sl.advance_campaign(self.db, cid, 6)
+        s = top_up(self.db, cap=100, dry_run=True, count_fn=lambda: 0,
+                   submit_fn=lambda *a: self.fail('must not submit'))
+        self.assertEqual(s['would-campaign-complete'], 1)
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'active')       # DB untouched
 
 
 class TestSubmitSlice(unittest.TestCase):

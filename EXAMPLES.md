@@ -181,10 +181,13 @@ Optional per-entry resource requests — `"memory"`, `"disk"`,
 ```
 
 `json2jobdef` copies any of the three keys present in the config into
-the map entry verbatim (`append_jobdef`). `submit_map` (section 11)
-reads them back at submission time: a CLI flag always overrides the
-entry key, which overrides the built-in default (`2000MB` / `30GB` /
-`24h`).
+the map entry verbatim (`append_jobdef`). `submit_map --backend direct`
+(section 11) reads them back at submission time: a CLI flag always
+overrides the entry key, which overrides the built-in default (`2000MB`
+/ `30GB` / `24h`). The default `--backend mu2ejobsub` path does **not**
+read these entry keys at all — it maps only the CLI flags
+(`--memory`/`--disk`/`--expected-lifetime`) to `mu2ejobsub`'s own flags,
+so an entry-key-only resource request is silently a no-op there.
 
 ### Direct `jobdef` invocation
 
@@ -605,21 +608,35 @@ submitted).
 
 Resource requests (`--disk`/`--memory`/`--expected-lifetime`) resolve as
 CLI flag > entry key (section 3: `"memory"`/`"disk"`/
-`"expected_lifetime"`) > built-in default. Whatever resolves is what
-gets recorded in the ledger/campaign snapshot, so a `recover` resubmit
-or a cron-fed slice reruns with the same resources the original jobs
-had — a CLI `--memory 4000MB` no longer downgrades to the 2000MB
-built-in default on resubmit.
+`"expected_lifetime"`) > built-in default — **`--backend direct` only**;
+`--backend mu2ejobsub` maps the CLI flags straight through and ignores
+the entry keys. Whatever resolves is what gets recorded in the
+ledger/campaign snapshot, so a `recover` resubmit or a cron-fed slice
+reruns with the same resources the original jobs had — a CLI `--memory
+4000MB` no longer downgrades to the 2000MB built-in default on
+resubmit.
 
 Sliced campaigns (`--enqueue`): snapshots the selected entries (all, or
 `--entry N`) into the campaigns table at cursor 0 and submits nothing.
 `--slice-size` is frozen into the campaign row. Direct backend only;
 mutually exclusive with `--first`/`--num`/`--indices`/`--indices-file`.
-An entry with no fixed `njobs` (a `generic_tarball` entry) cannot be
-enqueued — a campaign needs a job count to slice. Enqueueing a tarball
-that already has an *active* campaign is a hard error. `bin/recover`'s
+An entry with no fixed `njobs`, or `njobs < 1`, (a `generic_tarball`
+entry, or `njobs: 0`) cannot be enqueued — a campaign needs a positive
+job count to slice. Enqueueing a tarball that already has an *active or
+paused* campaign is a hard error — a paused campaign still owns its
+index space, so pausing does not free the tarball for a new campaign;
+only `--cancel-campaign` does (see Troubleshooting). `bin/recover`'s
 top-up phase (below) then feeds whole slices to the grid on its own,
-hourly, until the campaign is fully submitted.
+hourly, until the campaign is fully submitted. Before every slice,
+top-up also checks the ledger for indices that already cover the
+slice's absolute window (any ledger state counts as proof of
+submission) — an overlap means a crash likely happened between a prior
+submission and its own ledger/cursor write, so the campaign is paused
+with a crash-window note instead of resubmitting. A campaign whose
+cursor already equals its `njobs` but is still `active` (the same class
+of crash, between the last slice's cursor advance and its completion
+write) self-heals to `complete` on the next tick rather than staying
+stuck forever.
 
 Statistics expansion (`firstjob` windows):
 
@@ -787,9 +804,29 @@ any crontab by this repo — that is a one-time operator step (section 11
 - `Error: entry N has no njobs (generic tarball) — a campaign needs a
   job count to slice` — `--enqueue` requires a fixed-`njobs` entry;
   `generic_tarball` entries have no pre-determined job count.
-- `active campaign N already exists for <tarball>` — `--enqueue` refuses
-  a second active campaign for the same tarball; `--cancel-campaign` or
-  `--pause-campaign` the existing one first.
+- `Error: entry N has njobs=0 — a campaign needs a positive job count` —
+  `--enqueue` also refuses `njobs: 0` (and any non-positive value): a
+  zero-job campaign cannot be sliced.
+- `active campaign N already exists for <tarball>` / `paused campaign N
+  already exists for <tarball>` — `--enqueue` refuses a second
+  active-or-paused campaign for the same tarball. Use
+  `--cancel-campaign` on the existing one, ONLY — do not pause it and
+  then enqueue a replacement; a paused campaign still owns its index
+  space, so a paused-then-enqueued pair would double-feed the same
+  indices, and the guard refuses a paused tarball for exactly that
+  reason. After `--cancel-campaign`, the new campaign's cursor starts at
+  0 with no memory of what the cancelled one already fed — check
+  `recover --status` (or the ledger directly) for that tarball before
+  re-enqueueing, so you don't resubmit indices already covered.
+- `campaign N: ledger already covers indices in this slice — PAUSED
+  (crash-window suspected...)` — top-up found ledger rows for this
+  campaign's tarball whose indices already fall inside the next slice
+  window, meaning a prior submission likely succeeded but its cursor
+  advance or ledger write was lost to a crash. Reconcile manually:
+  compare the ledger rows for the tarball (`recover --status` /
+  `sqlite3`) against the campaign's `cursor`, adjust the cursor if
+  needed, then `--resume-campaign`. Do not resume blind — resuming
+  without reconciling can still double-submit.
 - `MU2E_MAX_QUEUED is not an integer: '<value>'` — the env var must
   parse as an int; unset it or fix the value, or pass `--max-queued`
   directly to override it for one run.

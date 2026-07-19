@@ -182,6 +182,34 @@ def submit_slice(camp, n, db_path, runner=subprocess.run):
     return res.returncode == 0
 
 
+def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
+    """True if any ledger row (ANY state) for `tarball` already has an
+    absolute cnf index inside the slice's absolute window
+    [firstjob+cursor, firstjob+cursor+n).
+
+    Crash-window guard: a parent `submit_map` process can die after
+    `jobsub_submit` succeeds but before its own ledger write (the same
+    residual window the recovery pass's resubmits have). Without this
+    check, the NEXT top-up tick would re-submit indices already queued
+    — deterministic payloads make that a duplicate-physics-events bug,
+    not a harmless retry. Also catches a human manually submitting
+    `--first/--num` on a tarball that has a live campaign.
+
+    Deliberately not a false-positive source for the recovery loop's
+    OWN resubmits: a child row's indices are a subset of an ALREADY
+    ADVANCED-PAST parent slice, strictly below the cursor — they can
+    never fall inside a slice window that starts at cursor.
+    """
+    lo = firstjob + cursor
+    hi = lo + n
+    for row in submission_ledger.all_rows(db_path):
+        if row['tarball'] != tarball:
+            continue
+        if any(lo <= idx < hi for idx in row['indices']):
+            return True
+    return False
+
+
 def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
            submit_fn=submit_slice):
     """Feed slices from active campaigns while total idle+running stays
@@ -190,8 +218,14 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
     oldest-first, one slice per campaign per cycle; the first slice
     that would exceed the cap stops the tick. Submission failure
     pauses the campaign (no blind retry — deterministic payloads make
-    an unverified resubmit the Run1Ban failure mode). Returns an
-    action-count summary in the recovery pass's style."""
+    an unverified resubmit the Run1Ban failure mode). Before each
+    slice, checks the ledger for indices already covering the slice's
+    absolute window (crash-window guard, see _slice_overlaps_ledger) —
+    an overlap pauses the campaign rather than submits. A campaign
+    whose cursor is already at njobs but is still 'active' (crash
+    between advance_campaign and the completion write) self-heals to
+    'complete'. Returns an action-count summary in the recovery pass's
+    style."""
     summary = {}
 
     def bump(key):
@@ -216,6 +250,23 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
             njobs = njobs_of(camp['entry'])
             remaining = njobs - camp['cursor']
             if remaining <= 0:
+                # Cursor already at njobs but the campaign is still
+                # 'active': a crash between advance_campaign and
+                # set_campaign_state('complete') on a prior tick, or the
+                # last slice's completion write never happened. Self-
+                # heal rather than leaving it stuck active forever.
+                if dry_run:
+                    print(f"campaign {camp['id']}: cursor already at "
+                          f"njobs — would close complete (self-heal)")
+                    bump('would-campaign-complete')
+                else:
+                    submission_ledger.set_campaign_state(
+                        db_path, camp['id'], 'complete',
+                        note='fully submitted (self-heal)')
+                    print(f"campaign {camp['id']}: cursor already at "
+                          f"njobs — closed complete (self-heal)")
+                    camp['state'] = 'complete'
+                    bump('campaign-complete')
                 continue
             n = min(camp['slice_size'], remaining)
             if count + n > cap:
@@ -223,6 +274,28 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
                       f"— headroom < slice, waiting for next tick")
                 bump('cap-wait')
                 return summary
+            firstjob = camp['entry'].get('firstjob', 0)
+            if _slice_overlaps_ledger(db_path, camp['tarball'], firstjob,
+                                      camp['cursor'], n):
+                if dry_run:
+                    print(f"campaign {camp['id']}: ledger already covers "
+                          f"indices in [{firstjob + camp['cursor']}.."
+                          f"{firstjob + camp['cursor'] + n - 1}] — would "
+                          f"pause (crash-window suspected)")
+                    bump('would-pause-overlap')
+                else:
+                    submission_ledger.set_campaign_state(
+                        db_path, camp['id'], 'paused',
+                        note='ledger already covers indices in this '
+                             'slice — crash-window suspected; reconcile '
+                             'cursor manually before --resume-campaign')
+                    print(f"campaign {camp['id']}: ledger already covers "
+                          f"indices in this slice — PAUSED (crash-window "
+                          f"suspected; reconcile cursor manually before "
+                          f"--resume-campaign)")
+                    camp['state'] = 'paused'
+                    bump('campaign-paused')
+                continue
             if dry_run:
                 print(f"campaign {camp['id']}: would submit slice "
                       f"first={camp['cursor']} num={n}")
@@ -482,7 +555,8 @@ def main():
               + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
     if (summary.get('held') or summary.get('exhausted')
             or summary.get('would-exhaust') or summary.get('child-missing')
-            or summary.get('campaign-paused')):
+            or summary.get('campaign-paused')
+            or summary.get('would-pause-overlap')):
         sys.exit(2)
 
 

@@ -297,9 +297,13 @@ def _enqueue_entries(entries_to_submit, map_path, opts):
     ledger hook, which must never raise). Returns new campaign ids."""
     ids = []
     for idx, entry in entries_to_submit:
-        if njobs_of(entry) is None:
+        njobs = njobs_of(entry)
+        if njobs is None:
             sys.exit(f"Error: entry {idx} has no njobs (generic tarball) — "
                      f"a campaign needs a job count to slice")
+        if njobs < 1:
+            sys.exit(f"Error: entry {idx} has njobs={njobs} — "
+                     f"a campaign needs a positive job count")
         snap = _snapshot_entry(entry, _effective_resources(entry, opts))
         if opts.dry_run:
             print(f"[DRY RUN] would enqueue entry {idx}: "
