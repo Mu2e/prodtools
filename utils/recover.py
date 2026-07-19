@@ -30,11 +30,29 @@ from utils import submission_ledger
 from utils.jobquery import Mu2eJobPars
 from utils.mkrecovery import (build_file_maps, extract_datasets_from_tarball,
                               locate_tarball)
+from utils.poms_entry import njobs_of
 from utils.samweb_wrapper import files_in_dataset
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUBMIT_MAP = REPO_ROOT / 'bin' / 'submit_map'
 DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_MAX_QUEUED = 10000
+
+
+def resolve_cap(flag_value):
+    """Queue cap for the top-up phase: --max-queued flag >
+    MU2E_MAX_QUEUED env > DEFAULT_MAX_QUEUED. Resolved once per
+    invocation; nothing persists between runs — the effective cap is
+    always readable off the crontab line."""
+    if flag_value is not None:
+        return flag_value
+    env = os.environ.get('MU2E_MAX_QUEUED')
+    if env is not None:
+        try:
+            return int(env)
+        except ValueError:
+            sys.exit(f"MU2E_MAX_QUEUED is not an integer: {env!r}")
+    return DEFAULT_MAX_QUEUED
 
 
 def queue_state(jobsub_id, runner=subprocess.run):
@@ -125,6 +143,132 @@ def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
     print(f"  resubmit: {' '.join(cmd)}")
     res = runner(cmd)
     return res.returncode == 0
+
+
+def total_queued(user='mu2epro', runner=subprocess.run):
+    """Total idle+running jobs for `user` — the top-up throttle gate —
+    or None when the count cannot be trusted (caller skips the phase).
+
+    Counts HTCondor states 1 (idle) and 2 (running) via condor_q
+    autoformat passthrough; held/removed/other states do not consume
+    cap headroom. Covers ALL the user's jobs (POMS-launched included),
+    so the cap bounds the account's whole farm footprint."""
+    res = runner(['jobsub_q', '--user', user, '-af', 'JobStatus'],
+                 capture_output=True, text=True)
+    if res.returncode != 0:
+        return None
+    states = res.stdout.split()
+    if any(not s.isdigit() for s in states):
+        return None
+    return sum(1 for s in states if s in ('1', '2'))
+
+
+def submit_slice(camp, n, db_path, runner=subprocess.run):
+    """Submit the campaign's next slice through the submit_map CLI —
+    the same battle-tested path as manual submissions (token check,
+    argv build, ledger row, submit log). The snapshot entry ships
+    VERBATIM: firstjob is preserved because cursor and --first/--num
+    are entry-relative, exactly like a manual windowed submission.
+    Returns True on submit success."""
+    tmpdir = tempfile.mkdtemp(prefix='campaign-')
+    map_path = Path(tmpdir) / 'campaign-map.json'
+    map_path.write_text(json.dumps([camp['entry']], indent=2) + '\n')
+    cmd = [str(SUBMIT_MAP), '--map', str(map_path), '--backend', 'direct',
+           '--first', str(camp['cursor']), '--num', str(n),
+           '--ledger-db', str(db_path)]
+    print(f"  campaign {camp['id']}: slice first={camp['cursor']} "
+          f"num={n}: {' '.join(cmd)}")
+    res = runner(cmd)
+    return res.returncode == 0
+
+
+def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
+           submit_fn=submit_slice):
+    """Feed slices from active campaigns while total idle+running stays
+    under the cap. Whole slices only (n = min(slice_size, remaining) is
+    short only at end of entry — never clamped to headroom); cycles
+    oldest-first, one slice per campaign per cycle; the first slice
+    that would exceed the cap stops the tick. Submission failure
+    pauses the campaign (no blind retry — deterministic payloads make
+    an unverified resubmit the Run1Ban failure mode). Returns an
+    action-count summary in the recovery pass's style."""
+    summary = {}
+
+    def bump(key):
+        summary[key] = summary.get(key, 0) + 1
+
+    camps = submission_ledger.active_campaigns(db_path)
+    if not camps:
+        return summary
+    count = count_fn()
+    if count is None:
+        print("top-up: queue count failed — top-up skipped this tick")
+        bump('count-error')
+        return summary
+    print(f"top-up: {count} idle+running (cap {cap}), "
+          f"{len(camps)} active campaign(s)")
+    progressed = True
+    while progressed:
+        progressed = False
+        for camp in camps:
+            if camp['state'] != 'active':
+                continue
+            njobs = njobs_of(camp['entry'])
+            remaining = njobs - camp['cursor']
+            if remaining <= 0:
+                continue
+            n = min(camp['slice_size'], remaining)
+            if count + n > cap:
+                print(f"top-up: campaign {camp['id']}: {count}+{n} > {cap} "
+                      f"— headroom < slice, waiting for next tick")
+                bump('cap-wait')
+                return summary
+            if dry_run:
+                print(f"campaign {camp['id']}: would submit slice "
+                      f"first={camp['cursor']} num={n}")
+                bump('would-slice')
+            else:
+                if not submit_fn(camp, n, db_path):
+                    submission_ledger.set_campaign_state(
+                        db_path, camp['id'], 'paused',
+                        note='submit failed — check the submit log and '
+                             'jobsub_q before --resume-campaign')
+                    print(f"campaign {camp['id']}: submit FAILED — PAUSED "
+                          f"(no blind retry; check the submit log and "
+                          f"jobsub_q, then --resume-campaign)")
+                    camp['state'] = 'paused'
+                    bump('campaign-paused')
+                    continue
+                submission_ledger.advance_campaign(
+                    db_path, camp['id'], camp['cursor'] + n)
+                bump('slice')
+            camp['cursor'] += n
+            count += n
+            progressed = True
+            if camp['cursor'] >= njobs:
+                if dry_run:
+                    print(f"campaign {camp['id']}: would close complete")
+                    bump('would-campaign-complete')
+                else:
+                    submission_ledger.set_campaign_state(
+                        db_path, camp['id'], 'complete',
+                        note='fully submitted')
+                    print(f"campaign {camp['id']}: fully submitted — "
+                          f"complete (verification continues per ledger "
+                          f"row)")
+                    bump('campaign-complete')
+                camp['state'] = 'complete'
+    return summary
+
+
+def manage_campaign(db_path, camp_id, action):
+    """Operator switches. cancel closes the campaign only —
+    already-submitted ledger rows still get recovered normally."""
+    target = {'pause': 'paused', 'resume': 'active',
+              'cancel': 'cancelled'}[action]
+    submission_ledger.set_campaign_state(
+        db_path, camp_id, target, note=f'operator {action}')
+    print(f"campaign {camp_id}: {action} -> {target}")
 
 
 def process_row(row, db_path, max_attempts, dry_run=False,
@@ -236,32 +380,63 @@ def print_status(db_path):
         print(f"{r['id']:>4} {r['state']:<10} {r['attempt']:>3} "
               f"{str(r['parent_id'] or ''):>6} {len(r['indices']):>5}  "
               f"{r['created_utc']:<20} {r['tarball']}")
+    camps = submission_ledger.all_campaigns(db_path)
+    if camps:
+        print(f"\n{'id':>4} {'state':<10} {'cursor':>12} {'slice':>6}  "
+              f"{'created':<20} tarball")
+        for c in camps:
+            njobs = njobs_of(c['entry'])
+            print(f"{c['id']:>4} {c['state']:<10} "
+                  f"{str(c['cursor']) + '/' + str(njobs):>12} "
+                  f"{c['slice_size']:>6}  {c['created_utc']:<20} "
+                  f"{c['tarball']}")
 
 
 def main():
     p = argparse.ArgumentParser(
-        description='Verify-and-resubmit recovery loop for direct-backend '
-                    'submissions (ledger written by submit_map).')
+        description='Verify-and-resubmit recovery loop + sliced-campaign '
+                    'top-up for direct-backend submissions (state written '
+                    'by submit_map).')
     p.add_argument('--db', default=submission_ledger.DEFAULT_DB,
                    help=f'Submission-ledger sqlite DB (default: '
                         f'{submission_ledger.DEFAULT_DB}, env '
                         f'MU2E_SUBMISSION_DB)')
     p.add_argument('--status', action='store_true',
-                   help='Print the ledger table and exit (read-only)')
+                   help='Print ledger + campaigns and exit (read-only)')
     p.add_argument('--dry-run', action='store_true',
-                   help='Drain-check + verify + report; no submissions, '
-                        'no row state changes')
+                   help='Report would-* actions only; no submissions, no '
+                        'state changes')
     p.add_argument('--row', type=int, default=None,
-                   help='Process only this ledger row id')
+                   help='Process only this ledger row id (skips top-up)')
     p.add_argument('--max-attempts', type=int, default=DEFAULT_MAX_ATTEMPTS,
                    help=f'Attempt cap per chain (default '
                         f'{DEFAULT_MAX_ATTEMPTS}); at the cap the row is '
                         f'marked exhausted for a human')
+    p.add_argument('--max-queued', type=int, default=None,
+                   help=f'Total mu2epro idle+running cap for the top-up '
+                        f'phase (default: MU2E_MAX_QUEUED env, then '
+                        f'{DEFAULT_MAX_QUEUED})')
+    p.add_argument('--pause-campaign', type=int, default=None, metavar='ID',
+                   help='Pause an active campaign and exit')
+    p.add_argument('--resume-campaign', type=int, default=None, metavar='ID',
+                   help='Reactivate a paused campaign and exit')
+    p.add_argument('--cancel-campaign', type=int, default=None, metavar='ID',
+                   help='Cancel a campaign and exit (already-submitted '
+                        'rows still get recovered)')
     args = p.parse_args()
 
     if args.status:
+        print(f"queue cap in effect: {resolve_cap(args.max_queued)}")
         print_status(args.db)
         return
+
+    mgmt = [(a, cid) for a, cid in
+            (('pause', args.pause_campaign),
+             ('resume', args.resume_campaign),
+             ('cancel', args.cancel_campaign)) if cid is not None]
+    if mgmt and args.dry_run:
+        sys.exit("--pause/--resume/--cancel-campaign mutate the DB — "
+                 "not valid with --dry-run")
 
     if not args.dry_run:
         # One mutating pass at a time per DB — guards manual runs racing
@@ -276,6 +451,11 @@ def main():
         except BlockingIOError:
             sys.exit(f"another recover run holds {lock_path} — exiting")
 
+    if mgmt:
+        for action, cid in mgmt:
+            manage_campaign(args.db, cid, action)
+        return
+
     rows = submission_ledger.open_rows(args.db)
     if args.row is not None:
         rows = [r for r in rows if r['id'] == args.row]
@@ -283,17 +463,26 @@ def main():
             sys.exit(f"no active row {args.row} in {args.db}")
     if not rows:
         print(f"No active submissions ({args.db}).")
-        return
 
     summary = {}
     for row in rows:
         action = process_row(row, args.db, args.max_attempts,
                              dry_run=args.dry_run)
         summary[action] = summary.get(action, 0) + 1
-    print("recover summary: "
-          + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
+
+    if args.row is None:
+        # Top-up AFTER the recovery pass: resubmissions are already in
+        # the queue when the count is taken, so the cap covers them.
+        for k, v in top_up(args.db, resolve_cap(args.max_queued),
+                           dry_run=args.dry_run).items():
+            summary[k] = summary.get(k, 0) + v
+
+    if summary:
+        print("recover summary: "
+              + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
     if (summary.get('held') or summary.get('exhausted')
-            or summary.get('would-exhaust') or summary.get('child-missing')):
+            or summary.get('would-exhaust') or summary.get('child-missing')
+            or summary.get('campaign-paused')):
         sys.exit(2)
 
 

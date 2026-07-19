@@ -4339,6 +4339,226 @@ class TestSubmissionLog(unittest.TestCase):
         self.assertIn('boom', r['raw_output'])
 
 
+class TestRecoverCap(unittest.TestCase):
+    """Cap resolution + queue counting for the top-up phase."""
+
+    def test_resolve_cap_flag_wins(self):
+        from utils import recover
+        with patch.dict(os.environ, {'MU2E_MAX_QUEUED': '5'}):
+            self.assertEqual(recover.resolve_cap(42), 42)
+
+    def test_resolve_cap_env_beats_default(self):
+        from utils import recover
+        with patch.dict(os.environ, {'MU2E_MAX_QUEUED': '5'}):
+            self.assertEqual(recover.resolve_cap(None), 5)
+
+    def test_resolve_cap_default(self):
+        from utils import recover
+        env = {k: v for k, v in os.environ.items() if k != 'MU2E_MAX_QUEUED'}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(recover.resolve_cap(None),
+                             recover.DEFAULT_MAX_QUEUED)
+
+    def test_resolve_cap_bad_env_exits(self):
+        from utils import recover
+        with patch.dict(os.environ, {'MU2E_MAX_QUEUED': 'lots'}):
+            with self.assertRaises(SystemExit):
+                recover.resolve_cap(None)
+
+    def _runner(self, stdout, rc=0):
+        def run(cmd, capture_output=True, text=True):
+            self.cmd = cmd
+            return MagicMock(returncode=rc, stdout=stdout, stderr='')
+        return run
+
+    def test_total_queued_counts_idle_and_running_only(self):
+        from utils.recover import total_queued
+        n = total_queued(runner=self._runner('1\n2\n2\n5\n4\n'))
+        self.assertEqual(n, 3)              # held (5) / removed (4) excluded
+        self.assertEqual(self.cmd[:3], ['jobsub_q', '--user', 'mu2epro'])
+        self.assertIn('JobStatus', self.cmd)
+
+    def test_total_queued_empty_is_zero(self):
+        from utils.recover import total_queued
+        self.assertEqual(total_queued(runner=self._runner('')), 0)
+
+    def test_total_queued_failure_is_none(self):
+        from utils.recover import total_queued
+        self.assertIsNone(total_queued(runner=self._runner('', rc=1)))
+
+    def test_total_queued_garbage_is_none(self):
+        from utils.recover import total_queued
+        self.assertIsNone(total_queued(runner=self._runner('1\nERROR\n')))
+
+
+class TestTopUp(unittest.TestCase):
+    """Slice feeding: cap gate, whole slices, round-robin, pause."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.calls = []
+
+    def _campaign(self, tarball='cnf.mu2e.A.C.0.tar', njobs=10, slice=4):
+        entry = {'tarball': tarball, 'njobs': njobs, 'inloc': 'tape',
+                 'outputs': []}
+        return self.sl.create_campaign(self.db, tarball=tarball,
+                                       entry=entry, slice_size=slice)
+
+    def _submit(self, ok=True):
+        def fn(camp, n, db_path):
+            self.calls.append((camp['id'], camp['cursor'], n))
+            return ok
+        return fn
+
+    def test_feeds_until_complete(self):
+        from utils.recover import top_up
+        cid = self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [(cid, 0, 4), (cid, 4, 4), (cid, 8, 2)])
+        self.assertEqual(s['slice'], 3)
+        self.assertEqual(s['campaign-complete'], 1)
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'complete')
+
+    def test_cap_stops_whole_slice(self):
+        from utils.recover import top_up
+        self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=100, count_fn=lambda: 97,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])            # 97+4 > 100: wait
+        self.assertEqual(s['cap-wait'], 1)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['cursor'], 0)
+
+    def test_cap_exact_fit_submits(self):
+        from utils.recover import top_up
+        self._campaign(njobs=4, slice=4)
+        top_up(self.db, cap=100, count_fn=lambda: 96,
+               submit_fn=self._submit())
+        self.assertEqual(len(self.calls), 1)        # 96+4 == 100 fits
+
+    def test_submitted_slices_consume_headroom(self):
+        from utils.recover import top_up
+        self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=8, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(len(self.calls), 2)        # 0+4, 4+4; 8+2 > 8 waits
+        self.assertEqual(s['cap-wait'], 1)
+
+    def test_failure_pauses_without_advancing(self):
+        from utils.recover import top_up
+        cid = self._campaign()
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit(ok=False))
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'paused')
+        self.assertEqual(c['cursor'], 0)
+        self.assertEqual(s['campaign-paused'], 1)
+
+    def test_round_robin_two_campaigns(self):
+        from utils.recover import top_up
+        a = self._campaign(tarball='cnf.mu2e.A.C.0.tar', njobs=4, slice=2)
+        b = self._campaign(tarball='cnf.mu2e.B.C.0.tar', njobs=2, slice=2)
+        top_up(self.db, cap=100, count_fn=lambda: 0,
+               submit_fn=self._submit())
+        self.assertEqual(self.calls,
+                         [(a, 0, 2), (b, 0, 2), (a, 2, 2)])
+
+    def test_no_campaigns_skips_count(self):
+        from utils.recover import top_up
+        def boom():
+            raise AssertionError("count_fn must not be called")
+        self.assertEqual(top_up(self.db, cap=100, count_fn=boom), {})
+
+    def test_count_failure_skips_topup(self):
+        from utils.recover import top_up
+        self._campaign()
+        s = top_up(self.db, cap=100, count_fn=lambda: None,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])
+        self.assertEqual(s['count-error'], 1)
+
+    def test_dry_run_reports_and_writes_nothing(self):
+        from utils.recover import top_up
+        def boom(camp, n, db_path):
+            raise AssertionError("submit_fn must not be called in dry-run")
+        self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=100, dry_run=True, count_fn=lambda: 0,
+                   submit_fn=boom)
+        self.assertEqual(s['would-slice'], 3)
+        self.assertEqual(s['would-campaign-complete'], 1)
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['cursor'], 0)            # DB untouched
+        self.assertEqual(c['state'], 'active')
+
+
+class TestSubmitSlice(unittest.TestCase):
+    """submit_slice shells out through the submit_map CLI."""
+
+    def test_argv_and_map_content(self):
+        import tempfile
+        from utils import recover
+        entry = {'tarball': 'cnf.mu2e.W.C.0.tar', 'njobs': 50,
+                 'firstjob': 100, 'inloc': 'tape', 'outputs': [],
+                 'memory': '4000MB'}
+        camp = {'id': 7, 'cursor': 10, 'slice_size': 5, 'entry': entry,
+                'tarball': entry['tarball']}
+        captured = {}
+        def runner(cmd, **kw):
+            captured['cmd'] = cmd
+            return MagicMock(returncode=0)
+        ok = recover.submit_slice(camp, 5, '/tmp/led.db', runner=runner)
+        self.assertTrue(ok)
+        cmd = captured['cmd']
+        self.assertIn('--backend', cmd)
+        self.assertIn('direct', cmd)
+        self.assertEqual(cmd[cmd.index('--first') + 1], '10')
+        self.assertEqual(cmd[cmd.index('--num') + 1], '5')
+        self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
+        with open(cmd[cmd.index('--map') + 1]) as f:
+            written = json.load(f)
+        self.assertEqual(written, [entry])          # firstjob PRESERVED
+
+    def test_nonzero_exit_is_failure(self):
+        from utils import recover
+        camp = {'id': 1, 'cursor': 0, 'slice_size': 2, 'tarball': 't',
+                'entry': {'tarball': 't', 'njobs': 2}}
+        ok = recover.submit_slice(
+            camp, 2, '/tmp/led.db',
+            runner=lambda cmd, **kw: MagicMock(returncode=1))
+        self.assertFalse(ok)
+
+
+class TestManageCampaign(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.cid = sl.create_campaign(
+            self.db, tarball='cnf.mu2e.M.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.M.C.0.tar', 'njobs': 5},
+            slice_size=2)
+
+    def test_pause_resume_cancel(self):
+        from utils.recover import manage_campaign
+        manage_campaign(self.db, self.cid, 'pause')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'paused')
+        manage_campaign(self.db, self.cid, 'resume')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'active')
+        manage_campaign(self.db, self.cid, 'cancel')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'cancelled')
+
+    def test_resume_active_raises(self):
+        from utils.recover import manage_campaign
+        with self.assertRaises(ValueError):
+            manage_campaign(self.db, self.cid, 'resume')
+
+
 # ---------------------------------------------------------------------------
 # submit_map ledger hook (utils/submit.py) — direct-backend recovery
 # ---------------------------------------------------------------------------
