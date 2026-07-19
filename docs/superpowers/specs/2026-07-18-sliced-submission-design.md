@@ -207,7 +207,15 @@ Today: built-in defaults in `utils/jobsub_argv.py`
 1. **Authoritative home: the map entry.** Three new optional entry
    keys — `"memory"`, `"disk"`, `"expected_lifetime"` — beside
    `tarball`/`njobs`/`inloc`. Precedence at submission:
-   CLI flag > entry key > built-in default.
+   CLI flag > entry key > built-in default. A shared accessor in
+   `utils/poms_entry.py` (`resources_of(entry) -> dict`) is the single
+   read path, consistent with the other entry accessors.
+1a. **How the keys get into an entry.** Two ways, both supported:
+   editing the map entry in place (the accepted outloc pattern), or —
+   the durable route — putting the same keys in the jobdef JSON config
+   (`data/<campaign>/<stage>.json`): `json2jobdef.append_jobdef` copies
+   them verbatim into the map entry at push time, so a template like
+   RMCPhaseSpace carries its 4000MB from day one.
 2. **Snapshot freezes the effective values.** When `submit_map` writes
    a ledger row or an `--enqueue` campaign row, CLI resource overrides
    are merged into the stored `entry_json` first. The snapshot records
@@ -260,7 +268,9 @@ submissions; fake queue-count function and fake subprocess runner):
   under `--no-ledger`/`--dry-run`; write failure warns, never raises.
 - Resources: entry-key precedence (flag > key > default) in the built
   jobsub argv; CLI override merged into ledger and campaign snapshots;
-  recovery resubmit argv carries snapshot resources.
+  recovery resubmit argv carries snapshot resources; jobdef config with
+  the keys → `append_jobdef` writes them into the map entry (and
+  configs without them produce entries without them).
 
 ## Out of scope (deliberate)
 
