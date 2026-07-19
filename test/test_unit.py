@@ -4222,6 +4222,18 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertNotIn('resubmit', calls)
         self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
 
+    def test_dry_run_complete_keeps_row_active(self):
+        action, calls = self._process(missing=(), dry_run=True)
+        self.assertEqual(action, 'would-complete')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_dry_run_at_cap_keeps_row_active(self):
+        action, calls = self._process(missing=(1,), max_attempts=1,
+                                      dry_run=True)
+        self.assertEqual(action, 'would-exhaust')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
     def test_verify_error_keeps_row_active(self):
         action, _ = self._process(verify_exc=RuntimeError('no tarball'))
         self.assertEqual(action, 'verify-error')
@@ -4377,6 +4389,19 @@ class TestRecoverCLI(unittest.TestCase):
             jobsub_id='1.0@js', cluster_id='1')
         with patch.object(recover, 'process_row', return_value='held'), \
              patch.object(sys, 'argv', ['recover', '--db', self.db]):
+            with self.assertRaises(SystemExit) as cm:
+                recover.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_main_exit_2_on_dry_run_would_exhaust(self):
+        from utils import recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(recover, 'process_row',
+                          return_value='would-exhaust'), \
+             patch.object(sys, 'argv', ['recover', '--db', self.db,
+                                        '--dry-run']):
             with self.assertRaises(SystemExit) as cm:
                 recover.main()
         self.assertEqual(cm.exception.code, 2)

@@ -126,7 +126,7 @@ def process_row(row, db_path, max_attempts, dry_run=False,
 
     Returns the action taken: 'running' | 'held' | 'queue-error' |
     'verify-error' | 'complete' | 'resubmitted' | 'resubmit-error' |
-    'exhausted' | 'would-resubmit'.
+    'exhausted' | 'would-resubmit' | 'would-complete' | 'would-exhaust'.
     """
     rid = row['id']
     if not row['jobsub_id']:
@@ -153,6 +153,10 @@ def process_row(row, db_path, max_attempts, dry_run=False,
         print(f"row {rid}: PARTIAL outputs at indices {partial} — some "
               f"streams landed; a re-run re-pushes the existing files")
     if not missing:
+        if dry_run:
+            print(f"row {rid}: would close complete "
+                  f"({len(row['indices'])} indices verified)")
+            return 'would-complete'
         submission_ledger.close_row(
             db_path, rid, 'complete',
             note=f"{len(row['indices'])} indices verified")
@@ -161,6 +165,10 @@ def process_row(row, db_path, max_attempts, dry_run=False,
     print(f"row {rid}: {len(missing)}/{len(row['indices'])} indices "
           f"missing outputs")
     if row['attempt'] >= max_attempts:
+        if dry_run:
+            print(f"row {rid}: would mark EXHAUSTED (attempt "
+                  f"{row['attempt']} at cap; {len(missing)} missing)")
+            return 'would-exhaust'
         submission_ledger.close_row(
             db_path, rid, 'exhausted',
             note=f"{len(missing)} indices missing after attempt "
@@ -237,7 +245,8 @@ def main():
         summary[action] = summary.get(action, 0) + 1
     print("recover summary: "
           + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
-    if summary.get('held') or summary.get('exhausted'):
+    if (summary.get('held') or summary.get('exhausted')
+            or summary.get('would-exhaust')):
         sys.exit(2)
 
 
