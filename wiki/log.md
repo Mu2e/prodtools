@@ -713,3 +713,31 @@ running the old Flask-test-client render path with the `setup_script` bug.
 Runbook in `web/pomsMonitor/README.md` and this page's Ops-decommission
 section both gained an explicit sync-checkout step (before/with the
 `wsgi.py` deregistration) plus a post-sync `setup_script` verification.
+
+## [2026-07-18] ingest | direct-backend recovery loop implemented (ledger + recover + cron)
+Pages written: 2026-07-18-direct-recovery-loop
+Pages updated: (none — index.md left for a future lint pass)
+Sources: `docs/superpowers/specs/2026-07-18-direct-recovery-design.md`,
+`docs/superpowers/plans/2026-07-18-direct-recovery.md`
+Reason: `submit_map --backend direct` had no automated recovery. Six-task
+TDD plan built `utils/submission_ledger.py` (stdlib-sqlite3 row store,
+states active|complete|recovered|exhausted, entry snapshot + absolute
+cnf indices + full jobsub id, attempt chains via parent_id), a ledger
+hook in `utils/submit.py` (new `--ledger-db`/`--ledger-parent`/
+`--no-ledger` flags, full `cluster.proc@schedd` parsing), a scoped-index
+extension to `utils/mkrecovery.build_file_maps`, `utils/recover.py` +
+`bin/recover` (drain-gate via jobsub_q, SAM-only verification, capped
+resubmit through the `submit_map` CLI, `--status`/`--dry-run`/`--row`/
+`--max-attempts`, exit 2 on held/exhausted rows), and `bin/recover_cron`
+(flock + quiet env + report-only token gate, dated log beside the DB —
+not installed in any crontab by this work). 380/380 unit tests green,
+all new tests injecting fakes for jobsub_q/SAM/subprocess (no network).
+Docs regenerated: `docs/EXAMPLES_schema.md` tool list + tribal-knowledge
+bullet, full `EXAMPLES.md` regen (submit_map ledger flags + new
+`recover` subsection + updated ops-scripts line), this wiki page.
+**Pre-activation checklist pending** (blocks the mu2epro crontab
+install): duplicate-declare behavior needs a live verify against a
+partially-landed index, one real `recover --dry-run` pass on a drained
+cluster, and `jobsub_q --jobid <id> -af JobStatus` passthrough needs
+confirming against the GPVM's actual jobsub_lite install. See the wiki
+page's "Pre-activation checklist" section.

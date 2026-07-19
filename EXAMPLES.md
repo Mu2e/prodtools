@@ -56,6 +56,7 @@ Core production tools:
 - `runmu2e` — worker entry point: FCL generation, `mu2e` execution, pushOutput
 - `submit_map` — submit all entries of a POMS-map JSON to the grid
 - `mkrecovery` — find job indices whose outputs are missing from SAM
+- `recover` — verify-and-resubmit recovery loop for direct-backend submissions
 
 Analysis / diagnostic tools:
 
@@ -508,6 +509,10 @@ Two index spaces — pick the one your submission path consumes:
   one per line under a `# <tarball>` header, for `submit_map
   --indices-file`. Diagnostics go to stderr so stdout stays pipeable.
 
+This is also the machinery `recover` (below) reuses internally to
+SAM-verify a ledger row — `mkrecovery` itself is unchanged and remains
+the POMS-backend recovery path (POMS stages are never in the ledger).
+
 ### `jobquery`
 
 Inspect a cnf tarball:
@@ -540,14 +545,26 @@ submit_map --map Run1Ban-pileuprecover.json --backend direct \
 
 Flags: `--map` (required), `--entry N`, `--backend {mu2ejobsub,direct}`
 (default `mu2ejobsub`), `--first N` / `--num M` (direct), `--indices
-K1,K2,...` / `--indices-file FILE` (direct), `--wftop`, `--wfproject`,
-`--role`, `--disk` (default `30GB`), `--memory` (default `2000MB`),
-`--expected-lifetime` (default `24h`), `--prodtools-tar`, `--dry-run`,
-`--verbose`.
+K1,K2,...` / `--indices-file FILE` (direct), `--ledger-db PATH` (direct;
+default `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`, env
+`MU2E_SUBMISSION_DB`), `--ledger-parent ID` (direct), `--no-ledger`
+(direct), `--wftop`, `--wfproject`, `--role`, `--disk` (default `30GB`),
+`--memory` (default `2000MB`), `--expected-lifetime` (default `24h`),
+`--prodtools-tar`, `--dry-run`, `--verbose`.
 
 The direct backend builds the `jobsub_submit` argv itself, ships the
 repo's `utils/` + `bin/` as a dropbox tarball, and runs per-job
 `pushOutput` on the worker.
+
+Every successful `--backend direct` submission (one that produced a
+cluster ID) is recorded in the submission ledger (sqlite3, `--ledger-db`)
+— the tarball, a verbatim entry snapshot, and the ABSOLUTE cnf indices
+submitted. `recover` (below) reads this ledger to drain-check,
+SAM-verify, and resubmit missing indices. `--ledger-parent ID` is set
+automatically by `recover` when it resubmits (chains the attempt count
+for that recovery lineage); `--no-ledger` opts an ad-hoc or test
+submission out of the ledger entirely — the recovery loop then never
+sees it. `--backend mu2ejobsub` submissions never touch the ledger.
 
 Statistics expansion (`firstjob` windows):
 
@@ -570,6 +587,44 @@ Job selection within an entry:
   that no contiguous range can express, and requires a non-windowed entry.
   It submits one cluster with one job per index.
 
+### `recover`
+
+Verify-and-resubmit recovery loop for `submit_map --backend direct`
+submissions. Reads the submission ledger (same sqlite3 DB `submit_map`
+writes to). Per active row: drain-check via `jobsub_q` (skip while jobs
+are still queued; report and skip held jobs — the loop never runs
+`condor_rm`/`condor_release`), SAM-verify the row's cnf indices using the
+cnf's own expected output filenames (`mkrecovery`'s file-map machinery,
+scoped to the row's indices), then close the row `complete`, resubmit
+exactly the missing indices as a child row (`attempt`+1, via the
+`submit_map` CLI), or mark it `exhausted` at the attempt cap for a human.
+
+```bash
+recover --status                 # read-only chain table (any account)
+recover --dry-run                # verify + report, no submissions
+recover                          # full pass (mu2epro; cron entry point)
+recover --row 42 --max-attempts 5
+```
+
+Flags: `--db PATH` (default: the submission-ledger path above, env
+`MU2E_SUBMISSION_DB`), `--status` (print the ledger table and exit,
+read-only), `--dry-run` (drain-check + verify + report; no submissions,
+no row state changes), `--row N` (process only this ledger row),
+`--max-attempts N` (default 3; the row closes `exhausted` once its
+attempt count reaches this cap, instead of resubmitting again).
+
+- `--status` and `--dry-run` are safe under any account — they make no
+  submissions and touch no grid queue beyond a read.
+- `recover` exits 2 when any row needed human attention this pass (held,
+  or newly exhausted) — a cron-visible "needs a look" signal — and 0
+  otherwise.
+- Deterministic cnf payloads re-run identical events, so a systematic
+  failure re-fails every attempt; `exhausted` is where a human takes
+  over, not something blind retry fixes.
+- POMS-backend (`--backend mu2ejobsub`) stages never appear in the
+  ledger and are out of scope by construction — POMS owns their own
+  recovery via `mkrecovery`.
+
 ### `copy_to_stash`
 
 Copy a dataset into stash (CVMFS-readable) or resilient dCache:
@@ -585,13 +640,19 @@ Flags: `--dataset`, `--dest {stash,resilient}`, `--source {disk,tape}`,
 resilient requires production (mu2epro) permissions for new dsconf
 directories.
 
-### `install_prodtools.sh` / `update_pomsmonitor_web`
+### `install_prodtools.sh` / `update_pomsmonitor_web` / `recover_cron`
 
 Operations scripts: `install_prodtools.sh` packages a versioned prodtools
 release for cvmfs publication; `update_pomsmonitor_web` rebuilds the POMS
 DB and regenerates the static dashboard site (the dashboard is a static
 page — `web/pomsMonitor/render_static.py` stamps `monitor_static.html`
-and builds `jobs.json` directly from the DB).
+and builds `jobs.json` directly from the DB); `recover_cron` wraps
+`recover` with `flock` + quiet env setup + a bearer-token presence gate
+(report-only — it never fetches or refreshes a token) for mu2epro's
+crontab, appending output to a `recover-YYYYMMDD.log` beside the ledger
+DB. Not installed into any crontab by this repo — that is a one-time
+operator step (section 11 `recover`, wiki page
+`2026-07-18-direct-recovery-loop`).
 
 ## 12. Troubleshooting
 
@@ -623,3 +684,9 @@ and builds `jobs.json` directly from the DB).
   run `source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana` after
   `muse setup ops` (needed by pomsMonitor and listNewDatasets
   --completeness).
+- `recover`: `row N: no full jobsub id recorded — cannot drain-check` —
+  the ledger row's `jobsub_id` lacks a schedd (numeric-only cluster
+  parse); update the row manually, `recover` will not guess a schedd.
+- `recover`: `row N: HELD jobs ... human decision needed` — the loop
+  never releases or removes held jobs; resolve with `condor_release`/
+  `condor_rm` (or `jobsub_rm`) yourself, then re-run `recover`.

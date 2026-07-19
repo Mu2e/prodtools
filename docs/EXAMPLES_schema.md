@@ -71,9 +71,9 @@ When regenerating, read in this order:
     user-facing CLI: `pomsMonitor`, `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `mkrecovery`, `jobquery`,
-    `submit_map`, `copy_to_stash`. Ops scripts
-    (`install_prodtools.sh`, `update_pomsmonitor_web`) get a one-line
-    mention. Each subsection: one-line purpose, 1–3 example invocations,
+    `submit_map`, `recover`, `copy_to_stash`. Ops scripts
+    (`install_prodtools.sh`, `update_pomsmonitor_web`, `recover_cron`)
+    get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
     key flags. Enumerate from the current `bin/` directory — add any new
     script found there, remove any that no longer exist. (`runjob.sh` is
     a worker bootstrap, not user-facing — omit.)
@@ -113,6 +113,13 @@ reading the code:
 - `genFilterEff` output is Proditions-compatible (`TABLE
   SimEfficiencies2`).
 - `famtree` auto-excludes `etc*.txt` files from diagrams.
+- Every successful `submit_map --backend direct` submission is recorded
+  in the submission ledger (default
+  `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`, env
+  `MU2E_SUBMISSION_DB`); `recover` drain-checks via jobsub_q, verifies
+  outputs against SAM, and resubmits only missing indices (attempt cap,
+  then `exhausted` for a human). POMS-backend stages are never in the
+  ledger — POMS owns their recovery (`mkrecovery`).
 
 If any of the above stops being true, update this list — do not leave a
 stale caveat in the regenerated doc.
