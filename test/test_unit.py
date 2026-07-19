@@ -4191,6 +4191,79 @@ class TestEntryResources(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# submit_map --enqueue (utils/submit.py) — sliced-campaign submission
+# ---------------------------------------------------------------------------
+class TestEnqueue(unittest.TestCase):
+    """submit_map --enqueue: campaign registration, no submission."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 10, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+
+    def _opts(self, dry_run=False, slice_size=100, memory=None):
+        import argparse
+        return argparse.Namespace(
+            ledger_db=self.db, slice_size=slice_size, dry_run=dry_run,
+            memory=memory, disk=None, expected_lifetime=None)
+
+    def test_enqueue_writes_campaign(self):
+        from utils.submit import _enqueue_entries
+        ids = _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+        camps = self.sl.active_campaigns(self.db)
+        self.assertEqual([c['id'] for c in camps], ids)
+        c = camps[0]
+        self.assertEqual(c['tarball'], self.entry['tarball'])
+        self.assertEqual(c['slice_size'], 100)
+        self.assertEqual(c['cursor'], 0)
+        self.assertEqual(c['map_path'], '/tmp/m.json')
+        self.assertEqual(c['entry'], self.entry)
+        # nothing submitted: the submissions table stays empty
+        self.assertEqual(self.sl.open_rows(self.db), [])
+
+    def test_enqueue_merges_cli_resources_into_snapshot(self):
+        from utils.submit import _enqueue_entries
+        _enqueue_entries([(0, self.entry)], '/tmp/m.json',
+                         self._opts(memory='4000MB'))
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['entry']['memory'], '4000MB')
+        self.assertNotIn('memory', self.entry)     # original untouched
+
+    def test_enqueue_dry_run_writes_nothing(self):
+        from utils.submit import _enqueue_entries
+        ids = _enqueue_entries([(0, self.entry)], '/tmp/m.json',
+                               self._opts(dry_run=True))
+        self.assertEqual(ids, [])
+        self.assertEqual(self.sl.all_campaigns(self.db), [])
+
+    def test_enqueue_duplicate_is_hard_error(self):
+        from utils.submit import _enqueue_entries
+        _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+        with self.assertRaises(ValueError):
+            _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+
+    def test_enqueue_generic_entry_refused(self):
+        from utils.submit import _enqueue_entries
+        generic = {'tarball': 'cnf.mu2e.G.C.0.tar', 'inloc': 'tape',
+                   'outputs': []}   # no njobs
+        with self.assertRaises(SystemExit):
+            _enqueue_entries([(0, generic)], '/tmp/m.json', self._opts())
+
+    def test_enqueue_db_failure_is_hard_error(self):
+        from utils.submit import _enqueue_entries
+        import argparse, sqlite3
+        opts = argparse.Namespace(
+            ledger_db='/nonexistent-dir-enqueue-test/s.db', slice_size=10,
+            dry_run=False, memory=None, disk=None, expected_lifetime=None)
+        with self.assertRaises(sqlite3.OperationalError):
+            _enqueue_entries([(0, self.entry)], '/tmp/m.json', opts)
+
+
+# ---------------------------------------------------------------------------
 # submit_map ledger hook (utils/submit.py) — direct-backend recovery
 # ---------------------------------------------------------------------------
 class TestSubmitLedgerHook(unittest.TestCase):

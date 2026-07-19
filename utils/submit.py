@@ -245,6 +245,33 @@ def _snapshot_entry(entry, resources):
     return snap
 
 
+def _enqueue_entries(entries_to_submit, map_path, opts):
+    """Register entries as sliced-submission campaigns (cursor 0) —
+    submits NOTHING; the recover cron feeds slices while the mu2epro
+    queue is under its cap. A DB failure here is a hard error: nothing
+    has been submitted yet, so fail loudly (unlike the post-submission
+    ledger hook, which must never raise). Returns new campaign ids."""
+    ids = []
+    for idx, entry in entries_to_submit:
+        if njobs_of(entry) is None:
+            sys.exit(f"Error: entry {idx} has no njobs (generic tarball) — "
+                     f"a campaign needs a job count to slice")
+        snap = _snapshot_entry(entry, _effective_resources(entry, opts))
+        if opts.dry_run:
+            print(f"[DRY RUN] would enqueue entry {idx}: "
+                  f"{tarball_of(entry)} njobs={njobs_of(entry)} "
+                  f"slice={opts.slice_size}")
+            continue
+        camp_id = submission_ledger.create_campaign(
+            opts.ledger_db, tarball=tarball_of(entry), entry=snap,
+            slice_size=opts.slice_size, map_path=map_path)
+        print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
+              f"njobs={njobs_of(entry)} slice={opts.slice_size} "
+              f"(db {opts.ledger_db})")
+        ids.append(camp_id)
+    return ids
+
+
 def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
     """Tar `utils/` + `bin/` from this repo into a worker-shippable bundle.
 
@@ -621,6 +648,10 @@ def submit_map(map_path, opts):
         print("No submittable entries found.")
         return []
 
+    if getattr(opts, 'enqueue', False):
+        _enqueue_entries(entries_to_submit, map_path, opts)
+        return []
+
     print(f"Map: {map_path}")
     print(f"Entries to submit: {len(entries_to_submit)}")
     print(f"Total jobs: {sum(njobs_of(e, default=0) for _, e in entries_to_submit)}")
@@ -703,6 +734,15 @@ def main():
                         help='[direct] Do not record this submission in '
                              'the ledger (ad-hoc/test submissions the '
                              'recovery loop must not watch).')
+    parser.add_argument('--enqueue', action='store_true',
+                        help='[direct] Register entries as sliced-submission '
+                             'campaigns in the ledger DB instead of '
+                             'submitting; bin/recover then feeds slices '
+                             'while total mu2epro idle+running is under '
+                             'its cap.')
+    parser.add_argument('--slice-size', type=int, default=1000,
+                        help='[direct] Jobs per slice for --enqueue '
+                             '(default 1000; frozen into the campaign).')
     parser.add_argument('--wftop', default=None,
                         help='[direct] Outstage top dir (default: '
                              '/pnfs/mu2e/persistent/users for Production, '
@@ -733,6 +773,19 @@ def main():
     except (ValueError, OSError) as e:
         print(f"Error: {e}")
         sys.exit(1)
+
+    if args.enqueue:
+        if args.backend != 'direct':
+            print("Error: --enqueue requires --backend direct")
+            sys.exit(1)
+        if (args.first is not None or args.num is not None
+                or args.indices is not None):
+            print("Error: --enqueue submits nothing — it cannot be "
+                  "combined with --first/--num/--indices")
+            sys.exit(1)
+        if args.slice_size < 1:
+            print(f"Error: --slice-size must be >= 1, got {args.slice_size}")
+            sys.exit(1)
 
     if not Path(args.map).is_file():
         print(f"Error: map file not found: {args.map}")
