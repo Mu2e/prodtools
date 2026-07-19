@@ -4154,7 +4154,7 @@ class TestRecoverLoop(unittest.TestCase):
 
     def _process(self, qstate='drained', missing=(), partial=(),
                  resub_ok=True, max_attempts=3, dry_run=False,
-                 verify_exc=None):
+                 verify_exc=None, resub_writes_child=True):
         from utils import recover
         calls = {}
 
@@ -4165,7 +4165,7 @@ class TestRecoverLoop(unittest.TestCase):
 
         def fake_resubmit(row, miss, db_path):
             calls['resubmit'] = (row['id'], list(miss), db_path)
-            if resub_ok:
+            if resub_ok and resub_writes_child:
                 self.sl.record_submission(
                     db_path, tarball=row['tarball'], entry=row['entry'],
                     indices=list(miss), jobsub_id='2.0@js.fnal.gov',
@@ -4244,6 +4244,44 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertEqual(action, 'resubmit-error')
         self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
 
+    def test_crash_window_child_already_active_repairs(self):
+        child = self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], jobsub_id='2.0@js', cluster_id='2',
+            parent_id=self.rid)
+        action, calls = self._process(missing=(1,))
+        self.assertEqual(action, 'child-active')
+        self.assertNotIn('resubmit', calls)
+        rows = {r['id']: r for r in self.sl.all_rows(self.db)}
+        self.assertEqual(rows[self.rid]['state'], 'recovered')
+        self.assertEqual(rows[child]['state'], 'active')
+
+    def test_crash_window_dry_run_previews_repair(self):
+        child = self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], jobsub_id='2.0@js', cluster_id='2',
+            parent_id=self.rid)
+        action, calls = self._process(missing=(1,), dry_run=True)
+        self.assertEqual(action, 'would-recover')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(sorted(r['id'] for r in self.sl.open_rows(self.db)),
+                         [self.rid, child])
+
+    def test_child_active_wins_over_cap(self):
+        self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], jobsub_id='2.0@js', cluster_id='2',
+            parent_id=self.rid)
+        action, _ = self._process(missing=(1,), max_attempts=1)
+        self.assertEqual(action, 'child-active')
+
+    def test_resubmit_without_child_row_flags_unwatched(self):
+        action, calls = self._process(missing=(1,), resub_writes_child=False)
+        self.assertEqual(action, 'child-missing')
+        rows = self.sl.all_rows(self.db)
+        self.assertEqual(rows[0]['state'], 'recovered')
+        self.assertIn('unwatched', rows[0]['note'])
+
     def test_missing_jobsub_id_reported(self):
         rid2 = self.sl.record_submission(
             self.db, tarball='t2', entry={}, indices=[0],
@@ -4272,6 +4310,8 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertEqual(
             recover.queue_state('x', runner=lambda *a, **k: r('', rc=1)),
             'error')
+        self.assertEqual(recover.queue_state(
+            'x', runner=lambda *a, **k: r('No jobs found\n')), 'error')
 
     def test_verify_row_missing_and_partial(self):
         from utils import recover
@@ -4316,6 +4356,23 @@ class TestRecoverLoop(unittest.TestCase):
         with patch.object(recover, 'locate_tarball', return_value=None):
             with self.assertRaises(RuntimeError):
                 recover.verify_row(row, sam_lister=lambda ds: [])
+
+    def test_verify_row_nonart_outputs_raise_not_complete(self):
+        from utils import recover
+        files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(2)]
+        jpars = _root_input_jobpars(files)
+        jpars['tbs']['outfiles']['outputs.PrimaryOutput.fileName'] = \
+            "nts.mu2e.TestDesc.TestConf.sequencer.root"
+        tar = _make_tarball(jpars)
+        try:
+            row = {'id': 1, 'tarball': 'cnf.mu2e.T.C.0.tar',
+                   'indices': [0, 1], 'entry': {}, 'attempt': 1,
+                   'jobsub_id': 'x'}
+            with patch.object(recover, 'locate_tarball', return_value=tar):
+                with self.assertRaises(RuntimeError):
+                    recover.verify_row(row, sam_lister=lambda ds: [])
+        finally:
+            os.unlink(tar)
 
     def test_resubmit_drops_firstjob_and_writes_indices(self):
         from utils import recover
@@ -4414,6 +4471,23 @@ class TestRecoverCLI(unittest.TestCase):
         with patch.object(recover, 'process_row', return_value='complete'), \
              patch.object(sys, 'argv', ['recover', '--db', self.db]):
             recover.main()  # returns without SystemExit
+
+    def test_main_lock_contention_exits(self):
+        import fcntl
+        from utils import recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        lock_path = os.path.join(os.path.dirname(self.db), 'recover.lock')
+        fh = open(lock_path, 'w')
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with patch.object(sys, 'argv', ['recover', '--db', self.db]):
+                with self.assertRaises(SystemExit) as cm:
+                    recover.main()
+            self.assertIn('recover.lock', str(cm.exception.code))
+        finally:
+            fh.close()
 
 
 # ---------------------------------------------------------------------------

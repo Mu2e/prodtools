@@ -4,7 +4,9 @@
 #   17 * * * * /path/to/prodtools/bin/recover_cron
 #
 # Order matters:
-#   1. flock — overlapping runs must not double-submit
+#   1. locking — handled inside `recover` itself (a per-DB lockfile
+#      beside the DB, held for the process lifetime); overlapping runs
+#      here just exit cleanly rather than double-submitting.
 #   2. Mu2e env (quiet; failures still surface via the python run)
 #   3. token gate — no valid bearer token -> report and exit non-zero.
 #      NEVER fetch or refresh a token here (standing rule: token
@@ -15,14 +17,7 @@ set -e
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB="${MU2E_SUBMISSION_DB:-/exp/mu2e/data/users/mu2epro/prodtools/submissions.db}"
 DBDIR="$(dirname "$DB")"
-LOCK="$DBDIR/recover.lock"
 LOG="$DBDIR/recover-$(date +%Y%m%d).log"
-
-exec 9>"$LOCK"
-if ! flock -n 9; then
-    echo "recover_cron: another run holds $LOCK — exiting" >&2
-    exit 0
-fi
 
 {
     echo "=== recover_cron $(date -u +%FT%TZ) ==="

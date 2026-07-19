@@ -16,6 +16,7 @@ round — `exhausted` is where a human takes over.
 Design: docs/superpowers/specs/2026-07-18-direct-recovery-design.md
 """
 import argparse
+import fcntl
 import json
 import os
 import subprocess
@@ -51,6 +52,8 @@ def queue_state(jobsub_id, runner=subprocess.run):
     states = res.stdout.split()
     if not states:
         return 'drained'
+    if any(not s.isdigit() for s in states):
+        return 'error'
     if '5' in states:
         return 'held'
     return 'running'
@@ -85,6 +88,11 @@ def verify_row(row, sam_lister=files_in_dataset):
             expected[idx] = expected.get(idx, 0) + 1
             if fname not in actual:
                 missing_ct[idx] = missing_ct.get(idx, 0) + 1
+    unverifiable = [i for i in indices if i not in expected]
+    if unverifiable:
+        raise RuntimeError(
+            f"indices {unverifiable} have no expected output files in "
+            f"{row['tarball']} — cannot verify (output datasets: {datasets})")
     missing = sorted(missing_ct)
     partial = sorted(i for i in missing_ct if missing_ct[i] < expected[i])
     return missing, partial
@@ -126,7 +134,8 @@ def process_row(row, db_path, max_attempts, dry_run=False,
 
     Returns the action taken: 'running' | 'held' | 'queue-error' |
     'verify-error' | 'complete' | 'resubmitted' | 'resubmit-error' |
-    'exhausted' | 'would-resubmit' | 'would-complete' | 'would-exhaust'.
+    'exhausted' | 'would-resubmit' | 'would-complete' | 'would-exhaust' |
+    'child-active' | 'child-missing' | 'would-recover'.
     """
     rid = row['id']
     if not row['jobsub_id']:
@@ -164,6 +173,20 @@ def process_row(row, db_path, max_attempts, dry_run=False,
         return 'complete'
     print(f"row {rid}: {len(missing)}/{len(row['indices'])} indices "
           f"missing outputs")
+    children = [r for r in submission_ledger.open_rows(db_path)
+                if r['parent_id'] == rid]
+    if children:
+        if dry_run:
+            print(f"row {rid}: child row {children[0]['id']} already "
+                  f"active — would close recovered (crash-window repair)")
+            return 'would-recover'
+        submission_ledger.close_row(
+            db_path, rid, 'recovered',
+            note=f"child row {children[0]['id']} already active "
+                 f"(crash-window repair)")
+        print(f"row {rid}: child row {children[0]['id']} already active — "
+              f"closed recovered (crash-window repair)")
+        return 'child-active'
     if row['attempt'] >= max_attempts:
         if dry_run:
             print(f"row {rid}: would mark EXHAUSTED (attempt "
@@ -181,9 +204,20 @@ def process_row(row, db_path, max_attempts, dry_run=False,
               f"(attempt {row['attempt'] + 1})")
         return 'would-resubmit'
     if resubmit_fn(row, missing, db_path):
+        children = [r for r in submission_ledger.open_rows(db_path)
+                    if r['parent_id'] == rid]
+        if not children:
+            submission_ledger.close_row(
+                db_path, rid, 'recovered',
+                note=f"resubmitted {len(missing)} indices but child ledger "
+                     f"row MISSING — chain unwatched, verify manually")
+            print(f"row {rid}: resubmit succeeded but NO child ledger row "
+                  f"found — the new submission is UNWATCHED; verify "
+                  f"manually (indices {missing})")
+            return 'child-missing'
         submission_ledger.close_row(
             db_path, rid, 'recovered',
-            note=f"{len(missing)} indices -> child row")
+            note=f"{len(missing)} indices -> child row {children[0]['id']}")
         return 'resubmitted'
     print(f"row {rid}: resubmit FAILED — row stays active")
     return 'resubmit-error'
@@ -229,6 +263,19 @@ def main():
         print_status(args.db)
         return
 
+    if not args.dry_run:
+        # One mutating pass at a time per DB — guards manual runs racing
+        # the cron (both passing the drain gate before either closes a
+        # row = double submit). Read-only modes skip the lock. Held for
+        # the process lifetime; released on exit.
+        lock_path = os.path.join(os.path.dirname(args.db) or '.',
+                                 'recover.lock')
+        main._lock_fh = open(lock_path, 'w')
+        try:
+            fcntl.flock(main._lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit(f"another recover run holds {lock_path} — exiting")
+
     rows = submission_ledger.open_rows(args.db)
     if args.row is not None:
         rows = [r for r in rows if r['id'] == args.row]
@@ -246,7 +293,7 @@ def main():
     print("recover summary: "
           + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
     if (summary.get('held') or summary.get('exhausted')
-            or summary.get('would-exhaust')):
+            or summary.get('would-exhaust') or summary.get('child-missing')):
         sys.exit(2)
 
 

@@ -222,6 +222,14 @@ path, so POMS-backend jobs simply never produce a row. That also means
 the loop cannot race POMS's own recovery machinery — there is no shared
 state for the two to disagree about.
 
+This is a pre-existing `submit_map` caveat, inherited by the loop rather
+than introduced by it: if a submission exits 0 with no parseable cluster
+id, `submit_map` reports it as a failure and writes no ledger row — but
+if that submission was genuinely partial (jobs were actually queued
+before the parse failure), a later manual resubmission of those same
+indices double-runs them. Verify with `jobsub_q` before resubmitting by
+hand in that specific situation.
+
 ## Related
 
 - [[poms-reference]] — the POMS recovery machinery this loop deliberately
