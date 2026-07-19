@@ -25,6 +25,17 @@ DEFAULT_DB = os.environ.get(
 
 STATES = ('active', 'complete', 'recovered', 'exhausted')
 
+CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
+
+# Sliced-submission campaign lifecycle. 'complete' means fully SUBMITTED
+# (verification continues per ledger row); 'paused' is the operator /
+# submit-failure hold; 'cancelled' closes the campaign but already-
+# submitted rows still get recovered.
+_CAMPAIGN_TRANSITIONS = {
+    'active': ('complete', 'paused', 'cancelled'),
+    'paused': ('active', 'cancelled'),
+}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS submissions (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,11 +54,27 @@ CREATE TABLE IF NOT EXISTS submissions (
 )
 """
 
+_CAMPAIGN_SCHEMA = """
+CREATE TABLE IF NOT EXISTS campaigns (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_utc  TEXT NOT NULL,
+  state        TEXT NOT NULL DEFAULT 'active',
+  map_path     TEXT,
+  tarball      TEXT NOT NULL,
+  entry_json   TEXT NOT NULL,
+  cursor       INTEGER NOT NULL DEFAULT 0,
+  slice_size   INTEGER NOT NULL,
+  closed_utc   TEXT,
+  note         TEXT
+)
+"""
+
 
 def _connect(db_path):
     con = sqlite3.connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute(_SCHEMA)
+    con.execute(_CAMPAIGN_SCHEMA)
     return con
 
 
@@ -132,6 +159,107 @@ def close_row(db_path, row_id, state, note=None):
             (state, _now(), note, row_id))
         if cur.rowcount != 1:
             raise ValueError(f"no active row {row_id} to close")
+        con.commit()
+    finally:
+        con.close()
+
+
+def create_campaign(db_path, *, tarball, entry, slice_size, map_path=None):
+    """Register a sliced-submission campaign (cursor 0); return its id.
+
+    entry is snapshotted verbatim — the caller has already merged any
+    CLI resource overrides, so slices reproduce what was asked for. A
+    second ACTIVE campaign for the same tarball is refused: that is the
+    double-submit guard.
+    """
+    if slice_size < 1:
+        raise ValueError(f"slice_size must be >= 1, got {slice_size}")
+    con = _connect(db_path)
+    try:
+        dup = con.execute(
+            "SELECT id FROM campaigns WHERE tarball = ? AND state = 'active'",
+            (tarball,)).fetchone()
+        if dup:
+            raise ValueError(
+                f"active campaign {dup['id']} already exists for {tarball}")
+        cur = con.execute(
+            'INSERT INTO campaigns '
+            '(created_utc, state, map_path, tarball, entry_json, cursor, '
+            ' slice_size) VALUES (?, ?, ?, ?, ?, 0, ?)',
+            (_now(), 'active', map_path, tarball, json.dumps(entry),
+             slice_size))
+        con.commit()
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def _campaign_to_dict(row):
+    d = dict(row)
+    d['entry'] = json.loads(d.pop('entry_json'))
+    return d
+
+
+def active_campaigns(db_path):
+    """Active campaigns, oldest first, entry JSON parsed."""
+    con = _connect(db_path)
+    try:
+        rows = con.execute(
+            "SELECT * FROM campaigns WHERE state = 'active' ORDER BY id"
+        ).fetchall()
+        return [_campaign_to_dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def all_campaigns(db_path):
+    """Every campaign regardless of state, oldest first."""
+    con = _connect(db_path)
+    try:
+        rows = con.execute('SELECT * FROM campaigns ORDER BY id').fetchall()
+        return [_campaign_to_dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def advance_campaign(db_path, camp_id, new_cursor):
+    """Move an active campaign's cursor forward. Backward moves and
+    non-active campaigns raise — the cursor only ever advances."""
+    con = _connect(db_path)
+    try:
+        cur = con.execute(
+            "UPDATE campaigns SET cursor = ? "
+            "WHERE id = ? AND state = 'active' AND cursor <= ?",
+            (new_cursor, camp_id, new_cursor))
+        if cur.rowcount != 1:
+            raise ValueError(
+                f"no active campaign {camp_id} with cursor <= {new_cursor}")
+        con.commit()
+    finally:
+        con.close()
+
+
+def set_campaign_state(db_path, camp_id, state, note=None):
+    """Validated campaign transition (see _CAMPAIGN_TRANSITIONS).
+    Reactivating a paused campaign clears closed_utc."""
+    if state not in CAMPAIGN_STATES:
+        raise ValueError(f"invalid campaign state: {state}")
+    allowed_from = tuple(f for f, targets in _CAMPAIGN_TRANSITIONS.items()
+                         if state in targets)
+    con = _connect(db_path)
+    try:
+        row = con.execute('SELECT state FROM campaigns WHERE id = ?',
+                          (camp_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"no campaign {camp_id}")
+        if row['state'] not in allowed_from:
+            raise ValueError(
+                f"campaign {camp_id}: cannot go {row['state']} -> {state}")
+        closed = None if state == 'active' else _now()
+        con.execute(
+            'UPDATE campaigns SET state = ?, closed_utc = ?, note = ? '
+            'WHERE id = ?',
+            (state, closed, note, camp_id))
         con.commit()
     finally:
         con.close()

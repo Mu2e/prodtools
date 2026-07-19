@@ -4042,6 +4042,91 @@ class TestSubmissionLedger(unittest.TestCase):
                 entry={}, indices=[0], jobsub_id=None, cluster_id='1')
 
 
+class TestCampaignLedger(unittest.TestCase):
+    """campaigns table in utils/submission_ledger.py (sliced submission)."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 10, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+
+    def _create(self, tarball=None, slice_size=4):
+        return self.sl.create_campaign(
+            self.db, tarball=tarball or self.entry['tarball'],
+            entry=self.entry, slice_size=slice_size,
+            map_path='/tmp/map.json')
+
+    def test_create_and_read_roundtrip(self):
+        cid = self._create()
+        camps = self.sl.active_campaigns(self.db)
+        self.assertEqual(len(camps), 1)
+        c = camps[0]
+        self.assertEqual(c['id'], cid)
+        self.assertEqual(c['state'], 'active')
+        self.assertEqual(c['cursor'], 0)
+        self.assertEqual(c['slice_size'], 4)
+        self.assertEqual(c['entry'], self.entry)
+        self.assertEqual(c['map_path'], '/tmp/map.json')
+        self.assertIsNone(c['closed_utc'])
+
+    def test_duplicate_active_tarball_refused(self):
+        self._create()
+        with self.assertRaises(ValueError):
+            self._create()
+
+    def test_reenqueue_allowed_after_close(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'cancelled')
+        self._create()  # must not raise
+        self.assertEqual(len(self.sl.all_campaigns(self.db)), 2)
+
+    def test_slice_size_validated(self):
+        with self.assertRaises(ValueError):
+            self._create(slice_size=0)
+
+    def test_advance_cursor(self):
+        cid = self._create()
+        self.sl.advance_campaign(self.db, cid, 4)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['cursor'], 4)
+
+    def test_advance_backward_refused(self):
+        cid = self._create()
+        self.sl.advance_campaign(self.db, cid, 4)
+        with self.assertRaises(ValueError):
+            self.sl.advance_campaign(self.db, cid, 2)
+
+    def test_advance_nonactive_refused(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        with self.assertRaises(ValueError):
+            self.sl.advance_campaign(self.db, cid, 4)
+
+    def test_state_transitions(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused', note='op pause')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'paused')
+        self.sl.set_campaign_state(self.db, cid, 'active')   # resume
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'active')
+        self.assertIsNone(c['closed_utc'])                   # reopened
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        self.assertIsNotNone(self.sl.all_campaigns(self.db)[0]['closed_utc'])
+
+    def test_invalid_transitions_raise(self):
+        cid = self._create()
+        with self.assertRaises(ValueError):
+            self.sl.set_campaign_state(self.db, cid, 'nonsense')
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError):
+            self.sl.set_campaign_state(self.db, cid, 'active')  # complete is terminal
+        with self.assertRaises(ValueError):
+            self.sl.set_campaign_state(self.db, 999, 'paused')  # no such id
+
+
 # ---------------------------------------------------------------------------
 # submit_map ledger hook (utils/submit.py) — direct-backend recovery
 # ---------------------------------------------------------------------------
