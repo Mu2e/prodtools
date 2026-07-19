@@ -56,7 +56,7 @@ Core production tools:
 - `runmu2e` — worker entry point: FCL generation, `mu2e` execution, pushOutput
 - `submit_map` — submit all entries of a POMS-map JSON to the grid
 - `mkrecovery` — find job indices whose outputs are missing from SAM
-- `recover` — verify-and-resubmit recovery loop for direct-backend submissions
+- `recover` — verify-and-resubmit recovery loop and sliced-campaign top-up for direct-backend submissions
 
 Analysis / diagnostic tools:
 
@@ -162,6 +162,29 @@ Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
 sequencer) and `generic_tarball` (build a reusable direct-input cnf with
 `{desc}` deferred to runtime).
+
+Optional per-entry resource requests — `"memory"`, `"disk"`,
+`"expected_lifetime"` (jobsub-format strings, e.g. `"4000MB"`,
+`"50GB"`, `"48h"`):
+
+```json
+{
+  "desc": "MuStopPileup",
+  "dsconf": "Run1Ban",
+  "fcl": "Production/JobConfig/pileup/MuStopPileup.fcl",
+  "njobs": 5000,
+  "memory": "4000MB",
+  "outloc": { "*.art": "tape" },
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
+  "owner": "mu2e"
+}
+```
+
+`json2jobdef` copies any of the three keys present in the config into
+the map entry verbatim (`append_jobdef`). `submit_map` (section 11)
+reads them back at submission time: a CLI flag always overrides the
+entry key, which overrides the built-in default (`2000MB` / `30GB` /
+`24h`).
 
 ### Direct `jobdef` invocation
 
@@ -541,6 +564,10 @@ submit_map --map MDC2025-032.json --backend direct --first 0 --num 10
 # Recovery: exactly these cnf indices, one cluster, one job per index
 submit_map --map Run1Ban-pileuprecover.json --backend direct \
     --indices-file gaps.txt --expected-lifetime 48h --memory 4000MB
+
+# Register a sliced campaign — submits nothing; bin/recover feeds it
+submit_map --map MDC2025-032.json --backend direct \
+    --enqueue --slice-size 2000
 ```
 
 Flags: `--map` (required), `--entry N`, `--backend {mu2ejobsub,direct}`
@@ -548,9 +575,11 @@ Flags: `--map` (required), `--entry N`, `--backend {mu2ejobsub,direct}`
 K1,K2,...` / `--indices-file FILE` (direct), `--ledger-db PATH` (direct;
 default `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`, env
 `MU2E_SUBMISSION_DB`), `--ledger-parent ID` (direct), `--no-ledger`
-(direct), `--wftop`, `--wfproject`, `--role`, `--disk` (default `30GB`),
-`--memory` (default `2000MB`), `--expected-lifetime` (default `24h`),
-`--prodtools-tar`, `--dry-run`, `--verbose`.
+(direct), `--enqueue` (direct; register a sliced campaign instead of
+submitting), `--slice-size N` (direct; default 1000, only meaningful
+with `--enqueue`), `--wftop`, `--wfproject`, `--role`, `--disk` (default
+`30GB`), `--memory` (default `2000MB`), `--expected-lifetime` (default
+`24h`), `--prodtools-tar`, `--dry-run`, `--verbose`.
 
 The direct backend builds the `jobsub_submit` argv itself, ships the
 repo's `utils/` + `bin/` as a dropbox tarball, and runs per-job
@@ -565,6 +594,32 @@ automatically by `recover` when it resubmits (chains the attempt count
 for that recovery lineage); `--no-ledger` opts an ad-hoc or test
 submission out of the ledger entirely — the recovery loop then never
 sees it. `--backend mu2ejobsub` submissions never touch the ledger.
+
+Every direct-backend submission **attempt** — manual, cron-fed slice, or
+recovery resubmit, success or failure — also appends a block to
+`submit-YYYYMMDD.log` beside the ledger DB (UTC day, plain appends, no
+rotation): timestamp, user, map, tarball, requested range or indices,
+outcome, and the raw `jobsub_submit` output. `--no-ledger` skips this
+log too; `--dry-run` and `--enqueue` write nothing (nothing was
+submitted).
+
+Resource requests (`--disk`/`--memory`/`--expected-lifetime`) resolve as
+CLI flag > entry key (section 3: `"memory"`/`"disk"`/
+`"expected_lifetime"`) > built-in default. Whatever resolves is what
+gets recorded in the ledger/campaign snapshot, so a `recover` resubmit
+or a cron-fed slice reruns with the same resources the original jobs
+had — a CLI `--memory 4000MB` no longer downgrades to the 2000MB
+built-in default on resubmit.
+
+Sliced campaigns (`--enqueue`): snapshots the selected entries (all, or
+`--entry N`) into the campaigns table at cursor 0 and submits nothing.
+`--slice-size` is frozen into the campaign row. Direct backend only;
+mutually exclusive with `--first`/`--num`/`--indices`/`--indices-file`.
+An entry with no fixed `njobs` (a `generic_tarball` entry) cannot be
+enqueued — a campaign needs a job count to slice. Enqueueing a tarball
+that already has an *active* campaign is a hard error. `bin/recover`'s
+top-up phase (below) then feeds whole slices to the grid on its own,
+hourly, until the campaign is fully submitted.
 
 Statistics expansion (`firstjob` windows):
 
@@ -582,48 +637,81 @@ Job selection within an entry:
 
 - `--first`/`--num` carve a contiguous slice, **entry-relative**: the
   entry's `firstjob` is added worker-side, so `--first 944` on a
-  `firstjob=15000` entry runs cnf index 15944.
+  `firstjob=15000` entry runs cnf index 15944. Sliced campaigns submit
+  their slices this way, so a windowed entry's `firstjob` survives
+  untouched in the campaign snapshot.
 - `--indices` takes **absolute cnf indices** for a scattered recovery set
   that no contiguous range can express, and requires a non-windowed entry.
   It submits one cluster with one job per index.
 
 ### `recover`
 
-Verify-and-resubmit recovery loop for `submit_map --backend direct`
-submissions. Reads the submission ledger (same sqlite3 DB `submit_map`
-writes to). Per active row: drain-check via `jobsub_q` (skip while jobs
-are still queued; report and skip held jobs — the loop never runs
-`condor_rm`/`condor_release`), SAM-verify the row's cnf indices using the
-cnf's own expected output filenames (`mkrecovery`'s file-map machinery,
-scoped to the row's indices), then close the row `complete`, resubmit
-exactly the missing indices as a child row (`attempt`+1, via the
-`submit_map` CLI), or mark it `exhausted` at the attempt cap for a human.
+Verify-and-resubmit recovery loop, plus sliced-campaign top-up, for
+`submit_map --backend direct` submissions. Reads the submission ledger
+(same sqlite3 DB `submit_map` writes to). Each invocation runs two
+passes:
+
+1. **Recovery pass** (per active ledger row): drain-check via `jobsub_q`
+   (skip while jobs are still queued; report and skip held jobs — the
+   loop never runs `condor_rm`/`condor_release`), SAM-verify the row's
+   cnf indices using the cnf's own expected output filenames
+   (`mkrecovery`'s file-map machinery, scoped to the row's indices),
+   then close the row `complete`, resubmit exactly the missing indices
+   as a child row (`attempt`+1, via the `submit_map` CLI), or mark it
+   `exhausted` at the attempt cap for a human.
+2. **Top-up pass** (skipped entirely when there is no active campaign):
+   counts total mu2epro idle+running jobs (`jobsub_q --user mu2epro -af
+   JobStatus`), then round-robins whole slices to active campaigns,
+   oldest first, while `count + slice <= cap`. Runs *after* the recovery
+   pass so its resubmissions are already counted. Skipped for `--row`
+   (single-row mode never touches campaigns).
 
 ```bash
-recover --status                 # read-only chain table (any account)
-recover --dry-run                # verify + report, no submissions
+recover --status                 # read-only ledger + campaigns + cap (any account)
+recover --dry-run                # verify + top-up report, no submissions
 recover                          # full pass (mu2epro; cron entry point)
 recover --row 42 --max-attempts 5
+recover --max-queued 5000        # override the top-up cap for this pass
+recover --pause-campaign 7       # operator off switch
+recover --resume-campaign 7      # paused -> active
+recover --cancel-campaign 7      # close; already-submitted rows still recovered
 ```
 
 Flags: `--db PATH` (default: the submission-ledger path above, env
-`MU2E_SUBMISSION_DB`), `--status` (print the ledger table and exit,
-read-only), `--dry-run` (drain-check + verify + report; no submissions,
-no row state changes), `--row N` (process only this ledger row),
-`--max-attempts N` (default 3; the row closes `exhausted` once its
-attempt count reaches this cap, instead of resubmitting again).
+`MU2E_SUBMISSION_DB`), `--status` (print the ledger table, the
+campaigns table, and the resolved queue cap, then exit; read-only),
+`--dry-run` (drain-check + verify + top-up report; no submissions, no
+row/campaign state changes), `--row N` (process only this ledger row,
+skips top-up), `--max-attempts N` (default 3; a row closes `exhausted`
+once its attempt count reaches this cap, instead of resubmitting
+again), `--max-queued N` (top-up cap for this pass; default: env
+`MU2E_MAX_QUEUED`, then `10000`), `--pause-campaign ID` (pause an active
+campaign and exit), `--resume-campaign ID` (reactivate a paused
+campaign and exit), `--cancel-campaign ID` (cancel a campaign and exit;
+already-submitted rows still get recovered).
 
 - `--status` and `--dry-run` are safe under any account — they make no
   submissions and touch no grid queue beyond a read.
-- `recover` exits 2 when any row needed human attention this pass (held,
-  or newly exhausted) — a cron-visible "needs a look" signal — and 0
-  otherwise.
+- `recover` exits 2 when any row/campaign needed human attention this
+  pass (held, newly exhausted, or a campaign paused by a submit
+  failure) — a cron-visible "needs a look" signal — and 0 otherwise.
 - Deterministic cnf payloads re-run identical events, so a systematic
   failure re-fails every attempt; `exhausted` is where a human takes
   over, not something blind retry fixes.
 - POMS-backend (`--backend mu2ejobsub`) stages never appear in the
   ledger and are out of scope by construction — POMS owns their own
   recovery via `mkrecovery`.
+- Campaign states: `active` (loop feeds it) → `complete` (fully
+  submitted; jobs may still be running — verification continues per
+  ledger row), `paused` (submit failure or `--pause-campaign`; a human
+  resumes), or `cancelled` (`--cancel-campaign`; already-submitted rows
+  still get recovered). `--pause`/`--resume`/`--cancel-campaign` are
+  mutating and take the same per-DB lock as a full pass — not valid
+  with `--dry-run`.
+- Cap resolution is `--max-queued` flag > `MU2E_MAX_QUEUED` env >
+  `10000`, resolved once per invocation; nothing persists between runs
+  — the effective cap is always readable off the crontab line via
+  `recover --status`.
 
 ### `copy_to_stash`
 
@@ -650,9 +738,11 @@ and builds `jobs.json` directly from the DB); `recover_cron` wraps
 `recover` with `flock` + quiet env setup + a bearer-token presence gate
 (report-only — it never fetches or refreshes a token) for mu2epro's
 crontab, appending output to a `recover-YYYYMMDD.log` beside the ledger
-DB. Not installed into any crontab by this repo — that is a one-time
-operator step (section 11 `recover`, wiki page
-`2026-07-18-direct-recovery-loop`).
+DB. Runs a bare `recover` invocation each tick, so it drives both the
+recovery pass and the sliced-campaign top-up pass automatically —
+`recover_cron` itself did not change to add top-up. Not installed into
+any crontab by this repo — that is a one-time operator step (section 11
+`recover`, wiki page `2026-07-18-direct-recovery-loop`).
 
 ## 12. Troubleshooting
 
@@ -690,3 +780,19 @@ operator step (section 11 `recover`, wiki page
 - `recover`: `row N: HELD jobs ... human decision needed` — the loop
   never releases or removes held jobs; resolve with `condor_release`/
   `condor_rm` (or `jobsub_rm`) yourself, then re-run `recover`.
+- `Error: --enqueue submits nothing — it cannot be combined with
+  --first/--num/--indices` — enqueue and immediate submission are
+  mutually exclusive; drop `--enqueue` to submit now, or drop the
+  selection flags to register a campaign.
+- `Error: entry N has no njobs (generic tarball) — a campaign needs a
+  job count to slice` — `--enqueue` requires a fixed-`njobs` entry;
+  `generic_tarball` entries have no pre-determined job count.
+- `active campaign N already exists for <tarball>` — `--enqueue` refuses
+  a second active campaign for the same tarball; `--cancel-campaign` or
+  `--pause-campaign` the existing one first.
+- `MU2E_MAX_QUEUED is not an integer: '<value>'` — the env var must
+  parse as an int; unset it or fix the value, or pass `--max-queued`
+  directly to override it for one run.
+- `--pause/--resume/--cancel-campaign mutate the DB — not valid with
+  --dry-run` — campaign management flags always write; drop `--dry-run`
+  to run them.

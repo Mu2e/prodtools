@@ -741,3 +741,46 @@ partially-landed index, one real `recover --dry-run` pass on a drained
 cluster, and `jobsub_q --jobid <id> -af JobStatus` passthrough needs
 confirming against the GPVM's actual jobsub_lite install. See the wiki
 page's "Pre-activation checklist" section.
+
+## [2026-07-19] ingest | sliced-campaign submission (top-up phase on the direct-recovery loop)
+Pages updated: 2026-07-18-direct-recovery-loop
+Sources: `docs/superpowers/specs/2026-07-18-sliced-submission-design.md`,
+`docs/superpowers/plans/2026-07-18-sliced-submission.md`
+Reason: POMS launches campaign stages via a server-side `drainingn`/
+`nfiles` split-type cron; the direct backend had the slice mechanism
+(`submit_map --first N --num M`) but no automation — a human advanced
+the cursor by hand. Built on top of the direct-recovery loop merged
+2026-07-18 (same ledger DB, same hourly cron, same lock): a new
+`campaigns` table in `utils/submission_ledger.py` (entry snapshot,
+cursor, slice_size, states active|complete|paused|cancelled,
+duplicate-active-tarball refusal), `submit_map --enqueue`/`--slice-size`
+(registers, submits nothing), a top-up phase inside `utils/recover.py`
+that runs after the existing recovery pass under the same lock
+(fast-path skip when no campaigns are active; round-robins whole
+slices to active campaigns while `jobsub_q --user mu2epro -af
+JobStatus` idle+running stays under a cap resolved `--max-queued` flag
+`>` `MU2E_MAX_QUEUED` env `>` `DEFAULT_MAX_QUEUED = 10000`; submit
+failure pauses the campaign rather than blind-retrying),
+`--pause-campaign`/`--resume-campaign`/`--cancel-campaign` operator
+switches, and a dated `submit-YYYYMMDD.log` beside the ledger DB
+recording every direct-backend submission attempt (manual, slice, or
+recovery resubmit) uniformly. A second, independent fix rode along:
+resource requests (`memory`/`disk`/`expected_lifetime`) move into
+optional map-entry keys (`utils/poms_entry.resources_of`,
+`json2jobdef` passthrough via `append_jobdef`) with precedence CLI
+flag > entry key > built-in default, frozen into the ledger/campaign
+snapshot at submission time — recoveries no longer silently downgrade
+a CLI `--memory 4000MB` to the 2000MB built-in default on resubmit.
+434/434 unit tests green (fake queue-count function and fake subprocess
+runner, no network). Docs: `docs/EXAMPLES_schema.md` coverage
+requirements + three tribal-knowledge bullets, full `submit_map`/
+`recover` section regen in `EXAMPLES.md` plus a resource-keys note in
+section 3, and a new "Sliced campaigns (top-up phase)" section on the
+existing wiki page (enqueue workflow, top-up semantics, pause/resume/
+cancel, the three-log-layer debugging story, the resource-key
+inheritance fix).
+**NOT activated** — gated behind the same pre-activation checklist as
+the underlying recovery loop (now four items: the original three plus
+confirming `jobsub_q --user mu2epro -af JobStatus` passthrough, since
+the top-up queue count is a new call site of that same assumption).
+Nothing installed in mu2epro's crontab by this work.

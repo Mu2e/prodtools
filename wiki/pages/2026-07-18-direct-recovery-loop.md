@@ -1,8 +1,8 @@
 ---
 title: Direct-backend recovery loop — ledger + recover + cron
-tags: [decision, recovery, direct-backend, submit_map, operations]
-sources: [docs/superpowers/specs/2026-07-18-direct-recovery-design.md]
-updated: 2026-07-18
+tags: [decision, recovery, direct-backend, submit_map, operations, sliced-campaigns]
+sources: [docs/superpowers/specs/2026-07-18-direct-recovery-design.md, docs/superpowers/specs/2026-07-18-sliced-submission-design.md]
+updated: 2026-07-19
 ---
 
 # Direct-backend recovery loop — ledger + recover + cron
@@ -132,6 +132,149 @@ token problems" rule, also encoded in memory as
 `feedback_never_get_mu2epro_token`); then `recover`, with output
 appended to a dated log (`recover-YYYYMMDD.log`) beside the DB.
 
+## Sliced campaigns (top-up phase)
+
+Since 2026-07-19 the loop does more than recover — it can also *drive* a
+big submission forward on its own, the direct-backend analog of a POMS
+`drainingn`/`nfiles` split-type stage that hands out the next slice each
+cron tick. Design: `docs/superpowers/specs/2026-07-18-sliced-submission-design.md`,
+plan: `docs/superpowers/plans/2026-07-18-sliced-submission.md`. One new
+table (`campaigns`, same sqlite3 DB) and one new phase inside `recover`
+— no new daemons, no new cron entries, no worker-side changes.
+
+**Enqueue workflow.** An operator registers a campaign instead of
+submitting directly:
+
+```bash
+submit_map --map MDC2025-032.json --backend direct --enqueue --slice-size 2000
+```
+
+This snapshots the selected entries (all, or `--entry N`) into the
+`campaigns` table at `cursor=0` and **submits nothing** — same
+"hard error, not a fallback" discipline as the ledger write in the
+normal submit path, but inverted: here nothing has gone to the grid
+yet, so a DB failure at enqueue time is a hard error rather than a
+warn-and-continue. `--slice-size` (default 1000) is frozen into the
+row. Direct backend only; mutually exclusive with
+`--first`/`--num`/`--indices`/`--indices-file`. An entry with no fixed
+`njobs` (`generic_tarball`) can't be enqueued — a campaign needs a job
+count to slice against. A second `--enqueue` for a tarball that already
+has an *active* campaign is refused outright — no silent double-feed.
+
+**Top-up semantics.** Every `recover` invocation (the same hourly cron
+tick that does recovery) runs the top-up phase *after* the recovery
+pass, under the same per-DB lock, with one fast-path skip: no active
+campaigns means zero extra queries, so the top-up phase costs nothing
+when unused. When there is work: count total mu2epro idle+running jobs
+(`jobsub_q --user mu2epro -af JobStatus`, states `1`+`2`) — this counts
+**everything** mu2epro has queued, POMS-launched jobs included, so the
+cap bounds the account's whole farm footprint, not just this tool's
+slice of it. Running top-up after recovery means a tick's
+resubmissions are already counted before top-up measures headroom.
+Then round-robin over active campaigns, oldest-first, one slice per
+campaign per cycle: `n = min(slice_size, njobs - cursor)`; if
+`count + n` would exceed the cap, that campaign (and the whole tick)
+stops there — **whole slices only**, never a slice clamped down to fit
+remaining headroom, so there's no confetti of tiny ledger rows. A slice
+short of the full `slice_size` happens only at the tail of an entry,
+never because of the cap. Each slice submits via the same `submit_map`
+CLI subprocess call recovery already uses (`--map <tmp single-entry
+map> --backend direct --first <cursor> --num <n>`), so it gets a
+regular ledger row like any other direct submission — the campaign row
+tracks the *cursor*, the ledger rows track the actual submitted jobs.
+
+Cap resolution mirrors the DB-path pattern: `--max-queued` flag >
+`MU2E_MAX_QUEUED` env > `10000` built-in default (`DEFAULT_MAX_QUEUED`
+in `utils/recover.py`). Resolved once per invocation, nothing persists
+between runs — deliberately not stored in the DB, so the effective cap
+is always readable straight off the crontab line, and `recover
+--status` prints it every time.
+
+**Pause / resume / cancel.**
+
+```bash
+recover --pause-campaign 7    # operator off switch
+recover --resume-campaign 7   # paused -> active
+recover --cancel-campaign 7   # close; already-submitted rows still recovered
+```
+
+These are mutating (same per-DB lock as a full pass) and exit
+immediately after acting — not valid combined with `--dry-run`.
+`paused` means one of two things: a submit failure during top-up (the
+loop pauses the campaign automatically rather than blind-retrying —
+deterministic payloads make an unverified resubmit the exact Run1Ban
+failure shape: queued-but-unrecorded jobs plus a later duplicate
+resubmit), or an operator hold via `--pause-campaign`. Either way the
+loop skips it until a human clears it. Before `--resume-campaign` after
+an automatic pause, check the submit log and `jobsub_q` for whether the
+failed attempt actually queued jobs — the ledger hook only fires on
+success, so a partial failure leaves indices that look unsubmitted but
+might not be. `cancelled` (via `--cancel-campaign`) closes the campaign
+only; ledger rows already written for it continue through the recovery
+loop to verified completion exactly as if the campaign were still
+active — cancelling stops new slices, it does not abandon jobs already
+in flight.
+
+`complete` means "fully submitted" — every index has gone out as a
+ledger row — **not** "fully verified". Verification remains the
+recovery loop's job, per ledger row, same as any other direct
+submission; a `complete` campaign's rows keep cycling through the
+recovery pass (drain-check, SAM-verify, resubmit-on-miss) until each
+one individually reaches `complete` at the row level too.
+
+**Submission log.** Every direct-backend submission *attempt* — manual,
+cron-fed slice, or recovery resubmit, success or failure alike —
+appends a block to `submit-YYYYMMDD.log` beside the ledger DB (one file
+per UTC day, plain appends, no rotation, cleanup manual — same as the
+nightly validation logs), including the raw `jobsub_submit` output.
+Introduced alongside sliced campaigns (design ruling: "submission
+logging owned by the submit path") so every origin gets the same
+durable per-attempt record — the ledger alone captures state
+(indices, chain, cursor) but not the human-readable *why*/*how* of one
+specific attempt, which matters more now that cron-fed slices add a
+second unattended submitter alongside cron-fed recovery resubmits.
+
+**Three-log-layer debugging story.** When something about a campaign
+looks wrong, the three logs answer different questions and none of
+them substitutes for another:
+
+- **Ledger** (`submissions`/`campaigns` tables, sqlite3) — structured
+  truth: exact indices submitted, attempt chains via `parent_id`,
+  campaign cursor/state. Query it with `recover --status` or `sqlite3`
+  directly. This is the only layer with machine-checkable state.
+- **Submit log** (`submit-YYYYMMDD.log`) — human-readable per-attempt
+  record, including the raw `jobsub_submit` output, for *every* origin
+  (manual/slice/recovery) uniformly. Answers "what actually happened
+  when this specific submission ran, and what did jobsub say."
+- **Recover log** (`recover-YYYYMMDD.log`, written by `bin/recover_cron`)
+  — the loop's own decisions: measured queue count, cap in effect, per
+  slice campaign id / tarball / entry-relative range / resulting jobsub
+  id, and explicit skip lines ("headroom < slice, waiting", "queue
+  count failed, top-up skipped", "campaign N paused: submit failed").
+  Answers "why did (or didn't) the loop act this tick."
+
+A stuck campaign is usually: recover log says why top-up didn't feed it
+(cap, count-query failure, or the campaign isn't `active`); if it did
+feed and nothing shows up in `jobsub_q`, the submit log has the raw
+`jobsub_submit` output for that attempt; the ledger tells you whether a
+row actually got recorded for it.
+
+**Resource-key inheritance fix.** Building the top-up phase surfaced
+(and fixed) a bug that predates sliced campaigns: a plain recovery
+resubmit used to silently drop CLI resource overrides. `submit_map
+--memory 4000MB` was CLI-only — the ledger snapshot didn't record it —
+so a `recover` resubmit of those same jobs would fall back to the
+2000MB built-in default and OOM identically every attempt (deterministic
+payloads mean a resource-starved job fails the same way every retry).
+Fixed by moving `memory`/`disk`/`expected_lifetime` into optional map-
+entry keys (`utils/poms_entry.resources_of`), resolved with precedence
+CLI flag > entry key > built-in default, and freezing the *effective*
+value into both the ledger row and the campaign row snapshot at
+submission time. Recoveries and cron-fed slices both now reconstruct
+from that snapshot, so they inherit the original resource request with
+no extra plumbing — a `--memory 4000MB` submission stays 4000MB through
+every subsequent recovery, not just the first attempt.
+
 ## Install runbook
 
 One-time setup, as mu2epro:
@@ -170,7 +313,7 @@ recover --status
 
 ## Pre-activation checklist
 
-These three items must be checked off **before** the cron line above
+These four items must be checked off **before** the cron line above
 goes into mu2epro's crontab. They need live services (a real jobsub_lite
 install, a real drained cluster, a real pushOutput run) and are
 deliberately **not** covered by the unit test suite, which only injects
@@ -200,6 +343,16 @@ fakes for `jobsub_q`, SAM listing, and the submit subprocess.
   the GPVM's actual jobsub_lite version, the drain gate silently
   misreads queue state — worth a direct check with a live cluster rather
   than trusting the assumption.
+- **`jobsub_q --user mu2epro -af JobStatus` passthrough confirmed**
+  against the installed jobsub_lite — same class of assumption as the
+  per-jobid check above, different call site: `total_queued` (top-up's
+  queue-count function in `utils/recover.py`) counts `JobStatus` tokens
+  `1`/`2` across mu2epro's *whole* queue, not one job's. If `-af` output
+  shape differs by-user vs by-jobid on this jobsub_lite install, the
+  top-up cap silently miscounts and either starves a campaign or
+  overshoots the farm-footprint cap it's meant to enforce. Confirm with
+  a real `--user mu2epro` query against a live queue before relying on
+  the count for anything unattended.
 
 ## Semantics and limits
 
@@ -244,3 +397,7 @@ hand in that specific situation.
 - `docs/superpowers/specs/2026-07-18-direct-recovery-design.md` and
   `docs/superpowers/plans/2026-07-18-direct-recovery.md` — design and
   implementation plan
+- `docs/superpowers/specs/2026-07-18-sliced-submission-design.md` and
+  `docs/superpowers/plans/2026-07-18-sliced-submission.md` — design and
+  implementation plan for the "Sliced campaigns (top-up phase)" section
+  above
