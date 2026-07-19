@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import tarfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,6 +127,8 @@ def _run_submit(cmd, tarball_name, njobs):
     if result.stderr:
         print(result.stderr, file=sys.stderr)
 
+    raw_output = (result.stdout or '') + (result.stderr or '')
+
     if result.returncode != 0:
         print(f"ERROR: {cmd[0]} failed with exit code {result.returncode}")
         return {
@@ -133,6 +136,7 @@ def _run_submit(cmd, tarball_name, njobs):
             'cluster_id': None,
             'njobs': njobs,
             'status': 'failed',
+            'raw_output': raw_output,
         }
 
     cluster_id = _parse_cluster_id(result.stdout)
@@ -152,6 +156,7 @@ def _run_submit(cmd, tarball_name, njobs):
             'cluster_id': None,
             'njobs': njobs,
             'status': 'failed',
+            'raw_output': raw_output,
         }
 
     print(f"Submitted cluster: {cluster_id}")
@@ -161,6 +166,7 @@ def _run_submit(cmd, tarball_name, njobs):
         'jobsub_id': _parse_jobsub_id(result.stdout),
         'njobs': njobs,
         'status': 'submitted',
+        'raw_output': raw_output,
     }
 
 
@@ -219,6 +225,44 @@ def _record_in_ledger(entry, firstjob, jobset, result, opts):
               f"manually: tarball={result['tarball']} indices={absolute} "
               f"jobsub_id={result.get('jobsub_id')} "
               f"parent={opts.ledger_parent} db={opts.ledger_db}")
+
+
+def _submission_log_path(ledger_db):
+    """Dated submission log beside the ledger DB (one file per UTC day,
+    plain appends, no rotation — cleanup is manual)."""
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%d')
+    return os.path.join(os.path.dirname(ledger_db) or '.',
+                        f'submit-{stamp}.log')
+
+
+def _log_submission(firstjob, jobset, result, opts):
+    """Append a human-readable record of a direct-backend submission
+    attempt — success AND failure (failures are exactly what gets
+    debugged). Covers every origin (manual, cron slice, recovery
+    resubmit): they all pass through here. Never raises: the attempt
+    already happened; a log problem must not crash the submit."""
+    try:
+        absolute = [firstjob + i for i in jobset]
+        idx_line = (f"indices: {len(absolute)} absolute "
+                    f"[{absolute[0]}..{absolute[-1]}]"
+                    if absolute else "indices: none")
+        block = '\n'.join([
+            f"=== {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
+            f"user={getpass.getuser()} status={result['status']}",
+            f"map={opts.map} tarball={result['tarball']}",
+            idx_line,
+            f"cluster={result['cluster_id']} "
+            f"jobsub_id={result.get('jobsub_id')}",
+            "--- jobsub output ---",
+            result.get('raw_output', '').rstrip(),
+            "=== end",
+            "",
+        ])
+        with open(_submission_log_path(opts.ledger_db), 'a') as fh:
+            fh.write(block + '\n')
+    except Exception as e:
+        print(f"WARNING: submit-log write failed ({e}) — submission "
+              f"outcome unaffected (status={result['status']})")
 
 
 def _effective_resources(entry, opts):
@@ -527,6 +571,8 @@ def submit_entry_direct(entry, idx, opts):
         }
 
     result = _run_submit(cmd, tarball_name, len(jobset))
+    if not opts.no_ledger:
+        _log_submission(firstjob, jobset, result, opts)
     if result['status'] == 'submitted' and not opts.no_ledger:
         _record_in_ledger(_snapshot_entry(entry, resources), firstjob,
                           jobset, result, opts)

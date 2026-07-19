@@ -4264,6 +4264,82 @@ class TestEnqueue(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Submission log (utils/submit.py) — dated per-attempt record
+# ---------------------------------------------------------------------------
+class TestSubmissionLog(unittest.TestCase):
+    """Dated per-submission log beside the ledger DB (all origins:
+    manual runs, cron slices, recovery resubmits)."""
+
+    def setUp(self):
+        import tempfile
+        self.dbdir = tempfile.mkdtemp()
+        self.db = os.path.join(self.dbdir, 'submissions.db')
+
+    def _opts(self, no_ledger=False):
+        import argparse
+        return argparse.Namespace(ledger_db=self.db, no_ledger=no_ledger,
+                                  map='/tmp/m.json')
+
+    def _result(self, status='submitted'):
+        return {'tarball': 'cnf.mu2e.T.C.0.tar', 'cluster_id': '123',
+                'jobsub_id': '123.0@js.fnal.gov', 'njobs': 3,
+                'status': status,
+                'raw_output': 'Use job id 123.0@js.fnal.gov ...\n'}
+
+    def _read_log(self):
+        from utils.submit import _submission_log_path
+        with open(_submission_log_path(self.db)) as f:
+            return f.read()
+
+    def test_success_block_appended(self):
+        from utils.submit import _log_submission
+        _log_submission(100, [0, 1, 2], self._result(), self._opts())
+        text = self._read_log()
+        self.assertIn('status=submitted', text)
+        self.assertIn('cnf.mu2e.T.C.0.tar', text)
+        self.assertIn('[100..102]', text)          # absolute indices
+        self.assertIn('Use job id 123.0@js.fnal.gov', text)
+
+    def test_failure_block_appended(self):
+        from utils.submit import _log_submission
+        _log_submission(0, [0], self._result(status='failed'), self._opts())
+        self.assertIn('status=failed', self._read_log())
+
+    def test_appends_not_truncates(self):
+        from utils.submit import _log_submission
+        _log_submission(0, [0], self._result(), self._opts())
+        _log_submission(0, [1], self._result(), self._opts())
+        self.assertEqual(self._read_log().count('=== end'), 2)
+
+    def test_write_failure_never_raises(self):
+        from utils.submit import _log_submission
+        import argparse
+        opts = argparse.Namespace(
+            ledger_db='/nonexistent-dir-submitlog-test/s.db',
+            no_ledger=False, map='/tmp/m.json')
+        _log_submission(0, [0], self._result(), opts)  # must not raise
+
+    def test_run_submit_carries_raw_output(self):
+        from utils import submit
+        fake = MagicMock(
+            returncode=0, stderr='warn\n',
+            stdout='1 job(s) submitted to cluster 12345678.\n'
+                   'Use job id 12345678.0@jobsub03.fnal.gov to retrieve output\n')
+        with patch('utils.submit.subprocess.run', return_value=fake):
+            r = submit._run_submit(['jobsub_submit'], 'cnf.tar', 3)
+        self.assertIn('Use job id', r['raw_output'])
+        self.assertIn('warn', r['raw_output'])
+
+    def test_run_submit_failure_carries_raw_output(self):
+        from utils import submit
+        fake = MagicMock(returncode=1, stderr='boom\n', stdout='')
+        with patch('utils.submit.subprocess.run', return_value=fake):
+            r = submit._run_submit(['jobsub_submit'], 'cnf.tar', 3)
+        self.assertEqual(r['status'], 'failed')
+        self.assertIn('boom', r['raw_output'])
+
+
+# ---------------------------------------------------------------------------
 # submit_map ledger hook (utils/submit.py) — direct-backend recovery
 # ---------------------------------------------------------------------------
 class TestSubmitLedgerHook(unittest.TestCase):
