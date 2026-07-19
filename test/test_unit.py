@@ -4128,6 +4128,69 @@ class TestCampaignLedger(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Entry resource keys (utils/poms_entry.py, utils/submit.py)
+# ---------------------------------------------------------------------------
+class TestEntryResources(unittest.TestCase):
+    """memory/disk/expected_lifetime: entry keys, precedence, snapshot."""
+
+    def _opts(self, memory=None, disk=None, expected_lifetime=None):
+        import argparse
+        return argparse.Namespace(memory=memory, disk=disk,
+                                  expected_lifetime=expected_lifetime)
+
+    def test_resources_of_subset(self):
+        from utils.poms_entry import resources_of
+        self.assertEqual(resources_of({'tarball': 't'}), {})
+        self.assertEqual(
+            resources_of({'memory': '4000MB', 'njobs': 5}),
+            {'memory': '4000MB'})
+        self.assertEqual(
+            resources_of({'memory': '4000MB', 'disk': '50GB',
+                          'expected_lifetime': '48h'}),
+            {'memory': '4000MB', 'disk': '50GB', 'expected_lifetime': '48h'})
+
+    def test_resources_of_nonstring_raises(self):
+        from utils.poms_entry import resources_of
+        with self.assertRaises(ValueError):
+            resources_of({'memory': 4000})
+
+    def test_effective_cli_beats_entry(self):
+        from utils.submit import _effective_resources
+        eff = _effective_resources({'memory': '4000MB'},
+                                   self._opts(memory='8000MB'))
+        self.assertEqual(eff['memory'], '8000MB')
+
+    def test_effective_entry_beats_default(self):
+        from utils.submit import _effective_resources
+        eff = _effective_resources({'memory': '4000MB'}, self._opts())
+        self.assertEqual(eff['memory'], '4000MB')
+        self.assertIsNone(eff['disk'])            # None -> jobsub_argv builtin
+        self.assertIsNone(eff['expected_lifetime'])
+
+    def test_snapshot_merges_without_mutating(self):
+        from utils.submit import _snapshot_entry
+        entry = {'tarball': 't', 'njobs': 5}
+        snap = _snapshot_entry(entry, {'memory': '8000MB', 'disk': None,
+                                       'expected_lifetime': None})
+        self.assertEqual(snap['memory'], '8000MB')
+        self.assertNotIn('disk', snap)
+        self.assertNotIn('memory', entry)         # original untouched
+
+    def test_append_jobdef_passes_resource_keys(self):
+        import tempfile
+        from utils import json2jobdef
+        out = os.path.join(tempfile.mkdtemp(), 'map.json')
+        config = {'desc': 'TestDesc', 'dsconf': 'TestConf', 'owner': 'mu2e',
+                  'inloc': 'tape', 'njobs': 5, 'memory': '4000MB',
+                  'outloc': {'sim.mu2e.TestDesc.TestConf.art': 'tape'}}
+        json2jobdef.append_jobdef(config, jobdefs_file=out)
+        with open(out) as f:
+            entry = json.load(f)[0]
+        self.assertEqual(entry['memory'], '4000MB')
+        self.assertNotIn('disk', entry)           # absent key stays absent
+
+
+# ---------------------------------------------------------------------------
 # submit_map ledger hook (utils/submit.py) — direct-backend recovery
 # ---------------------------------------------------------------------------
 class TestSubmitLedgerHook(unittest.TestCase):

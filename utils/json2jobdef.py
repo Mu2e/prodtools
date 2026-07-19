@@ -434,6 +434,13 @@ def append_jobdef(config, jobdefs_file=None):
         "outputs": []
     }
 
+    # Optional per-entry resource requests pass through to the map entry;
+    # the submit path reads them via poms_entry.resources_of
+    # (CLI flag > entry key > built-in default).
+    for key in ('memory', 'disk', 'expected_lifetime'):
+        if key in config:
+            jobdef_entry[key] = config[key]
+
     # Optional cnf-index window start (statistics expansion; semantics
     # in utils/poms_entry.py). firstjob_of/validate_window are the single
     # validation authority — shared with the submit path.

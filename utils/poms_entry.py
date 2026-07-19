@@ -111,3 +111,21 @@ def validate_window(firstjob: int, njobs: Optional[int], capacity: Optional[int]
     if capacity and firstjob + njobs > capacity:
         raise ValueError(
             f"window [{firstjob}, {firstjob + njobs}) exceeds cnf capacity {capacity}")
+
+
+RESOURCE_KEYS = ('memory', 'disk', 'expected_lifetime')
+
+
+def resources_of(entry: dict) -> dict:
+    """Optional per-entry resource requests (subset of RESOURCE_KEYS
+    actually present). Values are jobsub-format strings ('4000MB',
+    '50GB', '48h'); anything else is a malformed map."""
+    res = {}
+    for key in RESOURCE_KEYS:
+        if key in entry:
+            if not isinstance(entry[key], str):
+                raise ValueError(
+                    f"POMS entry {key!r} must be a string "
+                    f"(jobsub format), got {entry[key]!r}")
+            res[key] = entry[key]
+    return res

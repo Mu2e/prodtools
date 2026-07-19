@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import Mu2eName, log_storage_location
 from utils.poms_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
-                              firstjob_of, validate_window)
+                              firstjob_of, validate_window, resources_of)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
 
@@ -219,6 +219,30 @@ def _record_in_ledger(entry, firstjob, jobset, result, opts):
               f"manually: tarball={result['tarball']} indices={absolute} "
               f"jobsub_id={result.get('jobsub_id')} "
               f"parent={opts.ledger_parent} db={opts.ledger_db}")
+
+
+def _effective_resources(entry, opts):
+    """Resource precedence: CLI flag > entry key > None (None lets
+    jobsub_argv apply its built-in defaults)."""
+    res = resources_of(entry)
+    return {
+        'memory': opts.memory or res.get('memory'),
+        'disk': opts.disk or res.get('disk'),
+        'expected_lifetime': (opts.expected_lifetime
+                              or res.get('expected_lifetime')),
+    }
+
+
+def _snapshot_entry(entry, resources):
+    """Entry snapshot for ledger/campaign rows: effective resource
+    values merged in, so recoveries and cron slices reproduce what the
+    jobs actually ran with (a CLI --memory must not silently downgrade
+    to the built-in default on resubmit)."""
+    snap = dict(entry)
+    for key, val in resources.items():
+        if val is not None:
+            snap[key] = val
+    return snap
 
 
 def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
@@ -421,6 +445,9 @@ def submit_entry_direct(entry, idx, opts):
     # Bundle prodtools so the worker has our patched runmu2e.py.
     prodtools_tar = _bundle_prodtools(opts.prodtools_tar or DEFAULT_PRODTOOLS_TAR)
 
+    # Compute effective resources (CLI flag > entry key > None/builtin).
+    resources = _effective_resources(entry, opts)
+
     # Build the jobsub_submit argv. submitter is the effective UNIX user;
     # role auto-defaults to Production for mu2epro per jobsub_argv.role_for_user.
     submitter = getpass.getuser()
@@ -454,9 +481,9 @@ def submit_entry_direct(entry, idx, opts):
         role=opts.role,
         wftop=opts.wftop,
         wfproject=opts.wfproject,
-        disk=opts.disk,
-        memory=opts.memory,
-        expected_lifetime=opts.expected_lifetime,
+        disk=resources['disk'],
+        memory=resources['memory'],
+        expected_lifetime=resources['expected_lifetime'],
     )
 
     cmd = ['jobsub_submit'] + argv
@@ -474,7 +501,8 @@ def submit_entry_direct(entry, idx, opts):
 
     result = _run_submit(cmd, tarball_name, len(jobset))
     if result['status'] == 'submitted' and not opts.no_ledger:
-        _record_in_ledger(entry, firstjob, jobset, result, opts)
+        _record_in_ledger(_snapshot_entry(entry, resources), firstjob,
+                          jobset, result, opts)
     return result
 
 
