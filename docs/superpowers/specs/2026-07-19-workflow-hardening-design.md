@@ -38,6 +38,13 @@ inheritance, and the ledger schema all stay exactly as reviewed.
 9. The ksu environment requirements for direct submission by a human
    exist only in a Claude skill and a memory file, not in any
    operator-readable doc.
+10. `submit_map`'s default backend is still `mu2ejobsub` (Phase 1), so
+    an operator who forgets `--backend direct` silently gets the legacy
+    path — unledgered, unwatched, invisible to `submissions status`.
+    The Phase-1 backend has no operational use since the direct backend
+    landed (wiki survey 2026-07-19: design-doc mentions only), and the
+    entry modes it nominally covers (template/direct_input/g4bl, HPC)
+    are launched via POMS or the upstream CLIs in practice.
 
 ## Change 1 — rename `recover` → `submissions`, verb structure
 
@@ -93,9 +100,9 @@ submissions cancel CAMP_ID
 New optional POMS-map entry key: `"backend"`. The only recognized value
 is `"direct"`.
 
-- `submit_map --backend direct` — one-shot, `--first/--num`,
-  `--indices`, `--indices-file`, and `--enqueue` alike — **hard-errors**
-  on any selected entry that does not carry `"backend": "direct"`:
+- `submit_map` — one-shot, `--first/--num`, `--indices`,
+  `--indices-file`, and `--enqueue` alike — **hard-errors** on any
+  selected entry that does not carry `"backend": "direct"`:
 
   ```
   submit_map: entry 'cnf...tar' is not marked for the direct backend.
@@ -106,8 +113,11 @@ is `"direct"`.
 
   No `--force` escape (house no-fallbacks rule). The fix is a one-line
   map edit by an operator who has verified ownership.
-- `--backend mu2ejobsub` ignores the key entirely; POMS maps and
-  `runmu2e` are untouched. POMS-owned entries simply never carry it.
+- With Change 7, every `submit_map` submission is direct, so the guard
+  applies to all of them unconditionally. The key's meaning is
+  ownership: "this entry is submitted through `submit_map`, not by a
+  POMS campaign." POMS maps and `runmu2e` are untouched; POMS-owned
+  entries simply never carry it.
 - Ledger/campaign snapshots already copy the entry verbatim, so the key
   flows into snapshots; internal resubmit and slice tmp-maps therefore
   pass the guard without special-casing. There are no pre-guard ledger
@@ -165,21 +175,56 @@ map dir and removes it in `finally` after the child `submit_map`
 completes, success or failure. On cleanup failure: warn, never raise
 (post-submission never-raise rule).
 
-## Change 7 — docs
+## Change 7 — retire `submit_map`'s mu2ejobsub backend
+
+`submit_map` becomes single-backend (direct). Answers finding 10 by
+deletion rather than by a required flag.
+
+- **Deleted:** the `--backend` flag, `_submit_entry_mu2ejobsub`,
+  `build_mu2ejobsub_argv`, and the backend dispatch in `submit_entry`.
+  Passing `--backend` anything is an argparse error — loud, not silent.
+- **Call sites:** `submit_slice` and the recovery resubmit path drop
+  `--backend direct` from the child `submit_map` argv (`recover.py`,
+  two sites — renamed module per Change 1).
+- **Worker message:** `runmu2e` `_direct_dispatch` still refuses
+  non-normal jobdesc modes, but the message stops recommending
+  `--backend mu2ejobsub`; it now points at the POMS launch path and
+  the upstream CLIs.
+- **Boundary — what this does NOT touch:** the upstream `mu2ejobsub`
+  tool, the POMS launch path that drives it, `runmu2e`'s worker-side
+  shim compatibility (POMS-launched workers still come through the
+  Perl `mu2ejobsub.sh` shim), and the Perl parity tests. Those are the
+  POMS path and stay fully supported. We are deleting our Phase-1 CLI
+  *driver* of mu2ejobsub, nothing upstream.
+- **Policy (documented in the operator decision tree):** entry modes
+  the direct worker does not support — template, direct_input, g4bl —
+  and HPC submission are not submittable via `submit_map`. They run
+  via POMS campaigns or the upstream `mu2ejobsub`/`mu2eg4bl` CLIs
+  directly (both have local skills). `MU2EGRID_HPC` never had prodtools
+  support; nothing is lost.
+- **Tests:** the 7 mu2ejobsub-backend references in `test_unit.py` are
+  removed or rewritten against the single-backend CLI; one new test
+  asserts `--backend` is rejected as an unknown argument.
+
+## Change 8 — docs
 
 - **Wiki runbook** (`wiki/pages/2026-07-18-direct-recovery-loop.md`):
   - all `recover` invocations → `submissions` verbs; crontab line →
     `submissions_cron`;
   - the 5-item pre-activation checklist rewritten with the new
     spellings (items themselves unchanged);
-  - new **operator quickstart** section: POMS-vs-direct decision tree,
-    the ksu environment requirements for a human running
-    `submit_map --backend direct` (today only in the `/mu2epro-submit`
-    skill), how to read `submissions` output, and the response playbook
-    for each exit-2 cause.
+  - new **operator quickstart** section: POMS-vs-direct decision tree
+    (including where template/direct_input/g4bl/HPC submissions live),
+    the ksu environment requirements for a human running `submit_map`
+    (today only in the `/mu2epro-submit` skill), how to read
+    `submissions` output, and the response playbook for each exit-2
+    cause.
 - **EXAMPLES.md** via `docs/EXAMPLES_schema.md` + `/refresh-examples`:
   `submissions` verb table, `backend` entry key, the two refusals,
-  tribal bullets updated (status command, safe-by-default note).
+  single-backend `submit_map` (no `--backend` flag anywhere; the
+  resource-key note loses its "direct only" qualifier), tribal bullets
+  updated (status command, safe-by-default note, where template/
+  direct_input/g4bl/HPC submissions live now).
 - Memory files and `MEMORY.md` pointers updated post-merge (they
   reference `recover`/`recover_cron` heavily).
 
@@ -202,9 +247,13 @@ style). New/updated coverage:
 
 Full suite green before merge (442 tests today; expect ~460+).
 
-## Out of scope (post-activation candidates, deliberate)
+## Out of scope (deliberate)
 
-- mu2ejobsub backend honoring entry resource keys or the backend key
+- extending the direct worker to template/direct_input/g4bl modes
+  ("Route B" — build only if a real need appears)
+- HPC submission support in `submit_map`
+- changes to the upstream `mu2ejobsub`/`mu2eg4bl` tools, the POMS
+  launch path, or `runmu2e`'s worker-side shim compatibility
 - POMS-side or map-generation changes beyond the optional key
 - further verbs (`submissions watch`, log tailing)
 - any alias or back-compat shim for the old `recover` name
