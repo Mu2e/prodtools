@@ -11,8 +11,7 @@ and sliced campaigns (spec `2026-07-18-sliced-submission-design.md`), both on
 Close the multi-operator footguns found in the workflow review before
 activation. Operators will include production people without this repo's
 tribal context, so the CLI must be safe by default and self-describing,
-failures must be visible to cron monitoring, and cross-path double
-submission must be structurally impossible, not just documented.
+and failures must be visible to cron monitoring.
 
 No semantic redesign: the tick structure (recovery pass then top-up),
 campaign states and transitions, crash-window guards, snapshot
@@ -24,6 +23,7 @@ inheritance, and the ledger schema all stay exactly as reviewed.
    (`recover --status`); bare `recover` is a mutating command.
 2. The POMS map has no notion of which path owns an entry — nothing
    stops direct-submitting (or enqueueing) an entry POMS already runs.
+   (Deliberately NOT answered by this design — see "Decided against".)
 3. Queue-count failure during top-up skips the phase loudly in the log
    but exits 0 — cron monitoring sees success.
 4. A campaign that *stays* paused only signals exit 2 on the tick that
@@ -74,7 +74,7 @@ submissions cancel CAMP_ID
 - Global flag: `--db PATH` (default and `MU2E_SUBMISSION_DB` env
   unchanged), valid before the verb.
 - Exit codes: `run` keeps the exit-2 needs-attention contract
-  (extended by Change 3); `status` exits 0 unless the DB is unreadable;
+  (extended by Change 2); `status` exits 0 unless the DB is unreadable;
   management verbs exit 0 on success, 1 with a one-line error on
   invalid transitions.
 - Locking: `run` and `pause`/`resume`/`cancel` take the per-DB lock;
@@ -95,40 +95,7 @@ submissions cancel CAMP_ID
   dispatches to `status` explicitly — argparse `set_defaults` on the
   top-level parser, not a hidden fallthrough.
 
-## Change 2 — path-ownership guard (`"backend": "direct"` entry key)
-
-New optional POMS-map entry key: `"backend"`. The only recognized value
-is `"direct"`.
-
-- `submit_map` — one-shot, `--first/--num`, `--indices`,
-  `--indices-file`, and `--enqueue` alike — **hard-errors** on any
-  selected entry that does not carry `"backend": "direct"`:
-
-  ```
-  submit_map: entry 'cnf...tar' is not marked for the direct backend.
-  Add "backend": "direct" to the entry in <map> if this entry is NOT
-  run by a POMS campaign. Direct-submitting a POMS-owned entry runs
-  identical payloads twice.
-  ```
-
-  No `--force` escape (house no-fallbacks rule). The fix is a one-line
-  map edit by an operator who has verified ownership.
-- With Change 7, every `submit_map` submission is direct, so the guard
-  applies to all of them unconditionally. The key's meaning is
-  ownership: "this entry is submitted through `submit_map`, not by a
-  POMS campaign." POMS maps and `runmu2e` are untouched; POMS-owned
-  entries simply never carry it.
-- Ledger/campaign snapshots already copy the entry verbatim, so the key
-  flows into snapshots; internal resubmit and slice tmp-maps therefore
-  pass the guard without special-casing. There are no pre-guard ledger
-  rows in any production DB (the production DB does not exist until the
-  activation mkdir), so no migration is needed.
-- `json2jobdef` passthrough: NOT added. The key marks a *submission
-  path* decision made at map level, not a jobdef property; `--prod`
-  pushes continue to write entries without it, and the operator marks
-  entries direct when (and only when) they choose that path.
-
-## Change 3 — exit-code honesty in `run`
+## Change 2 — exit-code honesty in `run`
 
 Two additions to the needs-attention (exit 2) set:
 
@@ -146,7 +113,7 @@ Two additions to the needs-attention (exit 2) set:
 
 `status` never exits 2 — it is a display, not a monitor.
 
-## Change 4 — clean errors and flag hygiene
+## Change 3 — clean errors and flag hygiene
 
 - Enqueue failures (duplicate live campaign, njobs invalid, generic
   tarball, DB errors) print `submit_map: <one line>` and exit 1 — no
@@ -158,7 +125,7 @@ Two additions to the needs-attention (exit 2) set:
 - The `--status`-plus-management-flag silent ignore is resolved
   structurally by Change 1 (separate verbs).
 
-## Change 5 — pause-note preservation
+## Change 4 — pause-note preservation
 
 `set_campaign_state(..., 'active')` (resume) keeps the existing note
 instead of clearing it. `pause` gains an optional `--note TEXT`
@@ -167,7 +134,7 @@ unchanged. The note column remains a single value — no history table
 (YAGNI); the submission log already timestamps every state-changing
 invocation.
 
-## Change 6 — tmp hygiene
+## Change 5 — tmp hygiene
 
 One shared helper (in `utils/submissions.py`, used by both
 `submit_slice` and the recovery resubmit path) creates the scratch
@@ -175,7 +142,7 @@ map dir and removes it in `finally` after the child `submit_map`
 completes, success or failure. On cleanup failure: warn, never raise
 (post-submission never-raise rule).
 
-## Change 7 — retire `submit_map`'s mu2ejobsub backend
+## Change 6 — retire `submit_map`'s mu2ejobsub backend
 
 `submit_map` becomes single-backend (direct). Answers finding 10 by
 deletion rather than by a required flag.
@@ -206,7 +173,7 @@ deletion rather than by a required flag.
   removed or rewritten against the single-backend CLI; one new test
   asserts `--backend` is rejected as an unknown argument.
 
-## Change 8 — docs
+## Change 7 — docs
 
 - **Wiki runbook** (`wiki/pages/2026-07-18-direct-recovery-loop.md`):
   - all `recover` invocations → `submissions` verbs; crontab line →
@@ -220,7 +187,7 @@ deletion rather than by a required flag.
     `submissions` output, and the response playbook for each exit-2
     cause.
 - **EXAMPLES.md** via `docs/EXAMPLES_schema.md` + `/refresh-examples`:
-  `submissions` verb table, `backend` entry key, the two refusals,
+  `submissions` verb table, the `--enqueue --no-ledger` refusal,
   single-backend `submit_map` (no `--backend` flag anywhere; the
   resource-key note loses its "direct only" qualifier), tribal bullets
   updated (status command, safe-by-default note, where template/
@@ -235,9 +202,6 @@ style). New/updated coverage:
 
 - verb dispatch: bare → status; `run` mutates only under the verb;
   `status` takes no lock; management verbs validate transitions.
-- ownership guard: refusal (message includes the map path) for
-  one-shot, windowed, indices, and enqueue selection; acceptance with
-  the key; snapshot preserves the key; child-resubmit tmp map passes.
 - exit 2 on count failure; exit 2 on lingering paused campaign
   (two consecutive fake ticks).
 - resume preserves note; pause `--note` recorded.
@@ -254,9 +218,23 @@ Full suite green before merge (442 tests today; expect ~460+).
 - HPC submission support in `submit_map`
 - changes to the upstream `mu2ejobsub`/`mu2eg4bl` tools, the POMS
   launch path, or `runmu2e`'s worker-side shim compatibility
-- POMS-side or map-generation changes beyond the optional key
+- POMS-side or map-generation changes
 - further verbs (`submissions watch`, log tailing)
 - any alias or back-compat shim for the old `recover` name
+
+## Decided against — cross-path ownership key
+
+An earlier draft answered finding 2 with a `"backend": "direct"`
+map-entry key: `submit_map` would refuse entries not explicitly marked
+submit-map-owned, making cross-path double submission an explicit
+decision instead of a silent mistake. **Dropped by user decision
+2026-07-19: the plan is to move away from POMS eventually**, so the key
+would be scaffolding for a coexistence meant to end, and its per-entry
+friction would outlive its usefulness. During the transition the risk
+is carried by the operator decision tree (Change 7) and the standing
+"ask how it was submitted before recovering/resubmitting" rule.
+Revisit only if a real cross-path near-miss occurs before POMS is
+retired.
 
 ## Sequencing
 
