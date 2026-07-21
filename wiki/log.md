@@ -898,12 +898,44 @@ table, fail-closed (`_jobsub_table_states`: header required, skip
 token noise + `N total;` summaries, jobid-regex rows with one-letter
 ST at field 6, anything else → None). Empirical shapes captured
 2026-07-21: drained = header + zero summary, no rows; DAG children
-keep row geometry with the node name in OWNER. htcondor python
-bindings would eliminate parsing entirely but are NOT in the muse ops
-env (`import htcondor` fails) — recorded as a future path, stdlib
-rule holds. Second tick: 500 jobs submitted (cluster 92625184,
+keep row geometry with the node name in OWNER. Second tick: 500 jobs submitted (cluster 92625184,
 indices 0-499, ledger row 1), second slice correctly cap-waited
 (690+500 > 1000). Campaign at cursor 500/7000; cap 1000 self-holds
 until the queue drains. Checklist status: items 3+4 resolved by fix,
 item 2 (real dry-run on drained row) pending the drain; kill-test
 still pending; duplicate-declare opportunistic.
+
+## 2026-07-21 — htcondor bindings: available, deferred
+
+Followed up "is there a jobsub_q python library?" with a real search.
+Correcting yesterday's entry: the bindings are NOT missing from this
+node — RPM `python3-condor-23.0.28-1.el9`,
+`/usr/lib64/python3.9/site-packages/htcondor`, imports fine from
+`/usr/bin/python3`. `import htcondor` fails under `muse setup ops`
+only because that env swaps python 3.9 → spack cvmfs 3.10.14; the 3.9
+C-extensions cannot load into 3.10, so PYTHONPATH additions do not
+help. jobsub_lite solves this by pinning every `/opt/jobsub_lite/bin/`
+script to `#!/usr/bin/python3 -I` (isolated mode, ignores our
+PYTHONPATH) — the same escape hatch is open to us.
+
+Verified from inside the ops env: `/usr/bin/python3 -I` +
+`htcondor.Collector()` auto-resolves gpcollector04/03.fnal.gov, all 8
+schedds queryable, `Owner=="mu2epro"` → `{1:174, 2:19, 4:34}`
+(idle/running/completed). No auth setup, no token handling, no text
+parsing — structured ClassAds. `pip install htcondor` into the ops
+3.10 would also work (manylinux wheel, bundled libcondor) but adds a
+non-stdlib dep to the mu2epro path.
+
+Also inspected `/opt/jobsub_lite/lib/jobsub_api.py`, which exposes
+`q()`, `submit()`, `SubmittedJob`. Not an upgrade: `q()` shells out to
+`jobsub_q` and regex-parses the same default table with a looser
+pattern (`\S+` for status, no header requirement, no fail-closed), so
+on Monday's malformed output it would have matched garbage rows and
+returned a wrong count — precisely the failure the exit-2 honesty
+change exists to catch.
+
+Decision: keep `_jobsub_table_states` as-is. Not changing the counting
+logic of a loop whose first live campaign has 500 jobs on the grid.
+When adopted, the shape is a ~15-line helper invoked as
+`/usr/bin/python3 -I` returning JSON, with the table parser as
+fallback. See [[reference_jobsub_q_af_unreliable]].
