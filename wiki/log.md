@@ -980,3 +980,31 @@ accepted. Do not "fix" it later without re-litigating.
 Lesson: a helper that silently changes a storage class needs a test at
 birth. Grep for other places the direct path diverges from the POMS
 path by passing an explicit value where POMS takes a default.
+
+## 2026-07-21 — second slice: first full reconcile + top-up tick
+
+Ran `submissions run --dry-run --max-queued 1000` on the drained row
+(pre-activation checklist item 2) — the first real dry-run against a
+completed submission. It predicted exactly what the live tick did:
+`row 1: would close complete (500 indices verified)`, one slice of 500,
+then cap-wait.
+
+Live tick: row 1 closed complete, cluster **70966619** (jobsub03), 500
+jobs = indices 500-999, ledger row 2 active, campaign cursor
+1000/7000, `cap-wait=1`. RC=0.
+
+Cap arithmetic reads oddly at first glance and is CORRECT: the top-up
+loop submits then does `count += n` and re-loops, so `193 idle+running`
+becomes `693+500 > 1000` on the second pass. One slice out, then self-
+hold. Not a double-count — do not "fix" it.
+
+Log-location fix shipped: `_bundle_prodtools` is mtime-gated and
+rebuilt `/tmp/prodtools-mu2epro.tar` at 10:06 (verified the fixed
+marker is inside the shipped tarball). This slice's logs should land on
+persistent disk.
+
+OPEN CHECK ON DRAIN: `samweb locate-file` a log from cluster 70966619 —
+expect `dcache:/pnfs/mu2e/persistent/datasets/phy-etc/log/`, NOT
+`enstore:`. Token storage.modify scopes are not exposed on the condor
+job ad, so placement is the only real proof. If it is tape again, stop
+before slice 3.
