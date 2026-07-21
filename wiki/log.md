@@ -784,3 +784,97 @@ the underlying recovery loop (now four items: the original three plus
 confirming `jobsub_q --user mu2epro -af JobStatus` passthrough, since
 the top-up queue count is a new call site of that same assumption).
 Nothing installed in mu2epro's crontab by this work.
+
+## [2026-07-19] update | workflow hardening — submissions CLI, single-backend submit_map
+Pages updated: 2026-07-18-direct-recovery-loop
+Sources: `docs/superpowers/specs/2026-07-19-workflow-hardening-design.md`,
+`docs/superpowers/plans/2026-07-19-workflow-hardening.md`
+Reason: pre-activation review of the direct-recovery/sliced-campaign
+subsystem (merged 2026-07-18/19, still not in any crontab) surfaced
+multi-operator footguns — the target operators include production
+people without this repo's tribal context, so the CLI had to become
+safe by default before go-live. Seven-task TDD plan, all landed on
+`field-off-option`:
+1. **Rename `recover` → `submissions`, verb structure.** The bare
+   command is now read-only `status` (explicit `argparse
+   set_defaults`, not a hidden fallthrough); mutating actions require
+   an explicit verb: `run [--dry-run|--row|--max-attempts|--max-queued]`,
+   `pause CAMP_ID [--note TEXT]`, `resume CAMP_ID`, `cancel CAMP_ID`,
+   plus a global `--db`. `bin/recover` deleted outright (no alias — no
+   muscle memory existed yet); `bin/recover_cron` → `bin/submissions_cron`
+   (now just `submissions run` under flock/token-gate/quiet-env,
+   unchanged behavior otherwise); cron log renamed
+   `submissions-YYYYMMDD.log`; lock file `submissions.lock`.
+   `utils/recover.py` → `utils/submissions.py`.
+2. **Exit-code honesty in `run`.** Two additions to the needs-attention
+   (exit 2) set: a queue-count failure (`jobsub_q` itself unreadable —
+   previously skipped top-up silently and exited 0, starving every
+   campaign invisibly to cron monitoring) and a *lingering* paused
+   campaign (any campaign still `paused` when `run` executes, not just
+   the tick that paused it — the signal now repeats every tick until a
+   human runs `resume`/`cancel`). Both apply under `--dry-run` too.
+   `status` never exits 2 — display, not monitor.
+3. **Clean errors and flag hygiene.** Enqueue failures (duplicate live
+   campaign, invalid/missing njobs, DB errors) now print a one-line
+   `submit_map: <reason>` and exit 1 — no tracebacks for
+   operator-reachable errors. `--enqueue --no-ledger` is refused at
+   argument validation (a campaign has nowhere to track its cursor
+   without the ledger). The old "`--status` + a management flag
+   silently ignores the management flag" footgun is resolved
+   structurally by the verb split in (1).
+4. **Pause-note preservation.** `resume` no longer clobbers the note
+   explaining *why* a campaign was paused; `pause` gained an optional
+   `--note TEXT` (default unchanged). `cancel` behavior unchanged.
+5. **Scratch-dir cleanup.** One shared helper (used by both the
+   sliced-campaign `submit_slice` and the recovery resubmit path)
+   creates the child `submit_map`'s scratch map dir and removes it in
+   `finally` after the child completes, success or failure — hourly
+   cron was accumulating `mkdtemp` dirs in `/tmp` indefinitely.
+   Cleanup failure warns, never raises.
+6. **`submit_map` single-backend (direct-only) — `mu2ejobsub` backend
+   retired.** Deleted: the `--backend` flag, `_submit_entry_mu2ejobsub`,
+   `build_mu2ejobsub_argv`, and the backend dispatch in `submit_entry`;
+   passing `--backend` anything is now an argparse error. `submit_slice`
+   and the recovery resubmit path drop `--backend direct` from their
+   child `submit_map` argv. **Boundary — untouched by this change:** the
+   upstream `mu2ejobsub` tool, the POMS launch path that drives it,
+   `runmu2e`'s worker-side Perl-shim compatibility for POMS-launched
+   workers, and the Perl parity tests — all fully supported, unchanged.
+   Only prodtools' own Phase-1 CLI *driver* of `mu2ejobsub` is gone.
+   Policy going forward: `template`/`direct_input`/`g4bl` entry modes
+   and HPC submission are not submittable via `submit_map` (the direct
+   worker doesn't support them) — they run via POMS campaigns or the
+   upstream `mu2ejobsub`/`mu2eg4bl` CLIs directly.
+7. **Docs** (this update): wiki runbook
+   `2026-07-18-direct-recovery-loop` respelled throughout (every
+   `recover` invocation, `recover_cron`, the cron log/lock names, the
+   5-item pre-activation checklist — items unchanged, spellings
+   updated) plus a new **Operator quickstart** section (POMS-vs-direct
+   decision tree including where template/direct_input/g4bl/HPC
+   submissions live and the never-submit-both-paths warning; the human
+   ksu environment for running `submit_map` as mu2epro; how to read
+   `submissions` output; a one-line-per-cause exit-2 playbook covering
+   all seven causes). `docs/EXAMPLES_schema.md` + full regen of the
+   affected `EXAMPLES.md` sections (tools list, `submit_map`, the new
+   `submissions` subsection replacing `recover`, troubleshooting
+   entries matching the current `submit_map:`/lock/enqueue error text).
+   460/460 unit tests green.
+
+**Decided against — cross-path ownership key.** An earlier draft of
+this hardening pass would have answered "nothing stops
+double-submitting an entry POMS already runs" with a `"backend":
+"direct"` map-entry key that `submit_map` would refuse to submit
+without. Dropped by user decision 2026-07-19: the longer-term plan is
+to move away from POMS entirely, so the key would be scaffolding for a
+coexistence period that's meant to end, and its per-entry friction
+would outlive its usefulness. During the transition the risk is
+carried by the operator decision tree (this update's Operator
+quickstart section) and the standing "ask how an entry was submitted
+before recovering/resubmitting" rule. See "Decided against" in
+`docs/superpowers/specs/2026-07-19-workflow-hardening-design.md` for
+the full ruling; revisit only if a real cross-path near-miss occurs
+before POMS is retired.
+
+Still **NOT activated** — same pre-activation checklist as before
+(now read with the new spellings), nothing installed in mu2epro's
+crontab by this work.

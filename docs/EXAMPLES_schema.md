@@ -53,10 +53,9 @@ When regenerating, read in this order:
    `"disk"` / `"expected_lifetime"` (jobsub-format strings) — mention that
    `json2jobdef` copies them from the JSON config into the map entry
    verbatim, and cross-reference the `submit_map` subsection for the
-   precedence rule. State plainly that these keys are honored ONLY by
-   `submit_map --backend direct`; the default `mu2ejobsub` backend
-   (`build_mu2ejobsub_argv`) ignores entry keys entirely — CLI flags
-   (`--memory`/`--disk`/`--expected-lifetime`) are the only lever there.
+   precedence rule. State plainly that `submit_map` (single-backend
+   direct — no other backend exists) always honors these keys: CLI flag
+   > entry key > built-in default.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -78,34 +77,44 @@ When regenerating, read in this order:
     user-facing CLI: `pomsMonitor`, `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `mkrecovery`, `jobquery`,
-    `submit_map`, `recover`, `copy_to_stash`. Ops scripts
-    (`install_prodtools.sh`, `update_pomsmonitor_web`, `recover_cron`)
+    `submit_map`, `submissions`, `copy_to_stash`. Ops scripts
+    (`install_prodtools.sh`, `update_pomsmonitor_web`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
     key flags. Enumerate from the current `bin/` directory — add any new
     script found there, remove any that no longer exist. (`runjob.sh` is
     a worker bootstrap, not user-facing — omit.)
 
-    - `submit_map` must cover `--enqueue` and `--slice-size` (campaign
-      registration for the sliced-submission top-up phase; direct
-      backend only; mutually exclusive with
-      `--first`/`--num`/`--indices`/`--indices-file`; submits nothing).
-    - `recover` must cover `--max-queued`, `--pause-campaign`,
-      `--resume-campaign`, `--cancel-campaign`, and note that `--status`
-      also prints the resolved queue cap in effect for the top-up phase.
+    - `submit_map` is single-backend (direct only — no `--backend` flag
+      exists). Must cover `--enqueue` and `--slice-size` (campaign
+      registration for the sliced-submission top-up phase; mutually
+      exclusive with `--first`/`--num`/`--indices`/`--indices-file`;
+      submits nothing) and the `--enqueue --no-ledger` refusal
+      (contradictory flags; one-line `submit_map:` error, no traceback).
+    - `submissions` — name, one-line role ("direct-submission subsystem
+      CLI — status/run/pause/resume/cancel"), the verb table (`status`
+      is the default/read-only verb; `run` with `--dry-run`/`--row`/
+      `--max-attempts`/`--max-queued`; `pause CAMP_ID [--note TEXT]`;
+      `resume CAMP_ID`; `cancel CAMP_ID`), the global `--db` flag, the
+      read-only guarantees (`status` and `run --dry-run` take no lock
+      and submit nothing), and the extended exit-2 list for `run`: held,
+      exhausted, child-missing, campaign paused (submit failure),
+      campaign paused (crash-window overlap), queue-count failure,
+      lingering paused campaign (repeats every tick until a human
+      resumes or cancels it).
 12. **Troubleshooting** — only entries that correspond to real error
     messages produced by current code. Remove stale ones.
 
     - The duplicate-campaign entry (`active`/`paused` campaign already
-      exists for `<tarball>`) must recommend `--cancel-campaign` ONLY —
-      never "pause then re-enqueue" (pausing does not free the tarball;
-      a paused campaign is refused exactly like an active one, and even
-      if it weren't, two campaigns feeding the same index space is the
-      double-submit bug this guard exists to prevent). It must also warn
-      that re-enqueueing the same tarball after `--cancel-campaign`
-      starts the new campaign's cursor at 0 — it has no memory of what
-      the cancelled campaign already fed — so the operator should check
-      `recover --status` / the ledger for that tarball first, to avoid
-      re-submitting already-covered indices.
+      exists for `<tarball>`) must recommend `submissions cancel <ID>`
+      ONLY — never "pause then re-enqueue" (pausing does not free the
+      tarball; a paused campaign is refused exactly like an active one,
+      and even if it weren't, two campaigns feeding the same index space
+      is the double-submit bug this guard exists to prevent). It must
+      also warn that re-enqueueing the same tarball after `submissions
+      cancel <ID>` starts the new campaign's cursor at 0 — it has no
+      memory of what the cancelled campaign already fed — so the
+      operator should check `submissions status` / the ledger for that
+      tarball first, to avoid re-submitting already-covered indices.
 
 ## Tribal knowledge to preserve (non-derivable from code)
 
@@ -140,48 +149,50 @@ reading the code:
 - `genFilterEff` output is Proditions-compatible (`TABLE
   SimEfficiencies2`).
 - `famtree` auto-excludes `etc*.txt` files from diagrams.
-- Every successful `submit_map --backend direct` submission is recorded
-  in the submission ledger (default
-  `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`, env
-  `MU2E_SUBMISSION_DB`); `recover` drain-checks via jobsub_q, verifies
-  outputs against SAM, and resubmits only missing indices (attempt cap,
-  then `exhausted` for a human). POMS-backend stages are never in the
-  ledger — POMS owns their recovery (`mkrecovery`).
+- Every successful `submit_map` submission is recorded in the submission
+  ledger (default `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`,
+  env `MU2E_SUBMISSION_DB`); `submissions run` drain-checks via jobsub_q,
+  verifies outputs against SAM, and resubmits only missing indices
+  (attempt cap, then `exhausted` for a human). POMS-launched entries are
+  never in the ledger — `submit_map` is single-backend direct, so a
+  POMS-launched job (or one submitted via the upstream `mu2ejobsub`/
+  `mu2eg4bl` CLIs) simply never passes through it; POMS owns its own
+  recovery (`mkrecovery`).
+- `template`/`direct_input`/`g4bl` entry modes and HPC submission are
+  not submittable via `submit_map` — the direct worker doesn't support
+  them. They run via POMS campaigns, or the upstream `mu2ejobsub`/
+  `mu2eg4bl` CLIs directly.
 - Optional per-entry resource keys `"memory"` / `"disk"` /
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
   `48h`) live in the POMS-map entry itself, or in the jobdef JSON config
   that produces it — `json2jobdef` copies them into the entry verbatim.
-  These keys are honored ONLY by `submit_map --backend direct`.
-  Precedence there is CLI flag > entry key > built-in default
-  (`2000MB` / `30GB` / `24h`). The *effective* values are frozen into
-  the ledger row / campaign row snapshot at submission time, so a later
-  recovery or cron-fed slice reproduces exactly what the jobs originally
-  ran with — a CLI `--memory` no longer silently downgrades to the
-  built-in default on resubmit. The default `--backend mu2ejobsub` path
-  ignores the entry keys entirely (`build_mu2ejobsub_argv` reads only
-  `opts.memory`/`opts.disk`/`opts.expected_lifetime` — CLI flags, never
-  the entry) — this is deliberate scope, not a gap to fix.
+  `submit_map` always honors these keys. Precedence is CLI flag > entry
+  key > built-in default (`2000MB` / `30GB` / `24h`). The *effective*
+  values are frozen into the ledger row / campaign row snapshot at
+  submission time, so a later recovery or cron-fed slice reproduces
+  exactly what the jobs originally ran with — a CLI `--memory` no longer
+  silently downgrades to the built-in default on resubmit.
 - Sliced campaigns: `submit_map --enqueue` snapshots map entries into
-  the campaigns table and submits nothing; `recover`'s top-up phase
-  (runs after its recovery pass, inside the same hourly cron tick) then
-  feeds whole slices to active campaigns, round-robin oldest-first,
+  the campaigns table and submits nothing; `submissions run`'s top-up
+  phase (runs after its recovery pass, inside the same hourly cron tick)
+  then feeds whole slices to active campaigns, round-robin oldest-first,
   while total mu2epro idle+running jobs stay under a cap resolved as
   `--max-queued` flag > `MU2E_MAX_QUEUED` env > `10000` built-in
   default. A submit failure during top-up pauses the campaign rather
-  than blind-retrying; an operator investigates and issues
-  `--resume-campaign`. `--enqueue` refuses a second campaign for the
-  same tarball while an `active` OR `paused` one exists — a paused
-  campaign still owns its index space, so "pause then enqueue" is not a
-  workaround (only `--cancel-campaign` frees the tarball, and
+  than blind-retrying; an operator investigates and issues `submissions
+  resume <ID>`. `--enqueue` refuses a second campaign for the same
+  tarball while an `active` OR `paused` one exists — a paused campaign
+  still owns its index space, so "pause then enqueue" is not a
+  workaround (only `submissions cancel <ID>` frees the tarball, and
   re-enqueueing after cancel restarts the cursor at 0 — see the
   troubleshooting entry). Before every slice, top-up also checks the
   ledger for indices already covering the slice's window (any state —
   proves a submission happened even if the campaign row's cursor advance
   was lost to a crash); an overlap pauses the campaign with a
   crash-window note instead of resubmitting.
-- Every direct-backend submission attempt — manual, cron-fed slice, or
-  recovery resubmit — appends a block to `submit-YYYYMMDD.log` beside
-  the ledger DB (one file per UTC day, plain appends, no rotation).
+- Every submission attempt — manual, cron-fed slice, or recovery
+  resubmit — appends a block to `submit-YYYYMMDD.log` beside the ledger
+  DB (one file per UTC day, plain appends, no rotation).
 
 If any of the above stops being true, update this list — do not leave a
 stale caveat in the regenerated doc.
