@@ -1008,3 +1008,31 @@ expect `dcache:/pnfs/mu2e/persistent/datasets/phy-etc/log/`, NOT
 `enstore:`. Token storage.modify scopes are not exposed on the condor
 job ad, so placement is the only real proof. If it is tape again, stop
 before slice 3.
+
+## 2026-07-21 — first real recovery: index 519, scoped with --row
+
+Slice 2 drained 499/500. `verify_row` (run read-only as oksuzian, no
+ksu) named the gap: **index 519**, position 19 of the 500-index window,
+`partial=[]`. Not a boundary index and no streams landed at all —
+combined with dig count == log count, the job never reached the push
+stage. Single-job grid attrition (eviction / node failure), not
+systematic. 1 in 1000 across both slices.
+
+Cause is UNPROVEN and will stay that way: `Schedd.history()` times out
+on every schedd tried (`HTCondorIOError: Timeout when waiting for
+remote host`), three attempts across jobsub02/03. Live-queue `query()`
+works fine — it is history specifically that is unreachable. Exit codes
+and hold reasons for finished jobs are therefore unobtainable here,
+which independently validates verifying OUTPUT EXISTENCE rather than
+exit codes.
+
+Recovery run scoped with `submissions run --row 2` — `--row` skips
+top-up, so the campaign did not advance past the agreed 1000-job stop.
+Dry-run confirmed the scoping first (no top-up line emitted at all).
+Result: row 2 -> `recovered`, row 3 active (attempt 2, parent 2, 1
+index), cluster **29255796** on jobsub05, campaign cursor still
+1000/7000.
+
+`--row` is the right tool whenever recovery is wanted without campaign
+advancement — do not reach for pause/resume, which trips the exit-2
+lingering-paused-campaign check for no reason.
