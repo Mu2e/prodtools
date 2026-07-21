@@ -5382,6 +5382,48 @@ class TestSubmissionsExitHonesty(unittest.TestCase):
             submissions.main()  # no SystemExit
 
 
+class TestPauseNotePreservation(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.cid = sl.create_campaign(
+            self.db, tarball='cnf.mu2e.N.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.N.C.0.tar', 'njobs': 4},
+            slice_size=2)
+
+    def _note(self):
+        return self.sl.all_campaigns(self.db)[0]['note']
+
+    def test_resume_preserves_pause_note(self):
+        self.sl.set_campaign_state(self.db, self.cid, 'paused',
+                                   note='crash-window suspected')
+        self.sl.set_campaign_state(self.db, self.cid, 'active')
+        self.assertEqual(self._note(), 'crash-window suspected')
+
+    def test_resume_clears_closed_utc(self):
+        self.sl.set_campaign_state(self.db, self.cid, 'paused', note='x')
+        self.sl.set_campaign_state(self.db, self.cid, 'active')
+        self.assertIsNone(self.sl.all_campaigns(self.db)[0]['closed_utc'])
+
+    def test_pause_verb_custom_note(self):
+        from utils import submissions
+        with patch.object(sys, 'argv',
+                          ['submissions', '--db', self.db, 'pause',
+                           str(self.cid), '--note', 'draining for O2']):
+            submissions.main()
+        self.assertEqual(self._note(), 'draining for O2')
+
+    def test_pause_verb_default_note(self):
+        from utils import submissions
+        with patch.object(sys, 'argv',
+                          ['submissions', '--db', self.db, 'pause',
+                           str(self.cid)]):
+            submissions.main()
+        self.assertEqual(self._note(), 'operator pause')
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

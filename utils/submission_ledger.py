@@ -254,7 +254,9 @@ def advance_campaign(db_path, camp_id, new_cursor):
 
 def set_campaign_state(db_path, camp_id, state, note=None):
     """Validated campaign transition (see _CAMPAIGN_TRANSITIONS).
-    Reactivating a paused campaign clears closed_utc."""
+    Reactivating a paused campaign clears closed_utc and PRESERVES the
+    existing note (the pause reason); other transitions overwrite the
+    note."""
     if state not in CAMPAIGN_STATES:
         raise ValueError(f"invalid campaign state: {state}")
     allowed_from = tuple(f for f, targets in _CAMPAIGN_TRANSITIONS.items()
@@ -268,11 +270,17 @@ def set_campaign_state(db_path, camp_id, state, note=None):
         if row['state'] not in allowed_from:
             raise ValueError(
                 f"campaign {camp_id}: cannot go {row['state']} -> {state}")
-        closed = None if state == 'active' else _now()
-        con.execute(
-            'UPDATE campaigns SET state = ?, closed_utc = ?, note = ? '
-            'WHERE id = ?',
-            (state, closed, note, camp_id))
+        if state == 'active':
+            # Resume: KEEP the note that explains why it was paused —
+            # the operator clearing the pause is exactly who needs it.
+            con.execute(
+                'UPDATE campaigns SET state = ?, closed_utc = NULL '
+                'WHERE id = ?', (state, camp_id))
+        else:
+            con.execute(
+                'UPDATE campaigns SET state = ?, closed_utc = ?, '
+                'note = ? WHERE id = ?',
+                (state, _now(), note, camp_id))
         con.commit()
     finally:
         con.close()

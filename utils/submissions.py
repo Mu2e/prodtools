@@ -336,13 +336,16 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
     return summary
 
 
-def manage_campaign(db_path, camp_id, action):
+def manage_campaign(db_path, camp_id, action, note=None):
     """Operator switches. cancel closes the campaign only —
-    already-submitted ledger rows still get recovered normally."""
+    already-submitted ledger rows still get recovered normally. note
+    applies to pause/cancel; resume never writes one (the stored pause
+    reason is preserved)."""
     target = {'pause': 'paused', 'resume': 'active',
               'cancel': 'cancelled'}[action]
     submission_ledger.set_campaign_state(
-        db_path, camp_id, target, note=f'operator {action}')
+        db_path, camp_id, target,
+        note=note if note is not None else f'operator {action}')
     print(f"campaign {camp_id}: {action} -> {target}")
 
 
@@ -505,6 +508,9 @@ def build_parser():
 
     pause = sub.add_parser('pause', help='Pause an active campaign')
     pause.add_argument('camp_id', type=int)
+    pause.add_argument('--note', default=None,
+                       help='Reason recorded on the campaign (default: '
+                            '"operator pause")')
     resume = sub.add_parser('resume',
                             help='Reactivate a paused campaign')
     resume.add_argument('camp_id', type=int)
@@ -593,7 +599,8 @@ def main():
     if verb in ('pause', 'resume', 'cancel'):
         _acquire_lock(args.db)
         try:
-            manage_campaign(args.db, args.camp_id, verb)
+            manage_campaign(args.db, args.camp_id, verb,
+                            note=getattr(args, 'note', None))
         except ValueError as e:
             sys.exit(f"submissions: {e}")
         return
