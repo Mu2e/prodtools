@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Direct-submit driver for Mu2e grid jobs.
+Direct-submit driver for Mu2e grid jobs (single backend).
 
-Two backends:
-
-- ``--backend mu2ejobsub`` (default, Phase 1): drives `mu2ejobsub` for each
-  POMS-map entry. Worker uses the upstream Perl `mu2ejobsub.sh` shim, which
-  does NOT call pushOutput.
-
-- ``--backend direct`` (Phase 2): builds the `jobsub_submit` argv directly
-  and ships our prodtools as a dropbox tarball. Worker bootstraps
-  `bin/runjob.sh` → `utils/runmu2e.py` direct mode → per-job pushOutput.
+Builds the `jobsub_submit` argv directly and ships prodtools as a
+dropbox tarball. Worker bootstraps `bin/runjob.sh` →
+`utils/runmu2e.py` direct mode → per-job pushOutput. The Phase-1
+mu2ejobsub backend was retired 2026-07-19 (spec
+2026-07-19-workflow-hardening-design.md): template/direct_input/g4bl
+entries and HPC submission run via POMS campaigns or the upstream
+mu2ejobsub/mu2eg4bl CLIs, never through submit_map.
 
 Plans:
 - wiki/pages/2026-04-29-remove-poms-from-submit-loop.md (Phase 1, POMS removal)
@@ -43,74 +41,9 @@ DEFAULT_RUNJOB_SH = REPO_ROOT / 'bin' / 'runjob.sh'
 DEFAULT_PRODTOOLS_TAR = Path('/tmp') / f'prodtools-{getpass.getuser()}.tar'
 
 
-def build_mu2ejobsub_argv(entry, tarball_path, opts):
-    """Map a POMS-map entry + options to mu2ejobsub CLI argv.
-
-    This builds the flags we pass TO mu2ejobsub. mu2ejobsub itself
-    then builds the jobsub_submit argv internally (ops JSON, env vars,
-    UPS version lookups, outstage mkdir, etc.).
-
-    Args:
-        entry: dict from POMS-map JSON (tarball, njobs, inloc, outputs)
-        tarball_path: absolute path to the locally-fetched cnf tarball
-        opts: argparse namespace with dry_run, verbose, wfproject, role, etc.
-
-    Returns:
-        list[str]: mu2ejobsub argv (without the 'mu2ejobsub' command itself)
-    """
-    argv = ['--jobdef', str(tarball_path)]
-
-    # Job set specification. A windowed entry maps to mu2ejobsub's native
-    # --firstjob/--njobs; plain entries keep --all.
-    if 'njobs' in entry:
-        firstjob = firstjob_of(entry)
-        if firstjob:
-            argv.extend(['--firstjob', str(firstjob), '--njobs', str(njobs_of(entry))])
-        else:
-            argv.append('--all')
-
-    # Input location and protocol (single-homed in jobsub_argv — the same
-    # table drives both backends, so resilient gets `root` here too)
-    inloc = inloc_of(entry)
-    if inloc != 'none':
-        argv.extend(['--default-location', inloc])
-        protocol = _jobsub_argv.default_protocol_for_inloc(inloc)
-        if protocol:
-            argv.extend(['--default-protocol', protocol])
-
-    # Workflow project
-    tarball_name = tarball_of(entry)
-    wfproject = opts.wfproject or _jobsub_argv.campaign_from_tarball(tarball_name)
-    argv.extend(['--wfproject', wfproject])
-
-    # Cluster name from tarball description
-    clustername = _jobsub_argv.description_from_tarball(tarball_name)
-    argv.extend(['--clustername', clustername])
-
-    # Role
-    if opts.role:
-        argv.extend(['--role', opts.role])
-
-    # Resource overrides
-    if opts.disk:
-        argv.extend(['--disk', opts.disk])
-    if opts.memory:
-        argv.extend(['--memory', opts.memory])
-    if opts.expected_lifetime:
-        argv.extend(['--expected-lifetime', opts.expected_lifetime])
-
-    # Passthrough flags
-    if opts.dry_run:
-        argv.append('--dry-run')
-    if opts.verbose:
-        argv.append('--verbose')
-
-    return argv
-
-
 def _ensure_local_tarball(tarball_name):
     """Fetch the cnf tarball into cwd if not already local; return its
-    resolved path. Shared by both backends."""
+    resolved path."""
     tarball_path = Path(tarball_name).resolve()
     if not tarball_path.is_file():
         print(f"Fetching tarball: {tarball_name}")
@@ -121,7 +54,7 @@ def _ensure_local_tarball(tarball_name):
 
 def _run_submit(cmd, tarball_name, njobs):
     """Run a submission command, echo its output, and return the result
-    dict both backends share (tarball/cluster_id/njobs/status)."""
+    dict (tarball/cluster_id/njobs/status)."""
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.stdout:
         print(result.stdout)
@@ -589,59 +522,6 @@ def submit_entry_direct(entry, idx, opts):
     return result
 
 
-def submit_entry(entry, idx, opts):
-    """Dispatch on `opts.backend` to the appropriate per-entry submit path.
-
-    Args:
-        entry: dict from POMS-map JSON
-        idx: entry index in the map (for display)
-        opts: argparse namespace
-
-    Returns:
-        dict with keys: tarball, cluster_id, njobs, status
-    """
-    if opts.backend == 'direct':
-        return submit_entry_direct(entry, idx, opts)
-    return _submit_entry_mu2ejobsub(entry, idx, opts)
-
-
-def _submit_entry_mu2ejobsub(entry, idx, opts):
-    """Phase 1 backend: invoke `mu2ejobsub` with mapped flags."""
-    tarball_name = tarball_of(entry)
-    njobs = njobs_of(entry, default='?')  # diagnostic print only; '?' if absent
-    desc = _jobsub_argv.description_from_tarball(tarball_name)
-
-    print(f"\n{'='*60}")
-    print(f"Entry {idx}: {desc} ({njobs} jobs)")
-    print(f"  tarball: {tarball_name}")
-    print(f"  inloc:   {inloc_of(entry)}")
-    print(f"{'='*60}")
-
-    # In dry-run mode, mu2ejobsub resolves the tarball itself via
-    # find_file(), so we only need the basename. For real submissions,
-    # fetch locally so mu2ejobsub gets an absolute path.
-    if opts.dry_run:
-        tarball_path = tarball_name
-    else:
-        tarball_path = _ensure_local_tarball(tarball_name)
-
-    argv = build_mu2ejobsub_argv(entry, tarball_path, opts)
-
-    cmd = ['mu2ejobsub'] + argv
-    print(f"\nCommand: {' '.join(cmd)}")
-
-    if opts.dry_run:
-        print("[DRY RUN] Not submitting.")
-        return {
-            'tarball': tarball_name,
-            'cluster_id': None,
-            'njobs': njobs,
-            'status': 'dry_run',
-        }
-
-    return _run_submit(cmd, tarball_name, njobs)
-
-
 def _check_token():
     """Pre-flight token check. Returns True if valid, False otherwise."""
     try:
@@ -721,7 +601,7 @@ def submit_map(map_path, opts):
 
     results = []
     for idx, entry in entries_to_submit:
-        result = submit_entry(entry, idx, opts)
+        result = submit_entry_direct(entry, idx, opts)
         results.append(result)
 
     # Summary
@@ -748,59 +628,53 @@ def submit_map(map_path, opts):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Submit Mu2e grid jobs from a POMS-map JSON via mu2ejobsub'
+        description='Submit Mu2e grid jobs from a POMS-map JSON via the direct jobsub backend'
     )
     parser.add_argument('--map', required=True,
                         help='Path to POMS-map JSON (e.g., MDC2025-001.json)')
     parser.add_argument('--entry', type=int, default=None,
                         help='Submit only this entry index (0-based)')
-    parser.add_argument('--backend', choices=('mu2ejobsub', 'direct'),
-                        default='mu2ejobsub',
-                        help='Submission backend. mu2ejobsub (default) uses '
-                             'the Perl mu2ejobsub upstream; direct calls '
-                             'jobsub_submit straight from prodtools and ships '
-                             'our runjob.sh worker.')
     parser.add_argument('--first', type=int, default=None,
-                        help='[direct] First job index to submit. With --num '
+                        help='First job index to submit. With --num '
                              'submits a contiguous range; without --num '
                              'submits one job at this index.')
     parser.add_argument('--num', type=int, default=None,
-                        help='[direct] Number of consecutive jobs from --first.')
+                        help='Number of consecutive jobs from --first.')
     parser.add_argument('--indices', default=None,
-                        help='[direct] Comma/space-separated ABSOLUTE cnf indices '
+                        help='Comma/space-separated ABSOLUTE cnf indices '
                              'to submit (recovery) — one cluster, one job per '
                              'index. --first/--num can only carve a contiguous '
                              'range; this expresses a scattered set. Requires a '
                              'non-windowed entry (no firstjob).')
     parser.add_argument('--indices-file', default=None,
-                        help='[direct] File of ABSOLUTE cnf indices, whitespace/'
+                        help='File of ABSOLUTE cnf indices, whitespace/'
                              'comma separated, `#` comments ignored. Consumes '
                              '`mkrecovery --print-indices` output directly.')
     parser.add_argument('--ledger-db', default=submission_ledger.DEFAULT_DB,
-                        help='[direct] Submission-ledger sqlite DB '
+                        help='Submission-ledger sqlite DB '
                              f'(default: {submission_ledger.DEFAULT_DB}, '
                              'env MU2E_SUBMISSION_DB). Every successful '
                              'direct submission is recorded for the '
                              'recovery loop (bin/recover).')
     parser.add_argument('--ledger-parent', type=int, default=None,
-                        help='[direct] Ledger row id this submission '
+                        help='Ledger row id this submission '
                              'recovers (set by bin/recover; chains '
                              'attempt counting).')
     parser.add_argument('--no-ledger', action='store_true',
-                        help='[direct] Do not record this submission in '
+                        help='Do not record this submission in '
                              'the ledger (ad-hoc/test submissions the '
                              'recovery loop must not watch).')
     parser.add_argument('--enqueue', action='store_true',
-                        help='[direct] Register entries as sliced-submission '
+                        help='Register entries as sliced-submission '
                              'campaigns in the ledger DB instead of '
                              'submitting; bin/recover then feeds slices '
                              'while total mu2epro idle+running is under '
                              'its cap.')
     parser.add_argument('--slice-size', type=int, default=1000,
-                        help='[direct] Jobs per slice for --enqueue '
+                        help='Jobs per slice for --enqueue '
                              '(default 1000; frozen into the campaign).')
     parser.add_argument('--wftop', default=None,
-                        help='[direct] Outstage top dir (default: '
+                        help='Outstage top dir (default: '
                              '/pnfs/mu2e/persistent/users for Production, '
                              '/pnfs/mu2e/scratch/users otherwise)')
     parser.add_argument('--wfproject', default=None,
@@ -814,13 +688,13 @@ def main():
     parser.add_argument('--expected-lifetime', default=None,
                         help='Expected lifetime (default: 24h)')
     parser.add_argument('--prodtools-tar', default=None,
-                        help='[direct] Path for the prodtools bundle '
+                        help='Path for the prodtools bundle '
                              f'(default: {DEFAULT_PRODTOOLS_TAR}). Reused if '
                              'newer than every utils/*.py source file.')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print the submission command without running it')
     parser.add_argument('--verbose', action='store_true',
-                        help='Pass --verbose to mu2ejobsub (mu2ejobsub backend only)')
+                        help='Verbose output')
 
     args = parser.parse_args()
 
@@ -834,9 +708,6 @@ def main():
         if args.no_ledger:
             print("submit_map: --enqueue registers a campaign in the "
                   "ledger DB; --no-ledger contradicts it")
-            sys.exit(1)
-        if args.backend != 'direct':
-            print("Error: --enqueue requires --backend direct")
             sys.exit(1)
         if (args.first is not None or args.num is not None
                 or args.indices is not None):

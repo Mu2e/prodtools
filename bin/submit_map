@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# submit_map - Submit Mu2e grid jobs from a POMS-map JSON via mu2ejobsub
-# Wrapper for utils/submit.py
+# submit_map - Submit Mu2e grid jobs from a POMS-map JSON (direct
+# jobsub backend). Wrapper for utils/submit.py
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/../utils/submit.py"
@@ -18,7 +18,7 @@ if [[ $# -eq 0 ]]; then
     exit 1
 fi
 
-# Set up Mu2e environment (needed for mu2ejobsub, mdh, httokendecode)
+# Set up Mu2e environment (needed for jobsub, mdh, httokendecode)
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
 muse setup ops
 

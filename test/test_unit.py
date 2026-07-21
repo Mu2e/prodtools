@@ -3426,43 +3426,6 @@ class TestResolveNjobs(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 32. mu2ejobsub backend protocol selection (submit.py → jobsub_argv table)
-# ---------------------------------------------------------------------------
-
-class TestMu2ejobsubProtocol(unittest.TestCase):
-    """The mu2ejobsub backend must take its --default-protocol from the
-    single inloc→protocol table in jobsub_argv (submit.py used to carry a
-    divergent copy that silently lacked `resilient`)."""
-
-    def _argv(self, inloc):
-        from types import SimpleNamespace
-        from utils.submit import build_mu2ejobsub_argv
-        entry = {'tarball': 'cnf.mu2e.Desc.MDC2025af.0.tar', 'njobs': 5,
-                 'inloc': inloc, 'outputs': []}
-        opts = SimpleNamespace(dry_run=False, verbose=False, wfproject=None,
-                               role=None, disk=None, memory=None,
-                               expected_lifetime=None)
-        return build_mu2ejobsub_argv(entry, '/tmp/cnf.tar', opts)
-
-    def _protocol(self, argv):
-        return argv[argv.index('--default-protocol') + 1]
-
-    def test_resilient_maps_to_root(self):
-        self.assertEqual(self._protocol(self._argv('resilient')), 'root')
-
-    def test_tape_maps_to_ifdh(self):
-        self.assertEqual(self._protocol(self._argv('tape')), 'ifdh')
-
-    def test_dir_maps_to_ifdh(self):
-        self.assertEqual(self._protocol(self._argv('dir:/pnfs/mu2e/x')), 'ifdh')
-
-    def test_none_skips_location_and_protocol(self):
-        argv = self._argv('none')
-        self.assertNotIn('--default-location', argv)
-        self.assertNotIn('--default-protocol', argv)
-
-
-# ---------------------------------------------------------------------------
 # 33. normalize_input_data — single home of the input_data shape grammar
 # ---------------------------------------------------------------------------
 
@@ -3780,31 +3743,23 @@ class TestMkrecoveryPrintIndices(unittest.TestCase):
         self.assertEqual(buf.getvalue().splitlines(), ['# cnf.mu2e.X.0.tar', '7'])
 
 
-class TestMu2ejobsubArgvFirstjob(unittest.TestCase):
-    """mu2ejobsub backend: windowed entries map to --firstjob/--njobs,
-    plain entries keep --all."""
+class TestSingleBackend(unittest.TestCase):
+    """submit_map is single-backend (direct): --backend is gone and
+    rejected loudly as an unknown argument."""
 
-    def _argv(self, entry):
-        from types import SimpleNamespace
-        from utils.submit import build_mu2ejobsub_argv
-        opts = SimpleNamespace(dry_run=False, verbose=False, wfproject=None,
-                               role=None, disk=None, memory=None,
-                               expected_lifetime=None)
-        return build_mu2ejobsub_argv(entry, '/tmp/cnf.tar', opts)
+    def test_backend_flag_rejected(self):
+        from utils import submit
+        with patch.object(sys, 'argv',
+                          ['submit_map', '--map', 'x.json',
+                           '--backend', 'direct']):
+            with self.assertRaises(SystemExit) as cm:
+                submit.main()
+        self.assertEqual(cm.exception.code, 2)  # argparse usage error
 
-    def test_plain_entry_uses_all(self):
-        argv = self._argv({'tarball': 'cnf.mu2e.D.MDC2025af.0.tar',
-                           'njobs': 5, 'inloc': 'tape', 'outputs': []})
-        self.assertIn('--all', argv)
-        self.assertNotIn('--firstjob', argv)
-
-    def test_windowed_entry_uses_firstjob_njobs(self):
-        argv = self._argv({'tarball': 'cnf.mu2e.D.MDC2025af.0.tar',
-                           'njobs': 100, 'firstjob': 5000,
-                           'inloc': 'tape', 'outputs': []})
-        i = argv.index('--firstjob')
-        self.assertEqual(argv[i:i + 4], ['--firstjob', '5000', '--njobs', '100'])
-        self.assertNotIn('--all', argv)
+    def test_mu2ejobsub_helpers_gone(self):
+        from utils import submit
+        self.assertFalse(hasattr(submit, 'build_mu2ejobsub_argv'))
+        self.assertFalse(hasattr(submit, '_submit_entry_mu2ejobsub'))
 
 
 class TestRunSubmitClusterVerification(unittest.TestCase):
@@ -4365,8 +4320,7 @@ class TestEnqueueErrorStyle(unittest.TestCase):
         with patch('sys.stdout', buf), \
              patch.object(sys, 'argv',
                           ['submit_map', '--map', 'nonexistent.json',
-                           '--backend', 'direct', '--enqueue',
-                           '--no-ledger']):
+                           '--enqueue', '--no-ledger']):
             with self.assertRaises(SystemExit) as cm:
                 submit.main()
         self.assertEqual(cm.exception.code, 1)
@@ -4712,8 +4666,6 @@ class TestSubmitSlice(unittest.TestCase):
         ok = recover.submit_slice(camp, 5, '/tmp/led.db', runner=runner)
         self.assertTrue(ok)
         cmd = captured['cmd']
-        self.assertIn('--backend', cmd)
-        self.assertIn('direct', cmd)
         self.assertEqual(cmd[cmd.index('--first') + 1], '10')
         self.assertEqual(cmd[cmd.index('--num') + 1], '5')
         self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
@@ -5282,8 +5234,6 @@ class TestRecoverLoop(unittest.TestCase):
                               runner=fake_runner)
         self.assertTrue(ok)
         cmd = captured['cmd']
-        self.assertIn('--backend', cmd)
-        self.assertIn('direct', cmd)
         self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
         self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
         entry = captured['map_entry']

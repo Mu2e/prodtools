@@ -154,8 +154,8 @@ def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
         idx_path = tmpdir / 'indices.txt'
         idx_path.write_text(f"# {row['tarball']}\n"
                             + '\n'.join(str(i) for i in missing) + '\n')
-        cmd = [str(SUBMIT_MAP), '--map', str(map_path), '--backend',
-               'direct', '--indices-file', str(idx_path),
+        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
+               '--indices-file', str(idx_path),
                '--ledger-parent', str(row['id']),
                '--ledger-db', str(db_path)]
         if dry_run:
@@ -193,8 +193,8 @@ def submit_slice(camp, n, db_path, runner=subprocess.run):
     with _scratch_map_dir('campaign-') as tmpdir:
         map_path = tmpdir / 'campaign-map.json'
         map_path.write_text(json.dumps([camp['entry']], indent=2) + '\n')
-        cmd = [str(SUBMIT_MAP), '--map', str(map_path), '--backend',
-               'direct', '--first', str(camp['cursor']),
+        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
+               '--first', str(camp['cursor']),
                '--num', str(n), '--ledger-db', str(db_path)]
         print(f"  campaign {camp['id']}: slice first={camp['cursor']} "
               f"num={n}: {' '.join(cmd)}")

@@ -764,8 +764,10 @@ def _direct_dispatch(args, ops, index):
 
     mode = validate_jobdesc(jobdesc)
     if mode != False:  # noqa: E712 — validate_jobdesc returns False for normal
-        print(f"ERROR: direct mode v1 supports normal mode only, got '{mode}'. "
-              f"Use --backend mu2ejobsub for template/direct_input/g4bl entries.")
+        print(f"ERROR: direct mode supports normal-mode jobdescs only, "
+              f"got '{mode}'. template/direct_input/g4bl entries run "
+              f"via POMS campaigns or the upstream mu2ejobsub/mu2eg4bl "
+              f"CLIs, not through submit_map.")
         sys.exit(1)
 
     fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(jobdesc, fname, args)
