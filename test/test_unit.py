@@ -4269,7 +4269,7 @@ class TestEnqueue(unittest.TestCase):
 
     def test_enqueue_db_failure_is_hard_error(self):
         from utils.submit import _enqueue_entries
-        import argparse, sqlite3
+        import argparse
         opts = argparse.Namespace(
             ledger_db='/nonexistent-dir-enqueue-test/s.db', slice_size=10,
             dry_run=False, memory=None, disk=None, expected_lifetime=None)
@@ -4978,7 +4978,7 @@ class TestBuildFileMapsScoped(unittest.TestCase):
 
 
 class TestRecoverLoop(unittest.TestCase):
-    """utils/recover.py — drain gate, verify, cap semantics."""
+    """utils/submissions.py — drain gate, verify, cap semantics."""
 
     def setUp(self):
         import tempfile

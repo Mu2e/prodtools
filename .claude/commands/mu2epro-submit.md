@@ -6,7 +6,7 @@ allowed-tools: Bash
 
 # Submit a POMS map as mu2epro (direct backend)
 
-Runs `submit_map --backend direct` as the `mu2epro` production account via
+Runs `submit_map` as the `mu2epro` production account via
 `ksu`, with the environment fixes the direct backend needs but that plain
 `ksu` does not provide. Always dry-runs first, pauses for confirmation (grid
 production is not easily reversible), then submits and verifies the cluster
@@ -116,7 +116,7 @@ export XDG_RUNTIME_DIR="$WORKDIR"
 cd "$WORKDIR"
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \
   && muse setup ops > /dev/null 2>&1 \
-  && bash <REPO>/bin/submit_map --map <MAP> --backend direct <EXTRA> 2>&1
+  && bash <REPO>/bin/submit_map --map <MAP> <EXTRA> 2>&1
 RC=${PIPESTATUS[0]}
 echo "=== submit RC=$RC ==="
 exit $RC

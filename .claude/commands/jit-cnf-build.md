@@ -224,10 +224,9 @@ You are given `$ARGUMENTS`. Follow these steps:
 - Once the cnf is built and smoke-tested, the natural next steps are:
   - `/mu2ejobsub-submit <cnf>.tar --firstjob 0 --njobs N` for a
     one-off / smoke cluster.
-  - `submit_map --backend mu2ejobsub` if you've added a corresponding
-    POMS-map entry.
-  - The prodtools direct backend (`submit_map --backend direct`)
-    rejects direct-input / template / g4bl modes per ADR
+  - A POMS campaign if you've added a corresponding POMS-map entry.
+  - `submit_map` (the prodtools direct backend) rejects direct-input /
+    template / g4bl modes per ADR
     `2026-04-30-phase2-direct-jobsub-implementation.md` §CB10 —
-    JIT-cnfs must use the `mu2ejobsub` backend for submission until
-    that scope cut is lifted.
+    JIT-cnfs must go via the upstream `/mu2ejobsub-submit` skill or a
+    POMS campaign until that scope cut is lifted.

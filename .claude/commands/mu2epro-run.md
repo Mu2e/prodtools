@@ -144,7 +144,7 @@ You are given `$ARGUMENTS`. Follow these steps:
 
 ## Notes
 
-- **For grid submission (`submit_map --backend direct`), use
+- **For grid submission (`submit_map`), use
   `/mu2epro-submit` instead** — this skill does NOT set
   `USER`/`LOGNAME`/`HOME`/`XDG_RUNTIME_DIR`, which the direct backend
   requires (else `condor_vault_storer` fails / wrong submitter). `/mu2epro-submit`

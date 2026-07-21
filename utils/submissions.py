@@ -3,7 +3,7 @@
 the verify-and-resubmit + sliced-campaign top-up tick (`run`), and
 campaign management verbs.
 
-Processes ledger rows written by `submit_map --backend direct`
+Processes ledger rows written by `submit_map`
 (utils/submission_ledger.py). Per active row: skip while jobs are still
 in the queue (held jobs are reported, never touched), SAM-verify the
 row's indices via the cnf's expected output names, then close the row
@@ -308,11 +308,12 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
                         db_path, camp['id'], 'paused',
                         note='ledger already covers indices in this '
                              'slice — crash-window suspected; reconcile '
-                             'cursor manually before --resume-campaign')
+                             'cursor manually before `submissions resume '
+                             '<ID>`')
                     print(f"campaign {camp['id']}: ledger already covers "
                           f"indices in this slice — PAUSED (crash-window "
                           f"suspected; reconcile cursor manually before "
-                          f"--resume-campaign)")
+                          f"`submissions resume <ID>`)")
                     camp['state'] = 'paused'
                     bump('campaign-paused')
                 continue
@@ -325,10 +326,10 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
                     submission_ledger.set_campaign_state(
                         db_path, camp['id'], 'paused',
                         note='submit failed — check the submit log and '
-                             'jobsub_q before --resume-campaign')
+                             'jobsub_q, then `submissions resume <ID>`')
                     print(f"campaign {camp['id']}: submit FAILED — PAUSED "
                           f"(no blind retry; check the submit log and "
-                          f"jobsub_q, then --resume-campaign)")
+                          f"jobsub_q, then `submissions resume <ID>`)")
                     camp['state'] = 'paused'
                     bump('campaign-paused')
                     continue

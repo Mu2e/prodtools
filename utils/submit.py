@@ -390,7 +390,7 @@ def submit_entry_direct(entry, idx, opts):
     via utils.jobsub_argv, ship our prodtools as a dropbox tarball, run
     `runjob.sh` on the worker. No `mu2ejobsub` involved.
 
-    Returns the same dict shape as `submit_entry`.
+    Returns the same dict shape (tarball/cluster_id/njobs/status).
     """
     tarball_name = tarball_of(entry)
     desc = _jobsub_argv.description_from_tarball(tarball_name)
@@ -547,7 +547,8 @@ def submit_map(map_path, opts):
         opts: argparse namespace
 
     Returns:
-        list of result dicts from submit_entry
+        list of result dicts (tarball/cluster_id/njobs/status) from
+        submit_entry_direct
     """
     with open(map_path) as f:
         entries = json.load(f)
@@ -655,10 +656,10 @@ def main():
                              f'(default: {submission_ledger.DEFAULT_DB}, '
                              'env MU2E_SUBMISSION_DB). Every successful '
                              'direct submission is recorded for the '
-                             'recovery loop (bin/recover).')
+                             'recovery loop (`submissions run`).')
     parser.add_argument('--ledger-parent', type=int, default=None,
                         help='Ledger row id this submission '
-                             'recovers (set by bin/recover; chains '
+                             'recovers (set by the recovery loop; chains '
                              'attempt counting).')
     parser.add_argument('--no-ledger', action='store_true',
                         help='Do not record this submission in '
@@ -667,7 +668,8 @@ def main():
     parser.add_argument('--enqueue', action='store_true',
                         help='Register entries as sliced-submission '
                              'campaigns in the ledger DB instead of '
-                             'submitting; bin/recover then feeds slices '
+                             'submitting; the `submissions run` tick then '
+                             'feeds slices '
                              'while total mu2epro idle+running is under '
                              'its cap.')
     parser.add_argument('--slice-size', type=int, default=1000,

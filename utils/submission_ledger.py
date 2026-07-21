@@ -1,6 +1,6 @@
 """Submission ledger for the direct backend (recovery loop state).
 
-One row per `submit_map --backend direct` submission, including the
+One row per `submit_map` submission, including the
 recovery loop's own resubmissions (chained via parent_id, attempt+1).
 POMS-backend submissions never touch this ledger, so the recovery loop
 cannot race POMS by construction.
