@@ -4401,24 +4401,24 @@ class TestRecoverCap(unittest.TestCase):
     """Cap resolution + queue counting for the top-up phase."""
 
     def test_resolve_cap_flag_wins(self):
-        from utils import recover
+        from utils import submissions as recover
         with patch.dict(os.environ, {'MU2E_MAX_QUEUED': '5'}):
             self.assertEqual(recover.resolve_cap(42), 42)
 
     def test_resolve_cap_env_beats_default(self):
-        from utils import recover
+        from utils import submissions as recover
         with patch.dict(os.environ, {'MU2E_MAX_QUEUED': '5'}):
             self.assertEqual(recover.resolve_cap(None), 5)
 
     def test_resolve_cap_default(self):
-        from utils import recover
+        from utils import submissions as recover
         env = {k: v for k, v in os.environ.items() if k != 'MU2E_MAX_QUEUED'}
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(recover.resolve_cap(None),
                              recover.DEFAULT_MAX_QUEUED)
 
     def test_resolve_cap_bad_env_exits(self):
-        from utils import recover
+        from utils import submissions as recover
         with patch.dict(os.environ, {'MU2E_MAX_QUEUED': 'lots'}):
             with self.assertRaises(SystemExit):
                 recover.resolve_cap(None)
@@ -4430,22 +4430,22 @@ class TestRecoverCap(unittest.TestCase):
         return run
 
     def test_total_queued_counts_idle_and_running_only(self):
-        from utils.recover import total_queued
+        from utils.submissions import total_queued
         n = total_queued(runner=self._runner('1\n2\n2\n5\n4\n'))
         self.assertEqual(n, 3)              # held (5) / removed (4) excluded
         self.assertEqual(self.cmd[:3], ['jobsub_q', '--user', 'mu2epro'])
         self.assertIn('JobStatus', self.cmd)
 
     def test_total_queued_empty_is_zero(self):
-        from utils.recover import total_queued
+        from utils.submissions import total_queued
         self.assertEqual(total_queued(runner=self._runner('')), 0)
 
     def test_total_queued_failure_is_none(self):
-        from utils.recover import total_queued
+        from utils.submissions import total_queued
         self.assertIsNone(total_queued(runner=self._runner('', rc=1)))
 
     def test_total_queued_garbage_is_none(self):
-        from utils.recover import total_queued
+        from utils.submissions import total_queued
         self.assertIsNone(total_queued(runner=self._runner('1\nERROR\n')))
 
 
@@ -4472,7 +4472,7 @@ class TestTopUp(unittest.TestCase):
         return fn
 
     def test_feeds_until_complete(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         cid = self._campaign(njobs=10, slice=4)
         s = top_up(self.db, cap=100, count_fn=lambda: 0,
                    submit_fn=self._submit())
@@ -4483,7 +4483,7 @@ class TestTopUp(unittest.TestCase):
                          'complete')
 
     def test_cap_stops_whole_slice(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         self._campaign(njobs=10, slice=4)
         s = top_up(self.db, cap=100, count_fn=lambda: 97,
                    submit_fn=self._submit())
@@ -4492,14 +4492,14 @@ class TestTopUp(unittest.TestCase):
         self.assertEqual(self.sl.active_campaigns(self.db)[0]['cursor'], 0)
 
     def test_cap_exact_fit_submits(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         self._campaign(njobs=4, slice=4)
         top_up(self.db, cap=100, count_fn=lambda: 96,
                submit_fn=self._submit())
         self.assertEqual(len(self.calls), 1)        # 96+4 == 100 fits
 
     def test_submitted_slices_consume_headroom(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         self._campaign(njobs=10, slice=4)
         s = top_up(self.db, cap=8, count_fn=lambda: 0,
                    submit_fn=self._submit())
@@ -4507,7 +4507,7 @@ class TestTopUp(unittest.TestCase):
         self.assertEqual(s['cap-wait'], 1)
 
     def test_failure_pauses_without_advancing(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         cid = self._campaign()
         s = top_up(self.db, cap=100, count_fn=lambda: 0,
                    submit_fn=self._submit(ok=False))
@@ -4517,7 +4517,7 @@ class TestTopUp(unittest.TestCase):
         self.assertEqual(s['campaign-paused'], 1)
 
     def test_round_robin_two_campaigns(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         a = self._campaign(tarball='cnf.mu2e.A.C.0.tar', njobs=4, slice=2)
         b = self._campaign(tarball='cnf.mu2e.B.C.0.tar', njobs=2, slice=2)
         top_up(self.db, cap=100, count_fn=lambda: 0,
@@ -4526,13 +4526,13 @@ class TestTopUp(unittest.TestCase):
                          [(a, 0, 2), (b, 0, 2), (a, 2, 2)])
 
     def test_no_campaigns_skips_count(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         def boom():
             raise AssertionError("count_fn must not be called")
         self.assertEqual(top_up(self.db, cap=100, count_fn=boom), {})
 
     def test_count_failure_skips_topup(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         self._campaign()
         s = top_up(self.db, cap=100, count_fn=lambda: None,
                    submit_fn=self._submit())
@@ -4540,7 +4540,7 @@ class TestTopUp(unittest.TestCase):
         self.assertEqual(s['count-error'], 1)
 
     def test_dry_run_reports_and_writes_nothing(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         def boom(camp, n, db_path):
             raise AssertionError("submit_fn must not be called in dry-run")
         self._campaign(njobs=10, slice=4)
@@ -4559,7 +4559,7 @@ class TestTopUp(unittest.TestCase):
         (crash-window: parent submit_map died after jobsub_submit
         succeeded but before its own ledger write) must pause the
         campaign rather than resubmit — never a blind double-submit."""
-        from utils.recover import top_up
+        from utils.submissions import top_up
         tarball = 'cnf.mu2e.A.C.0.tar'
         cid = self._campaign(tarball=tarball, njobs=10, slice=4)
         self.sl.record_submission(
@@ -4579,7 +4579,7 @@ class TestTopUp(unittest.TestCase):
         the cursor (e.g. the recovery loop's own resubmits of already-
         submitted-but-missing indices) must not block a future slice —
         those indices can never intersect [cursor, cursor+n)."""
-        from utils.recover import top_up
+        from utils.submissions import top_up
         tarball = 'cnf.mu2e.A.C.0.tar'
         cid = self._campaign(tarball=tarball, njobs=10, slice=4)
         self.sl.advance_campaign(self.db, cid, 4)  # simulate prior slice
@@ -4594,7 +4594,7 @@ class TestTopUp(unittest.TestCase):
                          'complete')
 
     def test_overlap_dry_run_reports_and_writes_nothing(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         def boom(camp, n, db_path):
             raise AssertionError("submit_fn must not be called in dry-run")
         tarball = 'cnf.mu2e.A.C.0.tar'
@@ -4616,7 +4616,7 @@ class TestTopUp(unittest.TestCase):
         """cursor == njobs but state still 'active' (crash between
         advance_campaign and set_campaign_state('complete') on a prior
         tick) must self-heal to 'complete', not stay stuck forever."""
-        from utils.recover import top_up
+        from utils.submissions import top_up
         cid = self._campaign(njobs=6, slice=4)
         self.sl.advance_campaign(self.db, cid, 6)  # fully submitted already
         s = top_up(self.db, cap=100, count_fn=lambda: 0,
@@ -4628,7 +4628,7 @@ class TestTopUp(unittest.TestCase):
         self.assertEqual(s['campaign-complete'], 1)
 
     def test_self_heal_dry_run_leaves_active(self):
-        from utils.recover import top_up
+        from utils.submissions import top_up
         cid = self._campaign(njobs=6, slice=4)
         self.sl.advance_campaign(self.db, cid, 6)
         s = top_up(self.db, cap=100, dry_run=True, count_fn=lambda: 0,
@@ -4643,7 +4643,7 @@ class TestSubmitSlice(unittest.TestCase):
 
     def test_argv_and_map_content(self):
         import tempfile
-        from utils import recover
+        from utils import submissions as recover
         entry = {'tarball': 'cnf.mu2e.W.C.0.tar', 'njobs': 50,
                  'firstjob': 100, 'inloc': 'tape', 'outputs': [],
                  'memory': '4000MB'}
@@ -4666,7 +4666,7 @@ class TestSubmitSlice(unittest.TestCase):
         self.assertEqual(written, [entry])          # firstjob PRESERVED
 
     def test_nonzero_exit_is_failure(self):
-        from utils import recover
+        from utils import submissions as recover
         camp = {'id': 1, 'cursor': 0, 'slice_size': 2, 'tarball': 't',
                 'entry': {'tarball': 't', 'njobs': 2}}
         ok = recover.submit_slice(
@@ -4687,7 +4687,7 @@ class TestManageCampaign(unittest.TestCase):
             slice_size=2)
 
     def test_pause_resume_cancel(self):
-        from utils.recover import manage_campaign
+        from utils.submissions import manage_campaign
         manage_campaign(self.db, self.cid, 'pause')
         self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'paused')
         manage_campaign(self.db, self.cid, 'resume')
@@ -4697,9 +4697,130 @@ class TestManageCampaign(unittest.TestCase):
                          'cancelled')
 
     def test_resume_active_raises(self):
-        from utils.recover import manage_campaign
+        from utils.submissions import manage_campaign
         with self.assertRaises(ValueError):
             manage_campaign(self.db, self.cid, 'resume')
+
+
+# ---------------------------------------------------------------------------
+# submissions CLI verb structure (utils/submissions.py) — workflow hardening
+# ---------------------------------------------------------------------------
+class TestSubmissionsVerbs(unittest.TestCase):
+    """Safe-by-default CLI: bare invocation is read-only status; the
+    mutating tick requires the `run` verb; campaign management verbs
+    validate transitions and fail with one-line errors."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.dbdir = tempfile.mkdtemp()
+        self.db = os.path.join(self.dbdir, 'sub.db')
+
+    def _campaign(self, tarball='cnf.mu2e.V.C.0.tar', njobs=4):
+        return self.sl.create_campaign(
+            self.db, tarball=tarball,
+            entry={'tarball': tarball, 'njobs': njobs},
+            slice_size=2, map_path='m.json')
+
+    def test_bare_invocation_is_status(self):
+        from utils import submissions
+        import io as _io
+        self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.V.C.0.tar', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf), \
+             patch.object(submissions, 'process_row',
+                          side_effect=AssertionError('bare must not run')), \
+             patch.object(submissions, 'top_up',
+                          side_effect=AssertionError('bare must not top up')), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db]):
+            submissions.main()
+        out = buf.getvalue()
+        self.assertIn('queue cap in effect', out)
+        self.assertIn('cnf.mu2e.V.C.0.tar', out)
+        # read-only: no lock file created
+        self.assertFalse(
+            os.path.exists(os.path.join(self.dbdir, 'submissions.lock')))
+
+    def test_status_verb_same_as_bare(self):
+        from utils import submissions
+        import io as _io
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'status']):
+            submissions.main()
+        self.assertIn('empty', buf.getvalue().lower())
+
+    def test_run_verb_processes_rows_and_locks(self):
+        from utils import submissions
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(submissions, 'process_row',
+                          return_value='complete') as pr, \
+             patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            submissions.main()
+        self.assertEqual(pr.call_count, 1)
+        self.assertTrue(
+            os.path.exists(os.path.join(self.dbdir, 'submissions.lock')))
+
+    def test_run_dry_run_takes_no_lock(self):
+        from utils import submissions
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run', '--dry-run']):
+            submissions.main()
+        self.assertFalse(
+            os.path.exists(os.path.join(self.dbdir, 'submissions.lock')))
+
+    def test_pause_and_resume_verbs(self):
+        from utils import submissions
+        cid = self._campaign()
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'pause', str(cid)]):
+            submissions.main()
+        camp = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(camp['state'], 'paused')
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'resume', str(cid)]):
+            submissions.main()
+        camp = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(camp['state'], 'active')
+
+    def test_cancel_verb(self):
+        from utils import submissions
+        cid = self._campaign()
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'cancel', str(cid)]):
+            submissions.main()
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'cancelled')
+
+    def test_invalid_transition_one_line_exit_1(self):
+        from utils import submissions
+        cid = self._campaign()
+        self.sl.set_campaign_state(self.db, cid, 'cancelled')
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'resume', str(cid)]):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        msg = str(cm.exception.code)
+        self.assertIn('submissions:', msg)
+        self.assertNotIn('\n', msg)
+
+    def test_old_style_flags_rejected(self):
+        from utils import submissions
+        for bad in (['--status'], ['--dry-run'], ['--pause-campaign', '1']):
+            with patch.object(sys, 'argv',
+                              ['submissions', '--db', self.db] + bad):
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main()
+            self.assertNotEqual(cm.exception.code, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -4815,7 +4936,7 @@ class TestRecoverLoop(unittest.TestCase):
     def _process(self, qstate='drained', missing=(), partial=(),
                  resub_ok=True, max_attempts=3, dry_run=False,
                  verify_exc=None, resub_writes_child=True):
-        from utils import recover
+        from utils import submissions as recover
         calls = {}
 
         def fake_verify(row):
@@ -4947,7 +5068,7 @@ class TestRecoverLoop(unittest.TestCase):
             self.db, tarball='t2', entry={}, indices=[0],
             jobsub_id=None, cluster_id='9')
         row2 = [r for r in self.sl.open_rows(self.db) if r['id'] == rid2][0]
-        from utils import recover
+        from utils import submissions as recover
         action = recover.process_row(
             row2, self.db, 3,
             queue_state_fn=lambda jid: self.fail('must not be called'),
@@ -4956,7 +5077,7 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertEqual(action, 'queue-error')
 
     def test_queue_state_parsing(self):
-        from utils import recover
+        from utils import submissions as recover
         def r(stdout, rc=0):
             return MagicMock(returncode=rc, stdout=stdout, stderr='')
         self.assertEqual(
@@ -4974,7 +5095,7 @@ class TestRecoverLoop(unittest.TestCase):
             'x', runner=lambda *a, **k: r('No jobs found\n')), 'error')
 
     def test_verify_row_missing_and_partial(self):
-        from utils import recover
+        from utils import submissions as recover
         files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(3)]
         jpars = _root_input_jobpars(files)
         jpars['tbs']['outfiles']['outputs.SecondOutput.fileName'] = \
@@ -5010,7 +5131,7 @@ class TestRecoverLoop(unittest.TestCase):
             os.unlink(tar)
 
     def test_verify_row_unlocatable_tarball_raises(self):
-        from utils import recover
+        from utils import submissions as recover
         row = {'id': 1, 'tarball': 'cnf.mu2e.gone.C.0.tar',
                'indices': [0], 'entry': {}, 'attempt': 1, 'jobsub_id': 'x'}
         with patch.object(recover, 'locate_tarball', return_value=None):
@@ -5018,7 +5139,7 @@ class TestRecoverLoop(unittest.TestCase):
                 recover.verify_row(row, sam_lister=lambda ds: [])
 
     def test_verify_row_nonart_outputs_raise_not_complete(self):
-        from utils import recover
+        from utils import submissions as recover
         files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(2)]
         jpars = _root_input_jobpars(files)
         jpars['tbs']['outfiles']['outputs.PrimaryOutput.fileName'] = \
@@ -5035,7 +5156,7 @@ class TestRecoverLoop(unittest.TestCase):
             os.unlink(tar)
 
     def test_resubmit_drops_firstjob_and_writes_indices(self):
-        from utils import recover
+        from utils import submissions as recover
         row = {'id': 7, 'tarball': 'cnf.mu2e.T.C.0.tar',
                'entry': {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 5,
                          'firstjob': 100, 'inloc': 'tape'},
@@ -5074,7 +5195,7 @@ class TestRecoverCLI(unittest.TestCase):
         self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
 
     def test_print_status_empty(self):
-        from utils import recover
+        from utils import submissions as recover
         import io as _io
         buf = _io.StringIO()
         with patch('sys.stdout', buf):
@@ -5082,7 +5203,7 @@ class TestRecoverCLI(unittest.TestCase):
         self.assertIn('empty', buf.getvalue().lower())
 
     def test_print_status_lists_rows(self):
-        from utils import recover
+        from utils import submissions as recover
         import io as _io
         rid = self.sl.record_submission(
             self.db, tarball='cnf.mu2e.T.C.0.tar', entry={}, indices=[0, 1],
@@ -5100,52 +5221,55 @@ class TestRecoverCLI(unittest.TestCase):
         self.assertIn('cnf.mu2e.T2.C.0.tar', out)
 
     def test_main_exit_2_on_attention(self):
-        from utils import recover
+        from utils import submissions as recover
         self.sl.record_submission(
             self.db, tarball='t', entry={}, indices=[0],
             jobsub_id='1.0@js', cluster_id='1')
         with patch.object(recover, 'process_row', return_value='held'), \
-             patch.object(sys, 'argv', ['recover', '--db', self.db]):
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
             with self.assertRaises(SystemExit) as cm:
                 recover.main()
         self.assertEqual(cm.exception.code, 2)
 
     def test_main_exit_2_on_dry_run_would_exhaust(self):
-        from utils import recover
+        from utils import submissions as recover
         self.sl.record_submission(
             self.db, tarball='t', entry={}, indices=[0],
             jobsub_id='1.0@js', cluster_id='1')
         with patch.object(recover, 'process_row',
                           return_value='would-exhaust'), \
-             patch.object(sys, 'argv', ['recover', '--db', self.db,
-                                        '--dry-run']):
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run', '--dry-run']):
             with self.assertRaises(SystemExit) as cm:
                 recover.main()
         self.assertEqual(cm.exception.code, 2)
 
     def test_main_exit_0_when_clean(self):
-        from utils import recover
+        from utils import submissions as recover
         self.sl.record_submission(
             self.db, tarball='t', entry={}, indices=[0],
             jobsub_id='1.0@js', cluster_id='1')
         with patch.object(recover, 'process_row', return_value='complete'), \
-             patch.object(sys, 'argv', ['recover', '--db', self.db]):
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
             recover.main()  # returns without SystemExit
 
     def test_main_lock_contention_exits(self):
         import fcntl
-        from utils import recover
+        from utils import submissions as recover
         self.sl.record_submission(
             self.db, tarball='t', entry={}, indices=[0],
             jobsub_id='1.0@js', cluster_id='1')
-        lock_path = os.path.join(os.path.dirname(self.db), 'recover.lock')
+        lock_path = os.path.join(os.path.dirname(self.db), 'submissions.lock')
         fh = open(lock_path, 'w')
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
-            with patch.object(sys, 'argv', ['recover', '--db', self.db]):
+            with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                            'run']):
                 with self.assertRaises(SystemExit) as cm:
                     recover.main()
-            self.assertIn('recover.lock', str(cm.exception.code))
+            self.assertIn('submissions.lock', str(cm.exception.code))
         finally:
             fh.close()
 

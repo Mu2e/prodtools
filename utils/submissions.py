@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Verify-and-resubmit recovery loop for direct-backend submissions.
+"""Direct-submission subsystem CLI (`submissions`): read-only status,
+the verify-and-resubmit + sliced-campaign top-up tick (`run`), and
+campaign management verbs.
 
 Processes ledger rows written by `submit_map --backend direct`
 (utils/submission_ledger.py). Per active row: skip while jobs are still
@@ -465,70 +467,77 @@ def print_status(db_path):
                   f"{c['tarball']}")
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(
-        description='Verify-and-resubmit recovery loop + sliced-campaign '
-                    'top-up for direct-backend submissions (state written '
-                    'by submit_map).')
+        prog='submissions',
+        description='Direct-submission subsystem CLI: status (default '
+                    'verb, read-only), the hourly verify/resubmit/'
+                    'top-up tick (run), and campaign management '
+                    '(pause/resume/cancel).')
     p.add_argument('--db', default=submission_ledger.DEFAULT_DB,
                    help=f'Submission-ledger sqlite DB (default: '
                         f'{submission_ledger.DEFAULT_DB}, env '
                         f'MU2E_SUBMISSION_DB)')
-    p.add_argument('--status', action='store_true',
-                   help='Print ledger + campaigns and exit (read-only)')
-    p.add_argument('--dry-run', action='store_true',
-                   help='Report would-* actions only; no submissions, no '
-                        'state changes')
-    p.add_argument('--row', type=int, default=None,
-                   help='Process only this ledger row id (skips top-up)')
-    p.add_argument('--max-attempts', type=int, default=DEFAULT_MAX_ATTEMPTS,
-                   help=f'Attempt cap per chain (default '
-                        f'{DEFAULT_MAX_ATTEMPTS}); at the cap the row is '
-                        f'marked exhausted for a human')
-    p.add_argument('--max-queued', type=int, default=None,
-                   help=f'Total mu2epro idle+running cap for the top-up '
-                        f'phase (default: MU2E_MAX_QUEUED env, then '
-                        f'{DEFAULT_MAX_QUEUED})')
-    p.add_argument('--pause-campaign', type=int, default=None, metavar='ID',
-                   help='Pause an active campaign and exit')
-    p.add_argument('--resume-campaign', type=int, default=None, metavar='ID',
-                   help='Reactivate a paused campaign and exit')
-    p.add_argument('--cancel-campaign', type=int, default=None, metavar='ID',
-                   help='Cancel a campaign and exit (already-submitted '
-                        'rows still get recovered)')
-    args = p.parse_args()
+    sub = p.add_subparsers(dest='verb')
 
-    if args.status:
-        print(f"queue cap in effect: {resolve_cap(args.max_queued)}")
-        print_status(args.db)
-        return
+    sub.add_parser('status',
+                   help='Print ledger + campaigns + queue cap and exit '
+                        '(read-only; the default verb)')
 
-    mgmt = [(a, cid) for a, cid in
-            (('pause', args.pause_campaign),
-             ('resume', args.resume_campaign),
-             ('cancel', args.cancel_campaign)) if cid is not None]
-    if mgmt and args.dry_run:
-        sys.exit("--pause/--resume/--cancel-campaign mutate the DB — "
-                 "not valid with --dry-run")
+    run = sub.add_parser('run',
+                         help='One tick: recovery pass then campaign '
+                              'top-up (the cron entry point)')
+    run.add_argument('--dry-run', action='store_true',
+                     help='Report would-* actions only; no submissions, '
+                          'no state changes')
+    run.add_argument('--row', type=int, default=None,
+                     help='Process only this ledger row id (skips '
+                          'top-up)')
+    run.add_argument('--max-attempts', type=int,
+                     default=DEFAULT_MAX_ATTEMPTS,
+                     help=f'Attempt cap per chain (default '
+                          f'{DEFAULT_MAX_ATTEMPTS}); at the cap the row '
+                          f'is marked exhausted for a human')
+    run.add_argument('--max-queued', type=int, default=None,
+                     help=f'Total mu2epro idle+running cap for the '
+                          f'top-up phase (default: MU2E_MAX_QUEUED env, '
+                          f'then {DEFAULT_MAX_QUEUED})')
 
-    if not args.dry_run:
-        # One mutating pass at a time per DB — guards manual runs racing
-        # the cron (both passing the drain gate before either closes a
-        # row = double submit). Read-only modes skip the lock. Held for
-        # the process lifetime; released on exit.
-        lock_path = os.path.join(os.path.dirname(args.db) or '.',
-                                 'recover.lock')
-        main._lock_fh = open(lock_path, 'w')
-        try:
-            fcntl.flock(main._lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.exit(f"another recover run holds {lock_path} — exiting")
+    pause = sub.add_parser('pause', help='Pause an active campaign')
+    pause.add_argument('camp_id', type=int)
+    resume = sub.add_parser('resume',
+                            help='Reactivate a paused campaign')
+    resume.add_argument('camp_id', type=int)
+    cancel = sub.add_parser('cancel',
+                            help='Cancel a campaign (already-submitted '
+                                 'rows still get recovered)')
+    cancel.add_argument('camp_id', type=int)
 
-    if mgmt:
-        for action, cid in mgmt:
-            manage_campaign(args.db, cid, action)
-        return
+    # Bare invocation (no verb) IS status — an explicit default, not a
+    # hidden fallthrough (spec Change 1). Must come AFTER
+    # add_subparsers(dest='verb'): the subparsers action sets its own
+    # default of None for that dest, which otherwise clobbers this.
+    p.set_defaults(verb='status')
+    return p
 
+
+def _acquire_lock(db_path):
+    """One mutating pass at a time per DB — guards manual runs racing
+    the cron (both passing the drain gate before either closes a row =
+    double submit). Read-only modes never call this. The fd is held for
+    the process lifetime; released on exit."""
+    lock_path = os.path.join(os.path.dirname(db_path) or '.',
+                             'submissions.lock')
+    _acquire_lock._fh = open(lock_path, 'w')
+    try:
+        fcntl.flock(_acquire_lock._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"another submissions run holds {lock_path} — exiting")
+
+
+def _run_pass(args):
+    """The tick: recovery pass over active ledger rows, then campaign
+    top-up. Exits 2 when anything needs human attention."""
     rows = submission_ledger.open_rows(args.db)
     if args.row is not None:
         rows = [r for r in rows if r['id'] == args.row]
@@ -551,13 +560,36 @@ def main():
             summary[k] = summary.get(k, 0) + v
 
     if summary:
-        print("recover summary: "
+        print("submissions summary: "
               + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
     if (summary.get('held') or summary.get('exhausted')
             or summary.get('would-exhaust') or summary.get('child-missing')
             or summary.get('campaign-paused')
             or summary.get('would-pause-overlap')):
         sys.exit(2)
+
+
+def main():
+    args = build_parser().parse_args()
+    verb = args.verb
+
+    if verb == 'status':
+        print(f"queue cap in effect: {resolve_cap(None)}")
+        print_status(args.db)
+        return
+
+    if verb in ('pause', 'resume', 'cancel'):
+        _acquire_lock(args.db)
+        try:
+            manage_campaign(args.db, args.camp_id, verb)
+        except ValueError as e:
+            sys.exit(f"submissions: {e}")
+        return
+
+    # verb == 'run'
+    if not args.dry_run:
+        _acquire_lock(args.db)
+    _run_pass(args)
 
 
 if __name__ == '__main__':
