@@ -4435,24 +4435,73 @@ class TestRecoverCap(unittest.TestCase):
             return MagicMock(returncode=rc, stdout=stdout, stderr='')
         return run
 
+    # Realistic jobsub_q DEFAULT-table shapes (captured 2026-07-21).
+    # The -af JobStatus passthrough is unreliable on jobsub_lite (blank
+    # values / dropped --user filter), so the probes parse this table.
+    _HDR = ('JOBSUBJOBID                             OWNER       \t'
+            'SUBMITTED     RUNTIME   ST PRIO   SIZE  COMMAND')
+    _SUM = ('0 total; 0 completed, 0 removed, 0 idle, 0 running, '
+            '0 held, 0 suspended')
+
+    @staticmethod
+    def _row(jobid, owner, st):
+        return (f'{jobid}            {owner}   \t01/09 06:00   '
+                f'0+00:00:00 {st}    0    0.0 job.sh ')
+
     def test_total_queued_counts_idle_and_running_only(self):
         from utils.submissions import total_queued
-        n = total_queued(runner=self._runner('1\n2\n2\n5\n4\n'))
-        self.assertEqual(n, 3)              # held (5) / removed (4) excluded
-        self.assertEqual(self.cmd[:3], ['jobsub_q', '--user', 'mu2epro'])
-        self.assertIn('JobStatus', self.cmd)
+        table = '\n'.join([
+            self._HDR, self._SUM,
+            self._row('1.0@jobsub01.fnal.gov', 'mu2epro', 'I'),
+            self._row('2.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
+            self._row('3.0@jobsub02.fnal.gov', 'mu2epro', 'R'),
+            self._row('4.0@jobsub02.fnal.gov', '|-WORKER_12', 'H'),
+            self._row('5.0@jobsub02.fnal.gov', 'mu2epro', 'X'),
+        ]) + '\n'
+        n = total_queued(runner=self._runner(table))
+        self.assertEqual(n, 3)              # held / removed excluded
+        self.assertEqual(self.cmd, ['jobsub_q', '--user', 'mu2epro'])
 
-    def test_total_queued_empty_is_zero(self):
+    def test_total_queued_empty_table_is_zero(self):
         from utils.submissions import total_queued
-        self.assertEqual(total_queued(runner=self._runner('')), 0)
+        table = self._HDR + '\n' + self._SUM + '\n'
+        self.assertEqual(total_queued(runner=self._runner(table)), 0)
+
+    def test_total_queued_headerless_is_none(self):
+        # No JOBSUBJOBID header = we did not get the table (error page,
+        # empty stdout, or the -af blank-line failure mode) — fail closed.
+        from utils.submissions import total_queued
+        self.assertIsNone(total_queued(runner=self._runner('')))
+        self.assertIsNone(total_queued(runner=self._runner('\n\n\n')))
 
     def test_total_queued_failure_is_none(self):
         from utils.submissions import total_queued
         self.assertIsNone(total_queued(runner=self._runner('', rc=1)))
 
-    def test_total_queued_garbage_is_none(self):
+    def test_total_queued_garbage_row_is_none(self):
         from utils.submissions import total_queued
-        self.assertIsNone(total_queued(runner=self._runner('1\nERROR\n')))
+        table = '\n'.join([self._HDR,
+                           self._row('1.0@jobsub01.fnal.gov', 'mu2epro',
+                                     'I'),
+                           'some unexpected diagnostic line']) + '\n'
+        self.assertIsNone(total_queued(runner=self._runner(table)))
+
+    def test_total_queued_unknown_state_is_none(self):
+        from utils.submissions import total_queued
+        table = '\n'.join([self._HDR,
+                           self._row('1.0@jobsub01.fnal.gov', 'mu2epro',
+                                     'Z')]) + '\n'
+        self.assertIsNone(total_queued(runner=self._runner(table)))
+
+    def test_total_queued_skips_token_noise(self):
+        from utils.submissions import total_queued
+        table = '\n'.join([
+            'Attempting to get token from https://htvaultprod ... ok',
+            'Storing bearer token in /tmp/bt_token_mu2e_x',
+            self._HDR, self._SUM,
+            self._row('1.0@jobsub01.fnal.gov', 'mu2epro', 'I'),
+        ]) + '\n'
+        self.assertEqual(total_queued(runner=self._runner(table)), 1)
 
 
 class TestTopUp(unittest.TestCase):
@@ -5136,19 +5185,32 @@ class TestRecoverLoop(unittest.TestCase):
 
     def test_queue_state_parsing(self):
         from utils import submissions as recover
+        from test.test_unit import TestRecoverCap as T
         def r(stdout, rc=0):
             return MagicMock(returncode=rc, stdout=stdout, stderr='')
-        self.assertEqual(
-            recover.queue_state('x', runner=lambda *a, **k: r('')), 'drained')
-        self.assertEqual(
-            recover.queue_state('x', runner=lambda *a, **k: r('2\n1\n')),
+        hdr, summ = T._HDR, T._SUM
+        row = T._row
+        # drained: header + zero-count summary, no job rows
+        self.assertEqual(recover.queue_state(
+            'x', runner=lambda *a, **k: r(hdr + '\n' + summ + '\n')),
+            'drained')
+        # running: any non-held row
+        self.assertEqual(recover.queue_state(
+            'x', runner=lambda *a, **k: r('\n'.join(
+                [hdr, summ, row('9.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
+                 row('9.1@jobsub01.fnal.gov', 'mu2epro', 'I')]) + '\n')),
             'running')
-        self.assertEqual(
-            recover.queue_state('x', runner=lambda *a, **k: r('2\n5\n')),
+        # held wins over running
+        self.assertEqual(recover.queue_state(
+            'x', runner=lambda *a, **k: r('\n'.join(
+                [hdr, row('9.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
+                 row('9.1@jobsub01.fnal.gov', '|-WORKER_3', 'H')]) + '\n')),
             'held')
-        self.assertEqual(
-            recover.queue_state('x', runner=lambda *a, **k: r('', rc=1)),
-            'error')
+        # command failure and headerless/garbage output → error, never drained
+        self.assertEqual(recover.queue_state(
+            'x', runner=lambda *a, **k: r('', rc=1)), 'error')
+        self.assertEqual(recover.queue_state(
+            'x', runner=lambda *a, **k: r('')), 'error')
         self.assertEqual(recover.queue_state(
             'x', runner=lambda *a, **k: r('No jobs found\n')), 'error')
 

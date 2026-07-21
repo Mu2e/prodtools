@@ -22,6 +22,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,24 +60,63 @@ def resolve_cap(flag_value):
     return DEFAULT_MAX_QUEUED
 
 
+# jobsub_q output parsing. The `-af JobStatus` condor passthrough is
+# UNRELIABLE on jobsub_lite (observed 2026-07-21 on the first live
+# top-up tick: blank attribute values, and some flag orders silently
+# drop the --user filter and dump every experiment's queue — the tick
+# correctly refused with count-error). Both queue probes therefore
+# parse the DEFAULT table: one row per job, first field the jobsub id,
+# sixth field the one-letter HTCondor state (I idle, R running, H held,
+# C completed, X removed, S suspended). Empirical shapes 2026-07-21:
+# drained/unknown id -> header + "0 total; ..." summary, no rows; live
+# -> header + summary + rows; DAG children keep the same geometry with
+# the node name in the OWNER column.
+
+_JOBID_RE = re.compile(r'^\d+\.\d+@\S+$')
+_KNOWN_STATES = frozenset('IRHCXS<>')
+_SKIP_PREFIXES = ('JOBSUBJOBID', 'Attempting to ', 'Storing bearer token')
+
+
+def _jobsub_table_states(stdout):
+    """One-letter condor states from jobsub_q's default table, or None
+    when the output cannot be trusted. The header line must be present
+    (proof we got the table, not an error page); token-refresh noise
+    and per-schedd summary lines are skipped; any other unrecognized
+    line fails the whole parse — a miscount either floods the farm or
+    starves campaigns, so never guess."""
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+    if not any(ln.startswith('JOBSUBJOBID') for ln in lines):
+        return None
+    states = []
+    for ln in lines:
+        if ln.startswith(_SKIP_PREFIXES) or ' total; ' in ln:
+            continue
+        fields = ln.split()
+        if (len(fields) < 6 or not _JOBID_RE.match(fields[0])
+                or fields[5] not in _KNOWN_STATES):
+            return None
+        states.append(fields[5])
+    return states
+
+
 def queue_state(jobsub_id, runner=subprocess.run):
     """'drained' | 'held' | 'running' | 'error' for a jobsub id.
 
-    Uses condor_q autoformat passthrough (`-af JobStatus`): one numeric
-    HTCondor state per queued job (1 idle, 2 running, 5 held, ...).
-    Only an empty, successful query counts as drained — anything
-    unexpected is conservative (running/error), never drained.
+    Parses the default `jobsub_q --jobid` table (see
+    _jobsub_table_states). Only a successful, parseable query with ZERO
+    job rows counts as drained — anything unexpected is conservative
+    (running/error), never drained.
     """
-    res = runner(['jobsub_q', '--jobid', jobsub_id, '-af', 'JobStatus'],
+    res = runner(['jobsub_q', '--jobid', jobsub_id],
                  capture_output=True, text=True)
     if res.returncode != 0:
         return 'error'
-    states = res.stdout.split()
+    states = _jobsub_table_states(res.stdout)
+    if states is None:
+        return 'error'
     if not states:
         return 'drained'
-    if any(not s.isdigit() for s in states):
-        return 'error'
-    if '5' in states:
+    if 'H' in states:
         return 'held'
     return 'running'
 
@@ -169,18 +209,19 @@ def total_queued(user='mu2epro', runner=subprocess.run):
     """Total idle+running jobs for `user` — the top-up throttle gate —
     or None when the count cannot be trusted (caller skips the phase).
 
-    Counts HTCondor states 1 (idle) and 2 (running) via condor_q
-    autoformat passthrough; held/removed/other states do not consume
-    cap headroom. Covers ALL the user's jobs (POMS-launched included),
-    so the cap bounds the account's whole farm footprint."""
-    res = runner(['jobsub_q', '--user', user, '-af', 'JobStatus'],
+    Counts states I (idle) and R (running) from the default
+    `jobsub_q --user` table (see _jobsub_table_states); held/removed/
+    other states do not consume cap headroom. Covers ALL the user's
+    jobs (POMS-launched included), so the cap bounds the account's
+    whole farm footprint."""
+    res = runner(['jobsub_q', '--user', user],
                  capture_output=True, text=True)
     if res.returncode != 0:
         return None
-    states = res.stdout.split()
-    if any(not s.isdigit() for s in states):
+    states = _jobsub_table_states(res.stdout)
+    if states is None:
         return None
-    return sum(1 for s in states if s in ('1', '2'))
+    return sum(1 for s in states if s in ('I', 'R'))
 
 
 def submit_slice(camp, n, db_path, runner=subprocess.run):
