@@ -467,8 +467,9 @@ def submit_entry_direct(entry, idx, opts):
     submitter = getpass.getuser()
     # Token scopes for direct-mode pushOutput (CB1):
     #   - per data output: /mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>
-    #   - per log: same scheme with tier=log; logs share the first output's
-    #     location (matches runmu2e._direct_dispatch's log_location choice).
+    #   - per log: same scheme with tier=log, but logs go to persistent disk
+    #     regardless of the data location (see log_storage_location), so a
+    #     tape campaign needs BOTH a tape data scope and a disk log scope.
     extra_scopes = list(_jobsub_argv.output_storage_dirs(
         output_filenames, outputs_of(entry)))
     if output_filenames:

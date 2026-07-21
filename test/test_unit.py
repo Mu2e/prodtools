@@ -3743,6 +3743,49 @@ class TestMkrecoveryPrintIndices(unittest.TestCase):
         self.assertEqual(buf.getvalue().splitlines(), ['# cnf.mu2e.X.0.tar', '7'])
 
 
+class TestLogStorageLocation(unittest.TestCase):
+    """Logs go to persistent disk regardless of where data lands — the
+    Mu2e convention and what the POMS path does. Only `scratch` runs keep
+    logs beside their data (no persistent scope for non-mu2epro accounts).
+
+    Regression: the first direct campaign put 500 log files on tape
+    because logs inherited the data output's location.
+    """
+
+    def test_tape_data_keeps_logs_on_disk(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'}]
+        self.assertEqual(log_storage_location(outputs), 'disk')
+
+    def test_scratch_data_keeps_logs_on_scratch(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'scratch'}]
+        self.assertEqual(log_storage_location(outputs), 'scratch')
+
+    def test_disk_data_keeps_logs_on_disk(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'disk'}]
+        self.assertEqual(log_storage_location(outputs), 'disk')
+
+    def test_accepts_entry_dict(self):
+        from utils.job_common import log_storage_location
+        entry = {'tarball': 'cnf.mu2e.X.0.tar',
+                 'outputs': [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'}]}
+        self.assertEqual(log_storage_location(entry), 'disk')
+
+    def test_missing_outputs_defaults_to_disk(self):
+        from utils.job_common import log_storage_location
+        self.assertEqual(log_storage_location([]), 'disk')
+        self.assertEqual(log_storage_location({}), 'disk')
+
+    def test_only_first_output_consulted_for_scratch(self):
+        """A tape-first entry stays on disk even with a scratch sibling."""
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'},
+                   {'dataset': 'nts.mu2e.*.root', 'location': 'scratch'}]
+        self.assertEqual(log_storage_location(outputs), 'disk')
+
+
 class TestSingleBackend(unittest.TestCase):
     """submit_map is single-backend (direct): --backend is gone and
     rejected loudly as an unknown argument."""
