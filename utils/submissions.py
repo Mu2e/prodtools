@@ -558,6 +558,16 @@ def _run_pass(args):
         for k, v in top_up(args.db, resolve_cap(args.max_queued),
                            dry_run=args.dry_run).items():
             summary[k] = summary.get(k, 0) + v
+        # A paused campaign means "waiting on a human" — repeat the
+        # exit-2 signal EVERY tick until someone resumes or cancels,
+        # not just on the tick that paused it.
+        paused = [c for c in submission_ledger.all_campaigns(args.db)
+                  if c['state'] == 'paused']
+        if paused:
+            ids = ', '.join(str(c['id']) for c in paused)
+            print(f"ATTENTION: paused campaign(s) awaiting a human: "
+                  f"{ids} (submissions resume/cancel to clear)")
+            summary['paused-campaign'] = len(paused)
 
     if summary:
         print("submissions summary: "
@@ -565,7 +575,9 @@ def _run_pass(args):
     if (summary.get('held') or summary.get('exhausted')
             or summary.get('would-exhaust') or summary.get('child-missing')
             or summary.get('campaign-paused')
-            or summary.get('would-pause-overlap')):
+            or summary.get('would-pause-overlap')
+            or summary.get('count-error')
+            or summary.get('paused-campaign')):
         sys.exit(2)
 
 

@@ -5274,6 +5274,63 @@ class TestRecoverCLI(unittest.TestCase):
             fh.close()
 
 
+class TestSubmissionsExitHonesty(unittest.TestCase):
+    """A stalled loop must not impersonate a healthy one: queue-count
+    failure and lingering paused campaigns exit 2 every tick."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+
+    def test_count_error_exits_2(self):
+        from utils import submissions
+        with patch.object(submissions, 'top_up',
+                          return_value={'count-error': 1}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_lingering_paused_campaign_exits_2(self):
+        from utils import submissions
+        cid = self.sl.create_campaign(
+            self.db, tarball='cnf.mu2e.P.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.P.C.0.tar', 'njobs': 4},
+            slice_size=2)
+        self.sl.set_campaign_state(self.db, cid, 'paused',
+                                   note='paused on a PREVIOUS tick')
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_lingering_paused_exits_2_under_dry_run(self):
+        from utils import submissions
+        cid = self.sl.create_campaign(
+            self.db, tarball='cnf.mu2e.P2.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.P2.C.0.tar', 'njobs': 4},
+            slice_size=2)
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run', '--dry-run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_clean_run_still_exits_0(self):
+        from utils import submissions
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            submissions.main()  # no SystemExit
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
