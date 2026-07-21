@@ -939,3 +939,44 @@ logic of a loop whose first live campaign has 500 jobs on the grid.
 When adopted, the shape is a ~15-line helper invoked as
 `/usr/bin/python3 -I` returning JSON, with the table parser as
 fallback. See [[reference_jobsub_q_af_unreliable]].
+
+## 2026-07-21 — logs went to tape on the first direct campaign (fixed)
+
+Caught by inspection, not by a test: the first 500-job slice put its log
+dataset on `enstore:/pnfs/mu2e/tape/phy-etc/log/...` (nearline). Every
+POMS-submitted sibling of the same mix round — NoPrimaryMix1BB,
+RPCInternalPhysicalMix1BB — has logs on
+`dcache:/pnfs/mu2e/persistent/datasets/phy-etc/log/...`.
+
+Root cause: `job_common.log_storage_location()` returned the FIRST data
+output's location, and this entry declares `dig.mu2e.*.art -> tape`, so
+logs inherited tape. The POMS path never hit it — `runmu2e.py:900`
+calls `push_logs(fcl, ...)` with no location and takes the 'disk'
+default. Only the direct path (`runmu2e.py:805`) passes a location.
+
+The function was not gratuitous: a non-mu2epro account whose data goes
+to `scratch` has no `storage.modify` on `/mu2e/persistent/datasets`, so
+the 'disk' default 403s. Real problem, wrong key — it keyed on the data
+location instead of on whether the account can write to persistent, so
+it over-applied to tape production.
+
+Fix (2eb8b87): logs -> 'disk' unless the data location is 'scratch'.
+Token scoping in `submit.py` already computed the log scope separately,
+so a tape campaign now requests BOTH
+`/mu2e/tape/datasets/phy-sim/dig/mu2e` and
+`/mu2e/persistent/datasets/phy-etc/log/mu2e` — verified. Added
+`TestLogStorageLocation` (6 tests); the function previously had none,
+which is how this reached production. 469 tests OK.
+
+Deployment: `_bundle_prodtools` is mtime-gated, so the stale
+`/tmp/prodtools-mu2epro.tar` (00:16) rebuilds on the next submission.
+No manual step.
+
+DECISION: the 500 tape logs stay put. Relocating means a tape->disk
+read (against standing policy) to fix small, rarely-read files. The
+dataset stays split — 500 nearline, 6500 on persistent — and that is
+accepted. Do not "fix" it later without re-litigating.
+
+Lesson: a helper that silently changes a storage class needs a test at
+birth. Grep for other places the direct path diverges from the POMS
+path by passing an explicit value where POMS takes a default.
