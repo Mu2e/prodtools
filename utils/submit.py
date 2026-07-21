@@ -22,6 +22,7 @@ import getpass
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -291,18 +292,20 @@ def _snapshot_entry(entry, resources):
 
 def _enqueue_entries(entries_to_submit, map_path, opts):
     """Register entries as sliced-submission campaigns (cursor 0) —
-    submits NOTHING; the recover cron feeds slices while the mu2epro
-    queue is under its cap. A DB failure here is a hard error: nothing
-    has been submitted yet, so fail loudly (unlike the post-submission
-    ledger hook, which must never raise). Returns new campaign ids."""
+    submits NOTHING; the submissions cron feeds slices while the
+    mu2epro queue is under its cap. Nothing has been submitted when
+    this fails, so failures are hard errors — but operator-reachable
+    ones (duplicate live campaign, bad njobs, DB trouble) exit with a
+    ONE-LINE submit_map: message, never a traceback. Returns new
+    campaign ids."""
     ids = []
     for idx, entry in entries_to_submit:
         njobs = njobs_of(entry)
         if njobs is None:
-            sys.exit(f"Error: entry {idx} has no njobs (generic tarball) — "
-                     f"a campaign needs a job count to slice")
+            sys.exit(f"submit_map: entry {idx} has no njobs (generic "
+                     f"tarball) — a campaign needs a job count to slice")
         if njobs < 1:
-            sys.exit(f"Error: entry {idx} has njobs={njobs} — "
+            sys.exit(f"submit_map: entry {idx} has njobs={njobs} — "
                      f"a campaign needs a positive job count")
         snap = _snapshot_entry(entry, _effective_resources(entry, opts))
         if opts.dry_run:
@@ -310,9 +313,12 @@ def _enqueue_entries(entries_to_submit, map_path, opts):
                   f"{tarball_of(entry)} njobs={njobs_of(entry)} "
                   f"slice={opts.slice_size}")
             continue
-        camp_id = submission_ledger.create_campaign(
-            opts.ledger_db, tarball=tarball_of(entry), entry=snap,
-            slice_size=opts.slice_size, map_path=map_path)
+        try:
+            camp_id = submission_ledger.create_campaign(
+                opts.ledger_db, tarball=tarball_of(entry), entry=snap,
+                slice_size=opts.slice_size, map_path=map_path)
+        except (ValueError, sqlite3.Error) as e:
+            sys.exit(f"submit_map: {e}")
         print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
               f"njobs={njobs_of(entry)} slice={opts.slice_size} "
               f"(db {opts.ledger_db})")
@@ -825,6 +831,10 @@ def main():
         sys.exit(1)
 
     if args.enqueue:
+        if args.no_ledger:
+            print("submit_map: --enqueue registers a campaign in the "
+                  "ledger DB; --no-ledger contradicts it")
+            sys.exit(1)
         if args.backend != 'direct':
             print("Error: --enqueue requires --backend direct")
             sys.exit(1)

@@ -4292,7 +4292,7 @@ class TestEnqueue(unittest.TestCase):
     def test_enqueue_duplicate_is_hard_error(self):
         from utils.submit import _enqueue_entries
         _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SystemExit):
             _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
 
     def test_enqueue_generic_entry_refused(self):
@@ -4317,8 +4317,59 @@ class TestEnqueue(unittest.TestCase):
         opts = argparse.Namespace(
             ledger_db='/nonexistent-dir-enqueue-test/s.db', slice_size=10,
             dry_run=False, memory=None, disk=None, expected_lifetime=None)
-        with self.assertRaises(sqlite3.OperationalError):
+        with self.assertRaises(SystemExit):
             _enqueue_entries([(0, self.entry)], '/tmp/m.json', opts)
+
+
+class TestEnqueueErrorStyle(unittest.TestCase):
+    """Operator-reachable enqueue failures are one-line submit_map:
+    messages, not tracebacks; --enqueue --no-ledger is refused."""
+
+    def setUp(self):
+        import tempfile
+        from types import SimpleNamespace
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, 'sub.db')
+        self.opts = SimpleNamespace(
+            ledger_db=self.db, slice_size=10, dry_run=False,
+            memory=None, disk=None, expected_lifetime=None)
+
+    def _entry(self, tarball='cnf.mu2e.E.C.0.tar'):
+        return {'tarball': tarball, 'njobs': 50}
+
+    def test_duplicate_enqueue_one_line_no_traceback(self):
+        from utils import submit
+        submit._enqueue_entries([(0, self._entry())], 'm.json', self.opts)
+        with self.assertRaises(SystemExit) as cm:
+            submit._enqueue_entries([(0, self._entry())], 'm.json',
+                                    self.opts)
+        msg = str(cm.exception.code)
+        self.assertTrue(msg.startswith('submit_map: '), msg)
+        self.assertNotIn('\n', msg)
+        self.assertNotIn('Traceback', msg)
+
+    def test_db_error_one_line(self):
+        from utils import submit
+        self.opts.ledger_db = os.path.join(self.tmp, 'no', 'such',
+                                           'dir', 'sub.db')
+        with self.assertRaises(SystemExit) as cm:
+            submit._enqueue_entries([(0, self._entry())], 'm.json',
+                                    self.opts)
+        self.assertTrue(str(cm.exception.code).startswith('submit_map: '))
+
+    def test_enqueue_no_ledger_refused(self):
+        from utils import submit
+        import io as _io
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf), \
+             patch.object(sys, 'argv',
+                          ['submit_map', '--map', 'nonexistent.json',
+                           '--backend', 'direct', '--enqueue',
+                           '--no-ledger']):
+            with self.assertRaises(SystemExit) as cm:
+                submit.main()
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn('--no-ledger contradicts it', buf.getvalue())
 
 
 # ---------------------------------------------------------------------------
