@@ -594,9 +594,20 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
 
     # Push log if it exists
     if Path(logfile).exists():
-        # G4bl jobs have no SAM-registered parents → parents_file="none".
-        # Art jobs use parents_list.txt (written by push_data earlier).
-        parents = "none" if log_file is not None else "parents_list.txt"
+        # Name parents_list.txt only if it is actually on disk. pushOutput
+        # reports `ERROR - parents file ... not found` and then exits 0, so
+        # naming a missing file makes the log push a SILENT no-op and the
+        # log never reaches SAM.
+        #
+        # push_data writes it, and there are two routine ways it is absent:
+        #   - mu2e failed, so push_data was skipped entirely (the failure
+        #     path — exactly when the log is the only evidence left)
+        #   - track_parents=False (inloc `dir:`, non-SAM inputs), where
+        #     push_data deliberately skips it even on success
+        # G4bl passes log_file and never has SAM parents.
+        parents = ("parents_list.txt"
+                   if log_file is None and Path("parents_list.txt").is_file()
+                   else "none")
         output_specs = [(location, logfile, parents)]
         return push_output(output_specs, "log_output.txt", simjob_setup=simjob_setup)
     else:

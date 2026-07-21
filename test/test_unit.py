@@ -3786,6 +3786,85 @@ class TestLogStorageLocation(unittest.TestCase):
         self.assertEqual(log_storage_location(outputs), 'disk')
 
 
+class TestPushLogsParents(unittest.TestCase):
+    """The log push must never name a parents file that isn't on disk.
+
+    pushOutput reports `ERROR - parents file parents_list.txt not found`
+    and then exits 0, so a missing parents file makes the log push a
+    silent no-op — the log never reaches SAM. That bites hardest on the
+    failure path, where push_data is skipped and the log is the only
+    evidence left. Observed 2026-07-21 on index 519.
+    """
+
+    def _capture(self, tmpdir, *, log_file=None, fcl=None, with_parents):
+        """Run push_logs in tmpdir and return the parents column it chose."""
+        from utils import runmu2e
+        captured = {}
+
+        def fake_push_output(output_specs, output_file="output.txt",
+                             simjob_setup=None):
+            captured['specs'] = output_specs
+            return 0
+
+        logname = log_file or runmu2e.replace_file_extensions(fcl, "log", "log")
+        (Path(tmpdir) / logname).write_text('log contents\n')
+        if with_parents:
+            (Path(tmpdir) / 'parents_list.txt').write_text('in1.art\n')
+
+        cwd = os.getcwd()
+        env = dict(os.environ)
+        os.environ.pop('JSB_TMP', None)   # don't pull in a jobsub log
+        try:
+            os.chdir(tmpdir)
+            with patch.object(runmu2e, 'push_output', fake_push_output):
+                runmu2e.push_logs(fcl=fcl, log_file=log_file)
+        finally:
+            os.chdir(cwd)
+            os.environ.clear()
+            os.environ.update(env)
+
+        self.assertIn('specs', captured, "push_output was never called")
+        self.assertEqual(len(captured['specs']), 1)
+        return captured['specs'][0][2]
+
+    def test_art_success_uses_parents_list(self):
+        """Data push ran and wrote parents_list.txt — use it."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
+                                    with_parents=True)
+            self.assertEqual(parents, 'parents_list.txt')
+
+    def test_art_failure_falls_back_to_none(self):
+        """mu2e failed, push_data was skipped, so parents_list.txt does not
+        exist — the log must still be declarable."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
+                                    with_parents=False)
+            self.assertEqual(parents, 'none')
+
+    def test_untracked_parents_falls_back_to_none(self):
+        """track_parents=False (inloc dir:, non-SAM inputs) also leaves no
+        parents_list.txt even though the job succeeded."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, fcl='cnf.mu2e.Y.MDC2025ar.7.fcl',
+                                    with_parents=False)
+            self.assertEqual(parents, 'none')
+
+    def test_g4bl_still_none(self):
+        """g4bl passes log_file explicitly and has no SAM parents."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
+                                    with_parents=False)
+            self.assertEqual(parents, 'none')
+
+    def test_g4bl_ignores_stray_parents_file(self):
+        """Even if a parents_list.txt is lying around, g4bl stays 'none'."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
+                                    with_parents=True)
+            self.assertEqual(parents, 'none')
+
+
 class TestSingleBackend(unittest.TestCase):
     """submit_map is single-backend (direct): --backend is gone and
     rejected loudly as an unknown argument."""
