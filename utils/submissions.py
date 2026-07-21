@@ -18,9 +18,11 @@ round — `exhausted` is where a human takes over.
 Design: docs/superpowers/specs/2026-07-18-direct-recovery-design.md
 """
 import argparse
+import contextlib
 import fcntl
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -118,6 +120,22 @@ def verify_row(row, sam_lister=files_in_dataset):
     return missing, partial
 
 
+@contextlib.contextmanager
+def _scratch_map_dir(prefix):
+    """Scratch dir for a child submit_map's map/indices files; removed
+    after the child completes (success or failure — the child reads
+    them before returning). Cleanup failure warns, never raises
+    (post-submission never-raise rule)."""
+    tmpdir = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield Path(tmpdir)
+    finally:
+        try:
+            shutil.rmtree(tmpdir)
+        except OSError as e:
+            print(f"WARNING: could not remove scratch dir {tmpdir}: {e}")
+
+
 def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
     """Resubmit missing indices through the submit_map CLI — one
     battle-tested submit path (token check, argv build, child ledger row
@@ -130,20 +148,20 @@ def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
     row's snapshot.
     """
     entry = {k: v for k, v in row['entry'].items() if k != 'firstjob'}
-    tmpdir = tempfile.mkdtemp(prefix='recover-')
-    map_path = Path(tmpdir) / 'recovery-map.json'
-    map_path.write_text(json.dumps([entry], indent=2) + '\n')
-    idx_path = Path(tmpdir) / 'indices.txt'
-    idx_path.write_text(f"# {row['tarball']}\n"
-                        + '\n'.join(str(i) for i in missing) + '\n')
-    cmd = [str(SUBMIT_MAP), '--map', str(map_path), '--backend', 'direct',
-           '--indices-file', str(idx_path),
-           '--ledger-parent', str(row['id']),
-           '--ledger-db', str(db_path)]
-    if dry_run:
-        cmd.append('--dry-run')
-    print(f"  resubmit: {' '.join(cmd)}")
-    res = runner(cmd)
+    with _scratch_map_dir('recover-') as tmpdir:
+        map_path = tmpdir / 'recovery-map.json'
+        map_path.write_text(json.dumps([entry], indent=2) + '\n')
+        idx_path = tmpdir / 'indices.txt'
+        idx_path.write_text(f"# {row['tarball']}\n"
+                            + '\n'.join(str(i) for i in missing) + '\n')
+        cmd = [str(SUBMIT_MAP), '--map', str(map_path), '--backend',
+               'direct', '--indices-file', str(idx_path),
+               '--ledger-parent', str(row['id']),
+               '--ledger-db', str(db_path)]
+        if dry_run:
+            cmd.append('--dry-run')
+        print(f"  resubmit: {' '.join(cmd)}")
+        res = runner(cmd)
     return res.returncode == 0
 
 
@@ -172,15 +190,15 @@ def submit_slice(camp, n, db_path, runner=subprocess.run):
     VERBATIM: firstjob is preserved because cursor and --first/--num
     are entry-relative, exactly like a manual windowed submission.
     Returns True on submit success."""
-    tmpdir = tempfile.mkdtemp(prefix='campaign-')
-    map_path = Path(tmpdir) / 'campaign-map.json'
-    map_path.write_text(json.dumps([camp['entry']], indent=2) + '\n')
-    cmd = [str(SUBMIT_MAP), '--map', str(map_path), '--backend', 'direct',
-           '--first', str(camp['cursor']), '--num', str(n),
-           '--ledger-db', str(db_path)]
-    print(f"  campaign {camp['id']}: slice first={camp['cursor']} "
-          f"num={n}: {' '.join(cmd)}")
-    res = runner(cmd)
+    with _scratch_map_dir('campaign-') as tmpdir:
+        map_path = tmpdir / 'campaign-map.json'
+        map_path.write_text(json.dumps([camp['entry']], indent=2) + '\n')
+        cmd = [str(SUBMIT_MAP), '--map', str(map_path), '--backend',
+               'direct', '--first', str(camp['cursor']),
+               '--num', str(n), '--ledger-db', str(db_path)]
+        print(f"  campaign {camp['id']}: slice first={camp['cursor']} "
+              f"num={n}: {' '.join(cmd)}")
+        res = runner(cmd)
     return res.returncode == 0
 
 

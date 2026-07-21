@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -4703,6 +4704,10 @@ class TestSubmitSlice(unittest.TestCase):
         captured = {}
         def runner(cmd, **kw):
             captured['cmd'] = cmd
+            # Read the map file content during the runner call (before cleanup)
+            map_path = cmd[cmd.index('--map') + 1]
+            with open(map_path) as f:
+                captured['map_content'] = json.load(f)
             return MagicMock(returncode=0)
         ok = recover.submit_slice(camp, 5, '/tmp/led.db', runner=runner)
         self.assertTrue(ok)
@@ -4712,9 +4717,7 @@ class TestSubmitSlice(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('--first') + 1], '10')
         self.assertEqual(cmd[cmd.index('--num') + 1], '5')
         self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
-        with open(cmd[cmd.index('--map') + 1]) as f:
-            written = json.load(f)
-        self.assertEqual(written, [entry])          # firstjob PRESERVED
+        self.assertEqual(captured['map_content'], [entry])  # firstjob PRESERVED
 
     def test_nonzero_exit_is_failure(self):
         from utils import submissions as recover
@@ -4724,6 +4727,58 @@ class TestSubmitSlice(unittest.TestCase):
             camp, 2, '/tmp/led.db',
             runner=lambda cmd, **kw: MagicMock(returncode=1))
         self.assertFalse(ok)
+
+
+class TestScratchDirCleanup(unittest.TestCase):
+    """Hourly cron must not accumulate /tmp scratch dirs: the child
+    submit_map's map/indices files are removed after it returns,
+    success or failure."""
+
+    def setUp(self):
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.camp = {'id': 1, 'cursor': 0, 'slice_size': 5,
+                     'tarball': 'cnf.mu2e.S.C.0.tar',
+                     'entry': {'tarball': 'cnf.mu2e.S.C.0.tar',
+                               'njobs': 10}}
+        self.row = {'id': 7, 'tarball': 'cnf.mu2e.S.C.0.tar',
+                    'entry': {'tarball': 'cnf.mu2e.S.C.0.tar',
+                              'njobs': 10}}
+
+    def _run_and_capture_dir(self, fn, rc):
+        from utils import submissions
+        import types
+        seen = {}
+        real_mkdtemp = tempfile.mkdtemp
+
+        def spy_mkdtemp(*a, **k):
+            seen['dir'] = real_mkdtemp(*a, **k)
+            return seen['dir']
+
+        runner = lambda cmd, **k: types.SimpleNamespace(returncode=rc)
+        with patch.object(submissions.tempfile, 'mkdtemp', spy_mkdtemp):
+            fn(runner)
+        return seen['dir']
+
+    def test_submit_slice_cleans_up_on_success(self):
+        from utils import submissions
+        d = self._run_and_capture_dir(
+            lambda r: submissions.submit_slice(self.camp, 5, self.db,
+                                               runner=r), 0)
+        self.assertFalse(os.path.exists(d))
+
+    def test_submit_slice_cleans_up_on_failure(self):
+        from utils import submissions
+        d = self._run_and_capture_dir(
+            lambda r: submissions.submit_slice(self.camp, 5, self.db,
+                                               runner=r), 1)
+        self.assertFalse(os.path.exists(d))
+
+    def test_resubmit_cleans_up(self):
+        from utils import submissions
+        d = self._run_and_capture_dir(
+            lambda r: submissions.resubmit(self.row, [2, 4], self.db,
+                                           runner=r), 0)
+        self.assertFalse(os.path.exists(d))
 
 
 class TestManageCampaign(unittest.TestCase):
@@ -5216,6 +5271,11 @@ class TestRecoverLoop(unittest.TestCase):
 
         def fake_runner(cmd, **kwargs):
             captured['cmd'] = cmd
+            # Read file contents during the runner call (before cleanup)
+            map_path = cmd[cmd.index('--map') + 1]
+            captured['map_entry'] = json.loads(Path(map_path).read_text())[0]
+            idx_path = cmd[cmd.index('--indices-file') + 1]
+            captured['idx_lines'] = Path(idx_path).read_text().splitlines()
             return MagicMock(returncode=0)
 
         ok = recover.resubmit(row, [100, 102], '/tmp/led.db',
@@ -5226,12 +5286,10 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertIn('direct', cmd)
         self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
         self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
-        map_path = cmd[cmd.index('--map') + 1]
-        entry = json.loads(Path(map_path).read_text())[0]
+        entry = captured['map_entry']
         self.assertNotIn('firstjob', entry)
         self.assertEqual(entry['njobs'], 5)
-        idx_path = cmd[cmd.index('--indices-file') + 1]
-        lines = Path(idx_path).read_text().splitlines()
+        lines = captured['idx_lines']
         self.assertEqual(lines[0], '# cnf.mu2e.T.C.0.tar')
         self.assertEqual(lines[1:], ['100', '102'])
         recover.resubmit(row, [100], '/tmp/led.db', dry_run=True,
