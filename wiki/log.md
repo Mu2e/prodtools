@@ -1036,3 +1036,54 @@ index), cluster **29255796** on jobsub05, campaign cursor still
 `--row` is the right tool whenever recovery is wanted without campaign
 advancement — do not reach for pause/resume, which trips the exit-2
 lingering-paused-campaign check for no reason.
+
+## 2026-07-21 — truncated resilient pileup file: root cause and fix
+
+Index 519 failed twice, identically, with no output AND no log. The
+reproducibility is what cracked it: attrition does not repeat.
+
+`jobsub_fetchlog -G mu2e --jobid 29255796.0@jobsub05.fnal.gov` returned
+the sandbox (this WORKS even though `Schedd.history()` times out on
+every schedd, and even for a mu2epro job run as oksuzian — reach for it
+before concluding "cause unknown"). The .out held the answer:
+
+```
+Fatal Root Error: TNetXNGFile::Init
+  .../resilient/.../NeutralsFlashCat/MDC2025ad/art/
+  dts.mu2e.NeutralsFlashCat.MDC2025ad.001430_00000637.art
+  is truncated at 1048576 bytes: should be 113643009
+```
+
+Exactly 1 MiB — an interrupted dCache copy from the 2026-07-09
+staging. The file EXISTS, so every existence-based check passed; only
+art found out, at open time.
+
+Scan of all 1470 staged pileup files by PER-DATASET median size found
+exactly one bad file. (An absolute 10 MB threshold gives ~200 false
+positives — EleBeamFlashCat files are legitimately ~3 MB while
+NeutralsFlashCat are ~112 MB. Use `size < median/10`.)
+
+Blast radius computed offline from the cnf tarball (pileup assignment
+per index is deterministic): 9 of 7000 indices — 519, 1234, 1481, 1686,
+1934, 2376, 2513, 3686, 6915. Only 519 was in the submitted range.
+
+FIX: re-staged tape -> resilient as mu2epro. Source was
+ONLINE_AND_NEARLINE so no recall. Copied to a `.restage.$$` temp,
+verified size, `mv -f` over the bad file — no window with no file.
+Verified size 113643009, ADLER32 cebd4339 matching tape (via dCache
+`.(get)(<file>)(checksums)`, no 113 MB re-read), and a ROOT open
+showing 90489 Events.
+
+ROOT GAP (not yet fixed): `stash_utils._copy_dataset` runs `cp` with no
+post-copy size or checksum check, so a partial copy is silently
+accepted at staging time. That is why this sat undetected for 12 days.
+A verify step there is the real remedy — see also the pushOutput log
+bug below, which is why the failure left no SAM log to diagnose from.
+
+SECOND BUG (not yet fixed): when the data push is skipped because mu2e
+failed, pushOutput's log push errors `parents file parents_list.txt not
+found` and STILL exits RC=0, so the log never reaches SAM. Failed jobs
+are not debuggable in SAM — defeating runmu2e's always-push-logs
+design. Corollary: `log count == dig count` when both are short does
+NOT prove "died before push"; it can equally mean the log push
+no-oped. Do not infer failure stage from that equality.
