@@ -878,3 +878,32 @@ before POMS is retired.
 Still **NOT activated** — same pre-activation checklist as before
 (now read with the new spellings), nothing installed in mu2epro's
 crontab by this work.
+
+## [2026-07-21] incident+update | first live direct campaign — jobsub_q -af unreliable, caught by count-error
+
+First production use of the sliced-campaign workflow (supervised
+manual mode, no cron): RMCPhaseSpace External mixes pushed to the
+DEDICATED map `MDC2025ar-rmcextmix.json` (2 entries, 14,000 jobs —
+deliberately NOT MDC2025-033: map separation is the cross-path
+double-submit guard now that the ownership key was decided against).
+Campaign 1 enqueued (`0NExternal`, slice 500). **First tick submitted
+ZERO jobs and exited 2 with count-error**: `jobsub_q --user mu2epro
+-af JobStatus` on this jobsub_lite returns blank attribute values,
+and some flag orders silently DROP the --user filter and dump every
+experiment's queue (13MB). Exactly the failure class the exit-code
+honesty change (spec Change 2) and checklist items 3+4 existed for —
+the loop refused to submit blind. Fix (commit 4467a7a): both queue
+probes (`total_queued`, `queue_state`) now parse the DEFAULT jobsub_q
+table, fail-closed (`_jobsub_table_states`: header required, skip
+token noise + `N total;` summaries, jobid-regex rows with one-letter
+ST at field 6, anything else → None). Empirical shapes captured
+2026-07-21: drained = header + zero summary, no rows; DAG children
+keep row geometry with the node name in OWNER. htcondor python
+bindings would eliminate parsing entirely but are NOT in the muse ops
+env (`import htcondor` fails) — recorded as a future path, stdlib
+rule holds. Second tick: 500 jobs submitted (cluster 92625184,
+indices 0-499, ledger row 1), second slice correctly cap-waited
+(690+500 > 1000). Campaign at cursor 500/7000; cap 1000 self-holds
+until the queue drains. Checklist status: items 3+4 resolved by fix,
+item 2 (real dry-run on drained row) pending the drain; kill-test
+still pending; duplicate-declare opportunistic.
