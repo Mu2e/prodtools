@@ -5013,6 +5013,7 @@ class TestSubmissionsVerbs(unittest.TestCase):
             jobsub_id='1.0@js', cluster_id='1')
         with patch.object(submissions, 'process_row',
                           return_value='complete') as pr, \
+             patch.object(submissions, 'live_clusters', return_value={}), \
              patch.object(submissions, 'top_up', return_value={}), \
              patch.object(sys, 'argv', ['submissions', '--db', self.db,
                                         'run']):
@@ -5206,8 +5207,8 @@ class TestRecoverLoop(unittest.TestCase):
             return resub_ok
 
         action = recover.process_row(
-            self.row, self.db, max_attempts, dry_run=dry_run,
-            queue_state_fn=lambda jid: qstate,
+            self.row, self.db, max_attempts, clusters={}, dry_run=dry_run,
+            queue_state_fn=lambda cid, clusters: qstate,
             verify_fn=fake_verify, resubmit_fn=fake_resubmit)
         return action, calls
 
@@ -5315,49 +5316,70 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertEqual(rows[0]['state'], 'recovered')
         self.assertIn('unwatched', rows[0]['note'])
 
-    def test_missing_jobsub_id_reported(self):
+    def test_missing_cluster_id_reported(self):
         rid2 = self.sl.record_submission(
             self.db, tarball='t2', entry={}, indices=[0],
-            jobsub_id=None, cluster_id='9')
+            jobsub_id=None, cluster_id=None)
         row2 = [r for r in self.sl.open_rows(self.db) if r['id'] == rid2][0]
         from utils import submissions as recover
         action = recover.process_row(
-            row2, self.db, 3,
-            queue_state_fn=lambda jid: self.fail('must not be called'),
+            row2, self.db, 3, clusters={'9': ['R']},
+            queue_state_fn=lambda cid, cl: self.fail('must not be called'),
             verify_fn=lambda r: ([], []),
             resubmit_fn=lambda r, m, d: self.fail('must not be called'))
         self.assertEqual(action, 'queue-error')
 
-    def test_queue_state_parsing(self):
+    def test_cluster_queue_state_logic(self):
+        from utils.submissions import cluster_queue_state as cqs
+        # None snapshot (query untrusted) → error, never drained (fail-closed)
+        self.assertEqual(cqs('9', None), 'error')
+        # cluster absent from a good snapshot → drained
+        self.assertEqual(cqs('9', {}), 'drained')
+        self.assertEqual(cqs('9', {'8': ['R']}), 'drained')
+        # any idle/running job → running
+        self.assertEqual(cqs('9', {'9': ['R']}), 'running')
+        self.assertEqual(cqs('9', {'9': ['I']}), 'running')
+        # running wins over a stray held job (don't halt a working cluster)
+        self.assertEqual(cqs('9', {'9': ['R', 'H']}), 'running')
+        # every non-terminal job held → held (all preempted, human decides)
+        self.assertEqual(cqs('9', {'9': ['H', 'H']}), 'held')
+        # only terminal rows lingering (completed/removed) → drained
+        self.assertEqual(cqs('9', {'9': ['C', 'X']}), 'drained')
+        self.assertEqual(cqs('9', {'9': ['H', 'C']}), 'held')
+        # cluster_id coerced to str (ledger may hand an int)
+        self.assertEqual(cqs(9, {'9': ['R']}), 'running')
+
+    def test_live_clusters_parsing(self):
         from utils import submissions as recover
         from test.test_unit import TestRecoverCap as T
         def r(stdout, rc=0):
             return MagicMock(returncode=rc, stdout=stdout, stderr='')
-        hdr, summ = T._HDR, T._SUM
-        row = T._row
-        # drained: header + zero-count summary, no job rows
-        self.assertEqual(recover.queue_state(
-            'x', runner=lambda *a, **k: r(hdr + '\n' + summ + '\n')),
-            'drained')
-        # running: any non-held row
-        self.assertEqual(recover.queue_state(
-            'x', runner=lambda *a, **k: r('\n'.join(
-                [hdr, summ, row('9.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
-                 row('9.1@jobsub01.fnal.gov', 'mu2epro', 'I')]) + '\n')),
-            'running')
-        # held wins over running
-        self.assertEqual(recover.queue_state(
-            'x', runner=lambda *a, **k: r('\n'.join(
-                [hdr, row('9.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
-                 row('9.1@jobsub01.fnal.gov', '|-WORKER_3', 'H')]) + '\n')),
-            'held')
-        # command failure and headerless/garbage output → error, never drained
-        self.assertEqual(recover.queue_state(
-            'x', runner=lambda *a, **k: r('', rc=1)), 'error')
-        self.assertEqual(recover.queue_state(
-            'x', runner=lambda *a, **k: r('')), 'error')
-        self.assertEqual(recover.queue_state(
-            'x', runner=lambda *a, **k: r('No jobs found\n')), 'error')
+        hdr, summ, row = T._HDR, T._SUM, T._row
+        # a good table → {cluster: [states]}, procs of one cluster aggregate,
+        # and the probe queries the --user table (not per-jobid)
+        cmd = {}
+        def run(c, capture_output=True, text=True):
+            cmd['argv'] = c
+            return r('\n'.join([
+                hdr, summ,
+                row('9.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
+                row('9.1@jobsub01.fnal.gov', 'mu2epro', 'I'),
+                row('12.0@jobsub02.fnal.gov', '|-WORKER_3', 'H'),
+            ]) + '\n')
+        self.assertEqual(recover.live_clusters(runner=run),
+                         {'9': ['R', 'I'], '12': ['H']})
+        self.assertEqual(cmd['argv'], ['jobsub_q', '--user', 'mu2epro'])
+        # empty-but-valid table → {} (a real drained account), NOT None
+        self.assertEqual(
+            recover.live_clusters(runner=lambda *a, **k: r(hdr + '\n' + summ)),
+            {})
+        # command failure / headerless / garbage row → None (fail-closed)
+        self.assertIsNone(recover.live_clusters(
+            runner=lambda *a, **k: r('', rc=1)))
+        self.assertIsNone(recover.live_clusters(
+            runner=lambda *a, **k: r('No jobs found\n')))
+        self.assertIsNone(recover.live_clusters(runner=lambda *a, **k: r(
+            '\n'.join([hdr, row('9.0@jobsub01.fnal.gov', 'mu2epro', 'Z')]))))
 
     def test_verify_row_missing_and_partial(self):
         from utils import submissions as recover

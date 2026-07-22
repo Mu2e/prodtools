@@ -99,26 +99,71 @@ def _jobsub_table_states(stdout):
     return states
 
 
-def queue_state(jobsub_id, runner=subprocess.run):
-    """'drained' | 'held' | 'running' | 'error' for a jobsub id.
+def _jobsub_table_cluster_states(stdout):
+    """{cluster_id: [states]} from jobsub_q's default table, or None when
+    the output cannot be trusted (same trust rules as
+    _jobsub_table_states — header required, any unrecognized job row
+    fails the whole parse). The cluster id is the leading integer of the
+    JOBSUBJOBID (before the first '.')."""
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+    if not any(ln.startswith('JOBSUBJOBID') for ln in lines):
+        return None
+    clusters = {}
+    for ln in lines:
+        if ln.startswith(_SKIP_PREFIXES) or ' total; ' in ln:
+            continue
+        fields = ln.split()
+        if (len(fields) < 6 or not _JOBID_RE.match(fields[0])
+                or fields[5] not in _KNOWN_STATES):
+            return None
+        cluster = fields[0].split('.', 1)[0]
+        clusters.setdefault(cluster, []).append(fields[5])
+    return clusters
 
-    Parses the default `jobsub_q --jobid` table (see
-    _jobsub_table_states). Only a successful, parseable query with ZERO
-    job rows counts as drained — anything unexpected is conservative
-    (running/error), never drained.
-    """
-    res = runner(['jobsub_q', '--jobid', jobsub_id],
-                 capture_output=True, text=True)
+
+def live_clusters(user='mu2epro', runner=subprocess.run):
+    """{cluster_id: [states]} for every cluster with jobs in `user`'s
+    default `jobsub_q --user` table, or None when the query cannot be
+    trusted (caller treats None as 'error' — never drained).
+
+    This is the drain-check's source of truth, taken ONCE per tick.
+    It replaces the old per-jobid probe `jobsub_q --jobid
+    <cluster>.<proc>@<schedd>`, which matches NOTHING on this jobsub_lite
+    and returns a valid, ZERO-row table for a fully running cluster
+    (verified 2026-07-22: 0 total while 1976 jobs of one cluster ran) —
+    the old queue_state fail-OPENED that to 'drained', prematurely
+    recovering still-running rows. The --user table is the complete
+    collector view (the same source total_queued trusts); cluster-id
+    membership in it is the reliable, fail-closed drain signal."""
+    try:
+        res = runner(['jobsub_q', '--user', user],
+                     capture_output=True, text=True)
+    except OSError:
+        return None      # jobsub_q missing/unlaunchable → fail-closed
     if res.returncode != 0:
+        return None
+    return _jobsub_table_cluster_states(res.stdout)
+
+
+def cluster_queue_state(cluster_id, clusters):
+    """'drained' | 'held' | 'running' | 'error' for a cluster, read from a
+    live_clusters() snapshot. Fail-closed: a None snapshot (query failed
+    or unparseable) is 'error', never drained. A cluster absent from the
+    snapshot, or present with only terminal (C/X) rows, is 'drained'. Any
+    idle/running/transfer/suspended job → 'running' (still working); only
+    when every non-terminal job is held → 'held' (all preempted, human
+    decides)."""
+    if clusters is None:
         return 'error'
-    states = _jobsub_table_states(res.stdout)
-    if states is None:
-        return 'error'
+    states = clusters.get(str(cluster_id))
     if not states:
         return 'drained'
-    if 'H' in states:
-        return 'held'
-    return 'running'
+    active = [s for s in states if s not in ('C', 'X')]
+    if not active:
+        return 'drained'
+    if any(s != 'H' for s in active):
+        return 'running'
+    return 'held'
 
 
 def verify_row(row, sam_lister=files_in_dataset):
@@ -409,10 +454,12 @@ def manage_campaign(db_path, camp_id, action, note=None):
     print(f"campaign {camp_id}: {action} -> {target}")
 
 
-def process_row(row, db_path, max_attempts, dry_run=False,
-                queue_state_fn=queue_state, verify_fn=verify_row,
+def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
+                queue_state_fn=cluster_queue_state, verify_fn=verify_row,
                 resubmit_fn=resubmit):
     """Drive one ledger row through the gate/verify/act sequence.
+    `clusters` is the per-tick live_clusters() snapshot the drain-check
+    reads (None → the snapshot failed → every row skips as queue-error).
 
     Returns the action taken: 'running' | 'held' | 'queue-error' |
     'verify-error' | 'complete' | 'resubmitted' | 'resubmit-error' |
@@ -420,20 +467,20 @@ def process_row(row, db_path, max_attempts, dry_run=False,
     'child-active' | 'child-missing' | 'would-recover'.
     """
     rid = row['id']
-    if not row['jobsub_id']:
-        print(f"row {rid}: no full jobsub id recorded — cannot "
+    if not row['cluster_id']:
+        print(f"row {rid}: no cluster id recorded — cannot "
               f"drain-check; update the row manually")
         return 'queue-error'
-    state = queue_state_fn(row['jobsub_id'])
+    state = queue_state_fn(row['cluster_id'], clusters)
     if state == 'running':
         print(f"row {rid}: jobs still in queue — skip")
         return 'running'
     if state == 'held':
-        print(f"row {rid}: HELD jobs in {row['jobsub_id']} — human "
+        print(f"row {rid}: HELD jobs in cluster {row['cluster_id']} — human "
               f"decision needed (release or rm); loop will not act")
         return 'held'
     if state == 'error':
-        print(f"row {rid}: jobsub_q failed — skip")
+        print(f"row {rid}: jobsub_q --user failed — skip (fail-closed)")
         return 'queue-error'
     try:
         missing, partial = verify_fn(row)
@@ -613,10 +660,18 @@ def _run_pass(args):
         print(f"No active submissions ({args.db}).")
 
     summary = {}
-    for row in rows:
-        action = process_row(row, args.db, args.max_attempts,
-                             dry_run=args.dry_run)
-        summary[action] = summary.get(action, 0) + 1
+    if rows:
+        # ONE queue snapshot per tick drives every row's drain-check. None
+        # means the jobsub_q --user query could not be trusted — every row
+        # then skips as queue-error (fail-closed), never guessed drained.
+        clusters = live_clusters()
+        if clusters is None:
+            print("drain-check: jobsub_q --user failed — no row verified "
+                  "this tick (fail-closed)")
+        for row in rows:
+            action = process_row(row, args.db, args.max_attempts,
+                                 clusters=clusters, dry_run=args.dry_run)
+            summary[action] = summary.get(action, 0) + 1
 
     if args.row is None:
         # Top-up AFTER the recovery pass: resubmissions are already in
