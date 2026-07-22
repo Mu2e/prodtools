@@ -1109,3 +1109,16 @@ checksum verify — the actual root cause of the truncated file — and
 pushOutput's log push silently no-ops on the failure path (fixed the
 specific parents_list.txt trigger in 81962f7, but pushOutput still exits
 0 after an internal ERROR).
+
+## 2026-07-22 — RMCPhaseSpace0NExternalMix1BB: production resumed (1000→1500)
+
+Index-519 recovery closed: the re-staged NeutralsFlashCat file let attempt 3
+(cluster 92640949) produce output; outputs for indices 0-999 now 1000/1000
+(dig+log). Ledger row 4 reconciled `complete` on this tick — chain 2→3→4
+fully resolved.
+
+Resumed production at the agreed conservative pace (--max-queued 1000, "one
+more slice"): cluster **29263198** (jobsub05), 500 jobs, indices 1000-1499,
+ledger row 5. Cursor 1000→1500/7000. Self-holds at cap (794 in flight).
+Dry-run predicted it exactly (row 4 would-complete + 1 would-slice). Cron
+still not installed — advancing via supervised manual ticks.
