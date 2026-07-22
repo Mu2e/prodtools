@@ -5741,7 +5741,7 @@ class TestFileSizesInDataset(unittest.TestCase):
             FI("dts.mu2e.Pile.CampB.001430_00000000.art", 1, 111, 9),
             FI("dts.mu2e.Pile.CampB.001430_00000001.art", 2, 222, 9),
         ]
-        wrapper = MagicMock()
+        wrapper = object.__new__(samweb_wrapper.SAMWebWrapper)
         wrapper.client = fake_client
         with patch.object(samweb_wrapper, "get_samweb_wrapper",
                           return_value=wrapper):

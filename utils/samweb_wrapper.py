@@ -381,10 +381,7 @@ def get_metadata(filename: str) -> Dict:
 
 def file_sizes_in_dataset(dataset: str) -> Dict[str, int]:
     """{filename: file_size} for a dataset (one list-files --fileinfo)."""
-    wrapper = get_samweb_wrapper()
-    q = q_dataset(dataset)
-    return {fi.file_name: fi.file_size
-            for fi in wrapper.client.listFiles(dimensions=q, fileinfo=True)}
+    return get_samweb_wrapper().file_sizes_in_dataset(dataset)
 
 def definition_creation_date(defname: str) -> Optional[datetime]:
     """Creation time of a SAM definition, or None if unavailable."""
