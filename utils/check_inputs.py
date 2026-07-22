@@ -48,12 +48,16 @@ def _group_by_dataset(files):
 
 def split_inputs(tarball_path):
     """(primary_by_ds, auxin_by_ds): distinct input files grouped by
-    dataset, from the tarball's tbs.inputs (primary) and tbs.auxin
-    (pileup). Frozen in the tarball — no per-index reconstruction."""
+    dataset. Primary = tbs.inputs + tbs.samplinginput (the resampler's
+    primary input, routed like any other primary — tape/disk locality,
+    never the resilient size check). Pileup = tbs.auxin. Frozen in the
+    tarball — no per-index reconstruction."""
     jp = Mu2eJobPars(tarball_path)
     tbs = jp.json_data.get('tbs', {})
-    return (_group_by_dataset(_section_files(tbs, 'inputs')),
-            _group_by_dataset(_section_files(tbs, 'auxin')))
+    primary = _group_by_dataset(_section_files(tbs, 'inputs')
+                                + _section_files(tbs, 'samplinginput'))
+    auxin = _group_by_dataset(_section_files(tbs, 'auxin'))
+    return (primary, auxin)
 
 
 def _default_disk_size(pnfs_path):
@@ -68,8 +72,16 @@ def _default_disk_size(pnfs_path):
 
 def check_resilient(dataset, files, sam_sizes, disk_size):
     """Verify pileup files staged to resilient: each present AND its size
-    equals the SAM-recorded size. Returns a list of Problems."""
-    expected = sam_sizes(dataset)          # {filename: int}
+    equals the SAM-recorded size. Returns a list of Problems.
+
+    Fails closed: if the SAM size lookup itself raises (e.g. a SAM
+    outage), every file in this dataset becomes a query_error Problem
+    rather than letting the exception escape the enqueue gate."""
+    try:
+        expected = sam_sizes(dataset)      # {filename: int}
+    except Exception as e:
+        return [Problem(dataset, f, 'query_error',
+                        f'SAM size lookup failed: {e}') for f in files]
     problems = []
     for f in files:
         path = resilient_path(f)

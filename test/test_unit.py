@@ -5644,7 +5644,7 @@ class TestSplitInputs(unittest.TestCase):
     splitting primary (tbs.inputs) from pileup (tbs.auxin), grouped by
     dataset and deduplicated — no per-index reconstruction."""
 
-    def _tar(self, inputs=None, auxin=None):
+    def _tar(self, inputs=None, auxin=None, samplinginput=None):
         jp = {
             "code": "", "setup": "/cvmfs/x/setup.sh",
             "tbs": {"seed": "services.SeedService.baseSeed"},
@@ -5655,6 +5655,8 @@ class TestSplitInputs(unittest.TestCase):
             jp["tbs"]["inputs"] = inputs
         if auxin is not None:
             jp["tbs"]["auxin"] = auxin
+        if samplinginput is not None:
+            jp["tbs"]["samplinginput"] = samplinginput
         return _make_tarball(jp)
 
     def test_splits_primary_and_pileup_by_dataset(self):
@@ -5697,6 +5699,16 @@ class TestSplitInputs(unittest.TestCase):
         self.assertEqual(p.kind, "truncated")
         with self.assertRaises(Exception):
             p.kind = "missing"
+
+    def test_samplinginput_folded_into_primary(self):
+        from utils.check_inputs import split_inputs
+        tar = self._tar(
+            samplinginput={"physics.filters.resampler.fileNames": [1, [
+                "dts.mu2e.NeutralsCat.MDC2025ab.001430_00000007.art"]]})
+        primary, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(set(primary), {"dts.mu2e.NeutralsCat.MDC2025ab.art"})
+        self.assertEqual(auxin, {})
 
 
 class TestCheckResilient(unittest.TestCase):
@@ -5744,6 +5756,17 @@ class TestCheckResilient(unittest.TestCase):
             disk_size=lambda p: 100)
         self.assertEqual(len(probs), 1)
         self.assertEqual(probs[0].kind, "query_error")
+
+    def test_sam_lookup_raises_is_query_error(self):
+        from utils.check_inputs import check_resilient
+        def boom(ds):
+            raise RuntimeError("SAM down")
+        probs = check_resilient(
+            self.DS, [self.F1, self.F2],
+            sam_sizes=boom,
+            disk_size=lambda p: 100)
+        self.assertEqual([p.kind for p in probs], ["query_error", "query_error"])
+        self.assertEqual(len(probs), 2)
 
     def test_default_disk_size_absent_is_none(self):
         from utils.check_inputs import _default_disk_size
@@ -5894,7 +5917,7 @@ class TestCheckInputs(unittest.TestCase):
     """check_inputs assembles split_inputs + the two checks with the
     inloc routing, returning (ok, problems)."""
 
-    def _tar(self, inputs=None, auxin=None):
+    def _tar(self, inputs=None, auxin=None, samplinginput=None):
         jp = {"code": "", "setup": "/cvmfs/x/setup.sh",
               "tbs": {"seed": "s"}, "jobname": "cnf.mu2e.T.C.0.tar",
               "owner": "mu2e", "dsconf": "C"}
@@ -5902,6 +5925,8 @@ class TestCheckInputs(unittest.TestCase):
             jp["tbs"]["inputs"] = inputs
         if auxin is not None:
             jp["tbs"]["auxin"] = auxin
+        if samplinginput is not None:
+            jp["tbs"]["samplinginput"] = samplinginput
         return _make_tarball(jp)
 
     PRIM = "dts.mu2e.Prim.CampA.001430_00000000.art"
@@ -5985,6 +6010,20 @@ class TestCheckInputs(unittest.TestCase):
             dataset_location=lambda ds: "enstore")
         os.unlink(tar)
         self.assertTrue(ok)
+
+    def test_samplinginput_nearline_blocks(self):
+        from utils.check_inputs import check_inputs
+        SAMP = "dts.mu2e.NeutralsCat.MDC2025ab.001430_00000007.art"
+        tar = self._tar(samplinginput={"physics.filters.r.fileNames": [1, [SAMP]]})
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {},
+            disk_size=lambda p: None,
+            locality=lambda loc, fs: {f: "NEARLINE" for f in fs},
+            dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["nearline"])
 
 
 class TestCheckInputsCLI(unittest.TestCase):
