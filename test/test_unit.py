@@ -5867,6 +5867,103 @@ class TestDefaultLocalityParsing(unittest.TestCase):
         self.assertEqual(out, {self.F1: "ERROR"})
 
 
+class TestCheckInputs(unittest.TestCase):
+    """check_inputs assembles split_inputs + the two checks with the
+    inloc routing, returning (ok, problems)."""
+
+    def _tar(self, inputs=None, auxin=None):
+        jp = {"code": "", "setup": "/cvmfs/x/setup.sh",
+              "tbs": {"seed": "s"}, "jobname": "cnf.mu2e.T.C.0.tar",
+              "owner": "mu2e", "dsconf": "C"}
+        if inputs is not None:
+            jp["tbs"]["inputs"] = inputs
+        if auxin is not None:
+            jp["tbs"]["auxin"] = auxin
+        return _make_tarball(jp)
+
+    PRIM = "dts.mu2e.Prim.CampA.001430_00000000.art"
+    PILE = "dts.mu2e.Pile.CampB.001430_00000005.art"
+
+    def _tar_both(self):
+        return self._tar(
+            inputs={"source.fileNames": [1, [self.PRIM]]},
+            auxin={"physics.filters.M.fileNames": [1, [self.PILE]]})
+
+    def test_all_clean(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar_both()
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: 100,
+            locality=lambda loc, fs: {f: "ONLINE" for f in fs},
+            dataset_location=lambda ds: "dcache")
+        os.unlink(tar)
+        self.assertTrue(ok)
+        self.assertEqual(probs, [])
+
+    def test_resilient_pileup_checked_by_size_not_mdh(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar_both()
+        called = {"mdh": []}
+        def loc(mdh_loc, fs):
+            called["mdh"].extend(fs)
+            return {f: "ONLINE" for f in fs}
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: 1048576,      # truncated pileup
+            locality=loc, dataset_location=lambda ds: "dcache")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["truncated"])
+        # pileup went through the resilient size path, never mdh
+        self.assertNotIn(self.PILE, called["mdh"])
+
+    def test_nearline_primary_blocks(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar_both()
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: 100,
+            locality=lambda loc, fs: {f: "NEARLINE" for f in fs},
+            dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["nearline"])
+
+    def test_missing_resilient_not_reclassified_as_tape(self):
+        # The flagged subtlety: a pileup file absent from resilient must
+        # be reported 'missing', NOT quietly checked as a tape input.
+        from utils.check_inputs import check_inputs
+        tar = self._tar(auxin={"physics.filters.M.fileNames":
+                               [1, [self.PILE]]})
+        def loc(mdh_loc, fs):
+            raise AssertionError("pileup must not reach the tape path")
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: None,          # purged from resilient
+            locality=loc, dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["missing"])
+
+    def test_non_resilient_inloc_routes_pileup_to_tape(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar(auxin={"physics.filters.M.fileNames":
+                               [1, [self.PILE]]})
+        ok, probs = check_inputs(
+            tar, "tape",
+            sam_sizes=lambda ds: {},
+            disk_size=lambda p: None,
+            locality=lambda loc, fs: {f: "ONLINE" for f in fs},
+            dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertTrue(ok)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

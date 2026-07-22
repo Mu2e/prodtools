@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName
 from utils.file_resolver import resilient_path, infer_dataset_location
+from utils.samweb_wrapper import file_sizes_in_dataset
 
 
 @dataclass(frozen=True)
@@ -145,3 +146,27 @@ def check_tape(dataset, files, locality, dataset_location):
             problems.append(Problem(dataset, f, 'query_error',
                                     f'locality query failed for {f}'))
     return problems
+
+
+def check_inputs(tarball_path, inloc, *,
+                 sam_sizes=file_sizes_in_dataset,
+                 disk_size=_default_disk_size,
+                 locality=_default_locality,
+                 dataset_location=infer_dataset_location):
+    """Verify a campaign's inputs are readable. Returns (ok, problems).
+
+    Pileup (tbs.auxin) staged to resilient is checked by direct size vs
+    SAM (mdh cannot see resilient); everything else — the primary, and
+    pileup under a non-resilient inloc — is checked by tape/disk locality.
+    Read-only: never remediates. Callers exit 2 when ok is False.
+    """
+    primary, auxin = split_inputs(tarball_path)
+    problems = []
+    for ds, files in auxin.items():
+        if inloc == 'resilient':
+            problems += check_resilient(ds, files, sam_sizes, disk_size)
+        else:
+            problems += check_tape(ds, files, locality, dataset_location)
+    for ds, files in primary.items():
+        problems += check_tape(ds, files, locality, dataset_location)
+    return (not problems, problems)
