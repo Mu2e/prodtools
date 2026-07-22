@@ -5616,6 +5616,66 @@ class TestPauseNotePreservation(unittest.TestCase):
         self.assertEqual(self._note(), 'operator pause')
 
 
+class TestSplitInputs(unittest.TestCase):
+    """split_inputs reads the frozen input file lists from a cnf tarball,
+    splitting primary (tbs.inputs) from pileup (tbs.auxin), grouped by
+    dataset and deduplicated — no per-index reconstruction."""
+
+    def _tar(self, inputs=None, auxin=None):
+        jp = {
+            "code": "", "setup": "/cvmfs/x/setup.sh",
+            "tbs": {"seed": "services.SeedService.baseSeed"},
+            "jobname": "cnf.mu2e.TestDesc.TestConf.0.tar",
+            "owner": "mu2e", "dsconf": "TestConf",
+        }
+        if inputs is not None:
+            jp["tbs"]["inputs"] = inputs
+        if auxin is not None:
+            jp["tbs"]["auxin"] = auxin
+        return _make_tarball(jp)
+
+    def test_splits_primary_and_pileup_by_dataset(self):
+        from utils.check_inputs import split_inputs
+        tar = self._tar(
+            inputs={"source.fileNames": [1, [
+                "dts.mu2e.Prim.CampA.001430_00000000.art",
+                "dts.mu2e.Prim.CampA.001430_00000001.art"]]},
+            auxin={"physics.filters.M.fileNames": [1, [
+                "dts.mu2e.Pile.CampB.001430_00000005.art"]]},
+        )
+        primary, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(set(primary), {"dts.mu2e.Prim.CampA.art"})
+        self.assertEqual(len(primary["dts.mu2e.Prim.CampA.art"]), 2)
+        self.assertEqual(set(auxin), {"dts.mu2e.Pile.CampB.art"})
+
+    def test_dedups_repeated_files(self):
+        from utils.check_inputs import split_inputs
+        f = "dts.mu2e.Pile.CampB.001430_00000005.art"
+        tar = self._tar(auxin={
+            "physics.filters.A.fileNames": [1, [f]],
+            "physics.filters.B.fileNames": [1, [f]],
+        })
+        _, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(auxin["dts.mu2e.Pile.CampB.art"], [f])
+
+    def test_missing_sections_yield_empty(self):
+        from utils.check_inputs import split_inputs
+        tar = self._tar()
+        primary, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(primary, {})
+        self.assertEqual(auxin, {})
+
+    def test_problem_is_frozen(self):
+        from utils.check_inputs import Problem
+        p = Problem("ds", "f.art", "truncated", "detail")
+        self.assertEqual(p.kind, "truncated")
+        with self.assertRaises(Exception):
+            p.kind = "missing"
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
