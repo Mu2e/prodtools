@@ -5,11 +5,12 @@ Read-only: reports problems, never remediates. Blocks (exit 2) when any
 input is unreadable so a slice of jobs is not launched to die in bulk.
 """
 import os
+import subprocess
 from dataclasses import dataclass
 
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName
-from utils.file_resolver import resilient_path
+from utils.file_resolver import resilient_path, infer_dataset_location
 
 
 @dataclass(frozen=True)
@@ -80,4 +81,67 @@ def check_resilient(dataset, files, sam_sizes, disk_size):
             problems.append(Problem(dataset, f, 'truncated',
                                     f'{actual} bytes on disk, SAM expects '
                                     f'{expected[f]}'))
+    return problems
+
+
+_LOC_TO_MDH = {'enstore': 'tape', 'dcache': 'disk'}
+_LOCALITY_TOKENS = ('ONLINE', 'NEARLINE', 'ONLINE_AND_NEARLINE')
+
+
+def _default_locality(mdh_loc, filenames):
+    """{filename: state} via `mdh query-dcache -o -l <mdh_loc>`.
+
+    stdout: one locality token per FOUND file, in input order.
+    stderr: 'Error: File not found in dCache: <path>' per missing file.
+    Reconcile missing files by basename, map the rest positionally, and
+    fail closed (all ERROR) on any count mismatch or subprocess failure.
+    """
+    filenames = list(filenames)
+    cmd = ['mdh', 'query-dcache', '-o', '-l', mdh_loc] + filenames
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except (subprocess.SubprocessError, OSError):
+        return {f: 'ERROR' for f in filenames}
+
+    missing = set()
+    for line in proc.stderr.splitlines():
+        if 'File not found in dCache' in line:
+            missing.add(os.path.basename(line.split('dCache:')[-1].strip()))
+
+    states = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    found = [f for f in filenames if f not in missing]
+    if len(states) != len(found):
+        return {f: 'ERROR' for f in filenames}   # fail closed
+
+    result = {f: 'MISSING' for f in missing}
+    for f, s in zip(found, states):
+        result[f] = s if s in _LOCALITY_TOKENS else 'ERROR'
+    return result
+
+
+def check_tape(dataset, files, locality, dataset_location):
+    """Verify tape/persistent inputs are readable without a tape recall.
+    NEARLINE (evicted) → block with a /prestage hint. Returns Problems."""
+    loc = dataset_location(dataset)
+    mdh_loc = _LOC_TO_MDH.get(loc)
+    if mdh_loc is None:
+        return [Problem(dataset, f, 'query_error',
+                        f'unknown storage location {loc!r} for {dataset}')
+                for f in files]
+    states = locality(mdh_loc, files)
+    problems = []
+    for f in files:
+        st = states.get(f, 'ERROR')
+        if st in ('ONLINE', 'ONLINE_AND_NEARLINE'):
+            continue
+        if st == 'NEARLINE':
+            problems.append(Problem(dataset, f, 'nearline',
+                                    f'not staged (NEARLINE); run '
+                                    f'/prestage {dataset}'))
+        elif st == 'MISSING':
+            problems.append(Problem(dataset, f, 'missing',
+                                    f'absent from dCache {mdh_loc}'))
+        else:
+            problems.append(Problem(dataset, f, 'query_error',
+                                    f'locality query failed for {f}'))
     return problems

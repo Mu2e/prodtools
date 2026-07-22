@@ -5754,6 +5754,119 @@ class TestFileSizesInDataset(unittest.TestCase):
         self.assertTrue(kwargs.get("fileinfo"))
 
 
+class TestCheckTape(unittest.TestCase):
+    """Primary / tape inputs: NEARLINE (evicted) must block with a
+    /prestage hint; ONLINE passes; unknown storage or query failure fails
+    closed."""
+
+    DS = "dts.mu2e.Prim.CampA.art"
+    F1 = "dts.mu2e.Prim.CampA.001430_00000000.art"
+    F2 = "dts.mu2e.Prim.CampA.001430_00000001.art"
+
+    def test_online_passes(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1, self.F2],
+            locality=lambda loc, fs: {self.F1: "ONLINE",
+                                      self.F2: "ONLINE_AND_NEARLINE"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(probs, [])
+
+    def test_nearline_blocks_with_prestage_hint(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "NEARLINE"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "nearline")
+        self.assertIn("/prestage", probs[0].detail)
+
+    def test_disk_dataset_queries_disk_location(self):
+        from utils.check_inputs import check_tape
+        seen = {}
+        def loc(mdh_loc, fs):
+            seen["loc"] = mdh_loc
+            return {self.F1: "ONLINE"}
+        probs = check_tape(self.DS, [self.F1], locality=loc,
+                           dataset_location=lambda ds: "dcache")
+        self.assertEqual(probs, [])
+        self.assertEqual(seen["loc"], "disk")
+
+    def test_enstore_dataset_queries_tape_location(self):
+        from utils.check_inputs import check_tape
+        seen = {}
+        def loc(mdh_loc, fs):
+            seen["loc"] = mdh_loc
+            return {self.F1: "ONLINE"}
+        check_tape(self.DS, [self.F1], locality=loc,
+                   dataset_location=lambda ds: "enstore")
+        self.assertEqual(seen["loc"], "tape")
+
+    def test_missing_reported(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "MISSING"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(probs[0].kind, "missing")
+
+    def test_unknown_storage_location_fails_closed(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "ONLINE"},
+            dataset_location=lambda ds: "N/A")
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "query_error")
+
+    def test_locality_error_fails_closed(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "ERROR"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(probs[0].kind, "query_error")
+
+
+class TestDefaultLocalityParsing(unittest.TestCase):
+    """_default_locality parses `mdh query-dcache -o`: stdout carries one
+    locality token per FOUND file in input order; stderr carries an
+    'Error: File not found in dCache: <path>' line per missing file. A
+    count mismatch fails closed."""
+
+    F1 = "dts.mu2e.Prim.CampA.001430_00000000.art"
+    F2 = "dts.mu2e.Prim.CampA.001430_00000001.art"
+
+    def _run(self, stdout, stderr, rc=0):
+        from utils.check_inputs import _default_locality
+        completed = MagicMock(stdout=stdout, stderr=stderr, returncode=rc)
+        with patch("utils.check_inputs.subprocess.run", return_value=completed):
+            return _default_locality("tape", [self.F1, self.F2])
+
+    def test_all_found(self):
+        out = self._run("ONLINE \nNEARLINE \n", "")
+        self.assertEqual(out, {self.F1: "ONLINE", self.F2: "NEARLINE"})
+
+    def test_one_missing_reconciled_by_path(self):
+        out = self._run(
+            "ONLINE \n",
+            f"Error: File not found in dCache: /pnfs/mu2e/tape/x/{self.F2}\n")
+        self.assertEqual(out, {self.F1: "ONLINE", self.F2: "MISSING"})
+
+    def test_count_mismatch_fails_closed(self):
+        # two found files claimed but only one status line, no missing
+        out = self._run("ONLINE \n", "")
+        self.assertEqual(out, {self.F1: "ERROR", self.F2: "ERROR"})
+
+    def test_subprocess_failure_fails_closed(self):
+        from utils.check_inputs import _default_locality
+        with patch("utils.check_inputs.subprocess.run",
+                   side_effect=OSError("mdh not found")):
+            out = _default_locality("tape", [self.F1])
+        self.assertEqual(out, {self.F1: "ERROR"})
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
