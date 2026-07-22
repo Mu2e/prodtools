@@ -77,7 +77,7 @@ When regenerating, read in this order:
     user-facing CLI: `pomsMonitor`, `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `mkrecovery`, `jobquery`,
-    `submit_map`, `submissions`, `copy_to_stash`. Ops scripts
+    `submit_map`, `submissions`, `check_inputs`, `copy_to_stash`. Ops scripts
     (`install_prodtools.sh`, `update_pomsmonitor_web`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
     key flags. Enumerate from the current `bin/` directory — add any new
@@ -101,6 +101,15 @@ When regenerating, read in this order:
       campaign paused (crash-window overlap), queue-count failure,
       lingering paused campaign (repeats every tick until a human
       resumes or cancels it).
+    - `check_inputs` — one-line role ("pre-flight check that a
+      campaign's input files are readable before jobs launch: resilient
+      pileup present and correctly sized vs SAM, tape inputs staged /
+      not NEARLINE"). Cover: it is read-only and exits 2 on any problem
+      (never remediates — points at `/prestage` for NEARLINE inputs);
+      the `--inloc` flag (default `resilient`); accepts one or more cnf
+      tarballs; and that `submit_map --enqueue` runs it automatically as
+      a gate (a failing entry blocks with no campaign created). Note it
+      needs no mu2epro — it is a status check, safe to run as yourself.
 12. **Troubleshooting** — only entries that correspond to real error
     messages produced by current code. Remove stale ones.
 

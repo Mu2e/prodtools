@@ -1087,3 +1087,25 @@ are not debuggable in SAM — defeating runmu2e's always-push-logs
 design. Corollary: `log count == dig count` when both are short does
 NOT prove "died before push"; it can equally mean the log push
 no-oped. Do not infer failure stage from that equality.
+
+## 2026-07-21 — input pre-flight check shipped (check_inputs)
+
+New `utils/check_inputs.py` + `bin/check_inputs` + a gate in
+`submit_map --enqueue`. Motivated by today's index-519 incident: a
+1 MiB truncated pileup replica on resilient that passed every existence
+check and killed 9 of 7000 jobs deterministically. The check verifies a
+campaign's inputs are readable BEFORE jobs launch — resilient pileup
+present and byte-size-matching SAM (direct stat; mdh is blind to
+resilient), tape inputs staged (mdh query-dcache, not NEARLINE).
+Read-only, block-only (exit 2), fails closed. Detects and defers
+prestaging to /prestage; the enqueue gate refuses to create a campaign
+with unreadable inputs. Built via subagent-driven-development (7 tasks,
+TDD); suite 474 → 507. Full rationale on
+[[2026-07-21-input-preflight-check]].
+
+Still open from the incident (NOT addressed by this feature): staging
+(`stash_utils._copy_dataset`) accepts a partial `cp` with no size/
+checksum verify — the actual root cause of the truncated file — and
+pushOutput's log push silently no-ops on the failure path (fixed the
+specific parents_list.txt trigger in 81962f7, but pushOutput still exits
+0 after an internal ERROR).

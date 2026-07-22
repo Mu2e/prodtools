@@ -9,6 +9,7 @@
 <!-- entries added by wiki-ingest -->
 
 ### Decisions
+- [[2026-07-21-input-preflight-check]] — `check_inputs` gate: verify a campaign's inputs are readable before jobs launch (resilient pileup present+sized vs SAM by direct stat; tape inputs staged via mdh — mdh is blind to resilient). Read-only, block-only (exit 2), fails closed; wired into `submit_map --enqueue`. Motivated by the index-519 truncated-pileup incident _(2026-07-21)_
 - [[2026-07-12-hygiene-tiers-and-kept-duplication]] — tiers 1+2 consolidations (drifted fcl writer, cnf-name contract) + the deliberate-duplication do-not-fix list _(2026-07-12)_
 - [[2026-04-21-extend-jobdef-per-index-overrides]] — add `event_id_per_index` to tbs; per-index linear overrides `offset + index × step` for any fcl key _(ingested 2026-04-21)_
 - [[2026-04-21-fold-pbi-into-json2jobdef]] — delete the `gen_pbi_sequence` utility; add a `split_lines` input_data shape to `json2jobdef` _(ingested 2026-04-21)_

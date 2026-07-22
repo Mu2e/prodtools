@@ -631,7 +631,12 @@ cannot be enqueued — a campaign needs a positive job count to slice.
 Enqueueing a tarball that already has an *active or paused* campaign is
 a hard error — a paused campaign still owns its index space, so pausing
 does not free the tarball for a new campaign; only `submissions cancel
-<ID>` does (see Troubleshooting). `submissions run`'s top-up phase
+<ID>` does (see Troubleshooting). Before a campaign row is written,
+`--enqueue` runs the `check_inputs` pre-flight (below) on the entry's
+tarball: if a resilient pileup file is missing/truncated or a tape
+input is not staged, the entry is refused (exit 2) with a grouped
+report and no campaign is created — fix the inputs (e.g. `/prestage`)
+and re-run. `submissions run`'s top-up phase
 (below) then feeds whole slices to the grid on its own, hourly, until
 the campaign is fully submitted. Before every slice, top-up also checks
 the ledger for indices that already cover the slice's absolute window
@@ -753,6 +758,31 @@ Verbs:
   `10000`, resolved once per invocation; nothing persists between runs
   — the effective cap is always readable off the crontab line via
   `submissions status`.
+
+### `check_inputs`
+
+Pre-flight check that a campaign's input files are readable before jobs
+launch. Reads the frozen input list from the cnf tarball and verifies
+each group at its real read location: resilient pileup (`tbs.auxin`) is
+present and byte-size-matches SAM; tape/persistent inputs (`tbs.inputs`)
+are staged (not `NEARLINE`). Read-only — it never remediates; a
+`NEARLINE` tape input is reported with the `/prestage <dataset>` command
+to run. Exits 0 when every input is readable, 2 when any is missing,
+truncated, or unstaged.
+
+```bash
+check_inputs cnf.mu2e.RMCPhaseSpace0NExternalMix1BB.MDC2025ar_best_v1_3.0.tar
+check_inputs --inloc resilient cnf.mu2e.RMCPhaseSpace1NExternalMix1BB.MDC2025ar_best_v1_3.0.tar
+```
+
+Flags: `--inloc {resilient,...}` (input location the jobs read from,
+default `resilient` — the mixing default), and one or more positional
+`cnf.*.tar` tarballs. Needs no mu2epro — it is a status check, safe to
+run as yourself. `submit_map --enqueue` runs this same check
+automatically as a gate, so a campaign is never created with unreadable
+inputs; run it by hand before launching, or when a monthly resilient
+purge is suspected mid-campaign (the enqueue gate only fires at campaign
+creation, not per slice).
 
 ### `copy_to_stash`
 
