@@ -1122,3 +1122,38 @@ more slice"): cluster **29263198** (jobsub05), 500 jobs, indices 1000-1499,
 ledger row 5. Cursor 1000→1500/7000. Self-holds at cap (794 in flight).
 Dry-run predicted it exactly (row 4 would-complete + 1 would-slice). Cron
 still not installed — advancing via supervised manual ticks.
+
+## 2026-07-22 — INCIDENT+FIX: submissions drain-check fail-opened (premature recovery)
+
+Raised slice_size 500→2000 (manual `UPDATE campaigns` — no CLI verb for it;
+cap is the per-tick lever, slice_size is frozen at enqueue). The 2000-job
+slice fed cleanly (cluster 29281091, indices 4000-5999, row 13; cursor
+4000→6000/7000). But the same tick's verify pass marked rows 9/10
+`recovered` and resubmitted 142+158 indices **while ~126 of their jobs were
+still state R** — a premature double-submit.
+
+Root cause: `queue_state()` probed `jobsub_q --jobid <cluster>.0@schedd`
+(the representative proc-form id stored per row). On this jobsub_lite the
+proc-qualified form matches NOTHING — `jobsub_q --jobid 29281091.0@jobsub05`
+returned `0 total` while `jobsub_q --group mu2e | grep '^29281091\.'` showed
+1976 running (row 13's own slice, proc .0 among them). queue_state fail-
+OPENED that empty-but-valid table to `drained`, so the skip-gate never
+fired. Cluster-form `<cluster>@schedd` was ALSO unreliable (undercounts /
+zeros during churn) — jobsub_q is eventually-consistent across query paths,
+so the fix can't be a smarter count.
+
+Fix (commit e090116): fail-closed cluster-membership check. `live_clusters()`
+takes ONE `jobsub_q --user mu2epro` snapshot per tick (the complete
+collector view `total_queued` already trusts) → `{cluster:[states]}` or None
+(untrusted/unlaunchable). `cluster_queue_state(cluster_id, snapshot)`:
+None→error (never drained), absent/terminal-only→drained, any idle/running→
+running, all-held→held. `process_row` keys on `row['cluster_id']`;
+`_run_pass` fetches the snapshot once and threads it in. Validated live
+(dry-run): rows 11/12/13 (running) now correctly "jobs still in queue —
+skip". Suite 511→512.
+
+The already-fired recovery of rows 9/10 is self-healing — duplicate outputs
+dedupe via pushOutput/completeness — so no cleanup. **Large slice_size
+amplifies this exact hazard** (a 2000-job slice would resubmit up to ~2000
+duplicates on a fail-open tick); the fix removes the amplifier. See
+[[2026-07-18-direct-recovery-loop]].
