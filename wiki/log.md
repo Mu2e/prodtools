@@ -1157,3 +1157,25 @@ dedupe via pushOutput/completeness — so no cleanup. **Large slice_size
 amplifies this exact hazard** (a 2000-job slice would resubmit up to ~2000
 duplicates on a fail-open tick); the fix removes the amplifier. See
 [[2026-07-18-direct-recovery-loop]].
+
+## 2026-07-22 — RMCPhaseSpace0NExternalMix1BB: fully submitted 7000/7000 (fix validated in prod)
+
+Closing tick (fixed code, cap 3500) fed the final slice: cluster **92690597**
+(jobsub02), indices 6000-6999, 1000 jobs, ledger row 14. Cursor 6000→7000;
+`campaign 1: fully submitted — complete`.
+
+The same tick proved the drain-check fix (e090116) in production: **row 13
+(the 2000-slice's 3 still-running tail) correctly `jobs still in queue —
+skip`** instead of being mass-recovered. Rows 11/12 (the rows 9/10 recovery
+children) verified `complete` (142+158 indices) — outputs landed, chain
+closed. Jobs succeed and register promptly: `dig` dataset held 5997/6000
+files for indices 0-5999 with exactly the 3 in-flight jobs outstanding; no
+duplicate inflation despite the earlier premature recovery (self-healing
+dedup confirmed).
+
+Review verdict (brainstorming pass): fix accepted as-is. `--user mu2epro`
+empirically matches the independent `--group mu2e` view cluster-for-cluster,
+so the membership drain signal is complete and trustworthy; residual SAM-
+registration-lag window is narrow and self-healing — a debounce would be
+over-engineering. Remaining: rows 13 (3 jobs) + 14 (1000 jobs) verify as
+they drain. See [[2026-07-18-direct-recovery-loop]].
