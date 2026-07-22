@@ -4326,11 +4326,23 @@ class TestEnqueue(unittest.TestCase):
     def setUp(self):
         import tempfile
         from utils import submission_ledger as sl
+        from utils import submit
         self.sl = sl
         self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
         self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
                       'njobs': 10, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
+        # Task 6 enqueue gate reads the tarball; stub tarball resolution
+        # and the pre-flight check so these campaign-registration tests
+        # stay file-free (as they were before the gate existed).
+        tb_patcher = patch.object(submit, '_ensure_local_tarball',
+                                  return_value=Path(self.entry['tarball']))
+        ci_patcher = patch.object(submit, 'check_inputs',
+                                  return_value=(True, []))
+        tb_patcher.start()
+        ci_patcher.start()
+        self.addCleanup(tb_patcher.stop)
+        self.addCleanup(ci_patcher.stop)
 
     def _opts(self, dry_run=False, slice_size=100, memory=None):
         import argparse
@@ -4406,11 +4418,22 @@ class TestEnqueueErrorStyle(unittest.TestCase):
     def setUp(self):
         import tempfile
         from types import SimpleNamespace
+        from utils import submit
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, 'sub.db')
         self.opts = SimpleNamespace(
             ledger_db=self.db, slice_size=10, dry_run=False,
             memory=None, disk=None, expected_lifetime=None)
+        # Task 6 enqueue gate reads the tarball; stub tarball resolution
+        # and the pre-flight check so these tests stay file-free.
+        tb_patcher = patch.object(submit, '_ensure_local_tarball',
+                                  return_value=Path('cnf.mu2e.E.C.0.tar'))
+        ci_patcher = patch.object(submit, 'check_inputs',
+                                  return_value=(True, []))
+        tb_patcher.start()
+        ci_patcher.start()
+        self.addCleanup(tb_patcher.stop)
+        self.addCleanup(ci_patcher.stop)
 
     def _entry(self, tarball='cnf.mu2e.E.C.0.tar'):
         return {'tarball': tarball, 'njobs': 50}
@@ -6008,6 +6031,47 @@ class TestCheckInputsCLI(unittest.TestCase):
         with patch.object(ci, "check_inputs", side_effect=fake):
             ci.main(["cnf.mu2e.T.C.0.tar"])
         self.assertEqual(seen["inloc"], "resilient")
+
+
+class TestEnqueueInputGate(unittest.TestCase):
+    """submit_map --enqueue refuses to create a campaign when an entry's
+    inputs fail the pre-flight check (exit 2, no ledger row)."""
+
+    def test_failing_check_blocks_and_creates_no_campaign(self):
+        from utils import submit
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+                 "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
+                                            "location": "tape"}]}
+        opts = MagicMock(dry_run=False, slice_size=500,
+                         ledger_db="/tmp/never.db")
+        created = []
+        with patch.object(submit, "_ensure_local_tarball",
+                          return_value=Path("cnf.mu2e.T.C.0.tar")), \
+             patch.object(submit, "check_inputs",
+                          return_value=(False, [submit.Problem(
+                              "dts.mu2e.Pile.CampB.art", "f.art",
+                              "truncated", "1 != 2")])), \
+             patch.object(submit.submission_ledger, "create_campaign",
+                          side_effect=lambda *a, **k: created.append(1)):
+            with self.assertRaises(SystemExit) as cm:
+                submit._enqueue_entries([(0, entry)], "map.json", opts)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(created, [])   # no campaign row
+
+    def test_passing_check_creates_campaign(self):
+        from utils import submit
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+                 "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
+                                            "location": "tape"}]}
+        opts = MagicMock(dry_run=False, slice_size=500,
+                         ledger_db="/tmp/never.db")
+        with patch.object(submit, "_ensure_local_tarball",
+                          return_value=Path("cnf.mu2e.T.C.0.tar")), \
+             patch.object(submit, "check_inputs", return_value=(True, [])), \
+             patch.object(submit.submission_ledger, "create_campaign",
+                          return_value=7):
+            ids = submit._enqueue_entries([(0, entry)], "map.json", opts)
+        self.assertEqual(ids, [7])
 
 
 # ---------------------------------------------------------------------------

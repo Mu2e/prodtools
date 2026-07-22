@@ -35,6 +35,7 @@ from utils.poms_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
                               firstjob_of, validate_window, resources_of)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
+from utils.check_inputs import check_inputs, format_report, Problem
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RUNJOB_SH = REPO_ROOT / 'bin' / 'runjob.sh'
@@ -226,13 +227,24 @@ def _snapshot_entry(entry, resources):
 def _enqueue_entries(entries_to_submit, map_path, opts):
     """Register entries as sliced-submission campaigns (cursor 0) —
     submits NOTHING; the submissions cron feeds slices while the
-    mu2epro queue is under its cap. Nothing has been submitted when
-    this fails, so failures are hard errors — but operator-reachable
-    ones (duplicate live campaign, bad njobs, DB trouble) exit with a
-    ONE-LINE submit_map: message, never a traceback. Returns new
-    campaign ids."""
+    mu2epro queue is under its cap. Before anything else, each entry's
+    inputs are pre-flight checked (utils.check_inputs) so a campaign is
+    never created for a tarball with unreadable inputs — a failing
+    entry exits 2 with a report, before any ledger row is written.
+    Nothing has been submitted when this fails, so failures are hard
+    errors — but operator-reachable ones (duplicate live campaign, bad
+    njobs, DB trouble) exit with a ONE-LINE submit_map: message, never
+    a traceback. Returns new campaign ids."""
     ids = []
     for idx, entry in entries_to_submit:
+        tarball_path = _ensure_local_tarball(tarball_of(entry))
+        ok, problems = check_inputs(str(tarball_path), inloc_of(entry))
+        if not ok:
+            print(format_report(str(tarball_path), problems))
+            print(f"submit_map: entry {idx} inputs not ready "
+                  f"({len(problems)} problem(s)) — fix and re-run; "
+                  f"no campaign created")
+            sys.exit(2)
         njobs = njobs_of(entry)
         if njobs is None:
             sys.exit(f"submit_map: entry {idx} has no njobs (generic "
