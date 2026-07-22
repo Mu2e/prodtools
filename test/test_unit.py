@@ -5964,6 +5964,52 @@ class TestCheckInputs(unittest.TestCase):
         self.assertTrue(ok)
 
 
+class TestCheckInputsCLI(unittest.TestCase):
+    """format_report + main: grouped report, exit 0 clean / 2 on problems."""
+
+    def test_format_report_ok(self):
+        from utils.check_inputs import format_report
+        text = format_report("cnf.mu2e.T.C.0.tar", [])
+        self.assertIn("cnf.mu2e.T.C.0.tar", text)
+        self.assertIn("OK", text)
+
+    def test_format_report_groups_problems(self):
+        from utils.check_inputs import format_report, Problem
+        probs = [
+            Problem("dts.mu2e.Pile.CampB.art", "f1.art", "truncated", "1 != 2"),
+            Problem("dts.mu2e.Prim.CampA.art", "f2.art", "nearline",
+                    "run /prestage dts.mu2e.Prim.CampA.art"),
+        ]
+        text = format_report("cnf.mu2e.T.C.0.tar", probs)
+        self.assertIn("truncated", text)
+        self.assertIn("/prestage", text)
+        self.assertIn("dts.mu2e.Pile.CampB.art", text)
+
+    def test_main_returns_2_on_problem(self):
+        from utils import check_inputs as ci
+        with patch.object(ci, "check_inputs",
+                          return_value=(False, [ci.Problem(
+                              "ds", "f.art", "truncated", "d")])):
+            rc = ci.main(["--inloc", "resilient", "cnf.mu2e.T.C.0.tar"])
+        self.assertEqual(rc, 2)
+
+    def test_main_returns_0_when_clean(self):
+        from utils import check_inputs as ci
+        with patch.object(ci, "check_inputs", return_value=(True, [])):
+            rc = ci.main(["cnf.mu2e.T.C.0.tar"])
+        self.assertEqual(rc, 0)
+
+    def test_main_default_inloc_is_resilient(self):
+        from utils import check_inputs as ci
+        seen = {}
+        def fake(tar, inloc, **kw):
+            seen["inloc"] = inloc
+            return (True, [])
+        with patch.object(ci, "check_inputs", side_effect=fake):
+            ci.main(["cnf.mu2e.T.C.0.tar"])
+        self.assertEqual(seen["inloc"], "resilient")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

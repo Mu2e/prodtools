@@ -4,8 +4,10 @@ See docs/superpowers/specs/2026-07-21-input-preflight-check-design.md.
 Read-only: reports problems, never remediates. Blocks (exit 2) when any
 input is unreadable so a slice of jobs is not launched to die in bulk.
 """
+import argparse
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 
 from utils.jobquery import Mu2eJobPars
@@ -170,3 +172,44 @@ def check_inputs(tarball_path, inloc, *,
     for ds, files in primary.items():
         problems += check_tape(ds, files, locality, dataset_location)
     return (not problems, problems)
+
+
+def format_report(tarball_path, problems):
+    """Human-readable report for one tarball, grouped by dataset."""
+    lines = [f"=== {os.path.basename(tarball_path)}"]
+    if not problems:
+        lines.append("  OK: all inputs present, sized, and staged")
+        return "\n".join(lines)
+    by_ds = {}
+    for p in problems:
+        by_ds.setdefault(p.dataset, []).append(p)
+    for ds in sorted(by_ds):
+        lines.append(f"  {ds}: {len(by_ds[ds])} problem(s)")
+        for p in by_ds[ds]:
+            lines.append(f"    [{p.kind}] {p.filename}: {p.detail}")
+    return "\n".join(lines)
+
+
+def main(argv=None):
+    """CLI: check one or more cnf tarballs. Returns 0 (all clean) or 2."""
+    ap = argparse.ArgumentParser(
+        description="Pre-flight check that a campaign's inputs are readable "
+                    "(resilient pileup present+sized, tape inputs staged). "
+                    "Read-only; run /prestage to fix NEARLINE inputs.")
+    ap.add_argument('--inloc', default='resilient',
+                    help="input location the jobs read from (default: "
+                         "resilient, the mixing default)")
+    ap.add_argument('tarballs', nargs='+', help="cnf.*.tar file(s)")
+    args = ap.parse_args(argv)
+
+    worst = 0
+    for tb in args.tarballs:
+        ok, problems = check_inputs(tb, args.inloc)
+        print(format_report(tb, problems))
+        if not ok:
+            worst = 2
+    return worst
+
+
+if __name__ == '__main__':
+    sys.exit(main())
