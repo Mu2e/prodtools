@@ -6029,6 +6029,25 @@ class TestCheckInputs(unittest.TestCase):
 class TestCheckInputsCLI(unittest.TestCase):
     """format_report + main: grouped report, exit 0 clean / 2 on problems."""
 
+    def test_script_mode_help_runs_standalone(self):
+        """bin/check_inputs execs `python3 utils/check_inputs.py`; running
+        as a script (not `-m`) must resolve `import utils.*`, and the module
+        must load without the Mu2e environment so `--help` works. A fresh
+        subprocess has neither the repo root on sys.path nor the test's
+        samweb_client stub, so it reproduces the real invocation. Regression:
+        the module shipped without the sys.path insert AND with a top-level
+        samweb_wrapper import, so `bin/check_inputs` died on ModuleNotFound."""
+        import subprocess
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        script = os.path.join(repo_root, 'utils', 'check_inputs.py')
+        env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+        r = subprocess.run([sys.executable, script, '--help'],
+                           capture_output=True, text=True, cwd=repo_root,
+                           env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('usage', r.stdout)
+        self.assertIn('--inloc', r.stdout)
+
     def test_format_report_ok(self):
         from utils.check_inputs import format_report
         text = format_report("cnf.mu2e.T.C.0.tar", [])

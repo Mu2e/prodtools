@@ -10,10 +10,16 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+# Allow running as a script (bin/check_inputs execs `python3 utils/check_inputs.py`,
+# which puts utils/ on sys.path, not the repo root). Matches submit.py/submissions.py.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName
 from utils.file_resolver import resilient_path, infer_dataset_location
-from utils.samweb_wrapper import file_sizes_in_dataset
+# NB: utils.samweb_wrapper (→ samweb_client) is imported lazily inside
+# check_inputs, so `--help` and the unit tests can load this module
+# without the Mu2e environment on PATH.
 
 
 @dataclass(frozen=True)
@@ -163,7 +169,7 @@ def check_tape(dataset, files, locality, dataset_location):
 
 
 def check_inputs(tarball_path, inloc, *,
-                 sam_sizes=file_sizes_in_dataset,
+                 sam_sizes=None,
                  disk_size=_default_disk_size,
                  locality=_default_locality,
                  dataset_location=infer_dataset_location):
@@ -173,7 +179,14 @@ def check_inputs(tarball_path, inloc, *,
     SAM (mdh cannot see resilient); everything else — the primary, and
     pileup under a non-resilient inloc — is checked by tape/disk locality.
     Read-only: never remediates. Callers exit 2 when ok is False.
+
+    sam_sizes defaults to the real SAM size lister, imported lazily so
+    this module loads without the Mu2e environment (for `--help`/tests);
+    tests inject their own callable.
     """
+    if sam_sizes is None:
+        from utils.samweb_wrapper import file_sizes_in_dataset
+        sam_sizes = file_sizes_in_dataset
     primary, auxin = split_inputs(tarball_path)
     problems = []
     for ds, files in auxin.items():
