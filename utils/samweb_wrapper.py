@@ -210,6 +210,14 @@ class SAMWebWrapper:
             print(f"Error listing definition files for {definition_name}: {e}")
             return None
 
+    def file_sizes_in_dataset(self, dataset: str) -> Dict[str, int]:
+        """{filename: file_size} for a dataset via one list-files
+        --fileinfo. Used by the input pre-flight check to get expected
+        sizes without one get-metadata call per file."""
+        q = q_dataset(dataset)
+        return {fi.file_name: fi.file_size
+                for fi in self.client.listFiles(dimensions=q, fileinfo=True)}
+
     def get_metadata(self, filename: str) -> Dict:
         """Get metadata for a file (equivalent to samweb get-metadata)."""
         try:
@@ -370,6 +378,13 @@ def first_file_in_definition(definition_name: str,
 def get_metadata(filename: str) -> Dict:
     """Get metadata for a file."""
     return get_samweb_wrapper().get_metadata(filename)
+
+def file_sizes_in_dataset(dataset: str) -> Dict[str, int]:
+    """{filename: file_size} for a dataset (one list-files --fileinfo)."""
+    wrapper = get_samweb_wrapper()
+    q = q_dataset(dataset)
+    return {fi.file_name: fi.file_size
+            for fi in wrapper.client.listFiles(dimensions=q, fileinfo=True)}
 
 def definition_creation_date(defname: str) -> Optional[datetime]:
     """Creation time of a SAM definition, or None if unavailable."""

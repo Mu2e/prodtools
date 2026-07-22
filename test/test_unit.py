@@ -5676,6 +5676,84 @@ class TestSplitInputs(unittest.TestCase):
             p.kind = "missing"
 
 
+class TestCheckResilient(unittest.TestCase):
+    """Resilient pileup: present AND size matches SAM. Catches the
+    2026-07-21 truncation (1 MiB stub) and a purge (missing entirely).
+    mdh cannot see resilient, so this is a direct os.path.getsize vs the
+    SAM-recorded size."""
+
+    DS = "dts.mu2e.Pile.CampB.art"
+    F1 = "dts.mu2e.Pile.CampB.001430_00000000.art"
+    F2 = "dts.mu2e.Pile.CampB.001430_00000001.art"
+
+    def test_all_present_and_sized_ok(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1, self.F2],
+            sam_sizes=lambda ds: {self.F1: 100, self.F2: 200},
+            disk_size=lambda p: 100 if self.F1 in p else 200)
+        self.assertEqual(probs, [])
+
+    def test_truncated_file_flagged(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1],
+            sam_sizes=lambda ds: {self.F1: 113643009},
+            disk_size=lambda p: 1048576)
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "truncated")
+        self.assertEqual(probs[0].filename, self.F1)
+
+    def test_missing_file_flagged(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1],
+            sam_sizes=lambda ds: {self.F1: 100},
+            disk_size=lambda p: None)
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "missing")
+
+    def test_no_sam_size_is_query_error(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1],
+            sam_sizes=lambda ds: {},
+            disk_size=lambda p: 100)
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "query_error")
+
+    def test_default_disk_size_absent_is_none(self):
+        from utils.check_inputs import _default_disk_size
+        self.assertIsNone(_default_disk_size("/pnfs/mu2e/resilient/nope/x.art"))
+
+
+class TestFileSizesInDataset(unittest.TestCase):
+    """file_sizes_in_dataset returns {filename: size} from one
+    list-files --fileinfo call."""
+
+    def test_maps_name_to_size(self):
+        import collections
+        from utils import samweb_wrapper
+        FI = collections.namedtuple("fileinfo",
+                                    "file_name file_id file_size event_count")
+        fake_client = MagicMock()
+        fake_client.listFiles.return_value = [
+            FI("dts.mu2e.Pile.CampB.001430_00000000.art", 1, 111, 9),
+            FI("dts.mu2e.Pile.CampB.001430_00000001.art", 2, 222, 9),
+        ]
+        wrapper = MagicMock()
+        wrapper.client = fake_client
+        with patch.object(samweb_wrapper, "get_samweb_wrapper",
+                          return_value=wrapper):
+            out = samweb_wrapper.file_sizes_in_dataset("dts.mu2e.Pile.CampB.art")
+        self.assertEqual(out, {
+            "dts.mu2e.Pile.CampB.001430_00000000.art": 111,
+            "dts.mu2e.Pile.CampB.001430_00000001.art": 222})
+        # one query, fileinfo requested
+        _, kwargs = fake_client.listFiles.call_args
+        self.assertTrue(kwargs.get("fileinfo"))
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

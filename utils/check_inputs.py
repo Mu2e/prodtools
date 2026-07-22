@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName
+from utils.file_resolver import resilient_path
 
 
 @dataclass(frozen=True)
@@ -49,3 +50,34 @@ def split_inputs(tarball_path):
     tbs = jp.json_data.get('tbs', {})
     return (_group_by_dataset(_section_files(tbs, 'inputs')),
             _group_by_dataset(_section_files(tbs, 'auxin')))
+
+
+def _default_disk_size(pnfs_path):
+    """Actual size of a resilient/disk file, or None if absent. Resilient
+    is a flat /pnfs path, POSIX-statable on interactive nodes; stat does
+    not trigger a tape recall."""
+    try:
+        return os.path.getsize(pnfs_path)
+    except OSError:
+        return None
+
+
+def check_resilient(dataset, files, sam_sizes, disk_size):
+    """Verify pileup files staged to resilient: each present AND its size
+    equals the SAM-recorded size. Returns a list of Problems."""
+    expected = sam_sizes(dataset)          # {filename: int}
+    problems = []
+    for f in files:
+        path = resilient_path(f)
+        actual = disk_size(path)
+        if actual is None:
+            problems.append(Problem(dataset, f, 'missing',
+                                    f'absent from resilient: {path}'))
+        elif f not in expected:
+            problems.append(Problem(dataset, f, 'query_error',
+                                    f'no SAM size for {f}'))
+        elif actual != expected[f]:
+            problems.append(Problem(dataset, f, 'truncated',
+                                    f'{actual} bytes on disk, SAM expects '
+                                    f'{expected[f]}'))
+    return problems
