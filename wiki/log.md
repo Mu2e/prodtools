@@ -1179,3 +1179,21 @@ so the membership drain signal is complete and trustworthy; residual SAM-
 registration-lag window is narrow and self-healing — a debounce would be
 over-engineering. Remaining: rows 13 (3 jobs) + 14 (1000 jobs) verify as
 they drain. See [[2026-07-18-direct-recovery-loop]].
+
+## [2026-07-25] update | Mix merge factors sized to ~5 GB with exact, round job counts
+
+Re-derived all 19 per-desc `merge` values in `templates/MDC2025/mix.json`
+against the au round's resolved input campaigns. Ten changed; all 19 now
+divide their input file count exactly, and 18 land on a round job count
+(total 7,721 jobs, 3.86–6.49 GB/file).
+
+Key enabler: the entire MDC2025ar mix round ran at **merge 1** (every
+output file count equals its input file count), so output-size ÷ file-count
+is bytes-per-input-file directly — measured, not inferred from previously
+rounded merge factors.
+
+Two impossibilities recorded rather than papered over: `ensembleMDS3c`
+(4960 = 2^5·5·31 admits no round job count) and `IPAMuminusMichel` (ideal
+merge 3.08, and 3 does not divide 5000). Open concern: `RPCExternalPhysical`
+at merge 100 runs 50 jobs, sampling ~50 of 1000 NeutralsFlashCat pileup
+files. See [[mix-merge-factor-sizing]].
