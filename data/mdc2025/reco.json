@@ -113,6 +113,20 @@
             "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
         },
         {
+            "dsconf": "MDC2025au_best_v1_1",
+            "desc": "reco",
+            "generic_tarball": true,
+            "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+            "fcl_overrides": {
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_1"
+            },
+            "inloc": "tape",
+            "outloc": {"*.art": "tape"},
+            "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh"
+        },
+        {
             "dsconf": ["MDC2025ai_best_v1_3"],
             "tarball_append": "-reco",
             "fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
