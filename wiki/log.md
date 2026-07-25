@@ -1197,3 +1197,23 @@ Two impossibilities recorded rather than papered over: `ensembleMDS3c`
 merge 3.08, and 3 does not divide 5000). Open concern: `RPCExternalPhysical`
 at merge 100 runs 50 jobs, sampling ~50 of 1000 NeutralsFlashCat pileup
 files. See [[mix-merge-factor-sizing]].
+
+## [2026-07-25] update | MDC2025au mix round — wave 1 submitted (500 jobs)
+
+Wave 1 of the au mix reprocessing submitted: FlatGamma (125),
+RMCPhaseSpace0NInternal (125), RMCPhaseSpace1NInternal (50),
+MuCap1809keVCalo (200) = 500 jobs / 2.8 TB, clusters 29308498/29308499/
+92753604/29308501, ledger campaigns 6-9 rows 22-25. 0 held. Two local
+`mu2e -c -n 2` smokes exit 0 before the push.
+
+Split into waves deliberately to validate au mixing before committing
+wave 2's 6,821 jobs / 36.4 TB, which is blocked on an mdh residency
+check for four tape-backed inputs (IPAMuminusMichel, PbarResampling,
+RPCInternalPhysical, ensembleMDS3c).
+
+Two corrections recorded: direct campaigns use a throwaway /tmp map (NOT
+a new file under poms_map/, and never an append to a POMS-active
+MDC2025-NNN.json), and `json2jobdef --prod` is idempotent so re-running
+it is the correct way to add an already-pushed cnf to a map — hand-
+editing skips the index-definition rebuild. Both /mu2epro-run and
+/mu2epro-submit amended accordingly. See [[2026-07-25-mdc2025au-mix-round]].
