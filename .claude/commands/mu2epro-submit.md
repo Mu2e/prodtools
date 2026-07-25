@@ -45,8 +45,18 @@ See `reference_ksu_jobsub_env` for the incident history.
 /mu2epro-submit <map.json> [--entry N] [--first N --num M] [extra submit_map flags]
 ```
 
-- `<map.json>` — absolute path to the POMS map under
-  `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/`.
+- `<map.json>` — absolute path to the submission map. Two valid homes,
+  depending on how the campaign was created:
+  - **Direct campaign** (`--enqueue` + `submissions run`): a throwaway
+    `/tmp` map, one per campaign, e.g. `/tmp/map_noprimary_au.json`.
+    This is the normal case. Pass the SAME path that was given to
+    `json2jobdef --prod --jobdefs`.
+  - **POMS-driven**: the numbered map under
+    `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/`.
+
+  Despite the directory name, `poms_map/` is not where direct-campaign
+  maps belong — do not create files there for a direct campaign. See
+  the backend-routing rule in `/mu2epro-run`.
 - `--entry N` — submit only entry index N (default: ALL entries in the map).
   Use this when the map has entries that must NOT be resubmitted.
 - `--first N --num M` — submit only the jobset slice `[N, N+M)` (recovery /
