@@ -81,12 +81,75 @@ def _input_pattern(template):
     return keys[0]
 
 
-def _input_merge(template):
-    """The merge factor paired with the single input_data pattern."""
+def _desc_name(item):
+    """The description named by one `desc` list item.
+
+    An item is either a plain string, or a dict carrying per-description
+    settings: ``{"desc": "<name>", "merge": <n>}``. The dict form exists so a
+    single entry can give one description its own merge factor without
+    duplicating the entry's whole pileup/dsconf/override block.
+    """
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        name = item.get('desc')
+        if not isinstance(name, str):
+            raise ValueError(
+                f"template desc entry {item!r} has no 'desc' name — a malformed "
+                f"item would silently drop that description from the roster")
+        return name
+    raise ValueError(f"template desc entry must be a string or dict, got {item!r}")
+
+
+def _desc_settings(entry, description):
+    """The per-description settings dict for `description`, or {}.
+
+    Set by a ``{"desc": "<name>", ...}`` item in the entry's `desc` list.
+    """
+    d = entry.get('desc')
+    for item in (d if isinstance(d, list) else [d]):
+        if isinstance(item, dict) and _desc_name(item) == description:
+            return item
+    return {}
+
+
+def _input_merge(template, description=None):
+    """The merge factor for `description` under this entry.
+
+    Defaults to the factor paired with the single input_data pattern; a
+    ``{"desc": ..., "merge": n}`` item for this description overrides it.
+    """
     indata = template['input_data']
     if isinstance(indata, list):
         indata = indata[0]
-    return indata[_input_pattern(template)]
+    merge = indata[_input_pattern(template)]
+    if description is not None:
+        return _desc_settings(template, description).get('merge', merge)
+    return merge
+
+
+def _apply_desc_overrides(entry, description):
+    """Patch the entry's `fcl_overrides` with this description's own, in
+    place, preserving the template's container shape (list vs dict).
+
+    A PATCH, not a replacement: one description needing a single extra
+    override (e.g. the NoPrimary.fcl trigger include) would otherwise force a
+    duplicate of the entry's whole pileup/dsconf/fcl block. Per-desc keys win
+    over the entry's base keys. `entry` is already a deep copy, so the shared
+    template is never mutated.
+    """
+    extra = _desc_settings(entry, description).get('fcl_overrides')
+    if not extra:
+        return
+    base = entry.get('fcl_overrides')
+    if isinstance(base, list):
+        merged = dict(base[0]) if base else {}
+        merged.update(extra)
+        entry['fcl_overrides'] = [merged]
+    else:
+        merged = dict(base or {})
+        merged.update(extra)
+        entry['fcl_overrides'] = merged
 
 
 def _entries(template):
@@ -96,10 +159,11 @@ def _entries(template):
 
 def _explicit_descs(entry):
     """Concrete descriptions an entry names (excludes the `{desc}` wildcard).
-    `desc` may be a scalar or a list."""
+    `desc` may be a scalar, or a list of strings / per-desc dicts."""
     d = entry.get('desc')
     if isinstance(d, list):
-        return [x for x in d if '{desc}' not in x]
+        names = [_desc_name(x) for x in d]
+        return [x for x in names if '{desc}' not in x]
     if isinstance(d, str) and '{desc}' not in d:
         return [d]
     return []
@@ -201,7 +265,8 @@ def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=Fals
     """
     n = Mu2eName.parse(input_dataset)
     entry = copy.deepcopy(match_entry(template, n.description))
-    merge = _input_merge(entry)
+    merge = _input_merge(entry, n.description)
+    _apply_desc_overrides(entry, n.description)
     # Pin the concrete input, preserving the template's container shape:
     # list-form [{name: merge}] (mixing) vs dict {name: merge}
     # (digi/reco/ntuple). pileup_datasets and other fields are left untouched.

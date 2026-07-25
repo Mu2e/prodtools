@@ -86,6 +86,41 @@ class Mu2eJobPars(Mu2eJobBase):
                     tar.extract(member)
                     print(f"Extracted: {member.name}")
 
+    def recipe(self):
+        """Reconstruct this cnf's build config as human-readable text.
+
+        A cnf in SAM is sometimes the only surviving record of how it was
+        built — the MDC2025ar generic reco/evnt entries were never committed
+        to data/, so the tarball was the source of truth. The embedded
+        mu2e.fcl IS the json2jobdef entry's `fcl` + `fcl_overrides`, and
+        jobpars.json carries the setup script and output name patterns.
+        Neither the other queries nor fcldump exposed the override block.
+        """
+        lines = [f"# recipe: {self.jobname()}",
+                 f"setup: {self.setup()}"]
+        try:
+            lines.append(f"njobs: {self.njobs()}    # 0 = generic / open-ended")
+        except ValueError as e:
+            # njobs is informational here; report the breakage rather than
+            # letting it suppress the rest of the recipe.
+            lines.append(f"njobs: <unavailable: {e}>")
+
+        outfiles = self.json_data.get('tbs', {}).get('outfiles', {})
+        if outfiles:
+            lines.append("outfiles:")
+            for key, pattern in outfiles.items():
+                lines.append(f"    {key} = {pattern}")
+
+        lines.append("")
+        lines.append("# embedded mu2e.fcl  (= json2jobdef `fcl` + `fcl_overrides`)")
+        try:
+            fcl = self._extract_member('mu2e.fcl').decode()
+        except ValueError:
+            lines.append("# (no embedded mu2e.fcl — code-tarball job definition)")
+        else:
+            lines.append(fcl.rstrip('\n'))
+        return '\n'.join(lines)
+
     def output_files(self, dataset_name, list_size=None):
         """List output files belonging to the given dataset, computed
         through the canonical job_outputs()/sequencer() arithmetic."""
@@ -129,6 +164,8 @@ file cnf.tar. The possible queries are:
     --codesize    The size of the compressed code tarball, in bytes.
     --extract-code    Extracts embedded code tarball to current directory.
     --setup       Prints the name of the setup file.
+    --recipe      The build config: setup, njobs, output patterns, and the
+        embedded mu2e.fcl (the json2jobdef `fcl` + `fcl_overrides`).
 """
 
 
@@ -144,14 +181,17 @@ def main():
     parser.add_argument('--codesize', action='store_true', help='Get code size')
     parser.add_argument('--extract-code', action='store_true', help='Extract embedded code')
     parser.add_argument('--setup', action='store_true', help='Get setup file path')
+    parser.add_argument('--recipe', action='store_true',
+                        help='Build config: setup, njobs, output patterns, and the '
+                             'embedded mu2e.fcl (json2jobdef fcl + fcl_overrides)')
     parser.add_argument('parfile', help='Job parameter file (.tar)')
-    
+
     args = parser.parse_args()
-    
+
     # Check that exactly one query is specified
     queries = [args.jobname, args.njobs, args.input_datasets, args.input_files,
                args.output_datasets, args.output_files is not None,
-               args.codesize, args.extract_code, args.setup]
+               args.codesize, args.extract_code, args.setup, args.recipe]
     
     if sum(queries) != 1:
         print("Error: Exactly one query must be specified")
@@ -219,6 +259,9 @@ def main():
         
         elif args.setup:
             print(jp.setup())
+
+        elif args.recipe:
+            print(jp.recipe())
     
     except Exception as e:
         print(f"Error: {e}")

@@ -10,6 +10,7 @@ Run with:  python -m pytest test/test_unit.py -v
        or: python test/test_unit.py
 """
 
+import copy
 import hashlib
 import io
 import json
@@ -2759,6 +2760,139 @@ class TestJobdefLookup(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 31b. chain_emit: per-description merge factor in one entry
+# ---------------------------------------------------------------------------
+
+class TestChainEmitPerDescMerge(unittest.TestCase):
+    """One template entry, per-desc merge factors. Without this, giving a
+    single desc a different merge means duplicating the entry's whole
+    pileup/dsconf/override block — two copies that drift."""
+
+    TEMPLATE = [{
+        "desc": ["NoPrimary", {"desc": "MuCap1809keVCalo", "merge": 5}],
+        "input_data": [{"dts.mu2e.{desc}.{campaign}.art": 1}],
+        "dsconf": ["{out_campaign}_best_v1_3"],
+        "pbeam": ["Mix1BB"],
+        "inloc": ["resilient"],
+        "simjob_setup": ["/cvmfs/x/{out_campaign}/setup.sh"],
+    }]
+
+    def test_explicit_descs_reads_both_forms(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit.explicit_descriptions(self.TEMPLATE),
+                         ["NoPrimary", "MuCap1809keVCalo"])
+
+    def test_match_entry_finds_dict_form_desc(self):
+        from utils import chain_emit
+        e = chain_emit.match_entry(self.TEMPLATE, "MuCap1809keVCalo")
+        self.assertIs(e, self.TEMPLATE[0])
+
+    def test_per_desc_merge_overrides_base(self):
+        from utils import chain_emit
+        entry = self.TEMPLATE[0]
+        self.assertEqual(chain_emit._input_merge(entry, "MuCap1809keVCalo"), 5)
+
+    def test_plain_string_desc_keeps_base_merge(self):
+        from utils import chain_emit
+        entry = self.TEMPLATE[0]
+        self.assertEqual(chain_emit._input_merge(entry, "NoPrimary"), 1)
+
+    def test_synthesize_applies_per_desc_merge(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5}])
+
+    def test_synthesize_other_desc_unaffected(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.NoPrimary.MDC2025af.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.NoPrimary.MDC2025af.art": 1}])
+
+    def test_dict_desc_without_name_fails_loud(self):
+        """A malformed desc item must raise, not silently vanish from the
+        roster — a silently-dropped desc is a whole dataset not produced."""
+        from utils import chain_emit
+        bad = [{**self.TEMPLATE[0], "desc": [{"merge": 5}]}]
+        with self.assertRaises(ValueError):
+            chain_emit.explicit_descriptions(bad)
+
+
+class TestChainEmitPerDescOverrides(unittest.TestCase):
+    """Per-desc `fcl_overrides` PATCH the entry's base overrides. Without
+    this, one desc needing a single extra override (e.g. the NoPrimary.fcl
+    trigger include) forces a duplicate of the entry's whole
+    pileup/dsconf/fcl block."""
+
+    TEMPLATE = [{
+        "desc": [
+            "CeMLeadingLog",
+            {"desc": "NoPrimary",
+             "fcl_overrides": {"#include": "Production/JobConfig/mixing/NoPrimary.fcl"}},
+            {"desc": "MuCap1809keVCalo", "merge": 5,
+             "fcl_overrides": {"#include": "Production/JobConfig/mixing/NoPrimary.fcl"}},
+        ],
+        "input_data": [{"dts.mu2e.{desc}.{campaign}.art": 1}],
+        "dsconf": ["{out_campaign}_best_v1_3"],
+        "pbeam": ["Mix1BB"],
+        "inloc": ["resilient"],
+        "simjob_setup": ["/cvmfs/x/{out_campaign}/setup.sh"],
+        "fcl_overrides": [{
+            "services.DbService.purpose": "Sim_best",
+            "physics.producers.PBISim.SDF": 0.8,
+        }],
+    }]
+
+    def _ov(self, dataset):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(self.TEMPLATE, dataset,
+                                          out_campaign="MDC2025au", defer_desc=True)
+        ov = out['fcl_overrides']
+        return ov[0] if isinstance(ov, list) else ov
+
+    def test_per_desc_override_is_added_to_base(self):
+        ov = self._ov("dts.mu2e.NoPrimary.MDC2025af.art")
+        self.assertEqual(ov["#include"], "Production/JobConfig/mixing/NoPrimary.fcl")
+        # base keys survive the patch
+        self.assertEqual(ov["services.DbService.purpose"], "Sim_best")
+        self.assertEqual(ov["physics.producers.PBISim.SDF"], 0.8)
+
+    def test_desc_without_overrides_gets_base_only(self):
+        ov = self._ov("dts.mu2e.CeMLeadingLog.MDC2025ap.art")
+        self.assertNotIn("#include", ov)
+        self.assertEqual(ov["services.DbService.purpose"], "Sim_best")
+
+    def test_merge_and_overrides_combine(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5}])
+        ov = out['fcl_overrides'][0]
+        self.assertEqual(ov["#include"], "Production/JobConfig/mixing/NoPrimary.fcl")
+
+    def test_per_desc_override_wins_over_base_key(self):
+        from utils import chain_emit
+        tmpl = copy.deepcopy(self.TEMPLATE)
+        tmpl[0]['desc'][1]['fcl_overrides']["physics.producers.PBISim.SDF"] = 0.5
+        out = chain_emit.synthesize_entry(tmpl, "dts.mu2e.NoPrimary.MDC2025af.art",
+                                          out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['fcl_overrides'][0]["physics.producers.PBISim.SDF"], 0.5)
+
+    def test_base_template_not_mutated_across_calls(self):
+        """Patching must not leak into the shared template dict — the next
+        desc would silently inherit the previous one's overrides."""
+        self._ov("dts.mu2e.NoPrimary.MDC2025af.art")
+        ov = self._ov("dts.mu2e.CeMLeadingLog.MDC2025ap.art")
+        self.assertNotIn("#include", ov)
+
+
+# ---------------------------------------------------------------------------
 # 31. chain_emit: template synthesis for latestDatasets --emit
 # ---------------------------------------------------------------------------
 
@@ -3378,6 +3512,81 @@ class TestJobArithmeticConsolidation(unittest.TestCase):
                 Mu2eJobPars(tar).njobs()
         finally:
             os.unlink(tar)
+
+
+# ---------------------------------------------------------------------------
+# 32b. Mu2eJobPars.recipe (reconstruct the build config from a cnf)
+# ---------------------------------------------------------------------------
+
+class TestJobParsRecipe(unittest.TestCase):
+    """A cnf in SAM is sometimes the ONLY surviving record of how it was
+    built — the MDC2025ar generic reco/evnt entries were never committed.
+    recipe() surfaces the embedded template fcl (the `fcl` + `fcl_overrides`
+    of the json2jobdef entry), which neither jobquery's other queries nor
+    fcldump exposed."""
+
+    FCL = ('#include "Production/JobConfig/recoMC/OnSpill.fcl"\n'
+           'outputs.LoopHelixOutput.fileName: "mcs.owner.{desc}.version.sequencer.art"\n'
+           'services.DbService.purpose: "Sim_best"\n'
+           'services.DbService.version: "v1_1"\n')
+
+    def _tar(self):
+        jp = {
+            "code": "",
+            "setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh",
+            "jobname": "cnf.mu2e.reco.MDC2025au_best_v1_1.0.tar",
+            "tbs": {"outfiles": {
+                "outputs.LoopHelixOutput.fileName":
+                    "mcs.mu2e.{desc}.MDC2025au_best_v1_1.sequencer.art"}},
+        }
+        return _make_tarball(jp, self.FCL)
+
+    def test_recipe_reports_jobpars_fields(self):
+        from utils.jobquery import Mu2eJobPars
+        tar = self._tar()
+        try:
+            out = Mu2eJobPars(tar).recipe()
+        finally:
+            os.unlink(tar)
+        self.assertIn("cnf.mu2e.reco.MDC2025au_best_v1_1.0.tar", out)
+        self.assertIn("SimJob/MDC2025au/setup.sh", out)
+        self.assertIn("njobs: 0", out)  # no tbs capacity -> generic
+        self.assertIn("mcs.mu2e.{desc}.MDC2025au_best_v1_1.sequencer.art", out)
+
+    def test_recipe_includes_override_block_verbatim(self):
+        """The override lines are the part you cannot get anywhere else."""
+        from utils.jobquery import Mu2eJobPars
+        tar = self._tar()
+        try:
+            out = Mu2eJobPars(tar).recipe()
+        finally:
+            os.unlink(tar)
+        for line in self.FCL.strip().splitlines():
+            self.assertIn(line, out)
+
+    def test_recipe_without_embedded_fcl_reports_absence(self):
+        """A code-tarball cnf has no mu2e.fcl; say so rather than raising —
+        the jobpars half of the recipe is still worth printing."""
+        from utils.jobquery import Mu2eJobPars
+        import tempfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w') as tar_w:
+            jp_bytes = json.dumps({"code": "", "setup": "/cvmfs/test/setup.sh",
+                                   "jobname": "cnf.mu2e.X.TC.0.tar",
+                                   "tbs": {}}).encode()
+            ti = tarfile.TarInfo(name='jobpars.json')
+            ti.size = len(jp_bytes)
+            tar_w.addfile(ti, io.BytesIO(jp_bytes))
+        buf.seek(0)
+        tmp = tempfile.NamedTemporaryFile(suffix='.tar', delete=False)
+        tmp.write(buf.read())
+        tmp.close()
+        try:
+            out = Mu2eJobPars(tmp.name).recipe()
+        finally:
+            os.unlink(tmp.name)
+        self.assertIn("cnf.mu2e.X.TC.0.tar", out)
+        self.assertIn("no embedded mu2e.fcl", out)
 
 
 # ---------------------------------------------------------------------------
@@ -5351,7 +5560,10 @@ class TestRecoverLoop(unittest.TestCase):
 
     def test_live_clusters_parsing(self):
         from utils import submissions as recover
-        from test.test_unit import TestRecoverCap as T
+        # Same module — a `from test.test_unit import ...` package-path import
+        # resolves only when the suite is run as `python -m unittest
+        # test.test_unit`, and blows up under `unittest discover -s test`.
+        T = TestRecoverCap
         def r(stdout, rc=0):
             return MagicMock(returncode=rc, stdout=stdout, stderr='')
         hdr, summ, row = T._HDR, T._SUM, T._row
