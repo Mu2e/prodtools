@@ -2763,6 +2763,85 @@ class TestJobdefLookup(unittest.TestCase):
 # 31b. chain_emit: per-description merge factor in one entry
 # ---------------------------------------------------------------------------
 
+class TestChainEmitDescMapping(unittest.TestCase):
+    """`desc` as a {name: settings} mapping — the preferred shape. Keeps
+    the merge factor in exactly one place and drops the repeated "desc"
+    key that the list-of-dicts form required."""
+
+    TEMPLATE = [{
+        "desc": {
+            "CeMLeadingLog": 4,
+            "NoPrimary": {"merge": 5,
+                          "fcl_overrides": {"#include": "mixing/NoPrimary.fcl"}},
+        },
+        "input_data": ["dts.mu2e.{desc}.{campaign}.art"],
+        "dsconf": ["{out_campaign}_best_v1_3"],
+        "pbeam": ["Mix1BB"],
+        "inloc": ["resilient"],
+        "simjob_setup": ["/cvmfs/x/{out_campaign}/setup.sh"],
+        "fcl_overrides": [{"services.DbService.version": "v1_3"}],
+    }]
+
+    def test_explicit_descs_reads_mapping(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit.explicit_descriptions(self.TEMPLATE),
+                         ["CeMLeadingLog", "NoPrimary"])
+
+    def test_scalar_value_is_the_merge_factor(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit._input_merge(self.TEMPLATE[0], "CeMLeadingLog"), 4)
+
+    def test_dict_value_carries_merge_and_overrides(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit._input_merge(self.TEMPLATE[0], "NoPrimary"), 5)
+
+    def test_input_data_is_bare_pattern(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit._input_pattern(self.TEMPLATE[0]),
+                         "dts.mu2e.{desc}.{campaign}.art")
+
+    def test_synthesize_pins_merge_from_mapping(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.CeMLeadingLog.MDC2025ap.art": 4}])
+
+    def test_synthesize_applies_mapping_fcl_overrides(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.NoPrimary.MDC2025af.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['fcl_overrides'][0]["#include"], "mixing/NoPrimary.fcl")
+        self.assertEqual(out['fcl_overrides'][0]["services.DbService.version"], "v1_3")
+
+    def test_mapping_desc_dropped_when_deferred(self):
+        """The whole mapping must not leak into the emitted config."""
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertNotIn('desc', out)
+
+    def test_missing_merge_fails_loud(self):
+        """A desc added without a merge must error, not silently become 1 —
+        that would emit an undersized round with several times the jobs."""
+        from utils import chain_emit
+        tmpl = copy.deepcopy(self.TEMPLATE)
+        tmpl[0]['desc']['Forgotten'] = {}
+        with self.assertRaises(ValueError) as cm:
+            chain_emit._input_merge(tmpl[0], "Forgotten")
+        self.assertIn("merge factor", str(cm.exception))
+
+    def test_bad_mapping_value_rejected(self):
+        from utils import chain_emit
+        tmpl = copy.deepcopy(self.TEMPLATE)
+        tmpl[0]['desc']['Bogus'] = "4"
+        with self.assertRaises(ValueError):
+            chain_emit._desc_map(tmpl[0])
+
+
 class TestChainEmitPerDescMerge(unittest.TestCase):
     """One template entry, per-desc merge factors. Without this, giving a
     single desc a different merge means duplicating the entry's whole

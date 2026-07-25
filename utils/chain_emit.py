@@ -67,7 +67,12 @@ def load_template(campaign, stage, templates_dir):
 
 
 def _input_pattern(template):
-    """The single input_data key pattern declared by a stage template."""
+    """The single input_data key pattern declared by a stage template.
+
+    `input_data` is either a bare pattern string (the merge factor then
+    lives per-description in `desc`) or the legacy `{pattern: merge}`
+    mapping.
+    """
     indata = template.get('input_data')
     if not indata:
         raise ValueError("template has no 'input_data'")
@@ -75,6 +80,8 @@ def _input_pattern(template):
         if len(indata) != 1:
             raise ValueError("emit template input_data must declare exactly one pattern")
         indata = indata[0]
+    if isinstance(indata, str):
+        return indata
     keys = list(indata.keys())
     if len(keys) != 1:
         raise ValueError("emit template input_data must declare exactly one pattern")
@@ -84,10 +91,9 @@ def _input_pattern(template):
 def _desc_name(item):
     """The description named by one `desc` list item.
 
-    An item is either a plain string, or a dict carrying per-description
-    settings: ``{"desc": "<name>", "merge": <n>}``. The dict form exists so a
-    single entry can give one description its own merge factor without
-    duplicating the entry's whole pileup/dsconf/override block.
+    An item is either a plain string, or the legacy per-description dict
+    ``{"desc": "<name>", "merge": <n>}``. Prefer the `desc` mapping form
+    (``{"<name>": <merge>}``) for new templates — see `_desc_map`.
     """
     if isinstance(item, str):
         return item
@@ -101,11 +107,41 @@ def _desc_name(item):
     raise ValueError(f"template desc entry must be a string or dict, got {item!r}")
 
 
-def _desc_settings(entry, description):
-    """The per-description settings dict for `description`, or {}.
+def _desc_map(entry):
+    """The entry's `desc` as an ordered {name: settings} mapping, or None
+    if it does not use the mapping form.
 
-    Set by a ``{"desc": "<name>", ...}`` item in the entry's `desc` list.
+    Mapping form pairs each description with its own settings, mirroring
+    `input_data`'s scalar-or-dict grammar: a bare int is the merge factor,
+    a dict carries `merge` plus anything else (e.g. `fcl_overrides`)::
+
+        "desc": {"CeMLeadingLog": 4,
+                 "NoPrimary": {"merge": 5, "fcl_overrides": {...}}}
+
+    This is the preferred shape — it keeps the merge factor in exactly one
+    place and avoids repeating the key name ("desc") inside each item.
     """
+    d = entry.get('desc')
+    if not isinstance(d, dict):
+        return None
+    out = {}
+    for name, spec in d.items():
+        if isinstance(spec, int) and not isinstance(spec, bool):
+            out[name] = {'merge': spec}
+        elif isinstance(spec, dict):
+            out[name] = spec
+        else:
+            raise ValueError(
+                f"desc mapping for {name!r}: value must be an int merge factor "
+                f"or a settings dict, got {spec!r}")
+    return out
+
+
+def _desc_settings(entry, description):
+    """The per-description settings dict for `description`, or {}."""
+    mapping = _desc_map(entry)
+    if mapping is not None:
+        return mapping.get(description, {})
     d = entry.get('desc')
     for item in (d if isinstance(d, list) else [d]):
         if isinstance(item, dict) and _desc_name(item) == description:
@@ -116,15 +152,29 @@ def _desc_settings(entry, description):
 def _input_merge(template, description=None):
     """The merge factor for `description` under this entry.
 
-    Defaults to the factor paired with the single input_data pattern; a
-    ``{"desc": ..., "merge": n}`` item for this description overrides it.
+    Precedence: the description's own `merge` (from the `desc` mapping or a
+    legacy per-desc dict) wins; otherwise the factor paired with the
+    input_data pattern, when the template still uses `{pattern: merge}`.
+
+    Fails loud when neither supplies one — a silently-defaulted merge would
+    produce an undersized round with several times the intended job count
+    and nothing to flag it.
     """
     indata = template['input_data']
     if isinstance(indata, list):
         indata = indata[0]
-    merge = indata[_input_pattern(template)]
+    default = None if isinstance(indata, str) else indata[_input_pattern(template)]
+
     if description is not None:
-        return _desc_settings(template, description).get('merge', merge)
+        merge = _desc_settings(template, description).get('merge', default)
+    else:
+        merge = default
+
+    if merge is None:
+        where = f" for description {description!r}" if description else ""
+        raise ValueError(
+            f"no merge factor{where}: give it one in the template's `desc` "
+            f"mapping, or pair a factor with the input_data pattern")
     return merge
 
 
@@ -159,7 +209,11 @@ def _entries(template):
 
 def _explicit_descs(entry):
     """Concrete descriptions an entry names (excludes the `{desc}` wildcard).
-    `desc` may be a scalar, or a list of strings / per-desc dicts."""
+    `desc` may be a scalar, a list of strings / per-desc dicts, or the
+    preferred {name: settings} mapping."""
+    mapping = _desc_map(entry)
+    if mapping is not None:
+        return [x for x in mapping if '{desc}' not in x]
     d = entry.get('desc')
     if isinstance(d, list):
         names = [_desc_name(x) for x in d]
