@@ -7019,6 +7019,87 @@ class TestMcpDatasetDetails(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# MCP lineage
+# ---------------------------------------------------------------------------
+
+class TestMcpLineage(unittest.TestCase):
+    #  a -> b -> d
+    #    -> c
+    GRAPH = {'a': ['b', 'c'], 'b': ['d'], 'c': [], 'd': []}
+
+    def test_walks_to_depth(self):
+        from prodtools_mcp.tools.lineage import walk
+        nodes, edges, truncated = walk(
+            'a', 'up', 3, lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(set(nodes), {'a', 'b', 'c', 'd'})
+        self.assertIn({'child': 'a', 'parent': 'b'}, edges)
+        self.assertIn({'child': 'b', 'parent': 'd'}, edges)
+        self.assertFalse(truncated)
+
+    def test_depth_limit_sets_truncated(self):
+        from prodtools_mcp.tools.lineage import walk
+        nodes, edges, truncated = walk(
+            'a', 'up', 1, lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(set(nodes), {'a', 'b', 'c'})
+        self.assertTrue(truncated)
+
+    def test_direction_down_reverses_edge_sense(self):
+        from prodtools_mcp.tools.lineage import walk
+        _, edges, _ = walk('a', 'down', 1, lambda n: self.GRAPH.get(n, []))
+        self.assertIn({'child': 'b', 'parent': 'a'}, edges)
+
+    def test_cycle_terminates(self):
+        from prodtools_mcp.tools.lineage import walk
+        cyclic = {'a': ['b'], 'b': ['a']}
+        nodes, _, _ = walk('a', 'up', 10, lambda n: cyclic.get(n, []))
+        self.assertEqual(set(nodes), {'a', 'b'})
+
+    def test_rejects_bad_direction(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('x', direction='sideways')
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_rejects_bad_depth(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('x', depth=0)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_trace_provenance_shape(self):
+        from prodtools_mcp.tools import lineage
+        res = lineage.trace_provenance(
+            'a', direction='up', depth=2,
+            parents_fn=lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(res['root'], 'a')
+        self.assertEqual(res['direction'], 'up')
+        self.assertEqual(res['depth'], 2)
+        self.assertIn('nodes', res)
+        self.assertIn('edges', res)
+        self.assertNotIn('mermaid', res)
+
+    def test_stdout_stays_clean_through_safe_tool(self):
+        """famtree.get_first_file_from_dataset prints to stdout on the
+        not-found path (famtree.py:71), directly on this route."""
+        from prodtools_mcp.adapters import safe_tool
+        from prodtools_mcp.tools import lineage
+
+        def chatty_parents(node):
+            print(f"No files found for dataset: {node}")
+            return []
+
+        wrapped = safe_tool(lineage.trace_provenance)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'stdout', out), patch.object(sys, 'stderr', err):
+            res = wrapped('a', parents_fn=chatty_parents)
+        self.assertEqual(out.getvalue(), '')
+        self.assertIn('No files found', err.getvalue())
+        self.assertEqual(res['root'], 'a')
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
