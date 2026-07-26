@@ -7061,6 +7061,49 @@ class TestMcpDatasetDetails(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# samweb_wrapper.parents_of_file — the fail-loud lineage edge function
+# ---------------------------------------------------------------------------
+
+class TestSamwebParentsOfFile(unittest.TestCase):
+    def _wrapper(self, listfiles):
+        """A wrapper with a stub client. __init__ builds a real samweb
+        client and needs the Mu2e environment; __new__ does not."""
+        from utils.samweb_wrapper import SAMWebWrapper
+        w = SAMWebWrapper.__new__(SAMWebWrapper)
+
+        class Client:
+            listFiles = staticmethod(listfiles)
+        w.client = Client()
+        return w
+
+    def test_query_is_isparentof_on_file_name(self):
+        from utils.samweb_wrapper import _q_parents_of_file
+        self.assertEqual(_q_parents_of_file('a.art'),
+                         'isparentof: (file_name a.art)')
+
+    def test_filters_etc_txt_like_famtree(self):
+        w = self._wrapper(
+            lambda q: ['sim.mu2e.A.B.art', 'etc.mu2e.index.C.txt'])
+        self.assertEqual(w.parents_of_file('x.art'), ['sim.mu2e.A.B.art'])
+
+    def test_raises_instead_of_returning_empty(self):
+        """The whole point: file_lineage returns [] on any error, which a
+        lineage caller cannot distinguish from a genuine primary."""
+        def boom(q):
+            raise RuntimeError('403 Forbidden')
+        with self.assertRaises(RuntimeError):
+            self._wrapper(boom).parents_of_file('x.art')
+
+    def test_file_lineage_still_swallows(self):
+        """This is additive: file_lineage's callers depend on its current
+        fail-soft behaviour and must not change."""
+        import inspect
+        from utils.samweb_wrapper import SAMWebWrapper
+        src = inspect.getsource(SAMWebWrapper.file_lineage)
+        self.assertIn('return []', src)
+
+
+# ---------------------------------------------------------------------------
 # MCP lineage
 # ---------------------------------------------------------------------------
 
@@ -7133,12 +7176,58 @@ class TestMcpLineage(unittest.TestCase):
                       lineage._default_parents_fn())
         lineage._cached_parents.cache_clear()
         try:
-            with patch('utils.famtree.get_parents', lambda n: ['p1.art']):
+            with patch('utils.samweb_wrapper.parents_of_file',
+                       lambda n: ['p1.art']):
                 lineage._cached_parents('f.art')
                 lineage._cached_parents('f.art')
             self.assertEqual(lineage._cached_parents.cache_info().hits, 1)
         finally:
             lineage._cached_parents.cache_clear()
+
+    def test_parents_edge_fn_raises_instead_of_returning_empty(self):
+        """famtree.get_parents -> file_lineage swallows every exception and
+        returns [] (samweb_wrapper.py:248-260). For lineage that reads as
+        'no parents' == 'this is a primary'. The edge function must raise."""
+        from prodtools_mcp.tools import lineage
+        lineage._cached_parents.cache_clear()
+        try:
+            def boom(name):
+                raise RuntimeError('401 Unauthorized')
+            with patch('utils.samweb_wrapper.parents_of_file', boom):
+                with self.assertRaises(RuntimeError):
+                    lineage._cached_parents('f.art')
+            # lru_cache does not memoize exceptions: the wrong empty answer
+            # cannot outlive the outage.
+            self.assertEqual(lineage._cached_parents.cache_info().currsize, 0)
+        finally:
+            lineage._cached_parents.cache_clear()
+
+    def test_up_direction_sam_failure_is_error_not_lone_root(self):
+        """The symmetric case to the children path: a SAM failure walking
+        UP must be catalog_unavailable, NOT nodes=[root] — which a caller
+        would read as 'this file is a primary'."""
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(name):
+            raise RuntimeError('SAM unreachable')
+
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('f.art', direction='up',
+                                     parents_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_default_parents_fn_is_the_fail_loud_wrapper(self):
+        """Regression guard: pointing this back at famtree.get_parents
+        reintroduces the swallow."""
+        import inspect
+        from prodtools_mcp.tools import lineage
+        src = inspect.getsource(lineage._cached_parents.__wrapped__)
+        code = '\n'.join(l for l in src.splitlines()
+                         if not l.lstrip().startswith('#'))
+        self.assertIn('from utils.samweb_wrapper import parents_of_file',
+                      code)
+        self.assertNotIn('famtree', code)
 
     def test_depth_bounds_inclusive_at_max(self):
         from prodtools_mcp.tools import lineage

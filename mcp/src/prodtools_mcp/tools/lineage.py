@@ -5,11 +5,19 @@ has no depth limit, no truncation signal, and walks parents only — its
 recursion is a closure that cannot be parameterized. Nothing in famtree
 walks children; samweb_wrapper.children_of_file (:417) is per-file.
 
-This module keeps bounded caches (module-level singletons) and bypasses
-famtree's unbounded lru_cache(maxsize=None) (famtree.py:46) by calling
-the __wrapped__ undecorated function. Lineage is immutable so cached
-values stay correct; the bounded cache keeps per-call memory use fixed
-in a long-lived server.
+Both edge functions are the fail-loud samweb_wrapper pair,
+parents_of_file / children_of_file. famtree.get_parents is NOT used:
+it delegates to file_lineage, which catches every exception and returns
+[] (samweb_wrapper.py:248-260). An expired token would then render as
+"this file has no parents" — "it is a primary" — a materially wrong
+answer for a lineage tool, and lru_cache would keep serving it after SAM
+recovered. lru_cache does not memoize exceptions, so a raising edge
+function also cannot poison the cache.
+
+This module keeps bounded caches (module-level singletons). famtree's
+own lru_cache(maxsize=None) (famtree.py:46) is likewise avoided: it
+grows without limit in a long-lived server. Lineage is immutable so
+cached values stay correct.
 """
 import functools
 
@@ -53,13 +61,11 @@ def walk(root, direction, depth, edge_fn):
 
 @functools.lru_cache(maxsize=_CACHE_SIZE)
 def _cached_parents(name):
-    # __wrapped__ is the UNDECORATED get_parents. Going through the
-    # decorated one would populate famtree's lru_cache(maxsize=None)
-    # (famtree.py:46) — the unbounded growth this module exists to avoid.
-    # getattr falls back to the decorated function if the attribute ever
-    # disappears: same behaviour as today, never wrong results.
-    from utils.famtree import get_parents
-    return tuple(getattr(get_parents, '__wrapped__', get_parents)(name))
+    # parents_of_file, not famtree.get_parents: see the module docstring.
+    # It applies the same etc.*.txt filter but raises on SAM errors
+    # instead of returning an empty parent list.
+    from utils.samweb_wrapper import parents_of_file
+    return tuple(parents_of_file(name))
 
 
 @functools.lru_cache(maxsize=_CACHE_SIZE)

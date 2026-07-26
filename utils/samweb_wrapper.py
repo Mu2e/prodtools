@@ -111,6 +111,11 @@ def _q_children_of_file(filename: str) -> str:
     return f"ischildof: (file_name {filename})"
 
 
+def _q_parents_of_file(filename: str) -> str:
+    """Files that are parents of `filename`."""
+    return f"isparentof: (file_name {filename})"
+
+
 def q_recent_files(filetype: str, user: str, since_date: str) -> str:
     """Files of `filetype` created by `user` after `since_date` (YYYY-MM-DD)."""
     return f"Create_Date > {since_date} and file_format {filetype} and user {user}"
@@ -293,6 +298,20 @@ class SAMWebWrapper:
         """Files that are children of `filename`."""
         return self.client.listFiles(_q_children_of_file(filename))
 
+    def parents_of_file(self, filename: str) -> List[str]:
+        """Files that are parents of `filename`, excluding the etc.*.txt
+        bookkeeping entries (same filter famtree.get_parents applies).
+
+        Fail-loud twin of file_lineage(filename, 'parents'), which
+        swallows every exception and returns []. For a lineage caller
+        that empty list is indistinguishable from 'this file has no
+        parents' — i.e. 'it is a primary' — so an expired token or a SAM
+        outage renders as a confident, materially wrong answer. Callers
+        that must tell absence from failure use this one."""
+        parents = self.client.listFiles(_q_parents_of_file(filename))
+        return [p for p in parents
+                if not (p.startswith('etc.') and p.endswith('.txt'))]
+
     def files_like(self, pattern: str, sequencer: Optional[str] = None) -> List[str]:
         """Files whose dataset matches a SAM `like` pattern."""
         return self.client.listFiles(_q_dataset_like(pattern, sequencer))
@@ -417,6 +436,10 @@ def parents_of_dataset(dataset: str) -> List[str]:
 def children_of_file(filename: str) -> List[str]:
     """Files that are children of `filename`."""
     return get_samweb_wrapper().children_of_file(filename)
+
+def parents_of_file(filename: str) -> List[str]:
+    """Files that are parents of `filename`, raising on SAM errors."""
+    return get_samweb_wrapper().parents_of_file(filename)
 
 def files_like(pattern: str, sequencer: Optional[str] = None) -> List[str]:
     """Files whose dataset matches a SAM `like` pattern."""
