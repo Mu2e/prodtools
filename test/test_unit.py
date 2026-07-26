@@ -6718,6 +6718,160 @@ class TestMcpLedgerRo(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# MCP status tools
+# ---------------------------------------------------------------------------
+
+class TestMcpQueueBlock(unittest.TestCase):
+    def test_unknown_omits_counts_entirely(self):
+        """A failed jobsub_q must NOT serialize as running:0 — that reads
+        as 'drained' and could trigger recovery against live jobs."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['29308498'], None)
+        self.assertEqual(block['state'], 'unknown')
+        self.assertIn('reason', block)
+        for key in ('running', 'idle', 'held'):
+            self.assertNotIn(key, block)
+
+    def test_counts_by_state_letter(self):
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(
+            ['29308498'], {'29308498': ['R', 'R', 'I', 'H', 'C', 'X']})
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['running'], 2)
+        self.assertEqual(block['idle'], 1)
+        self.assertEqual(block['held'], 1)
+
+    def test_absent_cluster_is_zero_not_unknown(self):
+        """A genuinely drained cluster is a real zero, distinct from
+        an unknown snapshot."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['29308498'], {'99999999': ['R']})
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['running'], 0)
+        self.assertEqual(block['clusters'], [])
+
+
+class TestMcpCampaignStatus(unittest.TestCase):
+    def _make_db(self, tmpdir):
+        from utils import submission_ledger
+        db = os.path.join(tmpdir, 'ledger.db')
+        entry = {'njobs': 4000, 'outputs': [
+            {'dataset': 'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+             'location': 'tape'}]}
+        submission_ledger.create_campaign(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, slice_size=500, map_path='/tmp/map_au.json')
+        submission_ledger.record_submission(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, indices=[0, 1], jobsub_id='29308498.0@sched',
+            cluster_id='29308498', map_path='/tmp/map_au.json')
+        return db
+
+    def test_ledger_only_when_no_campaign_named(self):
+        """The bare call must not touch the network — otherwise a 23-row
+        ledger fans out to one SAM count per output dataset."""
+        from prodtools_mcp.tools import status
+
+        def boom(*a, **kw):
+            raise AssertionError("network call in ledger-only mode")
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                db_path=db, clusters_fn=boom, count_fn=boom)
+        self.assertEqual(len(result['campaigns']), 1)
+        camp = result['campaigns'][0]
+        self.assertNotIn('queue', camp)
+        self.assertNotIn('outputs', camp)
+        self.assertEqual(camp['njobs'], 4000)
+        self.assertEqual(camp['slice_size'], 500)
+
+    def test_no_integer_entry_field(self):
+        """The ledger stores the whole entry dict as entry_json; an index
+        into the map is not recoverable, so we must not invent one."""
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            camp = status.campaign_status(db_path=db)['campaigns'][0]
+        self.assertNotIn('entry', camp)
+
+    def test_named_campaign_includes_queue_and_outputs(self):
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db,
+                clusters_fn=lambda: {'29308498': ['R', 'R']},
+                count_fn=lambda ds: 412)
+        camp = result['campaigns'][0]
+        self.assertEqual(camp['queue']['running'], 2)
+        self.assertEqual(camp['outputs']['datasets'][0]['produced'], 412)
+        self.assertEqual(camp['outputs']['datasets'][0]['expected'], 4000)
+
+    def test_output_count_failure_is_unknown_not_zero(self):
+        from prodtools_mcp.tools import status
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db,
+                clusters_fn=lambda: None, count_fn=boom)
+        camp = result['campaigns'][0]
+        self.assertEqual(camp['outputs']['state'], 'unknown')
+        self.assertNotIn('datasets', camp['outputs'])
+
+    def test_unknown_campaign_is_not_found(self):
+        from prodtools_mcp.tools import status
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            with self.assertRaises(ToolError) as ctx:
+                status.campaign_status(campaign='MDC9999zz', db_path=db)
+        self.assertEqual(ctx.exception.kind, 'not_found')
+
+    def test_shared_tarball_adds_conflation_note(self):
+        """Rows correlate to a campaign by tarball only — no FK — so a
+        reused tarball must be flagged, not silently merged."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            camps = submission_ledger.all_campaigns(db)
+            submission_ledger.set_campaign_state(db, camps[0]['id'],
+                                                 'complete')
+            submission_ledger.create_campaign(
+                db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+                entry={'njobs': 4000, 'outputs': []}, slice_size=500)
+            result = status.campaign_status(db_path=db)
+        self.assertTrue(any('note' in c for c in result['campaigns']))
+
+
+class TestMcpListCampaigns(unittest.TestCase):
+    def test_filters_by_state(self):
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'ledger.db')
+            submission_ledger.create_campaign(
+                db, tarball='cnf.a.0.tar', entry={'njobs': 10},
+                slice_size=5)
+            active = status.list_campaigns(state='active', db_path=db)
+            done = status.list_campaigns(state='complete', db_path=db)
+        self.assertEqual(active['count'], 1)
+        self.assertEqual(done['count'], 0)
+
+    def test_rejects_bad_state(self):
+        from prodtools_mcp.tools import status
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            status.list_campaigns(state='banana', db_path='/x')
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
