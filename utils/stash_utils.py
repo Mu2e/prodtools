@@ -26,7 +26,7 @@ Usage
 """
 
 import os
-import subprocess
+import shutil
 import sys
 from typing import List, Optional
 
@@ -90,10 +90,10 @@ def _copy_dataset(
     `dest_path_fn(filename)` — the shared engine behind
     copy_dataset_to_stash / copy_dataset_to_resilient.
 
-    Files are copied with `cp`.  The source path is obtained from SAM for
-    the requested source_loc ('disk' or 'tape').  For tape sources the file
-    must already be staged to disk (dcache); this function does not trigger
-    staging.
+    Files are copied with `shutil.copyfile`.  The source path is obtained
+    from SAM for the requested source_loc ('disk' or 'tape').  For tape
+    sources the file must already be staged to disk (dcache); this function
+    does not trigger staging.
 
     Parameters
     ----------
@@ -156,10 +156,16 @@ def _copy_dataset(
         # Create destination directory
         os.makedirs(dest_dir, exist_ok=True)
 
-        # Copy file
-        result = subprocess.run(["cp", src, dest], capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"  FAIL {filename}: {result.stderr.strip()}", file=sys.stderr)
+        # Copy file. shutil.copyfile, not copy2/copy: content only, no
+        # metadata or permission-bit copy — the destination is dCache
+        # (stash/resilient), where chmod/utime on a freshly written file
+        # is not reliably supported and would fail a copy that in fact
+        # succeeded. Failures arrive as OSError with errno/strerror
+        # rather than a return code plus scraped stderr.
+        try:
+            shutil.copyfile(src, dest)
+        except OSError as e:
+            print(f"  FAIL {filename}: {e.strerror or e}", file=sys.stderr)
             n_fail += 1
         else:
             n_ok += 1

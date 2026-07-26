@@ -1305,7 +1305,7 @@ class TestStashUtils(unittest.TestCase):
         self.assertTrue(path.endswith(fname))
 
     def test_copy_dataset_dry_run(self):
-        """dry_run=True must not invoke cp or makedirs."""
+        """dry_run=True must not copy or makedirs."""
         from utils import stash_utils
 
         mock_files = ["dts.mu2e.CeEndpoint.Run1Bab.001440_00000000.art",
@@ -1319,7 +1319,7 @@ class TestStashUtils(unittest.TestCase):
              patch('utils.stash_utils.locate_files_strict',
                    side_effect=lambda fns: {f: mock_locations for f in fns}), \
              patch('os.makedirs') as mock_mkdir, \
-             patch('subprocess.run') as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             n = stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
@@ -1331,8 +1331,11 @@ class TestStashUtils(unittest.TestCase):
         mock_run.assert_not_called()
         self.assertEqual(n, 2)
 
-    def test_copy_dataset_calls_cp(self):
-        """copy_dataset_to_stash must call subprocess.run with cp."""
+    def test_copy_dataset_calls_copyfile(self):
+        """Copies via shutil.copyfile(src, dest) — not a `cp` subprocess.
+
+        copyfile, not copy2/copy: the destination is dCache, where the
+        metadata/permission copy those do is not reliably supported."""
         from utils import stash_utils
 
         mock_files = ["dts.mu2e.CeEndpoint.Run1Bab.001440_00000000.art"]
@@ -1340,14 +1343,11 @@ class TestStashUtils(unittest.TestCase):
             {'location_type': 'disk',
              'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'}
         ]
-        mock_run_result = MagicMock()
-        mock_run_result.returncode = 0
-
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
              patch('utils.stash_utils.locate_files_strict',
                    side_effect=lambda fns: {f: mock_locations for f in fns}), \
              patch('os.makedirs'), \
-             patch('subprocess.run', return_value=mock_run_result) as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             n = stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
@@ -1356,8 +1356,36 @@ class TestStashUtils(unittest.TestCase):
             )
 
         self.assertEqual(n, 1)
-        call_args = mock_run.call_args[0][0]
-        self.assertEqual(call_args[0], 'cp')
+        src, dest = mock_run.call_args[0]
+        self.assertTrue(src.endswith(mock_files[0]))
+        self.assertTrue(dest.endswith(mock_files[0]))
+
+    def test_copy_dataset_counts_oserror_as_failure(self):
+        """A copy that raises OSError is a failure, not a silent success.
+
+        The old code read subprocess returncode; shutil raises instead, so
+        the failure path must catch OSError or a failed copy would be
+        counted as copied."""
+        from utils import stash_utils
+
+        mock_files = ["dts.mu2e.CeEndpoint.Run1Bab.001440_00000000.art",
+                      "dts.mu2e.CeEndpoint.Run1Bab.001440_00000001.art"]
+        mock_locations = [
+            {'location_type': 'disk',
+             'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'}
+        ]
+
+        with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}), \
+             patch('os.makedirs'), \
+             patch('utils.stash_utils.shutil.copyfile',
+                   side_effect=OSError(28, "No space left on device")):
+            n = stash_utils.copy_dataset_to_stash(
+                "dts.mu2e.CeEndpoint.Run1Bab.art",
+                source_loc='disk', dry_run=False, verbose=False)
+
+        self.assertEqual(n, 0)
 
     def test_copy_dataset_limit(self):
         """--limit N should copy at most N files."""
@@ -1368,14 +1396,11 @@ class TestStashUtils(unittest.TestCase):
             {'location_type': 'disk',
              'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'}
         ]
-        mock_run_result = MagicMock()
-        mock_run_result.returncode = 0
-
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
              patch('utils.stash_utils.locate_files_strict',
                    side_effect=lambda fns: {f: mock_locations for f in fns}) as mock_loc, \
              patch('os.makedirs'), \
-             patch('subprocess.run', return_value=mock_run_result) as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
@@ -1398,7 +1423,7 @@ class TestStashUtils(unittest.TestCase):
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
              patch('utils.samweb_wrapper.locate_file_strict', return_value=[]), \
              patch('os.makedirs'), \
-             patch('subprocess.run') as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             n = stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
