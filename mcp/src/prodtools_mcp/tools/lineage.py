@@ -5,10 +5,11 @@ has no depth limit, no truncation signal, and walks parents only — its
 recursion is a closure that cannot be parameterized. Nothing in famtree
 walks children; samweb_wrapper.children_of_file (:417) is per-file.
 
-famtree.get_parents is lru_cache(maxsize=None) (famtree.py:46). Lineage
-is immutable so its cached values stay correct, but an unbounded cache
-in a long-lived server grows without limit, so this module keeps its own
-bounded one.
+This module keeps bounded caches (module-level singletons) and bypasses
+famtree's unbounded lru_cache(maxsize=None) (famtree.py:46) by calling
+the __wrapped__ undecorated function. Lineage is immutable so cached
+values stay correct; the bounded cache keeps per-call memory use fixed
+in a long-lived server.
 """
 import functools
 
@@ -50,22 +51,29 @@ def walk(root, direction, depth, edge_fn):
     return order, edges, bool(frontier)
 
 
-def _default_parents_fn():
+@functools.lru_cache(maxsize=_CACHE_SIZE)
+def _cached_parents(name):
+    # __wrapped__ is the UNDECORATED get_parents. Going through the
+    # decorated one would populate famtree's lru_cache(maxsize=None)
+    # (famtree.py:46) — the unbounded growth this module exists to avoid.
+    # getattr falls back to the decorated function if the attribute ever
+    # disappears: same behaviour as today, never wrong results.
     from utils.famtree import get_parents
+    return tuple(getattr(get_parents, '__wrapped__', get_parents)(name))
 
-    @functools.lru_cache(maxsize=_CACHE_SIZE)
-    def parents(name):
-        return tuple(get_parents(name))
-    return parents
+
+@functools.lru_cache(maxsize=_CACHE_SIZE)
+def _cached_children(name):
+    from utils.samweb_wrapper import children_of_file
+    return tuple(children_of_file(name))
+
+
+def _default_parents_fn():
+    return _cached_parents
 
 
 def _default_children_fn():
-    from utils.samweb_wrapper import children_of_file
-
-    @functools.lru_cache(maxsize=_CACHE_SIZE)
-    def children(name):
-        return tuple(children_of_file(name))
-    return children
+    return _cached_children
 
 
 def trace_provenance(name, direction='up', depth=3,

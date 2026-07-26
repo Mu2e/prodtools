@@ -7049,10 +7049,13 @@ class TestMcpLineage(unittest.TestCase):
         self.assertIn({'child': 'b', 'parent': 'a'}, edges)
 
     def test_cycle_terminates(self):
+        """Without the `seen` set the walk revisits nodes and `nodes` grows
+        past the graph's size — assert the list, not the set, so this
+        isolates the cycle guard rather than the depth bound."""
         from prodtools_mcp.tools.lineage import walk
         cyclic = {'a': ['b'], 'b': ['a']}
         nodes, _, _ = walk('a', 'up', 10, lambda n: cyclic.get(n, []))
-        self.assertEqual(set(nodes), {'a', 'b'})
+        self.assertEqual(nodes, ['a', 'b'])
 
     def test_rejects_bad_direction(self):
         from prodtools_mcp.tools import lineage
@@ -7079,6 +7082,32 @@ class TestMcpLineage(unittest.TestCase):
         self.assertIn('nodes', res)
         self.assertIn('edges', res)
         self.assertNotIn('mermaid', res)
+
+    def test_parents_cache_is_module_level_and_actually_hits(self):
+        """A cache rebuilt per call is inert: walk()'s own `seen` set means
+        it can never hit within one call, so it must persist across them."""
+        from prodtools_mcp.tools import lineage
+        self.assertIs(lineage._default_parents_fn(),
+                      lineage._default_parents_fn())
+        lineage._cached_parents.cache_clear()
+        try:
+            with patch('utils.famtree.get_parents', lambda n: ['p1.art']):
+                lineage._cached_parents('f.art')
+                lineage._cached_parents('f.art')
+            self.assertEqual(lineage._cached_parents.cache_info().hits, 1)
+        finally:
+            lineage._cached_parents.cache_clear()
+
+    def test_depth_bounds_inclusive_at_max(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        res = lineage.trace_provenance('a', depth=lineage.MAX_DEPTH,
+                                       parents_fn=lambda n: [])
+        self.assertEqual(res['depth'], lineage.MAX_DEPTH)
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('a', depth=lineage.MAX_DEPTH + 1,
+                                     parents_fn=lambda n: [])
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
 
     def test_stdout_stays_clean_through_safe_tool(self):
         """famtree.get_first_file_from_dataset prints to stdout on the
