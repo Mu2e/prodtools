@@ -6702,6 +6702,20 @@ class TestMcpLedgerRo(unittest.TestCase):
                 ledger_ro.campaigns(db)
         self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
 
+    def test_corrupt_db_becomes_catalog_unavailable(self):
+        """A truncated/corrupt ledger raises sqlite3.DatabaseError, which
+        is NOT an OperationalError — it must still surface as a typed
+        error rather than a raw traceback."""
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'corrupt.db')
+            with open(db, 'wb') as fh:
+                fh.write(b'this is not a sqlite database at all')
+            with self.assertRaises(ToolError) as ctx:
+                ledger_ro.campaigns(db)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
 
 # ---------------------------------------------------------------------------
 # Entry point

@@ -44,7 +44,7 @@ def _query(db_path, sql, params=()):
     con = _connect(db_path)
     try:
         return [dict(r) for r in con.execute(sql, params).fetchall()]
-    except sqlite3.OperationalError as exc:
+    except sqlite3.Error as exc:
         raise ToolError(
             'catalog_unavailable',
             f'ledger query failed on {db_path}: {exc}',
