@@ -7129,6 +7129,53 @@ class TestMcpLineage(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# MCP server wiring
+# ---------------------------------------------------------------------------
+
+class TestMcpServerInfo(unittest.TestCase):
+    def test_declares_read_only(self):
+        from prodtools_mcp.server import get_server_info
+        info = get_server_info()
+        self.assertFalse(info['writes'])
+        self.assertIn('read-only', info['description'].lower())
+
+    def test_lists_every_tool(self):
+        from prodtools_mcp.server import get_server_info, TOOL_NAMES
+        info = get_server_info()
+        self.assertEqual(sorted(info['tools']), sorted(TOOL_NAMES))
+        self.assertEqual(len(TOOL_NAMES), 6)
+
+
+class TestMcpToolRegistration(unittest.TestCase):
+    def test_every_tool_is_wrapped_in_safe_tool(self):
+        """An unwrapped tool could kill the server via SystemExit or
+        corrupt the JSON-RPC stream via print()."""
+        from prodtools_mcp import server
+        for name, fn in server.TOOL_FUNCTIONS.items():
+            self.assertTrue(getattr(fn, '__wrapped__', None) is not None,
+                            f'{name} is not wrapped in safe_tool')
+
+    def test_tool_names_covers_functions_plus_server_info(self):
+        from prodtools_mcp import server
+        self.assertEqual(
+            sorted(server.TOOL_NAMES),
+            sorted(list(server.TOOL_FUNCTIONS) + ['get_server_info']))
+
+    def test_no_tool_can_reach_definition_writers(self):
+        """create_definition/delete_definition must never be referenced
+        from the server package."""
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent / 'mcp' / 'src'
+        offenders = []
+        for path in root.rglob('*.py'):
+            text = path.read_text()
+            for bad in ('create_definition', 'delete_definition'):
+                if bad in text:
+                    offenders.append(f'{path}: {bad}')
+        self.assertEqual(offenders, [])
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
