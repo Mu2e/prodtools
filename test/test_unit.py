@@ -6927,6 +6927,31 @@ class TestMcpFindDatasets(unittest.TestCase):
             discovery.find_datasets(pattern='*', fetch_fn=boom)
         self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
 
+    def test_latest_only_keeps_newest_dsconf_per_description(self):
+        """latest_per_description returns (rows, skipped) with rows as
+        4-tuples, not a flat name list — regression guard."""
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(pattern='*', latest_only=True,
+                                      fetch_fn=lambda p, u: self.NAMES)
+        names = [d['name'] for d in res['datasets']]
+        self.assertIn('dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art', names)
+        self.assertNotIn('dig.mu2e.FlatGamma.MDC2025ar_best_v1_1.art', names)
+
+    def test_require_files_count_failure_is_catalog_unavailable(self):
+        """A raising count_fn under require_files must fail loudly, not
+        silently drop the dataset."""
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(pattern='*', require_files=True,
+                                    fetch_fn=lambda p, u: self.NAMES,
+                                    count_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
 
 class TestMcpDatasetDetails(unittest.TestCase):
     SUMMARY = {'file_count': 800, 'total_event_count': 4000000,
@@ -6976,6 +7001,21 @@ class TestMcpDatasetDetails(unittest.TestCase):
         with self.assertRaises(ToolError) as ctx:
             discovery.dataset_details('x.y.z.w.art', summary_fn=boom)
         self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_created_fn_failure_is_tolerated(self):
+        """The creation date is decoration, not the answer: a raising
+        created_fn yields created_utc=None and does NOT propagate — and
+        that tolerance must not extend to summary_fn."""
+        from prodtools_mcp.tools import discovery
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        res = discovery.dataset_details('dig.mu2e.X.Y.art',
+                                        summary_fn=lambda ds: self.SUMMARY,
+                                        created_fn=boom)
+        self.assertIsNone(res['created_utc'])
+        self.assertTrue(res['exists'])
 
 
 # ---------------------------------------------------------------------------

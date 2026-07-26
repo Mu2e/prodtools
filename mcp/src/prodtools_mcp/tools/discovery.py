@@ -50,7 +50,8 @@ def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
 
     if latest_only:
         from utils.latestDatasets import latest_per_description
-        names = latest_per_description(names)
+        rows, _skipped = latest_per_description(names)
+        names = [row[2] for row in rows]
 
     records = []
     for name in names:
