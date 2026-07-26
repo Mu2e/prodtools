@@ -7,6 +7,7 @@ testable without MCP machinery or a stdio transport.
 import logging
 import os
 import sys
+from typing import Optional
 
 from prodtools_mcp.adapters import safe_tool
 from prodtools_mcp.tools import discovery, lineage, status
@@ -36,8 +37,20 @@ READING THE RESULTS:
 - find_datasets reports a samweb DEFINITION listing (see its `basis`
   field): zero-file definitions appear and -LH/-CH variants do not. Pass
   require_files=True when you need existence.
+- find_datasets `pattern` is a SAM defname filter, a SQL LIKE. Either
+  wildcard works: `*` is translated to `%`. Results are capped at
+  `limit` (default 500) and `truncated` says whether the cap bit;
+  require_files is REFUSED above the cap rather than issuing one SAM
+  query per record.
+- campaign_status outputs report `produced` against both `submitted`
+  (indices actually handed to the grid) and `expected_at_completion`
+  (njobs). Every direct campaign is sliced, so compare against
+  `submitted` to judge what is in flight.
+- campaign_status `rows` is a count per submission state. `exhausted`
+  means the attempt cap was reached and a human must take over.
 - Errors arrive as {"error": {"kind", "message", "remedy"}}. Never retry
-  an auth_expired — tell the user to renew in their own shell.
+  an auth_expired — tell the user to renew in their own shell. This
+  server never refreshes credentials.
 """
 
 # Wrapped once, here, so registration and tests see the same objects.
@@ -80,10 +93,15 @@ def create_mcp_server():
 
     mcp = FastMCP('prodtools', instructions=INSTRUCTIONS)
 
+    # Optional[...] everywhere a parameter defaults to None. `str = None`
+    # emits {"default": null, "type": "string"} — null is not a string,
+    # and strict schema validators (and other providers' function-calling
+    # layers) reject it, which defeats the "reach other clients" goal.
     @mcp.tool(description='Status of one campaign, or a cheap ledger-only '
                           'summary of all of them when called with no '
                           'argument.')
-    def campaign_status(campaign: str = None, campaign_id: int = None,
+    def campaign_status(campaign: Optional[str] = None,
+                        campaign_id: Optional[int] = None,
                         include_queue: bool = True,
                         include_outputs: bool = True) -> dict:
         return TOOL_FUNCTIONS['campaign_status'](
@@ -92,19 +110,24 @@ def create_mcp_server():
 
     @mcp.tool(description='List submission campaigns, optionally filtered '
                           'by state (active/complete/paused/cancelled).')
-    def list_campaigns(state: str = None) -> dict:
+    def list_campaigns(state: Optional[str] = None) -> dict:
         return TOOL_FUNCTIONS['list_campaigns'](state=state)
 
     @mcp.tool(description='Find datasets by campaign, tier, description, '
-                          'or glob pattern. Reports a definition listing; '
-                          'pass require_files=True for existence.')
-    def find_datasets(campaign: str = None, tier: str = None,
-                      desc: str = None, pattern: str = None,
+                          'or SAM defname pattern (* or % both work). '
+                          'Reports a definition listing; pass '
+                          'require_files=True for existence.')
+    def find_datasets(campaign: Optional[str] = None,
+                      tier: Optional[str] = None,
+                      desc: Optional[str] = None,
+                      pattern: Optional[str] = None,
                       latest_only: bool = False,
-                      require_files: bool = False) -> dict:
+                      require_files: bool = False,
+                      limit: int = discovery.DEFAULT_LIMIT) -> dict:
         return TOOL_FUNCTIONS['find_datasets'](
             campaign=campaign, tier=tier, desc=desc, pattern=pattern,
-            latest_only=latest_only, require_files=require_files)
+            latest_only=latest_only, require_files=require_files,
+            limit=limit)
 
     @mcp.tool(description='File count, event count, size, and creation '
                           'date for one dataset.')

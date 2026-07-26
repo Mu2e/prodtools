@@ -39,6 +39,37 @@ class ToolError(Exception):
         self.remedy = remedy
 
 
+ENV_REMEDY = ('Run `muse setup ops` in the shell that starts this '
+              'server, then restart it.')
+AUTH_REMEDY = ('Renew your credentials in your own shell (htgettoken). '
+               'This server never refreshes credentials — do not retry '
+               'until you have.')
+CATALOG_REMEDY = 'Check SAM availability and that muse setup ops has run.'
+
+# Substrings that identify an authorization failure in a SAM/HTTP error.
+# Deliberately narrow: a broader net would reclassify ordinary outages as
+# auth_expired and send the caller to renew a perfectly good token.
+_AUTH_MARKERS = ('401', '403', 'token', 'unauthorized')
+
+
+def classify_catalog_error(exc, message):
+    """Build the right ToolError for a failure on a catalog code path.
+
+    Without this, `auth_expired` and `env_missing` are declared in
+    ERROR_KINDS and produced nowhere: every catalog failure came back as
+    catalog_unavailable with "Check SAM availability", so an expired
+    token sent the caller to check a service that was fine. The server's
+    own guidance says "never retry an auth_expired" — a branch that
+    could not fire.
+    """
+    if isinstance(exc, ImportError):
+        return ToolError('env_missing', message, ENV_REMEDY)
+    text = str(exc).lower()
+    if any(marker in text for marker in _AUTH_MARKERS):
+        return ToolError('auth_expired', message, AUTH_REMEDY)
+    return ToolError('catalog_unavailable', message, CATALOG_REMEDY)
+
+
 def error(kind, message, remedy=''):
     """Build the error envelope. Validates `kind` against the closed set
     so a typo becomes a loud failure here rather than a silently

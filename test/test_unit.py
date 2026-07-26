@@ -6590,6 +6590,30 @@ class TestMcpAdapters(unittest.TestCase):
         self.assertEqual(out.getvalue(), '')
         self.assertIn('No files found', err.getvalue())
 
+    def test_classify_import_error_is_env_missing(self):
+        """env_missing was declared in ERROR_KINDS and produced nowhere."""
+        from prodtools_mcp.adapters import classify_catalog_error
+        err = classify_catalog_error(
+            ImportError("No module named 'samweb_client'"), 'boom')
+        self.assertEqual(err.kind, 'env_missing')
+        self.assertIn('muse setup ops', err.remedy)
+
+    def test_classify_auth_markers_are_auth_expired(self):
+        """An expired token used to arrive as catalog_unavailable with
+        'Check SAM availability' — advice about a service that is fine."""
+        from prodtools_mcp.adapters import classify_catalog_error
+        for msg in ('HTTP 401 Client Error', 'HTTPError: 403 Forbidden',
+                    'Unauthorized', 'bearer token has expired'):
+            err = classify_catalog_error(RuntimeError(msg), 'boom')
+            self.assertEqual(err.kind, 'auth_expired', msg)
+            self.assertIn('own shell', err.remedy)
+
+    def test_classify_falls_back_to_catalog_unavailable(self):
+        from prodtools_mcp.adapters import classify_catalog_error
+        err = classify_catalog_error(
+            RuntimeError('Connection refused'), 'boom')
+        self.assertEqual(err.kind, 'catalog_unavailable')
+
     def test_safe_tool_preserves_name(self):
         from prodtools_mcp.adapters import safe_tool
 
@@ -7137,6 +7161,74 @@ class TestMcpFindDatasets(unittest.TestCase):
                                     count_fn=boom)
         self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
 
+    def test_expired_token_is_auth_expired_not_catalog_unavailable(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(pattern, user):
+            raise RuntimeError('HTTP 401: token has expired')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(fetch_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'auth_expired')
+
+    def test_missing_ops_env_is_env_missing(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(pattern, user):
+            raise ImportError("No module named 'samweb_client'")
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(fetch_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'env_missing')
+
+    def test_result_is_capped_and_truncated_is_honest(self):
+        """~20,000 definitions exist; truncated was hardcoded False."""
+        from prodtools_mcp.tools import discovery
+        many = [f'dig.mu2e.D{i:04d}.MDC2025au_best_v1_3.art'
+                for i in range(1200)]
+        res = discovery.find_datasets(limit=10, fetch_fn=lambda p, u: many)
+        self.assertEqual(res['count'], 10)
+        self.assertEqual(res['limit'], 10)
+        self.assertTrue(res['truncated'])
+        untruncated = discovery.find_datasets(
+            limit=10, fetch_fn=lambda p, u: many[:3])
+        self.assertFalse(untruncated['truncated'])
+
+    def test_default_limit_is_applied(self):
+        from prodtools_mcp.tools import discovery
+        many = [f'dig.mu2e.D{i:05d}.MDC2025au_best_v1_3.art'
+                for i in range(discovery.DEFAULT_LIMIT + 7)]
+        res = discovery.find_datasets(fetch_fn=lambda p, u: many)
+        self.assertEqual(res['count'], discovery.DEFAULT_LIMIT)
+        self.assertTrue(res['truncated'])
+
+    def test_require_files_over_limit_is_refused_not_fanned_out(self):
+        """require_files costs one serial HTTP round-trip per record and
+        FastMCP runs sync tools inline on the event loop."""
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        many = [f'dig.mu2e.D{i:04d}.MDC2025au_best_v1_3.art'
+                for i in range(300)]
+        calls = []
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(require_files=True, limit=10,
+                                    fetch_fn=lambda p, u: many,
+                                    count_fn=lambda ds: calls.append(ds) or 1)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        self.assertEqual(calls, [], 'must refuse before querying SAM')
+
+    def test_rejects_bad_limit(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        for bad in (0, -1, 'many', 2.5):
+            with self.assertRaises(ToolError) as ctx:
+                discovery.find_datasets(limit=bad,
+                                        fetch_fn=lambda p, u: self.NAMES)
+            self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
 
 class TestMcpDatasetDetails(unittest.TestCase):
     SUMMARY = {'file_count': 800, 'total_event_count': 4000000,
@@ -7345,6 +7437,28 @@ class TestMcpLineage(unittest.TestCase):
         finally:
             lineage._cached_parents.cache_clear()
 
+    def test_expired_token_on_lineage_is_auth_expired(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(name):
+            raise RuntimeError('403 Forbidden: bearer token rejected')
+
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('f.art', parents_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'auth_expired')
+
+    def test_missing_ops_env_on_lineage_is_env_missing(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(name):
+            raise ImportError("No module named 'samweb_client'")
+
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('f.art', parents_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'env_missing')
+
     def test_up_direction_sam_failure_is_error_not_lone_root(self):
         """The symmetric case to the children path: a SAM failure walking
         UP must be catalog_unavailable, NOT nodes=[root] — which a caller
@@ -7434,6 +7548,37 @@ class TestMcpToolRegistration(unittest.TestCase):
         self.assertEqual(
             sorted(server.TOOL_NAMES),
             sorted(list(server.TOOL_FUNCTIONS) + ['get_server_info']))
+
+    def test_optional_params_are_annotated_optional(self):
+        """`str = None` emits {"default": null, "type": "string"}. null is
+        not a string; strict validators and other providers'
+        function-calling layers reject the schema outright, which defeats
+        the spec's 'reach other clients' goal. AST rather than the live
+        schema because the suite runs on an interpreter without mcp."""
+        import ast
+        import pathlib
+        path = (pathlib.Path(__file__).resolve().parent.parent /
+                'mcp' / 'src' / 'prodtools_mcp' / 'server.py')
+        tree = ast.parse(path.read_text())
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            a = node.args
+            positional = list(a.posonlyargs) + list(a.args)
+            defaults = ([None] * (len(positional) - len(a.defaults))
+                        + list(a.defaults))
+            pairs = list(zip(positional, defaults))
+            pairs += list(zip(a.kwonlyargs, a.kw_defaults))
+            for arg, default in pairs:
+                if not isinstance(default, ast.Constant):
+                    continue
+                if default.value is not None or arg.annotation is None:
+                    continue
+                ann = ast.unparse(arg.annotation)
+                if 'Optional' not in ann and 'None' not in ann:
+                    offenders.append(f'{node.name}({arg.arg}: {ann} = None)')
+        self.assertEqual(offenders, [])
 
     def test_no_tool_can_reach_definition_writers(self):
         """create_definition/delete_definition must never be referenced

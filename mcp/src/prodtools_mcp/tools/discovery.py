@@ -5,12 +5,18 @@ as existence: zero-file definitions appear and -LH/-CH variants do not.
 Every response carries that caveat in `basis` so a caller cannot mistake
 one for the other.
 """
-from prodtools_mcp.adapters import ToolError
+from prodtools_mcp.adapters import ToolError, classify_catalog_error
 
 _BASIS = ('samweb list-definitions: a definition listing, not an '
           'existence check — zero-file definitions appear and -LH/-CH '
           'variants do not. Pass require_files=True to filter to '
           'definitions with at least one file.')
+
+# There are ~20,000 SAM definitions. FastMCP runs sync tools inline on
+# the event loop, so an unbounded result — and especially the one serial
+# HTTP round-trip per record that require_files costs — freezes the
+# whole server, not just this call.
+DEFAULT_LIMIT = 500
 
 
 def _default_fetch_fn(pattern, user):
@@ -54,21 +60,28 @@ def defname_query(campaign=None, tier=None, desc=None, pattern=None):
 
 def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
                   latest_only=False, require_files=False, user=None,
-                  fetch_fn=None, count_fn=None):
+                  limit=DEFAULT_LIMIT, fetch_fn=None, count_fn=None):
     """Datasets matching the given filters, from the SAM definition list."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise ToolError('invalid_argument',
+                        f'limit must be a positive integer, got {limit!r}',
+                        'Omit it for the default of '
+                        f'{DEFAULT_LIMIT}.')
     fetch = fetch_fn or _default_fetch_fn
     query = defname_query(campaign, tier, desc, pattern)
     try:
         names = fetch(query, user)
     except Exception as exc:
-        raise ToolError(
-            'catalog_unavailable',
-            f'samweb list-definitions failed: {exc}',
-            'Check SAM availability and that muse setup ops has run.'
-        ) from exc
+        raise classify_catalog_error(
+            exc, f'samweb list-definitions failed: {exc}') from exc
 
     if latest_only:
-        from utils.latestDatasets import latest_per_description
+        try:
+            from utils.latestDatasets import latest_per_description
+        except ImportError as exc:
+            raise classify_catalog_error(
+                exc, f'latest_only needs the ops environment: {exc}'
+            ) from exc
         rows, _skipped = latest_per_description(names)
         names = [row[2] for row in rows]
 
@@ -88,7 +101,19 @@ def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
             continue
         records.append(rec)
 
+    records.sort(key=lambda r: r['name'])
+
     if require_files:
+        # Refuse rather than issue thousands of serial round-trips. The
+        # caller must narrow the query; silently counting the first
+        # `limit` would answer a different question than the one asked.
+        if len(records) > limit:
+            raise ToolError(
+                'invalid_argument',
+                f'require_files=True would issue {len(records)} serial '
+                f'SAM queries (limit {limit})',
+                'Narrow the query with campaign/tier/desc, or raise '
+                'limit deliberately.')
         count = count_fn or _default_count_fn
         kept = []
         for rec in records:
@@ -96,15 +121,15 @@ def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
                 if count(rec['name']) > 0:
                     kept.append(rec)
             except Exception as exc:
-                raise ToolError(
-                    'catalog_unavailable',
-                    f'file count failed for {rec["name"]}: {exc}',
-                    'Check SAM availability.') from exc
+                raise classify_catalog_error(
+                    exc, f'file count failed for {rec["name"]}: {exc}'
+                ) from exc
         records = kept
 
-    records.sort(key=lambda r: r['name'])
-    return {'count': len(records), 'truncated': False,
-            'basis': _BASIS, 'datasets': records}
+    truncated = len(records) > limit
+    records = records[:limit]
+    return {'count': len(records), 'truncated': truncated,
+            'limit': limit, 'basis': _BASIS, 'datasets': records}
 
 
 def _default_summary_fn(dataset):
@@ -128,11 +153,8 @@ def dataset_details(dataset, summary_fn=None, created_fn=None):
     try:
         summary = (summary_fn or _default_summary_fn)(dataset) or {}
     except Exception as exc:
-        raise ToolError(
-            'catalog_unavailable',
-            f'dataset summary failed for {dataset}: {exc}',
-            'Check SAM availability and that muse setup ops has run.'
-        ) from exc
+        raise classify_catalog_error(
+            exc, f'dataset summary failed for {dataset}: {exc}') from exc
 
     try:
         created = (created_fn or _default_created_fn)(dataset)

@@ -21,7 +21,7 @@ cached values stay correct.
 """
 import functools
 
-from prodtools_mcp.adapters import ToolError
+from prodtools_mcp.adapters import ToolError, classify_catalog_error
 
 DIRECTIONS = ('up', 'down')
 MAX_DEPTH = 10
@@ -107,11 +107,8 @@ def trace_provenance(name, direction='up', depth=3,
     try:
         nodes, edges, truncated = walk(name, direction, depth, edge_fn)
     except Exception as exc:
-        raise ToolError(
-            'catalog_unavailable',
-            f'lineage lookup failed for {name}: {exc}',
-            'Check SAM availability and that muse setup ops has run.'
-        ) from exc
+        raise classify_catalog_error(
+            exc, f'lineage lookup failed for {name}: {exc}') from exc
 
     return {'root': name, 'direction': direction, 'depth': depth,
             'truncated': truncated, 'nodes': nodes, 'edges': edges}
