@@ -5,6 +5,8 @@ and SAM output counts. The bare call is ledger-only: a 23-row ledger
 fanned out to one SAM count per output dataset would exceed the client's
 timeout.
 """
+import subprocess
+
 from prodtools_mcp import ledger_ro
 from prodtools_mcp.adapters import ToolError
 
@@ -12,6 +14,11 @@ from prodtools_mcp.adapters import ToolError
 _TERMINAL = ('C', 'X')
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
+
+# jobsub_q talks to the collector over the network and can hang. This
+# runs inline on FastMCP's event loop, so an unbounded wait wedges the
+# whole server, not just one call.
+QUEUE_TIMEOUT_S = 60
 
 
 def queue_block(cluster_ids, clusters):
@@ -48,11 +55,19 @@ def queue_block(cluster_ids, clusters):
             'held': held, 'clusters': seen}
 
 
-def _outputs_block(entry, njobs, count_fn):
+def _outputs_block(entry, njobs, submitted, count_fn):
     """Produced-vs-expected per output dataset.
 
-    `expected` is njobs: one output file per job per stream. Derived this
-    way deliberately, to avoid a /pnfs cnf read on every status call.
+    Two denominators, because one is misleading on its own:
+
+    - `expected_at_completion` is njobs — one output file per job per
+      stream. Derived this way deliberately, to avoid a /pnfs cnf read on
+      every status call.
+    - `submitted` is the campaign cursor: how many indices have actually
+      been handed to the grid. EVERY direct campaign is sliced, so at
+      cursor 500 of njobs 4000 with all 500 landed, comparing produced
+      against njobs alone reports 12.5% when the truth is 100% of what is
+      in flight.
     """
     from utils.poms_entry import outputs_of
     try:
@@ -69,19 +84,53 @@ def _outputs_block(entry, njobs, count_fn):
         except Exception as exc:
             return {'state': 'unknown',
                     'reason': f'SAM count failed for {dataset}: {exc}'}
-        datasets.append({'dataset': dataset, 'expected': njobs,
+        datasets.append({'dataset': dataset,
+                         'expected_at_completion': njobs,
+                         'submitted': submitted,
                          'produced': produced})
     return {'state': 'known', 'datasets': datasets}
 
 
+def _timeout_runner(cmd, **kwargs):
+    kwargs.setdefault('timeout', QUEUE_TIMEOUT_S)
+    return subprocess.run(cmd, **kwargs)
+
+
 def _default_clusters_fn():
+    """live_clusters with a bounded wait.
+
+    live_clusters catches OSError (jobsub_q missing) but a hung collector
+    raises TimeoutExpired, which is a SubprocessError, not an OSError.
+    Catch it here and return None so queue_block renders state="unknown"
+    — a timeout is exactly the case that must never serialize as zero.
+    """
     from utils.submissions import live_clusters
-    return live_clusters()
+    try:
+        return live_clusters(runner=_timeout_runner)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def _default_count_fn(dataset):
     from utils.samweb_wrapper import dataset_file_count
     return dataset_file_count(dataset)
+
+
+def _row_counts(rows):
+    """Submission rows counted PER STATE.
+
+    An open/closed split hides `exhausted` — the state that means the
+    attempt cap was reached and a human must take over
+    (utils/submissions.py:14-17). Bucketed as "closed" alongside
+    complete/recovered, a campaign with five exhausted rows looked
+    identical to a clean one. Every state in ledger_ro.ROW_STATES is
+    present with an explicit zero: these are counts of rows actually
+    read, not an unknown, so zero is the honest value.
+    """
+    counts = {state: 0 for state in ledger_ro.ROW_STATES}
+    for row in rows:
+        counts[row['state']] = counts.get(row['state'], 0) + 1
+    return counts
 
 
 def _matches(camp, campaign, campaign_id):
@@ -102,20 +151,25 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     """
     from utils.poms_entry import njobs_of
 
-    all_camps = ledger_ro.campaigns(db_path)
+    # One snapshot, one connection: campaigns and rows must agree. See
+    # ledger_ro.snapshot.
+    all_camps, all_rows = ledger_ro.snapshot(db_path)
     selected = [c for c in all_camps if _matches(c, campaign, campaign_id)]
-    if not selected:
+
+    named = campaign is not None or campaign_id is not None
+    # An empty ledger is a finding, not an error — list_campaigns()
+    # returns [] for it and these siblings must not disagree. Only a
+    # selector that matched nothing is not_found.
+    if not selected and named:
         raise ToolError(
             'not_found',
             f'no campaign matching '
             f'{campaign_id if campaign_id is not None else campaign!r}',
             'Call list_campaigns() to see what exists.')
 
-    named = campaign is not None or campaign_id is not None
     want_queue = named and include_queue
     want_outputs = named and include_outputs
 
-    all_rows = ledger_ro.rows(db_path) if want_queue else []
     clusters = None
     if want_queue:
         clusters = (clusters_fn or _default_clusters_fn)()
@@ -144,15 +198,13 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
                            '(no foreign key) and may be conflated')
         if want_queue:
             mine = [r for r in all_rows if r['tarball'] == camp['tarball']]
-            rec['rows'] = {
-                'open': sum(1 for r in mine if r['state'] == 'active'),
-                'closed': sum(1 for r in mine if r['state'] != 'active'),
-            }
+            rec['rows'] = _row_counts(mine)
             cluster_ids = [r['cluster_id'] for r in mine if r['cluster_id']]
             rec['queue'] = queue_block(cluster_ids, clusters)
         if want_outputs:
             rec['outputs'] = _outputs_block(
-                camp['entry'], njobs, count_fn or _default_count_fn)
+                camp['entry'], njobs, camp['cursor'],
+                count_fn or _default_count_fn)
         out.append(rec)
 
     return {'db_path': db_path or ledger_ro.DEFAULT_DB, 'campaigns': out}

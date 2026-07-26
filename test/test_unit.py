@@ -6683,11 +6683,68 @@ class TestMcpLedgerRo(unittest.TestCase):
         for sql in seen:
             self.assertNotIn('CREATE', sql.upper())
 
+    def test_snapshot_returns_both_tables(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, cid = self._make_db(td)
+            camps, subs = ledger_ro.snapshot(db)
+        self.assertEqual([c['id'] for c in camps], [cid])
+        self.assertEqual(camps[0]['entry']['njobs'], 4000)
+        self.assertEqual(subs[0]['indices'], [0, 1, 2])
+
+    def test_snapshot_uses_one_connection_and_one_transaction(self):
+        """campaigns() + rows() are two snapshots on two connections. The
+        cron commits record_submission and advance_campaign separately, so
+        a read between them shows a cursor that disagrees with the rows."""
+        from prodtools_mcp import ledger_ro
+        opened, sql_seen = [], []
+        real_connect = sqlite3.connect
+
+        class ConnectionSpy:
+            def __init__(self, con):
+                object.__setattr__(self, '_con', con)
+            def execute(self, sql, *rest):
+                sql_seen.append(sql)
+                return self._con.execute(sql, *rest)
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+            def __setattr__(self, name, value):
+                if name == '_con':
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._con, name, value)
+
+        def spy_connect(*a, **kw):
+            opened.append(a[0])
+            return ConnectionSpy(real_connect(*a, **kw))
+
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            with patch.object(sqlite3, 'connect', spy_connect):
+                ledger_ro.snapshot(db)
+        self.assertEqual(len(opened), 1, f'expected one connection: {opened}')
+        self.assertIn('BEGIN', sql_seen)
+        self.assertLess(sql_seen.index('BEGIN'),
+                        min(i for i, s in enumerate(sql_seen)
+                            if s.startswith('SELECT')))
+        for sql in sql_seen:
+            self.assertNotIn('CREATE', sql.upper())
+
     def test_missing_db_is_catalog_unavailable(self):
         from prodtools_mcp import ledger_ro
         from prodtools_mcp.adapters import ToolError
         with self.assertRaises(ToolError) as ctx:
             ledger_ro.campaigns('/nonexistent/path/ledger.db')
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_snapshot_on_broken_db_is_catalog_unavailable(self):
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            sqlite3.connect(db).close()      # exists, but has no tables
+            with self.assertRaises(ToolError) as ctx:
+                ledger_ro.snapshot(db)
         self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
 
     def test_operational_error_becomes_catalog_unavailable(self):
@@ -6750,6 +6807,25 @@ class TestMcpQueueBlock(unittest.TestCase):
         self.assertEqual(block['running'], 0)
         self.assertEqual(block['clusters'], [])
 
+    def test_jobsub_q_runs_with_a_timeout(self):
+        """No timeout means a hung jobsub_q wedges the whole server —
+        FastMCP runs sync tools inline on the event loop. A timeout must
+        surface as state='unknown', never as zero."""
+        import subprocess as sp
+        from prodtools_mcp.tools import status
+        seen = {}
+
+        def hang(cmd, **kwargs):
+            seen.update(kwargs)
+            raise sp.TimeoutExpired(cmd, kwargs.get('timeout'))
+
+        with patch.object(sp, 'run', hang):
+            self.assertIsNone(status._default_clusters_fn())
+        self.assertEqual(seen.get('timeout'), status.QUEUE_TIMEOUT_S)
+        block = status.queue_block(['29308498'], None)
+        self.assertEqual(block['state'], 'unknown')
+        self.assertNotIn('running', block)
+
 
 class TestMcpCampaignStatus(unittest.TestCase):
     def _make_db(self, tmpdir):
@@ -6805,8 +6881,75 @@ class TestMcpCampaignStatus(unittest.TestCase):
                 count_fn=lambda ds: 412)
         camp = result['campaigns'][0]
         self.assertEqual(camp['queue']['running'], 2)
-        self.assertEqual(camp['outputs']['datasets'][0]['produced'], 412)
-        self.assertEqual(camp['outputs']['datasets'][0]['expected'], 4000)
+        out = camp['outputs']['datasets'][0]
+        self.assertEqual(out['produced'], 412)
+        self.assertEqual(out['expected_at_completion'], 4000)
+
+    def test_outputs_report_submitted_alongside_njobs(self):
+        """Every direct campaign is sliced. njobs alone under-reports a
+        live one: cursor 500 of 4000 with all 500 landed is 100% of what
+        is in flight, not 12.5%."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            camps = submission_ledger.all_campaigns(db)
+            submission_ledger.advance_campaign(db, camps[0]['id'], 500)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_queue=False,
+                count_fn=lambda ds: 500)
+        out = result['campaigns'][0]['outputs']['datasets'][0]
+        self.assertEqual(out['submitted'], 500)
+        self.assertEqual(out['expected_at_completion'], 4000)
+        self.assertEqual(out['produced'], 500)
+
+    def test_row_counts_are_per_state_not_open_closed(self):
+        """`exhausted` is where a human must take over. Bucketed as
+        'closed' beside complete/recovered it was invisible."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        tarball = 'cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar'
+        entry = {'njobs': 4000, 'outputs': []}
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            for state in ('complete', 'exhausted', 'exhausted'):
+                rid = submission_ledger.record_submission(
+                    db, tarball=tarball, entry=entry, indices=[9],
+                    jobsub_id='1.0@s', cluster_id='1', map_path='/tmp/m')
+                submission_ledger.close_row(db, rid, state)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=lambda: None)
+        rows = result['campaigns'][0]['rows']
+        self.assertEqual(rows['exhausted'], 2)
+        self.assertEqual(rows['complete'], 1)
+        self.assertEqual(rows['active'], 1)      # the one from _make_db
+        self.assertEqual(rows['recovered'], 0)
+        self.assertNotIn('closed', rows)
+
+    def test_empty_ledger_is_empty_list_not_not_found(self):
+        """A bare call and list_campaigns() must agree about 'nothing
+        here': list_campaigns returns [], so this must not raise."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            submission_ledger.all_campaigns(db)      # creates the schema
+            result = status.campaign_status(db_path=db)
+            listed = status.list_campaigns(db_path=db)
+        self.assertEqual(result['campaigns'], [])
+        self.assertEqual(listed['count'], 0)
+
+    def test_named_campaign_on_empty_ledger_still_not_found(self):
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            submission_ledger.all_campaigns(db)
+            with self.assertRaises(ToolError) as ctx:
+                status.campaign_status(campaign='MDC2025au', db_path=db)
+        self.assertEqual(ctx.exception.kind, 'not_found')
 
     def test_output_count_failure_is_unknown_not_zero(self):
         from prodtools_mcp.tools import status
