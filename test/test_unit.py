@@ -6872,6 +6872,113 @@ class TestMcpListCampaigns(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# MCP discovery tools
+# ---------------------------------------------------------------------------
+
+class TestMcpFindDatasets(unittest.TestCase):
+    NAMES = [
+        'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+        'dig.mu2e.FlatGamma.MDC2025ar_best_v1_1.art',
+        'dts.mu2e.CeMLeadingLog.MDC2025au.art',
+    ]
+
+    def test_parses_name_fields(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(pattern='*', fetch_fn=lambda p, u: self.NAMES)
+        first = [d for d in res['datasets']
+                 if d['name'].startswith('dig.mu2e.FlatGamma.MDC2025au')][0]
+        self.assertEqual(first['tier'], 'dig')
+        self.assertEqual(first['owner'], 'mu2e')
+        self.assertEqual(first['desc'], 'FlatGamma')
+        self.assertEqual(first['dsconf'], 'MDC2025au_best_v1_3')
+        self.assertEqual(first['file_format'], 'art')
+
+    def test_filters_by_campaign_and_tier(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(campaign='MDC2025au', tier='dig',
+                                      fetch_fn=lambda p, u: self.NAMES)
+        self.assertEqual(res['count'], 1)
+        self.assertEqual(res['datasets'][0]['dsconf'], 'MDC2025au_best_v1_3')
+
+    def test_always_reports_basis(self):
+        """A definition listing must never be mistaken for existence."""
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(pattern='*', fetch_fn=lambda p, u: self.NAMES)
+        self.assertIn('basis', res)
+        self.assertIn('list-definitions', res['basis'])
+
+    def test_require_files_drops_empty_definitions(self):
+        from prodtools_mcp.tools import discovery
+        counts = {n: (0 if 'ar_best' in n else 5) for n in self.NAMES}
+        res = discovery.find_datasets(pattern='*', require_files=True,
+                                      fetch_fn=lambda p, u: self.NAMES,
+                                      count_fn=lambda ds: counts[ds])
+        self.assertTrue(all('ar_best' not in d['name'] for d in res['datasets']))
+        self.assertEqual(res['count'], 2)
+
+    def test_catalog_failure_is_not_empty_list(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(pattern, user):
+            raise RuntimeError('SAM unreachable')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(pattern='*', fetch_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+
+class TestMcpDatasetDetails(unittest.TestCase):
+    SUMMARY = {'file_count': 800, 'total_event_count': 4000000,
+               'total_file_size': 4294967296}
+
+    def test_composes_summary_and_creation_date(self):
+        from prodtools_mcp.tools import discovery
+        import datetime as _dt
+        res = discovery.dataset_details(
+            'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+            summary_fn=lambda ds: self.SUMMARY,
+            created_fn=lambda ds: _dt.datetime(2026, 7, 25, 2, 11,
+                                               tzinfo=_dt.timezone.utc))
+        self.assertTrue(res['exists'])
+        self.assertEqual(res['file_count'], 800)
+        self.assertEqual(res['event_count'], 4000000)
+        self.assertEqual(res['total_size_bytes'], 4294967296)
+        self.assertEqual(res['created_utc'], '2026-07-25T02:11:00+00:00')
+
+    def test_created_utc_is_nullable(self):
+        """definition_creation_date returns None for metadata-only
+        -LH/-CH datasets; that is data, not an error."""
+        from prodtools_mcp.tools import discovery
+        res = discovery.dataset_details(
+            'dig.mu2e.X.Y-LH.art',
+            summary_fn=lambda ds: self.SUMMARY,
+            created_fn=lambda ds: None)
+        self.assertIsNone(res['created_utc'])
+        self.assertTrue(res['exists'])
+
+    def test_zero_files_means_not_exists(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.dataset_details(
+            'dig.mu2e.Nope.Z.art',
+            summary_fn=lambda ds: {'file_count': 0, 'total_event_count': 0,
+                                   'total_file_size': 0},
+            created_fn=lambda ds: None)
+        self.assertFalse(res['exists'])
+
+    def test_summary_failure_is_catalog_unavailable(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.dataset_details('x.y.z.w.art', summary_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
