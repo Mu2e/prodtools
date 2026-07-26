@@ -26,6 +26,11 @@ from unittest.mock import MagicMock, patch
 # Make the package root importable when running from any directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# The MCP server package lives outside utils/; add its src root so the
+# server's tools are testable in this suite without MCP machinery.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'mcp', 'src'))
+
 # samweb_client and other Fermilab-specific modules are not available outside
 # the Mu2e environment. Stub them before any utils import occurs so that the
 # test suite runs standalone.
@@ -6509,6 +6514,90 @@ class TestEnqueueInputGate(unittest.TestCase):
                           return_value=7):
             ids = submit._enqueue_entries([(0, entry)], "map.json", opts)
         self.assertEqual(ids, [7])
+
+
+# ---------------------------------------------------------------------------
+# MCP adapters
+# ---------------------------------------------------------------------------
+
+class TestMcpAdapters(unittest.TestCase):
+    def test_error_shape(self):
+        from prodtools_mcp.adapters import error
+        e = error('not_found', 'no such dataset', 'check the name')
+        self.assertEqual(e, {'error': {'kind': 'not_found',
+                                       'message': 'no such dataset',
+                                       'remedy': 'check the name'}})
+
+    def test_error_rejects_unknown_kind(self):
+        from prodtools_mcp.adapters import error
+        with self.assertRaises(ValueError):
+            error('banana', 'nope')
+
+    def test_safe_tool_passes_success_through(self):
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def ok():
+            return {'value': 1}
+        self.assertEqual(ok(), {'value': 1})
+
+    def test_safe_tool_converts_toolerror(self):
+        from prodtools_mcp.adapters import safe_tool, ToolError
+
+        @safe_tool
+        def boom():
+            raise ToolError('catalog_unavailable', 'SAM down', 'retry later')
+        self.assertEqual(boom()['error']['kind'], 'catalog_unavailable')
+        self.assertEqual(boom()['error']['remedy'], 'retry later')
+
+    def test_safe_tool_traps_systemexit(self):
+        """SystemExit derives from BaseException; an uncaught one would
+        terminate the server rather than fail one call."""
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def exits():
+            sys.exit('MU2E_MAX_QUEUED is not an integer')
+        result = exits()
+        self.assertEqual(result['error']['kind'], 'internal')
+        self.assertIn('MU2E_MAX_QUEUED', result['error']['message'])
+
+    def test_safe_tool_converts_unexpected_exception(self):
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def raises():
+            raise RuntimeError('kaboom')
+        result = raises()
+        self.assertEqual(result['error']['kind'], 'internal')
+        self.assertIn('kaboom', result['error']['message'])
+
+    def test_safe_tool_keeps_stdout_clean(self):
+        """stdout IS the JSON-RPC channel. A print() inside a util must
+        not reach it (utils/famtree.py:71 does exactly this)."""
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def chatty():
+            print("No files found for dataset: dts.mu2e.X.Y.art")
+            return {'ok': True}
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'stdout', out), patch.object(sys, 'stderr', err):
+            result = chatty()
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(out.getvalue(), '')
+        self.assertIn('No files found', err.getvalue())
+
+    def test_safe_tool_preserves_name(self):
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def my_tool():
+            """Docstring survives."""
+            return {}
+        self.assertEqual(my_tool.__name__, 'my_tool')
+        self.assertEqual(my_tool.__doc__, 'Docstring survives.')
 
 
 # ---------------------------------------------------------------------------
