@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import sys
 import types
 import tarfile
@@ -6598,6 +6599,108 @@ class TestMcpAdapters(unittest.TestCase):
             return {}
         self.assertEqual(my_tool.__name__, 'my_tool')
         self.assertEqual(my_tool.__doc__, 'Docstring survives.')
+
+
+# ---------------------------------------------------------------------------
+# MCP read-only ledger
+# ---------------------------------------------------------------------------
+
+class TestMcpLedgerRo(unittest.TestCase):
+    def _make_db(self, tmpdir):
+        """Build a real ledger via the writer, so the read path is tested
+        against the actual schema rather than a hand-rolled copy."""
+        from utils import submission_ledger
+        db = os.path.join(tmpdir, 'ledger.db')
+        entry = {'njobs': 4000, 'outputs': [
+            {'dataset': 'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+             'location': 'tape'}]}
+        cid = submission_ledger.create_campaign(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, slice_size=500, map_path='/tmp/map_au.json')
+        submission_ledger.record_submission(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, indices=[0, 1, 2], jobsub_id='29308498.0@sched',
+            cluster_id='29308498', map_path='/tmp/map_au.json')
+        return db, cid
+
+    def test_campaigns_returns_parsed_entry(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, cid = self._make_db(td)
+            camps = ledger_ro.campaigns(db)
+        self.assertEqual(len(camps), 1)
+        self.assertEqual(camps[0]['id'], cid)
+        self.assertEqual(camps[0]['slice_size'], 500)
+        self.assertIsInstance(camps[0]['entry'], dict)
+        self.assertEqual(camps[0]['entry']['njobs'], 4000)
+
+    def test_campaigns_filters_by_state(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            self.assertEqual(len(ledger_ro.campaigns(db, state='active')), 1)
+            self.assertEqual(len(ledger_ro.campaigns(db, state='complete')), 0)
+
+    def test_rows_returns_parsed_indices_and_cluster(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            rows = ledger_ro.rows(db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['indices'], [0, 1, 2])
+        self.assertEqual(rows[0]['cluster_id'], '29308498')
+
+    def test_issues_no_ddl(self):
+        """The writer's _connect runs CREATE statements on every connect;
+        the read path must not, or a read-only DB raises OperationalError."""
+        from prodtools_mcp import ledger_ro
+        seen = []
+        real_connect = sqlite3.connect
+
+        class ConnectionSpy:
+            def __init__(self, con):
+                object.__setattr__(self, '_con', con)
+            def execute(self, sql, *rest):
+                seen.append(sql)
+                return self._con.execute(sql, *rest)
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+            def __setattr__(self, name, value):
+                if name == '_con':
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._con, name, value)
+
+        def spy_connect(*a, **kw):
+            con = real_connect(*a, **kw)
+            return ConnectionSpy(con)
+
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            with patch.object(sqlite3, 'connect', spy_connect):
+                ledger_ro.campaigns(db)
+        self.assertTrue(seen, "expected at least one statement")
+        for sql in seen:
+            self.assertNotIn('CREATE', sql.upper())
+
+    def test_missing_db_is_catalog_unavailable(self):
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            ledger_ro.campaigns('/nonexistent/path/ledger.db')
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_operational_error_becomes_catalog_unavailable(self):
+        """A DB missing an expected object must surface as a typed error,
+        not an OperationalError traceback."""
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            sqlite3.connect(db).close()      # exists, but has no tables
+            with self.assertRaises(ToolError) as ctx:
+                ledger_ro.campaigns(db)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
 
 
 # ---------------------------------------------------------------------------
