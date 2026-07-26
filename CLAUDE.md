@@ -34,6 +34,23 @@ before proceeding.
   production account. The skill warns before executing such flags and
   asks for explicit confirmation.
 
+## MCP server
+
+A read-only MCP server at `mcp/` exposes campaign status and dataset
+discovery as typed tools (`campaign_status`, `list_campaigns`,
+`find_datasets`, `dataset_details`, `trace_provenance`,
+`get_server_info`). Prefer it over shelling the CLI for status questions —
+it returns structured JSON and costs less context.
+
+It performs **no writes**. Submission remains `/mu2epro-submit`.
+
+A queue or outputs block with `state: "unknown"` has **no count keys**.
+Never read a missing count as zero: the query failed and the campaign
+may still be running. Do not start a recovery pass on an `unknown`.
+
+Setup: `bash mcp/scripts/install.sh`. Health check:
+`bash mcp/scripts/start_mcp.sh --check`.
+
 ## Memory discipline
 
 Save a memory immediately when you learn something non-obvious about

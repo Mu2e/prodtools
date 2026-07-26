@@ -44,6 +44,7 @@
 - [[reference-rpc-primary-inherits-bfgeom]] — RPC*/Pbar*/TargetStop primary fcls inherit `bfgeom_no_tsu_ps_v01.txt` via `StopParticle.fcl:41`; don't restate it in `fcl_overrides` _(2026-05-23)_
 - [[digi-output-stream-by-fcl]] — output stream names depend on digi fcl: OnSpill/OffSpill = Triggered+Triggerable, Extracted/NoField = single Output; wrong override keys are silent no-ops; MDC2025af CosmicCRYExtracted entry has stale wrong-shape overrides _(2026-05-29)_
 - [[2026-05-19-run1bak-resampler-additions]] — appended 4 field-off Run1Bak entries (Neutrals/MuBeam/EleBeam/MuStop Flash + MuStopPileup) to `data/Run1B/resampler_beam.json`; originals preserved; pions excluded _(2026-05-19)_
+- [[prodtools-mcp-server]] — six status/discovery tools; `unknown` ≠ zero; two-part venv check _(2026-07-26)_
 
 ### Analyses
 <!-- entries added by wiki-query when answers are filed -->
