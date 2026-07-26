@@ -56,10 +56,19 @@ PY
 import importlib, sys
 importlib.import_module("mcp.server.fastmcp")
 importlib.import_module("samweb_client")
-from prodtools_mcp.server import get_server_info
+from prodtools_mcp.server import create_mcp_server, get_server_info, TOOL_NAMES
 info = get_server_info()
+# Build the server for real: this is the only automated check that the
+# @mcp.tool decorators resolve without collision and that every
+# advertised name is actually registered. Without it a registration
+# regression passes install.sh and only breaks at first client use.
+import asyncio
+server = create_mcp_server()
+registered = sorted(t.name for t in asyncio.run(server.list_tools()))
+if registered != sorted(TOOL_NAMES):
+    raise SystemExit(f"tool registration mismatch: registered={registered} advertised={sorted(TOOL_NAMES)}")
 print("OK: interpreter", sys.executable)
-print("OK: tools", ", ".join(info["tools"]))
+print("OK: tools", ", ".join(registered))
 PY
   exit 0
 fi

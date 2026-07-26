@@ -6,7 +6,14 @@ MCP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$MCP_ROOT"
 
 set +u
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh 1>&2 || true
+# CVMFS setup scripts are not set -e clean; guard around them the same
+# way start_mcp.sh does. `|| true` here would silently swallow a real
+# CVMFS outage and let the venv build against a half-set-up environment.
+if [[ $- == *e* ]]; then _restore_e=1; set +e; else _restore_e=0; fi
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh 1>&2
+_rc=$?
+if [[ ${_restore_e} -eq 1 ]]; then set -e; fi
+if [[ ${_rc} -ne 0 ]]; then exit ${_rc}; fi
 muse setup ops 1>&2
 set -u
 
