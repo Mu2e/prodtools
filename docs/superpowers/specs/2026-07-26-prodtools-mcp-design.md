@@ -205,12 +205,14 @@ count per output dataset and exceeds the client's timeout.
       "cursor": 4000,
       "njobs": 4000,
       "created_utc": "2026-07-25T18:02:11+00:00",
-      "rows": {"open": 2, "closed": 6},
+      "rows": {"active": 2, "complete": 5, "recovered": 1,
+               "exhausted": 0},
       "queue": {"state": "known", "running": 12, "idle": 0,
                 "held": 1, "clusters": [29308498]},
       "outputs": {"state": "known", "datasets": [
         {"dataset": "dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art",
-         "expected": 4000, "produced": 412}
+         "expected_at_completion": 4000, "submitted": 4000,
+         "produced": 412}
       ]}
     }
   ]
@@ -224,9 +226,16 @@ column:
   as `entry_json` (`submission_ledger.py:57-69`); an index into the map
   is not recoverable from it. Callers get `tarball` and `njobs` instead.
 - **`njobs`** is `poms_entry.njobs_of(entry)` (`poms_entry.py:69`).
-- **`outputs[].expected`** is `njobs` — one output file per job per
-  output stream. Derived this way deliberately, to avoid a `/pnfs` cnf
-  read on every status call.
+- **`outputs[].expected_at_completion`** is `njobs` — one output file
+  per job per output stream. Derived this way deliberately, to avoid a
+  `/pnfs` cnf read on every status call. It is reported alongside
+  **`submitted`** (the campaign `cursor`), because every direct campaign
+  is sliced: against `njobs` alone a fully-landed cursor 500 of 4000
+  reads as 12.5% complete when it is 100% of what is in flight.
+- **`rows` is a count per submission state**, not an open/closed split:
+  `exhausted` means the attempt cap was reached and a human must take
+  over, and bucketing it with `complete`/`recovered` hides exactly the
+  campaigns that need attention.
 - **`rows` correlates to a campaign by `tarball` only** — there is no
   foreign key. A tarball reused across an older completed campaign will
   conflate rows; the count carries a `note` when more than one campaign
@@ -248,7 +257,7 @@ all?" `state` filters over `CAMPAIGN_STATES`
 Wraps `latestDatasets.fetch_definitions` and `latest_per_description`.
 
 ```json
-{"count": 19, "truncated": false, "datasets": [
+{"count": 19, "truncated": false, "limit": 500, "datasets": [
   {"name": "dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art",
    "tier": "dig", "owner": "mu2e", "desc": "FlatGamma",
    "dsconf": "MDC2025au_best_v1_3", "file_format": "art"}
@@ -256,6 +265,12 @@ Wraps `latestDatasets.fetch_definitions` and `latest_per_description`.
 ```
 
 **This is a definition listing, not an existence check.**
+The `pattern` argument is a SAM `defname` filter, which is a **SQL
+`LIKE`** — the wildcard is `%`, not `*`. A caller-supplied `*` is
+translated. Results are capped at `limit` (default 500) with `truncated`
+reporting whether the cap bit, and `require_files=True` is refused above
+the cap rather than issuing one serial SAM query per record.
+
 `fetch_definitions` is `samweb list-definitions`
 (`latestDatasets.py:47-48`): zero-file definitions appear, and
 `-LH`/`-CH` variants do not. `require_files=True` filters to
@@ -293,16 +308,27 @@ warns about. `dataset_summary` does not carry a creation time.
 truncation signal, and walks parents only — its recursion is a closure
 that cannot be parameterized. Nothing in `famtree` walks children;
 `samweb_wrapper.children_of_file` (`samweb_wrapper.py:417`) is per-file.
-`lineage.py` implements a depth-bounded breadth-first walk reusing
-`famtree.get_parents` and `samweb_wrapper.children_of_file` as the edge
-functions, sets `truncated` when `depth` cuts the walk short, and
-returns edges and nodes as data — **not** the mermaid string, which is a
-presentation format the caller can build itself.
+`lineage.py` implements a depth-bounded breadth-first walk, sets
+`truncated` when `depth` cuts the walk short, and returns edges and
+nodes as data — **not** the mermaid string, which is a presentation
+format the caller can build itself.
 
-`famtree.get_parents` is decorated `lru_cache(maxsize=None)`
+**Both edge functions must fail loudly.** They are
+`samweb_wrapper.parents_of_file` and `samweb_wrapper.children_of_file`
+— **not** `famtree.get_parents`, which delegates to `file_lineage` and
+returns `[]` on any error (`samweb_wrapper.py:248-260`). For a lineage
+caller that empty list is indistinguishable from "this file has no
+parents", i.e. "it is a primary", so an expired token would render as a
+confident, materially wrong answer. `parents_of_file` is the fail-loud
+twin of `children_of_file`, applying the same `etc.*.txt` filter
+`famtree.get_parents` does but raising on SAM errors.
+
+`famtree.get_parents` is also decorated `lru_cache(maxsize=None)`
 (`famtree.py:46`). Lineage is immutable so the cached values stay
 correct, but an unbounded cache in a long-lived server grows without
 limit; `lineage.py` uses its own bounded cache and does not rely on it.
+`lru_cache` does not memoize exceptions, so a raising edge function
+cannot poison that cache either.
 
 ### `get_server_info()`
 
@@ -355,7 +381,8 @@ already skips as a matter of course.
 ## Testing
 
 Tool functions are plain Python, so tests live in the existing
-`test/test_unit.py` (540 tests) with no MCP machinery. Dependencies
+`test/test_unit.py` (540 tests before this work; 624 after it and the
+post-review fix wave) with no MCP machinery. Dependencies
 inject as they already do elsewhere: `runner=` for subprocess,
 `sam_lister=` for catalog, `db_path=` pointed at a tmp sqlite carrying
 the real schema.

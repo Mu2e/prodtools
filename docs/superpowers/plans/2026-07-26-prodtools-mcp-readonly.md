@@ -6,7 +6,7 @@
 
 **Architecture:** A FastMCP stdio server that imports `utils/*` in-process and composes existing functions. `server.py` holds FastMCP wiring only; every tool is a plain Python function taking plain arguments and returning a plain dict, so all of it is testable in the existing `test/test_unit.py` suite with no MCP machinery. A decorator layer (`adapters.py`) converts exceptions to a JSON error envelope, traps `SystemExit`, and redirects stray `print()` off the JSON-RPC channel.
 
-**Tech Stack:** Python ≥3.10, `mcp>=1.2.0` (FastMCP), sqlite3, unittest (run via pytest).
+**Tech Stack:** Python ≥3.10, `mcp>=1.2.0` (FastMCP), sqlite3, unittest (run with `python3 test/test_unit.py`; pytest is NOT installed on this host).
 
 **Spec:** `docs/superpowers/specs/2026-07-26-prodtools-mcp-design.md`
 
@@ -20,7 +20,7 @@
 - **"Unknown" must never render as "zero":** an unknown queue block carries `state: "unknown"` and **omits the count keys entirely**.
 - **Fail loudly; never substitute empty.** A catalog error returns `catalog_unavailable`, never an empty result list.
 - Error `kind` comes from exactly this closed set: `env_missing`, `auth_expired`, `catalog_unavailable`, `not_found`, `invalid_argument`, `internal`.
-- Tests live in `test/test_unit.py` (unittest classes), run with `python -m pytest test/test_unit.py -v`. Suite is at **540 tests** before this plan.
+- Tests live in `test/test_unit.py` (unittest classes), run with `python3 test/test_unit.py`. Suite is at **540 tests** before this plan.
 - Commit footers on every commit:
   ```
   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
@@ -177,7 +177,7 @@ class TestMcpAdapters(unittest.TestCase):
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `python -m pytest test/test_unit.py -v -k TestMcpAdapters`
+Run: `python3 -m unittest -v test.test_unit.TestMcpAdapters`
 Expected: FAIL — `ModuleNotFoundError: No module named 'prodtools_mcp'`
 
 - [ ] **Step 4: Implement adapters.py**
@@ -265,10 +265,10 @@ def safe_tool(fn):
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `python -m pytest test/test_unit.py -v -k TestMcpAdapters`
+Run: `python3 -m unittest -v test.test_unit.TestMcpAdapters`
 Expected: PASS — 8 tests
 
-Then the whole suite: `python -m pytest test/test_unit.py -q`
+Then the whole suite: `python3 test/test_unit.py`
 Expected: 548 passed (540 + 8)
 
 - [ ] **Step 6: Commit**
@@ -370,15 +370,25 @@ class TestMcpLedgerRo(unittest.TestCase):
         seen = []
         real_connect = sqlite3.connect
 
-        def spy_connect(*a, **kw):
-            con = real_connect(*a, **kw)
-            real_execute = con.execute
-
-            def exec_spy(sql, *rest):
+        # A delegating wrapper, NOT `con.execute = exec_spy`: a real
+        # sqlite3.Connection is a C type with no instance __dict__, so
+        # assigning to its `execute` attribute raises AttributeError.
+        class ConnectionSpy:
+            def __init__(self, con):
+                object.__setattr__(self, '_con', con)
+            def execute(self, sql, *rest):
                 seen.append(sql)
-                return real_execute(sql, *rest)
-            con.execute = exec_spy
-            return con
+                return self._con.execute(sql, *rest)
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+            def __setattr__(self, name, value):
+                if name == '_con':
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._con, name, value)
+
+        def spy_connect(*a, **kw):
+            return ConnectionSpy(real_connect(*a, **kw))
 
         with tempfile.TemporaryDirectory() as td:
             db, _ = self._make_db(td)
@@ -412,7 +422,7 @@ Add `import sqlite3` to the imports at the top of `test/test_unit.py` (alphabeti
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest test/test_unit.py -v -k TestMcpLedgerRo`
+Run: `python3 -m unittest -v test.test_unit.TestMcpLedgerRo`
 Expected: FAIL — `ModuleNotFoundError: No module named 'prodtools_mcp.ledger_ro'`
 
 - [ ] **Step 3: Implement ledger_ro.py**
@@ -506,11 +516,11 @@ def rows(db_path=None):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest test/test_unit.py -v -k TestMcpLedgerRo`
+Run: `python3 -m unittest -v test.test_unit.TestMcpLedgerRo`
 Expected: PASS — 6 tests
 
-Whole suite: `python -m pytest test/test_unit.py -q`
-Expected: 554 passed
+Whole suite: `python3 test/test_unit.py`
+Expected: 554 passed (555 after the follow-up widening ledger_ro exception handling)
 
 - [ ] **Step 5: Commit**
 
@@ -717,7 +727,7 @@ class TestMcpListCampaigns(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest test/test_unit.py -v -k "TestMcpQueueBlock or TestMcpCampaignStatus or TestMcpListCampaigns"`
+Run: `python3 -m unittest -v test.test_unit.TestMcpQueueBlock test.test_unit.TestMcpCampaignStatus test.test_unit.TestMcpListCampaigns`
 Expected: FAIL — `ModuleNotFoundError: No module named 'prodtools_mcp.tools'`
 
 - [ ] **Step 3: Implement the tools package and status.py**
@@ -745,6 +755,21 @@ from prodtools_mcp.adapters import ToolError
 _TERMINAL = ('C', 'X')
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
+
+# jobsub_q talks to the collector and can hang. This runs inline on
+# FastMCP's event loop, so an unbounded wait wedges the whole server.
+QUEUE_TIMEOUT_S = 60
+
+
+def _row_counts(rows):
+    """Submission rows counted PER STATE over ledger_ro.ROW_STATES.
+    Every state present with an explicit zero: these are counts of rows
+    actually read, so zero is the honest value (unlike a failed query,
+    which omits its keys)."""
+    counts = {state: 0 for state in ledger_ro.ROW_STATES}
+    for row in rows:
+        counts[row['state']] = counts.get(row['state'], 0) + 1
+    return counts
 
 
 def queue_block(cluster_ids, clusters):
@@ -781,11 +806,15 @@ def queue_block(cluster_ids, clusters):
             'held': held, 'clusters': seen}
 
 
-def _outputs_block(entry, njobs, count_fn):
+def _outputs_block(entry, njobs, submitted, count_fn):
     """Produced-vs-expected per output dataset.
 
-    `expected` is njobs: one output file per job per stream. Derived this
-    way deliberately, to avoid a /pnfs cnf read on every status call.
+    TWO denominators. `expected_at_completion` is njobs — one output file
+    per job per stream, derived this way deliberately to avoid a /pnfs
+    cnf read on every status call. `submitted` is the campaign cursor:
+    EVERY direct campaign is sliced, so njobs alone reports 12.5% for a
+    fully-landed cursor 500 of 4000, when the truth is 100% of what is in
+    flight.
     """
     from utils.poms_entry import outputs_of
     try:
@@ -802,14 +831,29 @@ def _outputs_block(entry, njobs, count_fn):
         except Exception as exc:
             return {'state': 'unknown',
                     'reason': f'SAM count failed for {dataset}: {exc}'}
-        datasets.append({'dataset': dataset, 'expected': njobs,
+        datasets.append({'dataset': dataset,
+                         'expected_at_completion': njobs,
+                         'submitted': submitted,
                          'produced': produced})
     return {'state': 'known', 'datasets': datasets}
 
 
+def _timeout_runner(cmd, **kwargs):
+    kwargs.setdefault('timeout', QUEUE_TIMEOUT_S)
+    return subprocess.run(cmd, **kwargs)
+
+
 def _default_clusters_fn():
+    """live_clusters with a bounded wait. FastMCP runs sync tools inline
+    on the event loop, so an unbounded jobsub_q wedges the whole server.
+    live_clusters catches OSError but a hung collector raises
+    TimeoutExpired (a SubprocessError, not an OSError), so catch it here
+    and return None -> queue state 'unknown', never zero."""
     from utils.submissions import live_clusters
-    return live_clusters()
+    try:
+        return live_clusters(runner=_timeout_runner)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def _default_count_fn(dataset):
@@ -835,20 +879,27 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     """
     from utils.poms_entry import njobs_of
 
-    all_camps = ledger_ro.campaigns(db_path)
+    # ONE snapshot on ONE connection. campaigns() + rows() are two
+    # reads on two connections, and the cron commits record_submission
+    # and advance_campaign separately — a read between them sees a cursor
+    # that disagrees with the rows reported beside it.
+    all_camps, all_rows = ledger_ro.snapshot(db_path)
     selected = [c for c in all_camps if _matches(c, campaign, campaign_id)]
-    if not selected:
+
+    named = campaign is not None or campaign_id is not None
+    # An empty ledger is a finding, not an error: list_campaigns()
+    # returns [] for it and these siblings must agree. Only a supplied
+    # selector that matched nothing is not_found.
+    if not selected and named:
         raise ToolError(
             'not_found',
             f'no campaign matching '
             f'{campaign_id if campaign_id is not None else campaign!r}',
             'Call list_campaigns() to see what exists.')
 
-    named = campaign is not None or campaign_id is not None
     want_queue = named and include_queue
     want_outputs = named and include_outputs
 
-    all_rows = ledger_ro.rows(db_path) if want_queue else []
     clusters = None
     if want_queue:
         clusters = (clusters_fn or _default_clusters_fn)()
@@ -877,15 +928,16 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
                            '(no foreign key) and may be conflated')
         if want_queue:
             mine = [r for r in all_rows if r['tarball'] == camp['tarball']]
-            rec['rows'] = {
-                'open': sum(1 for r in mine if r['state'] == 'active'),
-                'closed': sum(1 for r in mine if r['state'] != 'active'),
-            }
+            # Per STATE, not open/closed: an open/closed split buries
+            # `exhausted` — the attempt cap was reached and a human must
+            # take over — alongside complete and recovered.
+            rec['rows'] = _row_counts(mine)
             cluster_ids = [r['cluster_id'] for r in mine if r['cluster_id']]
             rec['queue'] = queue_block(cluster_ids, clusters)
         if want_outputs:
             rec['outputs'] = _outputs_block(
-                camp['entry'], njobs, count_fn or _default_count_fn)
+                camp['entry'], njobs, camp['cursor'],
+                count_fn or _default_count_fn)
         out.append(rec)
 
     return {'db_path': db_path or ledger_ro.DEFAULT_DB, 'campaigns': out}
@@ -915,11 +967,11 @@ def list_campaigns(state=None, db_path=None):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest test/test_unit.py -v -k "TestMcpQueueBlock or TestMcpCampaignStatus or TestMcpListCampaigns"`
-Expected: PASS — 11 tests
+Run: `python3 -m unittest -v test.test_unit.TestMcpQueueBlock test.test_unit.TestMcpCampaignStatus test.test_unit.TestMcpListCampaigns`
+Expected: PASS — 12 tests
 
-Whole suite: `python -m pytest test/test_unit.py -q`
-Expected: 565 passed
+Whole suite: `python3 test/test_unit.py`
+Expected: 566 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1079,7 +1131,7 @@ class TestMcpDatasetDetails(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest test/test_unit.py -v -k "TestMcpFindDatasets or TestMcpDatasetDetails"`
+Run: `python3 -m unittest -v test.test_unit.TestMcpFindDatasets test.test_unit.TestMcpDatasetDetails`
 Expected: FAIL — `ModuleNotFoundError: No module named 'prodtools_mcp.tools.discovery'`
 
 - [ ] **Step 3: Implement discovery.py**
@@ -1094,7 +1146,9 @@ as existence: zero-file definitions appear and -LH/-CH variants do not.
 Every response carries that caveat in `basis` so a caller cannot mistake
 one for the other.
 """
-from prodtools_mcp.adapters import ToolError
+from prodtools_mcp.adapters import ToolError, classify_catalog_error
+
+DEFAULT_LIMIT = 500
 
 _BASIS = ('samweb list-definitions: a definition listing, not an '
           'existence check — zero-file definitions appear and -LH/-CH '
@@ -1122,24 +1176,46 @@ def _parse(name):
             'desc': parts[2], 'dsconf': parts[3], 'file_format': parts[4]}
 
 
+def defname_query(campaign=None, tier=None, desc=None, pattern=None):
+    """The `defname` filter handed to samweb.
+
+    SAM's defname filter is a SQL LIKE: the wildcard is `%`, NOT `*`.
+    `query = pattern or '*'` matches NOTHING against the live catalog and
+    returns an empty list with no error — the manufactured-empty result
+    the spec forbids. Callers will type `*` anyway, so translate it. Push
+    the filters into the defname rather than fetching ~20,000
+    definitions and filtering client-side.
+    """
+    if pattern:
+        return pattern.replace('*', '%')
+    return '.'.join([tier or '%', '%', desc or '%',
+                     f'{campaign}%' if campaign else '%', '%'])
+
+
 def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
                   latest_only=False, require_files=False, user=None,
-                  fetch_fn=None, count_fn=None):
+                  limit=DEFAULT_LIMIT, fetch_fn=None, count_fn=None):
     """Datasets matching the given filters, from the SAM definition list."""
     fetch = fetch_fn or _default_fetch_fn
-    query = pattern or '*'
+    query = defname_query(campaign, tier, desc, pattern)
     try:
         names = fetch(query, user)
     except Exception as exc:
-        raise ToolError(
-            'catalog_unavailable',
-            f'samweb list-definitions failed: {exc}',
-            'Check SAM availability and that muse setup ops has run.'
-        ) from exc
+        # classify_catalog_error, not a hardcoded catalog_unavailable:
+        # ImportError -> env_missing, 401/403/token/Unauthorized ->
+        # auth_expired. Otherwise those two kinds are declared in
+        # ERROR_KINDS and produced nowhere, and an expired token is
+        # reported as a SAM outage.
+        raise classify_catalog_error(
+            exc, f'samweb list-definitions failed: {exc}') from exc
 
     if latest_only:
+        # latest_per_description returns (rows, skipped), and each row is
+        # a 4-tuple (description, latest_dsconf, latest_name, count) —
+        # NOT a flat name list. Take row[2].
         from utils.latestDatasets import latest_per_description
-        names = latest_per_description(names)
+        rows, _skipped = latest_per_description(names)
+        names = [row[2] for row in rows]
 
     records = []
     for name in names:
@@ -1154,7 +1230,20 @@ def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
             continue
         records.append(rec)
 
+    records.sort(key=lambda r: r['name'])
+
     if require_files:
+        # require_files costs one SERIAL HTTP round-trip per record, and
+        # FastMCP runs sync tools inline on the event loop. Refuse above
+        # the cap rather than issuing thousands of queries; counting only
+        # the first `limit` would answer a different question.
+        if len(records) > limit:
+            raise ToolError(
+                'invalid_argument',
+                f'require_files=True would issue {len(records)} serial '
+                f'SAM queries (limit {limit})',
+                'Narrow the query with campaign/tier/desc, or raise '
+                'limit deliberately.')
         count = count_fn or _default_count_fn
         kept = []
         for rec in records:
@@ -1162,15 +1251,16 @@ def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
                 if count(rec['name']) > 0:
                     kept.append(rec)
             except Exception as exc:
-                raise ToolError(
-                    'catalog_unavailable',
-                    f'file count failed for {rec["name"]}: {exc}',
-                    'Check SAM availability.') from exc
+                raise classify_catalog_error(
+                    exc, f'file count failed for {rec["name"]}: {exc}'
+                ) from exc
         records = kept
 
-    records.sort(key=lambda r: r['name'])
-    return {'count': len(records), 'truncated': False,
-            'basis': _BASIS, 'datasets': records}
+    # `truncated` must be honest: there are ~20,000 SAM definitions.
+    truncated = len(records) > limit
+    records = records[:limit]
+    return {'count': len(records), 'truncated': truncated,
+            'limit': limit, 'basis': _BASIS, 'datasets': records}
 
 
 def _default_summary_fn(dataset):
@@ -1194,11 +1284,8 @@ def dataset_details(dataset, summary_fn=None, created_fn=None):
     try:
         summary = (summary_fn or _default_summary_fn)(dataset) or {}
     except Exception as exc:
-        raise ToolError(
-            'catalog_unavailable',
-            f'dataset summary failed for {dataset}: {exc}',
-            'Check SAM availability and that muse setup ops has run.'
-        ) from exc
+        raise classify_catalog_error(
+            exc, f'dataset summary failed for {dataset}: {exc}') from exc
 
     try:
         created = (created_fn or _default_created_fn)(dataset)
@@ -1218,11 +1305,11 @@ def dataset_details(dataset, summary_fn=None, created_fn=None):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest test/test_unit.py -v -k "TestMcpFindDatasets or TestMcpDatasetDetails"`
+Run: `python3 -m unittest -v test.test_unit.TestMcpFindDatasets test.test_unit.TestMcpDatasetDetails`
 Expected: PASS — 9 tests
 
-Whole suite: `python -m pytest test/test_unit.py -q`
-Expected: 574 passed
+Whole suite: `python3 test/test_unit.py`
+Expected: 575 passed (578 after the follow-up adding latest_only regression guards)
 
 - [ ] **Step 5: Commit**
 
@@ -1359,7 +1446,7 @@ class TestMcpLineage(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest test/test_unit.py -v -k TestMcpLineage`
+Run: `python3 -m unittest -v test.test_unit.TestMcpLineage`
 Expected: FAIL — `ModuleNotFoundError: No module named 'prodtools_mcp.tools.lineage'`
 
 - [ ] **Step 3: Implement lineage.py**
@@ -1374,10 +1461,17 @@ has no depth limit, no truncation signal, and walks parents only — its
 recursion is a closure that cannot be parameterized. Nothing in famtree
 walks children; samweb_wrapper.children_of_file (:417) is per-file.
 
-famtree.get_parents is lru_cache(maxsize=None) (famtree.py:46). Lineage
-is immutable so its cached values stay correct, but an unbounded cache
-in a long-lived server grows without limit, so this module keeps its own
-bounded one.
+Both edge functions are the fail-loud samweb_wrapper pair,
+parents_of_file / children_of_file. famtree.get_parents is NOT used: it
+delegates to file_lineage, which swallows every exception and returns []
+(samweb_wrapper.py:248-260), so a SAM outage would render as "no
+parents" — i.e. "this is a primary".
+
+famtree.get_parents is also lru_cache(maxsize=None) (famtree.py:46).
+Lineage is immutable so cached values stay correct, but an unbounded
+cache in a long-lived server grows without limit, so this module keeps
+its own bounded one. lru_cache does not memoize exceptions, so a raising
+edge function cannot poison it either.
 """
 import functools
 
@@ -1419,22 +1513,34 @@ def walk(root, direction, depth, edge_fn):
     return order, edges, bool(frontier)
 
 
-def _default_parents_fn():
-    from utils.famtree import get_parents
+# MODULE-LEVEL singletons, not per-call factories. A cache built inside
+# _default_parents_fn() is discarded when the call returns, and walk()'s
+# own `seen` set means it can never hit within a single call either — so
+# a per-call factory is inert. It must persist across calls.
+#
+# The parents edge function is samweb_wrapper.parents_of_file, NOT
+# famtree.get_parents: get_parents delegates to file_lineage, which
+# catches every exception and returns [] (samweb_wrapper.py:248-260). A
+# lineage caller cannot distinguish that from "this file is a primary",
+# and lru_cache would keep serving the wrong answer after SAM recovered.
+@functools.lru_cache(maxsize=_CACHE_SIZE)
+def _cached_parents(name):
+    from utils.samweb_wrapper import parents_of_file
+    return tuple(parents_of_file(name))
 
-    @functools.lru_cache(maxsize=_CACHE_SIZE)
-    def parents(name):
-        return tuple(get_parents(name))
-    return parents
+
+@functools.lru_cache(maxsize=_CACHE_SIZE)
+def _cached_children(name):
+    from utils.samweb_wrapper import children_of_file
+    return tuple(children_of_file(name))
+
+
+def _default_parents_fn():
+    return _cached_parents
 
 
 def _default_children_fn():
-    from utils.samweb_wrapper import children_of_file
-
-    @functools.lru_cache(maxsize=_CACHE_SIZE)
-    def children(name):
-        return tuple(children_of_file(name))
-    return children
+    return _cached_children
 
 
 def trace_provenance(name, direction='up', depth=3,
@@ -1462,11 +1568,8 @@ def trace_provenance(name, direction='up', depth=3,
     try:
         nodes, edges, truncated = walk(name, direction, depth, edge_fn)
     except Exception as exc:
-        raise ToolError(
-            'catalog_unavailable',
-            f'lineage lookup failed for {name}: {exc}',
-            'Check SAM availability and that muse setup ops has run.'
-        ) from exc
+        raise classify_catalog_error(
+            exc, f'lineage lookup failed for {name}: {exc}') from exc
 
     return {'root': name, 'direction': direction, 'depth': depth,
             'truncated': truncated, 'nodes': nodes, 'edges': edges}
@@ -1474,11 +1577,11 @@ def trace_provenance(name, direction='up', depth=3,
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest test/test_unit.py -v -k TestMcpLineage`
+Run: `python3 -m unittest -v test.test_unit.TestMcpLineage`
 Expected: PASS — 8 tests
 
-Whole suite: `python -m pytest test/test_unit.py -q`
-Expected: 582 passed
+Whole suite: `python3 test/test_unit.py`
+Expected: 586 passed (588 after the follow-up making the caches module-level singletons)
 
 - [ ] **Step 5: Commit**
 
@@ -1577,7 +1680,7 @@ class TestMcpToolRegistration(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest test/test_unit.py -v -k "TestMcpServerInfo or TestMcpToolRegistration"`
+Run: `python3 -m unittest -v test.test_unit.TestMcpServerInfo test.test_unit.TestMcpToolRegistration`
 Expected: FAIL — `ModuleNotFoundError: No module named 'prodtools_mcp.server'`
 
 - [ ] **Step 3: Implement server.py**
@@ -1727,11 +1830,11 @@ if __name__ == '__main__':
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest test/test_unit.py -v -k "TestMcpServerInfo or TestMcpToolRegistration"`
+Run: `python3 -m unittest -v test.test_unit.TestMcpServerInfo test.test_unit.TestMcpToolRegistration`
 Expected: PASS — 5 tests
 
-Whole suite: `python -m pytest test/test_unit.py -q`
-Expected: 587 passed
+Whole suite: `python3 test/test_unit.py`
+Expected: 593 passed
 
 - [ ] **Step 5: Write pyproject.toml**
 
@@ -1876,7 +1979,7 @@ Create `mcp/scripts/smoke_test_stdio.py`:
 """Spawn the server over stdio, list its tools, call server_info.
 
 Exercises the real transport, which the unit tests deliberately do not.
-Run:  python3 mcp/scripts/smoke_test_stdio.py
+Run:  mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py
 """
 import asyncio
 import os
@@ -1924,7 +2027,7 @@ Expected: part 1 prints `OK: mcp imports without the ops PYTHONPATH (self-contai
 If part 1 fails with a `ModuleNotFoundError`, the venv is not self-contained — `pip install` the named package explicitly into `.venv` and re-run. Do **not** "fix" it by adding the ops path to part 1; that is the exact failure this check exists to catch.
 
 ```bash
-python3 mcp/scripts/smoke_test_stdio.py
+mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py
 ```
 Expected: `SMOKE OK`
 
@@ -2073,7 +2176,7 @@ none needs mu2epro.
 ```bash
 bash mcp/scripts/install.sh            # once
 bash mcp/scripts/start_mcp.sh --check  # health
-python3 mcp/scripts/smoke_test_stdio.py
+mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py
 ```
 
 `--check` is two-part on purpose. Part 1 imports the MCP dependencies
@@ -2120,8 +2223,8 @@ In `wiki/index.md`, add to the reference pages list:
 
 - [ ] **Step 6: Run the full suite one last time**
 
-Run: `python -m pytest test/test_unit.py -q`
-Expected: 587 passed
+Run: `python3 test/test_unit.py`
+Expected: 593 passed
 
 - [ ] **Step 7: Commit**
 
@@ -2149,10 +2252,14 @@ EOF
 
 After Task 7, confirm all of the following:
 
-- [ ] `python -m pytest test/test_unit.py -q` → 586 passed
+- [ ] `python3 test/test_unit.py` → 593 passed at the end of Task 7; 624 after the post-review fix wave
 - [ ] `bash mcp/scripts/start_mcp.sh --check` → both parts OK
-- [ ] `python3 mcp/scripts/smoke_test_stdio.py` → `SMOKE OK`
+- [ ] `mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py` → `SMOKE OK`
+      (the venv interpreter, not /usr/bin/python3 — `mcp` is not installed there)
 - [ ] `grep -rn "create_definition\|delete_definition" mcp/src/` → no matches
-- [ ] `grep -rn "htgettoken\|kinit\|voms-proxy" mcp/src/ mcp/scripts/` → no matches
+- [ ] `grep -rn "htgettoken\|kinit\|voms-proxy" mcp/src/ mcp/scripts/` → the
+      only hit is `adapters.AUTH_REMEDY`, which *tells the human* to run
+      `htgettoken` in their own shell. No invocation: confirm no hit sits
+      inside a `subprocess`/`os.system` call or a shell script line.
 - [ ] `grep -rn "ksu\|mu2epro -e" mcp/src/` → no matches (this phase writes nothing)
 - [ ] Branch is ahead but **not pushed** — report to the user for their own `git push`
