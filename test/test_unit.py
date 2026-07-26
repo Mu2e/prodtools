@@ -16,6 +16,7 @@ import io
 import json
 import os
 import sys
+import types
 import tarfile
 import tempfile
 import unittest
@@ -6189,40 +6190,80 @@ class TestCheckTape(unittest.TestCase):
 
 
 class TestDefaultLocalityParsing(unittest.TestCase):
-    """_default_locality parses `mdh query-dcache -o`: stdout carries one
-    locality token per FOUND file in input order; stderr carries an
-    'Error: File not found in dCache: <path>' line per missing file. A
-    count mismatch fails closed."""
+    """_default_locality queries mdh per file via the Python API.
+
+    The `mdh query-dcache` CLI aborts at the FIRST file absent from the
+    queried area, so one persistent-resident file in a tape dataset
+    truncated stdout and forced a fail-closed ERROR for all 5000 files of
+    dts.mu2e.RPCInternalPhysical.MDC2025ap — 4997 of which were in fact
+    ONLINE_AND_NEARLINE. Per-file lookups cannot have that failure mode.
+    """
 
     F1 = "dts.mu2e.Prim.CampA.001430_00000000.art"
     F2 = "dts.mu2e.Prim.CampA.001430_00000001.art"
 
-    def _run(self, stdout, stderr, rc=0):
-        from utils.check_inputs import _default_locality
-        completed = MagicMock(stdout=stdout, stderr=stderr, returncode=rc)
-        with patch("utils.check_inputs.subprocess.run", return_value=completed):
-            return _default_locality("tape", [self.F1, self.F2])
+    @staticmethod
+    def _client(by_loc, fail_times=0):
+        """Fake MdhClient. `by_loc` maps location -> {filename: locality};
+        a 404 raises RuntimeError as the real client does."""
+        state = {'left': fail_times}
 
-    def test_all_found(self):
-        out = self._run("ONLINE \nNEARLINE \n", "")
-        self.assertEqual(out, {self.F1: "ONLINE", self.F2: "NEARLINE"})
+        class FakeClient:
+            def query_dcache(self, filename, location="tape"):
+                if state['left'] > 0:
+                    state['left'] -= 1
+                    raise ConnectionError("transient")
+                loc = by_loc.get(location, {})
+                if filename not in loc:
+                    raise RuntimeError(f"File not found in dCache: /pnfs/{location}/{filename}")
+                return {'fileLocality': loc[filename]}
+        return FakeClient
 
-    def test_one_missing_reconciled_by_path(self):
-        out = self._run(
-            "ONLINE \n",
-            f"Error: File not found in dCache: /pnfs/mu2e/tape/x/{self.F2}\n")
+    def _run(self, by_loc, files=None, fail_times=0):
+        from utils import check_inputs
+        fake = types.ModuleType("mdh")
+        fake.MdhClient = self._client(by_loc, fail_times)
+        with patch.dict(sys.modules, {"mdh": fake}):
+            return check_inputs._default_locality("tape", files or [self.F1, self.F2])
+
+    def test_all_found_on_tape(self):
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE", self.F2: "NEARLINE"}})
+        self.assertEqual(out, {self.F1: "ONLINE_AND_NEARLINE", self.F2: "NEARLINE"})
+
+    def test_disk_resident_file_is_online_not_missing(self):
+        """A file on persistent/disk has no tape copy — nothing to stage."""
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE"},
+                         "disk": {self.F2: "ONLINE"}})
+        self.assertEqual(out, {self.F1: "ONLINE_AND_NEARLINE", self.F2: "ONLINE"})
+
+    def test_absent_everywhere_is_missing(self):
+        out = self._run({"tape": {self.F1: "ONLINE"}})
         self.assertEqual(out, {self.F1: "ONLINE", self.F2: "MISSING"})
 
-    def test_count_mismatch_fails_closed(self):
-        # two found files claimed but only one status line, no missing
-        out = self._run("ONLINE \n", "")
-        self.assertEqual(out, {self.F1: "ERROR", self.F2: "ERROR"})
+    def test_one_offlocation_file_does_not_poison_the_rest(self):
+        """The regression: a split dataset must not fail every file."""
+        files = [f"dts.mu2e.Prim.CampA.001430_{i:08d}.art" for i in range(50)]
+        tape = {f: "ONLINE_AND_NEARLINE" for f in files if f != files[7]}
+        out = self._run({"tape": tape, "disk": {files[7]: "ONLINE"}}, files=files)
+        self.assertEqual(out[files[7]], "ONLINE")
+        self.assertTrue(all(out[f] == "ONLINE_AND_NEARLINE"
+                            for f in files if f != files[7]))
 
-    def test_subprocess_failure_fails_closed(self):
-        from utils.check_inputs import _default_locality
-        with patch("utils.check_inputs.subprocess.run",
-                   side_effect=OSError("mdh not found")):
-            out = _default_locality("tape", [self.F1])
+    def test_transient_transport_error_is_retried(self):
+        """A concurrency blip must not block a campaign."""
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE"}},
+                        files=[self.F1], fail_times=2)
+        self.assertEqual(out, {self.F1: "ONLINE_AND_NEARLINE"})
+
+    def test_persistent_transport_error_fails_closed(self):
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE"}},
+                        files=[self.F1], fail_times=99)
+        self.assertEqual(out, {self.F1: "ERROR"})
+
+    def test_unimportable_mdh_fails_closed(self):
+        from utils import check_inputs
+        with patch.dict(sys.modules, {"mdh": None}):
+            out = check_inputs._default_locality("tape", [self.F1])
         self.assertEqual(out, {self.F1: "ERROR"})
 
 

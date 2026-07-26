@@ -6,8 +6,9 @@ input is unreadable so a slice of jobs is not launched to die in bulk.
 """
 import argparse
 import os
-import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 # Allow running as a script (bin/check_inputs execs `python3 utils/check_inputs.py`,
@@ -109,34 +110,70 @@ _LOC_TO_MDH = {'enstore': 'tape', 'dcache': 'disk'}
 _LOCALITY_TOKENS = ('ONLINE', 'NEARLINE', 'ONLINE_AND_NEARLINE')
 
 
-def _default_locality(mdh_loc, filenames):
-    """{filename: state} via `mdh query-dcache -o -l <mdh_loc>`.
+_DISK_LOCS = ('disk', 'scratch')
 
-    stdout: one locality token per FOUND file, in input order.
-    stderr: 'Error: File not found in dCache: <path>' per missing file.
-    Reconcile missing files by basename, map the rest positionally, and
-    fail closed (all ERROR) on any count mismatch or subprocess failure.
+# Files are looked up one at a time (mdh.query_dcache is per-file), so a
+# dataset spread over several areas resolves correctly. Threads hide the
+# per-file HTTPS round-trip; the calls are independent reads.
+_LOCALITY_WORKERS = 16
+_QUERY_ATTEMPTS = 3       # transport retries per area (not for 404s)
+_QUERY_BACKOFF = 0.5      # seconds, multiplied by attempt number
+
+
+def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
+    """Locality of one file, searching `mdh_loc` first then the disk areas.
+
+    A file absent from the tape area but present on disk/persistent is
+    ONLINE by construction: those areas have no tape copy, so there is
+    nothing to stage and no recall to avoid. Only a file found in NO area
+    is MISSING.
+
+    Transport failures are retried: under concurrency a transient HTTPS
+    error would otherwise fail the gate closed and block a whole campaign
+    over a blip. A 404 (RuntimeError) is definitive and never retried.
+    """
+    for loc in (mdh_loc,) + tuple(l for l in _DISK_LOCS if l != mdh_loc):
+        for attempt in range(attempts):
+            try:
+                info = client.query_dcache(filename, location=loc)
+            except RuntimeError:
+                break             # 404 in this area — try the next area
+            except Exception:
+                if attempt + 1 == attempts:
+                    return 'ERROR'    # persistent failure: fail closed
+                time.sleep(_QUERY_BACKOFF * (attempt + 1))
+                continue
+            state = (info or {}).get('fileLocality')
+            return state if state in _LOCALITY_TOKENS else 'ERROR'
+    return 'MISSING'
+
+
+def _default_locality(mdh_loc, filenames):
+    """{filename: state} via the mdh Python API, one lookup per file.
+
+    Uses `mdh.MdhClient.query_dcache` rather than shelling out to
+    `mdh query-dcache`: the CLI aborts at the FIRST file absent from the
+    queried area, so one persistent-resident file in a tape dataset
+    truncated the output and forced a fail-closed ERROR for every file —
+    including thousands already confirmed ONLINE_AND_NEARLINE.
     """
     filenames = list(filenames)
-    cmd = ['mdh', 'query-dcache', '-o', '-l', mdh_loc] + filenames
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    except (subprocess.SubprocessError, OSError):
-        return {f: 'ERROR' for f in filenames}
-
-    missing = set()
-    for line in proc.stderr.splitlines():
-        if 'File not found in dCache' in line:
-            missing.add(os.path.basename(line.split('dCache:')[-1].strip()))
-
-    states = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
-    found = [f for f in filenames if f not in missing]
-    if len(states) != len(found):
+        import mdh
+        client = mdh.MdhClient()
+    except Exception:
         return {f: 'ERROR' for f in filenames}   # fail closed
 
-    result = {f: 'MISSING' for f in missing}
-    for f, s in zip(found, states):
-        result[f] = s if s in _LOCALITY_TOKENS else 'ERROR'
+    result = {}
+    with ThreadPoolExecutor(max_workers=_LOCALITY_WORKERS) as pool:
+        futures = {pool.submit(_file_locality, client, mdh_loc, f): f
+                   for f in filenames}
+        for fut in as_completed(futures):
+            f = futures[fut]
+            try:
+                result[f] = fut.result()
+            except Exception:
+                result[f] = 'ERROR'
     return result
 
 
