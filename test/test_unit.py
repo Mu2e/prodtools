@@ -6882,6 +6882,48 @@ class TestMcpFindDatasets(unittest.TestCase):
         'dts.mu2e.CeMLeadingLog.MDC2025au.art',
     ]
 
+    def _spy(self, names=None):
+        """Record the defname string handed to samweb. The filter is a SQL
+        LIKE; asserting only the RETURN value cannot tell `*` from `%`,
+        and `*` silently matches nothing against the live catalog."""
+        seen = []
+
+        def fetch(pattern, user):
+            seen.append(pattern)
+            return self.NAMES if names is None else names
+        return seen, fetch
+
+    def test_query_uses_sql_like_wildcard_not_glob(self):
+        """SAM's defname filter is a SQL LIKE: the wildcard is `%`. A `*`
+        returns zero rows against the live catalog, which would render as
+        'no datasets' — the empty result the spec forbids."""
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(campaign='MDC2025au', tier='cnf',
+                                fetch_fn=fetch)
+        self.assertEqual(seen, ['cnf.%.%.MDC2025au%.%'])
+        self.assertNotIn('*', seen[0])
+
+    def test_caller_glob_is_translated_to_like(self):
+        """Callers will type `*`; translate rather than return nothing."""
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(pattern='cnf.mu2e.*.MDC2025au_best_v1_3.tar',
+                                fetch_fn=fetch)
+        self.assertEqual(seen, ['cnf.mu2e.%.MDC2025au_best_v1_3.tar'])
+
+    def test_query_pushes_desc_into_defname(self):
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(desc='FlatGamma', fetch_fn=fetch)
+        self.assertEqual(seen, ['%.%.FlatGamma.%.%'])
+
+    def test_query_is_all_wildcards_with_no_filters(self):
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(fetch_fn=fetch)
+        self.assertEqual(seen, ['%.%.%.%.%'])
+
     def test_parses_name_fields(self):
         from prodtools_mcp.tools import discovery
         res = discovery.find_datasets(pattern='*', fetch_fn=lambda p, u: self.NAMES)

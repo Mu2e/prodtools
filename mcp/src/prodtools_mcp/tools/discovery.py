@@ -33,12 +33,31 @@ def _parse(name):
             'desc': parts[2], 'dsconf': parts[3], 'file_format': parts[4]}
 
 
+def defname_query(campaign=None, tier=None, desc=None, pattern=None):
+    """The `defname` filter handed to samweb.
+
+    SAM's defname filter is a SQL LIKE: the wildcard is `%`, NOT `*`.
+    Verified against the live catalog on 2026-07-26 —
+    `--defname "cnf.mu2e.%.MDC2025au_best_v1_3.tar"` returns rows and the
+    `*` form returns none. The repo already knows this
+    (utils/jobdef_lookup.py:41, utils/chain_emit.py:264, EXAMPLES.md:495).
+
+    Callers will type `*` anyway, so translate it. The filters are pushed
+    into the defname rather than applied only client-side, so the server
+    does not pull ~20,000 definitions to keep three.
+    """
+    if pattern:
+        return pattern.replace('*', '%')
+    return '.'.join([tier or '%', '%', desc or '%',
+                     f'{campaign}%' if campaign else '%', '%'])
+
+
 def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
                   latest_only=False, require_files=False, user=None,
                   fetch_fn=None, count_fn=None):
     """Datasets matching the given filters, from the SAM definition list."""
     fetch = fetch_fn or _default_fetch_fn
-    query = pattern or '*'
+    query = defname_query(campaign, tier, desc, pattern)
     try:
         names = fetch(query, user)
     except Exception as exc:
@@ -53,6 +72,9 @@ def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
         rows, _skipped = latest_per_description(names)
         names = [row[2] for row in rows]
 
+    # Client-side filters are a correctness backstop, not the primary
+    # mechanism: `_` is also a LIKE wildcard, and a caller-supplied
+    # `pattern` is not narrowed by campaign/tier/desc at all.
     records = []
     for name in names:
         rec = _parse(name)
