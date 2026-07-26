@@ -18,8 +18,13 @@ echo "binding to: $(command -v python3)" | tee "$MCP_ROOT/.venv-binding"
 python3 -m venv .venv
 # --upgrade so the venv carries its OWN transitive deps. metacat's venv
 # does not, and survives only because the ops PYTHONPATH supplies idna.
-./.venv/bin/pip install --upgrade pip 1>&2
-./.venv/bin/pip install -e . 1>&2
+#
+# pip must NOT see the ops PYTHONPATH: with it exported, pip resolves
+# idna/certifi/jsonschema against the spack env, marks them satisfied,
+# and skips installing them into .venv — leaving exactly the
+# non-self-contained venv that part 1 of the check then fails on.
+env -u PYTHONPATH ./.venv/bin/pip install --upgrade pip 1>&2
+env -u PYTHONPATH ./.venv/bin/pip install -e . 1>&2
 
 echo "== verifying =="
 exec "$MCP_ROOT/scripts/start_mcp.sh" --check

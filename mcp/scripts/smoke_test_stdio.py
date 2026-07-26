@@ -2,7 +2,10 @@
 """Spawn the server over stdio, list its tools, call server_info.
 
 Exercises the real transport, which the unit tests deliberately do not.
-Run:  python3 mcp/scripts/smoke_test_stdio.py
+Run:  mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py
+
+Must run under the venv interpreter, not /usr/bin/python3 — the latter
+is 3.9 (too old for mcp) and does not have the package installed.
 """
 import asyncio
 import os
