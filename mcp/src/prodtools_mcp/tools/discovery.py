@@ -18,6 +18,13 @@ _BASIS = ('samweb list-definitions: a definition listing, not an '
 # whole server, not just this call.
 DEFAULT_LIMIT = 500
 
+# `limit` itself was unbounded: a caller following the require_files
+# refusal's own remedy ("raise limit deliberately") could set
+# limit=100000 and get exactly the thousand-serial-query fan-out the
+# refusal exists to prevent. This is a hard ceiling on the input, not a
+# second truncation point — DEFAULT_LIMIT stays the default.
+MAX_LIMIT = 5000
+
 
 def _default_fetch_fn(pattern, user):
     from utils.latestDatasets import fetch_definitions
@@ -62,11 +69,15 @@ def find_datasets(campaign=None, tier=None, desc=None, pattern=None,
                   latest_only=False, require_files=False, user=None,
                   limit=DEFAULT_LIMIT, fetch_fn=None, count_fn=None):
     """Datasets matching the given filters, from the SAM definition list."""
-    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+    if (not isinstance(limit, int) or isinstance(limit, bool)
+            or limit < 1 or limit > MAX_LIMIT):
         raise ToolError('invalid_argument',
-                        f'limit must be a positive integer, got {limit!r}',
+                        f'limit must be a positive integer in '
+                        f'1..{MAX_LIMIT}, got {limit!r}',
                         'Omit it for the default of '
-                        f'{DEFAULT_LIMIT}.')
+                        f'{DEFAULT_LIMIT}; narrow the query with '
+                        'campaign/tier/desc instead of raising limit '
+                        'past the ceiling.')
     fetch = fetch_fn or _default_fetch_fn
     query = defname_query(campaign, tier, desc, pattern)
     try:

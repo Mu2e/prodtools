@@ -6600,10 +6600,16 @@ class TestMcpAdapters(unittest.TestCase):
 
     def test_classify_auth_markers_are_auth_expired(self):
         """An expired token used to arrive as catalog_unavailable with
-        'Check SAM availability' — advice about a service that is fine."""
+        'Check SAM availability' — advice about a service that is fine.
+        These are word-only markers on exception types with no `.code`
+        (see test_classify_code_takes_priority_over_text for the
+        SAMWebHTTPError path). Bare digits ('401'/'403') are deliberately
+        NOT markers here: see
+        test_classify_5xx_with_digits_in_url_is_not_auth_expired."""
         from prodtools_mcp.adapters import classify_catalog_error
-        for msg in ('HTTP 401 Client Error', 'HTTPError: 403 Forbidden',
-                    'Unauthorized', 'bearer token has expired'):
+        for msg in ('HTTPError: 403 Forbidden', 'Unauthorized',
+                    'bearer token has expired',
+                    'Authentication failed: credential expired'):
             err = classify_catalog_error(RuntimeError(msg), 'boom')
             self.assertEqual(err.kind, 'auth_expired', msg)
             self.assertIn('own shell', err.remedy)
@@ -6613,6 +6619,53 @@ class TestMcpAdapters(unittest.TestCase):
         err = classify_catalog_error(
             RuntimeError('Connection refused'), 'boom')
         self.assertEqual(err.kind, 'catalog_unavailable')
+
+    def test_classify_code_401_and_403_are_auth_expired(self):
+        """SAMWebHTTPError.code is a plain int (verified against the
+        installed ops env 2026-07-26); classification must key on it."""
+        from prodtools_mcp.adapters import classify_catalog_error
+
+        class FakeHTTPError(Exception):
+            def __init__(self, code, msg):
+                super().__init__(msg)
+                self.code = code
+
+        for code in (401, 403):
+            err = classify_catalog_error(
+                FakeHTTPError(code, 'Forbidden'), 'boom')
+            self.assertEqual(err.kind, 'auth_expired', code)
+
+    def test_classify_5xx_with_digits_in_url_is_not_auth_expired(self):
+        """Regression pin. Mu2e filenames routinely contain digit runs
+        that collide with '401'/'403' — e.g. a sequencer number in
+        dig.mu2e.FlatGamma.MDC2025au_best_v1_3.001430_00004031.art — and
+        SAMWebHTTPError.__str__ embeds the URL (and therefore the
+        filename) for every 5xx. A plain SAM outage on such a file must
+        stay catalog_unavailable, not send the operator to renew a fine
+        token."""
+        from prodtools_mcp.adapters import classify_catalog_error
+
+        class FakeHTTPError(Exception):
+            def __init__(self, code, msg):
+                super().__init__(msg)
+                self.code = code
+
+        msg = ('HTTP error: 503 Service Unavailable\n'
+               'URL: https://samweb.fnal.gov/sam/mu2e/api/files/name/'
+               'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.'
+               '001430_00004031.art/metadata')
+        err = classify_catalog_error(FakeHTTPError(503, msg), 'boom')
+        self.assertEqual(err.kind, 'catalog_unavailable')
+
+    def test_classify_no_code_text_fallback_still_catches_auth(self):
+        """A 4xx-style failure that arrives as some other exception type
+        (no `.code`) with an unambiguous word marker must still classify
+        as auth_expired."""
+        from prodtools_mcp.adapters import classify_catalog_error
+        err = classify_catalog_error(
+            RuntimeError('Authentication failed: credential expired'),
+            'boom')
+        self.assertEqual(err.kind, 'auth_expired')
 
     def test_safe_tool_preserves_name(self):
         from prodtools_mcp.adapters import safe_tool
@@ -7223,11 +7276,27 @@ class TestMcpFindDatasets(unittest.TestCase):
     def test_rejects_bad_limit(self):
         from prodtools_mcp.tools import discovery
         from prodtools_mcp.adapters import ToolError
-        for bad in (0, -1, 'many', 2.5):
+        for bad in (0, -1, 'many', 2.5, discovery.MAX_LIMIT + 1):
             with self.assertRaises(ToolError) as ctx:
                 discovery.find_datasets(limit=bad,
                                         fetch_fn=lambda p, u: self.NAMES)
             self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_limit_has_a_hard_ceiling(self):
+        """The require_files refusal's own remedy says 'raise limit
+        deliberately' — without a ceiling that invites
+        require_files=True, limit=100000 and exactly the serial-query
+        fan-out the refusal exists to prevent."""
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(limit=discovery.MAX_LIMIT + 1,
+                                    fetch_fn=lambda p, u: self.NAMES)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        # And the ceiling itself is usable, not off-by-one.
+        ok = discovery.find_datasets(limit=discovery.MAX_LIMIT,
+                                     fetch_fn=lambda p, u: self.NAMES)
+        self.assertEqual(ok['limit'], discovery.MAX_LIMIT)
 
 
 class TestMcpDatasetDetails(unittest.TestCase):
@@ -7421,7 +7490,7 @@ class TestMcpLineage(unittest.TestCase):
 
     def test_parents_edge_fn_raises_instead_of_returning_empty(self):
         """famtree.get_parents -> file_lineage swallows every exception and
-        returns [] (samweb_wrapper.py:248-260). For lineage that reads as
+        returns [] (samweb_wrapper.py:260-265). For lineage that reads as
         'no parents' == 'this is a primary'. The edge function must raise."""
         from prodtools_mcp.tools import lineage
         lineage._cached_parents.cache_clear()
@@ -7498,8 +7567,14 @@ class TestMcpLineage(unittest.TestCase):
         self.assertEqual(ctx.exception.kind, 'invalid_argument')
 
     def test_stdout_stays_clean_through_safe_tool(self):
-        """famtree.get_first_file_from_dataset prints to stdout on the
-        not-found path (famtree.py:71), directly on this route."""
+        """Defence in depth: trace_provenance's edge functions are
+        samweb_wrapper.parents_of_file/children_of_file, not famtree, so
+        famtree.py:71 is no longer on this route. But samweb_wrapper
+        itself prints on error at several sites (e.g.
+        describe_definition:182, reached from dataset_details via
+        definition_creation_date's text fallback), so any edge function
+        that prints must still be neutralized here. `chatty_parents`
+        stands in for that class of print."""
         from prodtools_mcp.adapters import safe_tool
         from prodtools_mcp.tools import lineage
 
@@ -7514,6 +7589,56 @@ class TestMcpLineage(unittest.TestCase):
         self.assertEqual(out.getvalue(), '')
         self.assertIn('No files found', err.getvalue())
         self.assertEqual(res['root'], 'a')
+
+    def test_max_nodes_caps_wide_walk(self):
+        from prodtools_mcp.tools.lineage import walk
+
+        def wide(node):
+            return [f'{node}.{i}' for i in range(10)]
+
+        nodes, edges, truncated = walk('root', 'up', 3, wide, max_nodes=25)
+        self.assertLessEqual(len(nodes), 25)
+        self.assertTrue(truncated)
+
+    def test_max_nodes_stops_queries_before_issuing_them(self):
+        """The budget must stop work BEFORE issuing more queries, not
+        merely trim the result at the end — that is the entire point,
+        since one parents_of_file call costs ~0.5s. An unbudgeted 10-way,
+        depth-3 walk would call edge_fn once per discovered node: 1 (root)
+        + 10 + 100 = 111 calls. A max_nodes=25 budget must cut that off
+        after a handful, well before the fan-out reaches depth 2."""
+        from prodtools_mcp.tools.lineage import walk
+        calls = []
+
+        def wide(node):
+            calls.append(node)
+            return [f'{node}.{i}' for i in range(10)]
+
+        walk('root', 'up', 3, wide, max_nodes=25)
+        self.assertLess(len(calls), 15,
+                        'edge_fn was called too many times — the budget '
+                        'trimmed the result instead of stopping queries')
+
+    def test_max_nodes_not_hit_is_not_truncated(self):
+        from prodtools_mcp.tools.lineage import walk
+        nodes, edges, truncated = walk(
+            'a', 'up', 3, lambda n: self.GRAPH.get(n, []), max_nodes=100)
+        self.assertFalse(truncated)
+
+    def test_rejects_bad_max_nodes(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        for bad in (0, -1, lineage.MAX_NODES + 1, True, 'many'):
+            with self.assertRaises(ToolError) as ctx:
+                lineage.trace_provenance('x', max_nodes=bad,
+                                         parents_fn=lambda n: [])
+            self.assertEqual(ctx.exception.kind, 'invalid_argument', bad)
+
+    def test_max_nodes_echoed_in_response(self):
+        from prodtools_mcp.tools import lineage
+        res = lineage.trace_provenance(
+            'a', max_nodes=42, parents_fn=lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(res['max_nodes'], 42)
 
 
 # ---------------------------------------------------------------------------

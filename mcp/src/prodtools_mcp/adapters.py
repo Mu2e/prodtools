@@ -6,9 +6,15 @@ Three jobs, all load-bearing for a stdio server:
    misses it; uncaught it terminates the server rather than failing one
    call. Reachable examples on these tools' paths: submissions.resolve_cap
    (utils/submissions.py:59) and _acquire_lock (utils/submissions.py:648).
-2. Guard stdout. In a stdio server stdout IS the JSON-RPC channel, and
-   utils/famtree.py:71 prints to it on the not-found path, directly on
-   trace_provenance's route. Stray output is rerouted to stderr.
+2. Guard stdout. In a stdio server stdout IS the JSON-RPC channel.
+   trace_provenance no longer touches famtree at all (lineage.py calls
+   samweb_wrapper.parents_of_file/children_of_file directly), but the
+   guard is still load-bearing: utils/samweb_wrapper.py prints on error
+   at several call sites (e.g. describe_definition:182), and
+   definition_creation_date's text-fallback path (samweb_wrapper.py:250)
+   reaches describe_definition, putting that print on dataset_details's
+   route (discovery.py's created_fn). Stray output is rerouted to
+   stderr regardless of which util path triggers it.
 3. Build the error envelope every tool returns on failure.
 """
 import contextlib
@@ -46,10 +52,17 @@ AUTH_REMEDY = ('Renew your credentials in your own shell (htgettoken). '
                'until you have.')
 CATALOG_REMEDY = 'Check SAM availability and that muse setup ops has run.'
 
-# Substrings that identify an authorization failure in a SAM/HTTP error.
-# Deliberately narrow: a broader net would reclassify ordinary outages as
-# auth_expired and send the caller to renew a perfectly good token.
-_AUTH_MARKERS = ('401', '403', 'token', 'unauthorized')
+# Word-only fallback for auth failures that arrive as exception types with
+# no `.code` (see classify_catalog_error below for why code comes first).
+# Deliberately narrow and NEVER a bare digit: Mu2e filenames routinely
+# contain sequences like "403" (e.g.
+# dig.mu2e.FlatGamma.MDC2025au_best_v1_3.001430_00004031.art), and
+# SAMWebHTTPError.__str__ embeds the URL — and therefore the filename —
+# for every 5xx. A digit marker on that text reclassifies a plain SAM
+# outage as auth_expired and tells the operator to renew a token that was
+# never the problem.
+_AUTH_MARKERS = ('unauthorized', 'forbidden', 'credential',
+                  'authentication failed', 'token')
 
 
 def classify_catalog_error(exc, message):
@@ -61,9 +74,27 @@ def classify_catalog_error(exc, message):
     token sent the caller to check a service that was fine. The server's
     own guidance says "never retry an auth_expired" — a branch that
     could not fire.
+
+    Auth is decided by the exception's status CODE, not its text, when a
+    code is available. `samweb_client.exceptions.SAMWebHTTPError` (verified
+    against the installed ops env 2026-07-26) carries `.code` as a plain
+    int, and its `__str__` is asymmetric: for 4xx it returns only `msg`
+    (the code never appears in the text, so a substring match on '401' or
+    '403' misses real auth failures), and for everything else — including
+    every 5xx SAM outage — it returns
+    "HTTP error: <code> <msg>\\nURL: <url>", where the URL routinely
+    embeds a Mu2e filename containing a 3-digit run/subrun sequencer that
+    can read as '401' or '403'. Keying on `.code` fixes both directions at
+    once. Exception types with no `.code` (i.e. not a SAMWebHTTPError) fall
+    back to the word-only markers below.
     """
     if isinstance(exc, ImportError):
         return ToolError('env_missing', message, ENV_REMEDY)
+    code = getattr(exc, 'code', None)
+    if code is not None:
+        if code in (401, 403):
+            return ToolError('auth_expired', message, AUTH_REMEDY)
+        return ToolError('catalog_unavailable', message, CATALOG_REMEDY)
     text = str(exc).lower()
     if any(marker in text for marker in _AUTH_MARKERS):
         return ToolError('auth_expired', message, AUTH_REMEDY)

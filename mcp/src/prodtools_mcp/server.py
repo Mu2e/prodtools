@@ -39,9 +39,14 @@ READING THE RESULTS:
   require_files=True when you need existence.
 - find_datasets `pattern` is a SAM defname filter, a SQL LIKE. Either
   wildcard works: `*` is translated to `%`. Results are capped at
-  `limit` (default 500) and `truncated` says whether the cap bit;
-  require_files is REFUSED above the cap rather than issuing one SAM
-  query per record.
+  `limit` (default 500, hard ceiling 5000) and `truncated` says whether
+  the cap bit; require_files is REFUSED above the cap rather than
+  issuing one SAM query per record.
+- trace_provenance caps the walk at `max_nodes` (default 500, hard
+  ceiling 2000) as well as `depth`: a mixed dig file has ~33 parents, so
+  depth alone can fan out to thousands of serial SAM queries. The budget
+  check runs before the next query is issued, not after, and
+  `truncated: true` covers both the depth cutoff and the node cutoff.
 - campaign_status outputs report `produced` against both `submitted`
   (indices actually handed to the grid) and `expected_at_completion`
   (njobs). Every direct campaign is sliced, so compare against
@@ -135,11 +140,15 @@ def create_mcp_server():
         return TOOL_FUNCTIONS['dataset_details'](dataset=dataset)
 
     @mcp.tool(description='Trace a file\'s lineage as nodes and edges, '
-                          'up (parents) or down (children).')
+                          'up (parents) or down (children). Bounded by '
+                          'both depth and max_nodes; either can set '
+                          'truncated=true.')
     def trace_provenance(name: str, direction: str = 'up',
-                         depth: int = 3) -> dict:
+                         depth: int = 3,
+                         max_nodes: int = lineage.DEFAULT_MAX_NODES) -> dict:
         return TOOL_FUNCTIONS['trace_provenance'](
-            name=name, direction=direction, depth=depth)
+            name=name, direction=direction, depth=depth,
+            max_nodes=max_nodes)
 
     # Registered under the module function's name via name=, because a
     # nested `def get_server_info` would shadow the module-level one and
