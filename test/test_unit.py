@@ -7920,6 +7920,62 @@ class TestMcpToolRegistration(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Recovery resource headroom
+# ---------------------------------------------------------------------------
+
+class TestRecoveryResourceArgv(unittest.TestCase):
+    """Recoveries get more memory/lifetime by default: they are the tail of
+    a population that already succeeded at the default, so the prior that
+    they need headroom is high and only a handful of jobs are affected."""
+
+    def test_bare_entry_gets_both_floors(self):
+        from utils.submissions import (recovery_resource_argv,
+                                       RECOVERY_MEMORY, RECOVERY_LIFETIME)
+        self.assertEqual(recovery_resource_argv({}),
+                         ['--memory', RECOVERY_MEMORY,
+                          '--expected-lifetime', RECOVERY_LIFETIME])
+
+    def test_floor_never_downgrades_a_larger_request(self):
+        """submit_map precedence is CLI > entry, so passing --memory
+        unconditionally would SILENTLY DOWNGRADE an entry asking for more.
+        That is the hazard _snapshot_entry exists to prevent."""
+        from utils.submissions import recovery_resource_argv
+        argv = recovery_resource_argv({'memory': '8000MB'})
+        self.assertNotIn('--memory', argv)
+        self.assertIn('--expected-lifetime', argv)
+
+    def test_entry_choice_respected_even_when_smaller(self):
+        from utils.submissions import recovery_resource_argv
+        self.assertNotIn('--memory', recovery_resource_argv({'memory': '1000MB'}))
+
+    def test_entry_naming_both_gets_no_flags(self):
+        from utils.submissions import recovery_resource_argv
+        self.assertEqual(
+            recovery_resource_argv({'memory': '8000MB',
+                                    'expected_lifetime': '72h'}), [])
+
+    def test_resubmit_passes_the_floors_to_submit_map(self):
+        """End-to-end: the flags actually reach the submit_map argv."""
+        from utils import submissions
+        seen = {}
+
+        def fake_runner(cmd, *a, **kw):
+            seen['cmd'] = cmd
+            return types.SimpleNamespace(returncode=0)
+
+        row = {'id': 7, 'tarball': 'cnf.mu2e.X.Y.0.tar',
+               'entry': {'njobs': 10, 'outputs': []}}
+        with patch.object(submissions.submission_ledger, 'record_submission',
+                          return_value=1):
+            submissions.resubmit(row, [3], '/tmp/none.db', dry_run=True,
+                                 runner=fake_runner)
+        cmd = seen['cmd']
+        self.assertIn('--memory', cmd)
+        self.assertIn('--expected-lifetime', cmd)
+
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

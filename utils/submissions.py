@@ -221,6 +221,36 @@ def _scratch_map_dir(prefix):
             print(f"WARNING: could not remove scratch dir {tmpdir}: {e}")
 
 
+# Recoveries get resource headroom by default. A recovery is the tail of
+# a population that already succeeded at the default (typically 1-3 jobs
+# out of hundreds), so the prior that it needs more is high and the blast
+# radius is tiny — cheap insurance against slow nodes and heavy events.
+# Deliberately NOT applied to first submissions: there, a memory bump
+# masks an oversized merge factor instead of exposing it (MDC2025au RPC,
+# 2026-07-26 — 300 jobs died at merge 20/100 and the fix was merge 3/6,
+# not memory).
+RECOVERY_MEMORY = '4000MB'
+RECOVERY_LIFETIME = '48h'
+
+
+def recovery_resource_argv(entry):
+    """Extra submit_map flags giving a recovery more memory/lifetime.
+
+    A FLOOR, not an override. submit_map's precedence is CLI > entry >
+    built-in default, so passing a flag unconditionally would silently
+    DOWNGRADE an entry that already asks for more than the floor — the
+    same hazard _snapshot_entry exists to prevent. An entry that names a
+    resource had it chosen deliberately; leave it alone.
+    """
+    argv = []
+    for flag, key, floor in (
+            ('--memory', 'memory', RECOVERY_MEMORY),
+            ('--expected-lifetime', 'expected_lifetime', RECOVERY_LIFETIME)):
+        if not entry.get(key):
+            argv += [flag, floor]
+    return argv
+
+
 def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
     """Resubmit missing indices through the submit_map CLI — one
     battle-tested submit path (token check, argv build, child ledger row
@@ -243,6 +273,7 @@ def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
                '--indices-file', str(idx_path),
                '--ledger-parent', str(row['id']),
                '--ledger-db', str(db_path)]
+        cmd += recovery_resource_argv(entry)
         if dry_run:
             cmd.append('--dry-run')
         print(f"  resubmit: {' '.join(cmd)}")
