@@ -1,58 +1,61 @@
 """Campaign status tools.
 
-Composed from the read-only ledger plus, optionally, a jobsub_q snapshot
-and SAM output counts. The bare call is ledger-only: a 23-row ledger
-fanned out to one SAM count per output dataset would exceed the client's
-timeout.
+Composed from the read-only ledger plus, optionally, a live HTCondor
+queue snapshot and SAM output counts. The bare call is ledger-only: a
+23-row ledger fanned out to one SAM count per output dataset would
+exceed the client's timeout.
 """
-import subprocess
-
-from prodtools_mcp import ledger_ro
+from prodtools_mcp import condor, ledger_ro
 from prodtools_mcp.adapters import ToolError
-
-# jobsub table state letters. C and X are terminal.
-_TERMINAL = ('C', 'X')
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
-# jobsub_q talks to the collector over the network and can hang. This
-# runs inline on FastMCP's event loop, so an unbounded wait wedges the
-# whole server, not just one call.
-QUEUE_TIMEOUT_S = 60
-
 
 def queue_block(cluster_ids, clusters):
-    """Queue counts for a campaign's clusters from a live_clusters()
-    snapshot.
+    """Queue counts for a campaign's clusters from a
+    condor.query_owner_jobs() snapshot: {cluster_id: [{'JobStatus',
+    'HoldReasonCode', 'HoldReason'}, ...]}.
 
     A None snapshot means the query could not be trusted. It returns
     state='unknown' and OMITS the count keys entirely — there must be no
     zero to misread. Proc-form jobsub_q was verified on 2026-07-22
     reporting 0 total while 1976 jobs of one cluster ran; a {"running": 0}
     from a failed query reads as 'drained' and could trigger a recovery
-    pass against live jobs.
+    pass against live jobs. condor.query_owner_jobs() preserves this same
+    fail-closed contract (timeout or any unreachable schedd -> None).
+
+    When held > 0, adds `hold_reasons`: the held jobs' HoldReasonCode
+    breakdown (see condor.hold_reasons — grouped by CODE, never by the
+    HoldReason text, which embeds a unique slot/host per job).
     """
     if clusters is None:
         return {'state': 'unknown',
-                'reason': 'jobsub_q query failed or was unparseable'}
+                'reason': 'HTCondor queue query failed, timed out, or '
+                          'could not reach every schedd'}
     running = idle = held = 0
     seen = []
+    held_jobs = []
     for cid in cluster_ids:
-        states = clusters.get(str(cid))
-        if not states:
+        jobs = clusters.get(str(cid))
+        if not jobs:
             continue
         seen.append(str(cid))
-        for st in states:
-            if st in _TERMINAL:
-                continue
-            if st == 'H':
-                held += 1
-            elif st == 'I':
-                idle += 1
-            else:
+        for job in jobs:
+            st = job.get('JobStatus')
+            if st == condor.RUNNING:
                 running += 1
-    return {'state': 'known', 'running': running, 'idle': idle,
+            elif st == condor.IDLE:
+                idle += 1
+            elif st == condor.HELD:
+                held += 1
+                held_jobs.append(job)
+            # Anything else (removed/completed/transferring/suspended)
+            # is neither a live nor a held job — not counted.
+    block = {'state': 'known', 'running': running, 'idle': idle,
             'held': held, 'clusters': seen}
+    if held:
+        block['hold_reasons'] = condor.hold_reasons(held_jobs)
+    return block
 
 
 def _outputs_block(entry, njobs, submitted, count_fn):
@@ -91,24 +94,13 @@ def _outputs_block(entry, njobs, submitted, count_fn):
     return {'state': 'known', 'datasets': datasets}
 
 
-def _timeout_runner(cmd, **kwargs):
-    kwargs.setdefault('timeout', QUEUE_TIMEOUT_S)
-    return subprocess.run(cmd, **kwargs)
-
-
 def _default_clusters_fn():
-    """live_clusters with a bounded wait.
-
-    live_clusters catches OSError (jobsub_q missing) but a hung collector
-    raises TimeoutExpired, which is a SubprocessError, not an OSError.
-    Catch it here and return None so queue_block renders state="unknown"
-    — a timeout is exactly the case that must never serialize as zero.
-    """
-    from utils.submissions import live_clusters
-    try:
-        return live_clusters(runner=_timeout_runner)
-    except subprocess.TimeoutExpired:
-        return None
+    """condor.query_owner_jobs(), the MCP server's own path — direct
+    ClassAd queries, independent of utils.submissions.live_clusters()
+    (which backs the live production cron and stays untouched). Already
+    bounded and already fail-closed to None on any timeout or
+    unreachable schedd; nothing to add here."""
+    return condor.query_owner_jobs()
 
 
 def _default_count_fn(dataset):

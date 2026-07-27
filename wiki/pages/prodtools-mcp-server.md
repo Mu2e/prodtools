@@ -26,11 +26,42 @@ none needs mu2epro.
 
 - `campaign_status()` with no argument is ledger-only and cheap. Naming
   a campaign adds queue and output counts, which hit the network.
+- **The queue block comes from live HTCondor ClassAd queries**
+  (`mcp/src/prodtools_mcp/condor.py`), not `jobsub_q` table parsing.
+  This is an INDEPENDENT path from `utils/submissions.py`'s
+  `live_clusters()`/`cluster_queue_state()`, which back the live
+  production cron and stay untouched — the MCP server queries the pool
+  itself, in-process, via the `htcondor` Python bindings (a PyPI cp310
+  wheel pinned to `htcondor==23.0.*` in `mcp/pyproject.toml`, matching
+  the pool's running version; the system RPM htcondor is py3.9-only,
+  which is why this is a venv dep). Queries only the schedds whose
+  `Name` starts with `jobsub` (8 daemons advertised, ~6 are jobsub
+  schedds), filters server-side in the constraint
+  (`Owner=="mu2epro" && JobStatus==...`), and projects only
+  `ClusterId`/`JobStatus`/`HoldReasonCode`/`HoldReason` — never whole
+  ClassAds. Measured live against the real pool 2026-07-26: ~0.5s for
+  190 clusters / ~500 jobs across 6 schedds queried in parallel.
 - **`state: "unknown"` is not zero.** An unknown queue block omits its
   count keys entirely. Proc-form `jobsub_q` was verified on 2026-07-22
   reporting 0 total while 1976 jobs of one cluster ran, so a
   `{"running": 0}` from a failed query would read as "drained" and could
-  trigger a recovery pass against live jobs.
+  trigger a recovery pass against live jobs. `condor.query_owner_jobs()`
+  preserves the same fail-closed contract: a bounded ~60s wall clock
+  (FastMCP runs sync tools inline on the event loop), and if EITHER the
+  query times out OR any single schedd is unreachable, the whole result
+  is `None` — never a partial undercount from the schedds that did
+  answer (an undercount reads exactly like "drained").
+- **`held > 0` adds `hold_reasons`**: `[{code, count, example}, ...]`
+  sorted by count descending, aggregated by `HoldReasonCode`. Grouping
+  by the `HoldReason` TEXT instead is the trap — the text embeds the
+  slot and host (`Error from slot1_26@fnpc19131.fnal.gov: ...`), so
+  every job's string is unique and a text-keyed count returns one entry
+  per job. `example` is deliberately singular (one representative
+  string, truncated) so it can't be mistaken for an aggregate. Verified
+  live 2026-07-26 against MDC2025au: RPC campaigns showing `code: 34`,
+  "Docker job has gone over memory limit of 2000 Mb", correctly
+  collapsed to one entry each (counts 50 and 237) despite every job's
+  `HoldReason` string differing by slot/host.
 - `find_datasets` reports a **definition listing**, not existence:
   zero-file definitions appear and `-LH`/`-CH` variants do not. Its
   `basis` field says so on every response. Pass `require_files=True`
@@ -139,10 +170,12 @@ failed exec rather than an import error.
   returns `[]`. For a lineage tool that reads as "this file is a
   primary", and an `lru_cache` would keep serving it after SAM
   recovered.
-- **Every network call is bounded.** `jobsub_q` runs with a 60s timeout
-  and a timeout renders as queue `state: "unknown"`. FastMCP runs sync
-  tools inline on the event loop, so an unbounded wait wedges the whole
-  server, not one call.
+- **Every network call is bounded.** The HTCondor queue query
+  (`condor.query_owner_jobs`) runs its per-schedd fan-out under a
+  bounded executor with a ~60s total timeout, and a timeout renders as
+  queue `state: "unknown"`. FastMCP runs sync tools inline on the event
+  loop, so an unbounded wait wedges the whole server, not one call —
+  the same class of bug the `trace_provenance` fan-out fix addressed.
 
 ## Not included
 

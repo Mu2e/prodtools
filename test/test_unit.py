@@ -6855,10 +6855,20 @@ class TestMcpLedgerRo(unittest.TestCase):
 # MCP status tools
 # ---------------------------------------------------------------------------
 
+def _job(status, code=None, reason=None):
+    """One fake HTCondor ClassAd projection, in the {ClusterId,
+    JobStatus, HoldReasonCode, HoldReason} shape condor.query_owner_jobs
+    returns."""
+    return {'JobStatus': status, 'HoldReasonCode': code, 'HoldReason': reason}
+
+
 class TestMcpQueueBlock(unittest.TestCase):
     def test_unknown_omits_counts_entirely(self):
-        """A failed jobsub_q must NOT serialize as running:0 — that reads
-        as 'drained' and could trigger recovery against live jobs."""
+        """A failed/untrustworthy HTCondor query must NOT serialize as
+        running:0 — that reads as 'drained' and could trigger recovery
+        against live jobs. This is the single most important behavior
+        in the server — keep it passing across any change to the
+        underlying queue source."""
         from prodtools_mcp.tools.status import queue_block
         block = queue_block(['29308498'], None)
         self.assertEqual(block['state'], 'unknown')
@@ -6866,10 +6876,11 @@ class TestMcpQueueBlock(unittest.TestCase):
         for key in ('running', 'idle', 'held'):
             self.assertNotIn(key, block)
 
-    def test_counts_by_state_letter(self):
+    def test_counts_by_job_status(self):
         from prodtools_mcp.tools.status import queue_block
-        block = queue_block(
-            ['29308498'], {'29308498': ['R', 'R', 'I', 'H', 'C', 'X']})
+        block = queue_block(['29308498'], {'29308498': [
+            _job(2), _job(2), _job(1), _job(5, code=34, reason='held one'),
+        ]})
         self.assertEqual(block['state'], 'known')
         self.assertEqual(block['running'], 2)
         self.assertEqual(block['idle'], 1)
@@ -6879,29 +6890,216 @@ class TestMcpQueueBlock(unittest.TestCase):
         """A genuinely drained cluster is a real zero, distinct from
         an unknown snapshot."""
         from prodtools_mcp.tools.status import queue_block
-        block = queue_block(['29308498'], {'99999999': ['R']})
+        block = queue_block(['29308498'], {'99999999': [_job(2)]})
         self.assertEqual(block['state'], 'known')
         self.assertEqual(block['running'], 0)
+        self.assertEqual(block['idle'], 0)
+        self.assertEqual(block['held'], 0)
         self.assertEqual(block['clusters'], [])
+        self.assertNotIn('hold_reasons', block)
 
-    def test_jobsub_q_runs_with_a_timeout(self):
-        """No timeout means a hung jobsub_q wedges the whole server —
-        FastMCP runs sync tools inline on the event loop. A timeout must
-        surface as state='unknown', never as zero."""
-        import subprocess as sp
+    def test_drained_cluster_is_known_with_real_zeros(self):
+        """An empty snapshot (no cluster has any job left) is a genuine
+        drain, not 'unknown' — 'unknown' and 'drained' must stay
+        distinguishable."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['29308498'], {})
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['running'], 0)
+        self.assertEqual(block['idle'], 0)
+        self.assertEqual(block['held'], 0)
+        self.assertEqual(block['clusters'], [])
+        self.assertNotIn('hold_reasons', block)
+
+    def test_held_zero_omits_hold_reasons_key(self):
+        """No empty list sitting around to be misread as data."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['1'], {'1': [_job(2), _job(1)]})
+        self.assertEqual(block['held'], 0)
+        self.assertNotIn('hold_reasons', block)
+
+    def test_hold_reasons_present_and_sorted_by_count(self):
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['1'], {'1': [
+            _job(5, code=34, reason='Error from slot1_1@fnpc1.fnal.gov: '
+                                     'Docker job has gone over memory '
+                                     'limit of 2000 Mb'),
+            _job(5, code=34, reason='Error from slot1_2@fnpc2.fnal.gov: '
+                                     'Docker job has gone over memory '
+                                     'limit of 2000 Mb'),
+            _job(5, code=12, reason='via condor_rm (by user oksuzian)'),
+            _job(5, code=34, reason='Error from slot1_3@fnpc3.fnal.gov: '
+                                     'Docker job has gone over memory '
+                                     'limit of 2000 Mb'),
+        ]})
+        self.assertEqual(block['held'], 4)
+        reasons = block['hold_reasons']
+        self.assertEqual([r['code'] for r in reasons], [34, 12])
+        self.assertEqual(reasons[0]['count'], 3)
+        self.assertEqual(reasons[1]['count'], 1)
+        self.assertIn('memory limit', reasons[0]['example'])
+
+    def test_hold_reason_aggregation_trap_by_code_not_text(self):
+        """THE lesson: several held jobs sharing one HoldReasonCode but
+        each with a DIFFERENT reason string (real data embeds the slot
+        and host, so every string is unique) must collapse to ONE
+        entry with the right count — not N entries of 1. Aggregating by
+        the HoldReason text instead of the code returns garbage."""
+        from prodtools_mcp.tools.status import queue_block
+        jobs = [
+            _job(5, code=34,
+                reason=f'Error from slot1_{i}@fnpc191{i}.fnal.gov: Docker '
+                       f'job has gone over memory limit of 2000 Mb')
+            for i in range(6)
+        ]
+        block = queue_block(['1'], {'1': jobs})
+        self.assertEqual(block['held'], 6)
+        self.assertEqual(len(block['hold_reasons']), 1)
+        self.assertEqual(block['hold_reasons'][0]['code'], 34)
+        self.assertEqual(block['hold_reasons'][0]['count'], 6)
+
+    def test_default_clusters_fn_delegates_to_condor_module(self):
+        """The wiring point queue_block callers use — must call the new
+        independent condor.py path, not utils.submissions."""
         from prodtools_mcp.tools import status
-        seen = {}
+        from prodtools_mcp import condor
+        with patch.object(condor, 'query_owner_jobs',
+                          return_value={'1': [_job(2)]}) as mock:
+            result = status._default_clusters_fn()
+        mock.assert_called_once_with()
+        self.assertEqual(result, {'1': [_job(2)]})
 
-        def hang(cmd, **kwargs):
-            seen.update(kwargs)
-            raise sp.TimeoutExpired(cmd, kwargs.get('timeout'))
 
-        with patch.object(sp, 'run', hang):
-            self.assertIsNone(status._default_clusters_fn())
-        self.assertEqual(seen.get('timeout'), status.QUEUE_TIMEOUT_S)
-        block = status.queue_block(['29308498'], None)
-        self.assertEqual(block['state'], 'unknown')
-        self.assertNotIn('running', block)
+class TestMcpCondor(unittest.TestCase):
+    """condor.py: the MCP server's own in-process HTCondor ClassAd
+    query path, independent of utils.submissions.live_clusters (which
+    backs the live production cron and is not touched here)."""
+
+    def test_only_jobsub_schedds_are_kept(self):
+        """The pool advertises 8 daemons; only the ~5 whose Name starts
+        with 'jobsub' are the schedds that carry mu2epro's jobs."""
+        from prodtools_mcp import condor
+        ads = [{'Name': 'jobsub01.fnal.gov'}, {'Name': 'jobsub04.fnal.gov'},
+              {'Name': 'collector01.fnal.gov'},
+              {'Name': 'negotiator.fnal.gov'}]
+        kept = [a['Name'] for a in ads if condor._is_jobsub_schedd(a)]
+        self.assertEqual(kept, ['jobsub01.fnal.gov', 'jobsub04.fnal.gov'])
+
+    def test_query_schedd_filters_server_side_with_projection(self):
+        """Owner and JobStatus belong in the CONSTRAINT (server-side),
+        not fetched wholesale and filtered in Python; and only the
+        four needed attributes are projected — never a whole ClassAd."""
+        from prodtools_mcp import condor
+        calls = []
+
+        class FakeSchedd:
+            def __init__(self, ad):
+                calls.append(('Schedd', ad))
+
+            def query(self, constraint, projection=None):
+                calls.append(('query', constraint, projection))
+                return []
+
+        fake_htcondor = types.SimpleNamespace(Schedd=FakeSchedd)
+        with patch.dict(sys.modules, {'htcondor': fake_htcondor}):
+            result = condor._query_schedd('sched-a.fnal.gov', 'mu2epro')
+
+        self.assertEqual(result, [])
+        self.assertEqual(calls[0], ('Schedd', 'sched-a.fnal.gov'))
+        _, constraint, projection = calls[1]
+        self.assertIn('Owner=="mu2epro"', constraint)
+        self.assertIn(f'JobStatus=={condor.IDLE}', constraint)
+        self.assertIn(f'JobStatus=={condor.RUNNING}', constraint)
+        self.assertIn(f'JobStatus=={condor.HELD}', constraint)
+        self.assertEqual(set(projection),
+                         {'ClusterId', 'JobStatus', 'HoldReasonCode',
+                          'HoldReason'})
+
+    def test_hold_reasons_groups_by_code_not_text(self):
+        from prodtools_mcp import condor
+        jobs = [
+            {'HoldReasonCode': 34,
+             'HoldReason': 'Error from slot1_1@a.fnal.gov: Docker job has '
+                           'gone over memory limit of 2000 Mb'},
+            {'HoldReasonCode': 34,
+             'HoldReason': 'Error from slot1_2@b.fnal.gov: Docker job has '
+                           'gone over memory limit of 2000 Mb'},
+            {'HoldReasonCode': 12, 'HoldReason': 'via condor_rm'},
+        ]
+        result = condor.hold_reasons(jobs)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {'code': 34, 'count': 2,
+                                     'example': jobs[0]['HoldReason']})
+        self.assertEqual(result[1]['code'], 12)
+        self.assertEqual(result[1]['count'], 1)
+
+    def test_query_owner_jobs_aggregates_across_schedds(self):
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a', 'sched-b']
+
+        def query(sd, owner):
+            self.assertEqual(owner, 'mu2epro')
+            if sd == 'sched-a':
+                return [{'ClusterId': 1, 'JobStatus': 2,
+                        'HoldReasonCode': None, 'HoldReason': None}]
+            return [{'ClusterId': 1, 'JobStatus': 5,
+                    'HoldReasonCode': 34, 'HoldReason': 'oom'}]
+
+        result = condor.query_owner_jobs(schedds_fn=schedds, query_fn=query)
+        self.assertEqual(len(result['1']), 2)
+
+    def test_schedd_discovery_failure_is_unknown(self):
+        from prodtools_mcp import condor
+
+        def boom():
+            raise RuntimeError('collector unreachable')
+
+        result = condor.query_owner_jobs(schedds_fn=boom, query_fn=None)
+        self.assertIsNone(result)
+
+    def test_one_unreachable_schedd_makes_the_whole_result_unknown(self):
+        """A per-schedd failure must not silently drop that schedd's
+        jobs — an undercount reads as 'drained' and could trigger
+        recovery against jobs that are still live there. Skip that
+        schedd's data, but the OVERALL result must come back untrusted,
+        not a partial count from the schedds that did answer."""
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a', 'sched-b']
+
+        def query(sd, owner):
+            if sd == 'sched-a':
+                raise RuntimeError('timed out talking to sched-a')
+            return [{'ClusterId': 1, 'JobStatus': 2,
+                    'HoldReasonCode': None, 'HoldReason': None}]
+
+        result = condor.query_owner_jobs(schedds_fn=schedds, query_fn=query)
+        self.assertIsNone(result)
+
+    def test_query_owner_jobs_bounds_wall_clock(self):
+        """FastMCP runs sync tools inline on the event loop — a hung
+        schedd must not wedge the whole server. Bounded by `timeout`;
+        a timeout is 'unknown' (None), never zero, and the call must
+        actually return close to the bound, not the full hang."""
+        import time
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a']
+
+        def hang(sd, owner):
+            time.sleep(5)
+            return []
+
+        start = time.monotonic()
+        result = condor.query_owner_jobs(timeout=0.2, schedds_fn=schedds,
+                                         query_fn=hang)
+        elapsed = time.monotonic() - start
+        self.assertIsNone(result)
+        self.assertLess(elapsed, 2.0)
 
 
 class TestMcpCampaignStatus(unittest.TestCase):
@@ -6950,11 +7148,13 @@ class TestMcpCampaignStatus(unittest.TestCase):
 
     def test_named_campaign_includes_queue_and_outputs(self):
         from prodtools_mcp.tools import status
+        running_job = {'JobStatus': 2, 'HoldReasonCode': None,
+                      'HoldReason': None}
         with tempfile.TemporaryDirectory() as td:
             db = self._make_db(td)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db,
-                clusters_fn=lambda: {'29308498': ['R', 'R']},
+                clusters_fn=lambda: {'29308498': [running_job, running_job]},
                 count_fn=lambda ds: 412)
         camp = result['campaigns'][0]
         self.assertEqual(camp['queue']['running'], 2)

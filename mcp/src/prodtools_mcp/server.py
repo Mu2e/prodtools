@@ -34,6 +34,14 @@ READING THE RESULTS:
 - A queue or outputs block with state="unknown" has NO count keys. Do
   NOT read a missing count as zero: the query failed, and the campaign
   may well be running. Never start a recovery pass on an "unknown".
+- The queue block comes from live HTCondor ClassAd queries (in-process,
+  via the htcondor Python bindings — no jobsub_q table parsing), so held
+  jobs carry a reason, not just a count. When held > 0 the block also
+  has `hold_reasons`: entries {code, count, example}, grouped by
+  HoldReasonCode and sorted by count descending. `example` is ONE
+  representative HoldReason string (truncated) — never sum/average
+  against it, and never group by the HoldReason text yourself, since
+  that text embeds the slot and host and is unique per job.
 - find_datasets reports a samweb DEFINITION listing (see its `basis`
   field): zero-file definitions appear and -LH/-CH variants do not. Pass
   require_files=True when you need existence.
