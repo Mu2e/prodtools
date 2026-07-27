@@ -61,7 +61,7 @@
   - `error(kind: str, message: str, remedy: str = '') -> dict`
   - `safe_tool(fn) -> callable` — decorator preserving `__name__`/`__doc__`
 
-**Why this exists:** `SystemExit` derives from `BaseException`, so `except Exception` does not catch it — uncaught it kills the server mid-session. And stdout is the JSON-RPC channel: `utils/famtree.py:71` prints `"No files found for dataset: …"` to stdout on the not-found path, which sits directly on `trace_provenance`'s route and would corrupt the protocol stream.
+**Why this exists:** `SystemExit` derives from `BaseException`, so `except Exception` does not catch it — uncaught it kills the server mid-session. And stdout is the JSON-RPC channel: `utils/famtree.py:71` prints `"No files found for dataset: …"` to stdout on the not-found path, which at the time of this plan sat directly on `trace_provenance`'s route and would corrupt the protocol stream. (Corrected 2026-07-26: a later fix removed `famtree` from every tool's composition path — `lineage.py`'s edge functions call `samweb_wrapper.parents_of_file`/`children_of_file` directly — so this specific print is no longer reachable from any tool. The guard stays load-bearing regardless: `samweb_wrapper.py` prints on error at several of its own call sites, e.g. `describe_definition:182`, reached from `dataset_details` via `definition_creation_date`'s text-fallback path.)
 
 - [ ] **Step 1: Add the package directory and sys.path entry**
 
@@ -1352,11 +1352,17 @@ EOF
   - `walk(root: str, direction: str, depth: int, edge_fn) -> tuple[list[str], list[dict], bool]` returning `(nodes, edges, truncated)`
   - `trace_provenance(name, direction='up', depth=3, parents_fn=None, children_fn=None) -> dict`
 
-**Background the implementer needs.** This is **new traversal code, not a wrapper.** `utils/famtree.py:118` `topology_for_dataset` has no depth limit, no truncation signal, and walks parents only — its recursion is a closure that cannot be parameterized. Nothing in `famtree` walks children; `utils/samweb_wrapper.py:417` `children_of_file(filename)` is per-file.
+  (Superseded 2026-07-26: a post-review blocker fix added a `max_nodes`
+  parameter to both `walk()` and `trace_provenance()`, default 500, hard
+  ceiling `MAX_NODES = 2000` — `depth` alone did not bound query cost,
+  since each level of the walk multiplies. See the design spec's
+  `trace_provenance` section for the current signature and rationale.)
+
+**Background the implementer needs.** This is **new traversal code, not a wrapper.** `utils/famtree.py:118` `topology_for_dataset` has no depth limit, no truncation signal, and walks parents only — its recursion is a closure that cannot be parameterized. Nothing in `famtree` walks children; `utils/samweb_wrapper.py:417` `children_of_file(filename)` is per-file — line numbers as they stood at the time of this plan; `parents_of_file` was inserted into `samweb_wrapper.py` afterward and shifted them (current: `children_of_file` module function at `:436`, the `file_lineage` swallow at `:260-265`).
 
 `famtree.get_parents` is decorated `@functools.lru_cache(maxsize=None)` (`famtree.py:46`). Lineage is immutable so cached values stay correct, but an unbounded cache in a long-lived server grows without limit — this module uses its own bounded cache.
 
-`famtree.get_first_file_from_dataset` **prints to stdout** on the not-found path (`famtree.py:71`). Task 1's `safe_tool` redirects it, and Step 1 below tests that end-to-end.
+`famtree.get_first_file_from_dataset` **prints to stdout** on the not-found path (`famtree.py:71`). Task 1's `safe_tool` redirects it, and Step 1 below tests that end-to-end. (Corrected 2026-07-26: a later fix removed `famtree` from every tool's composition path entirely — `walk()`'s edge functions call `samweb_wrapper.parents_of_file`/`children_of_file` directly, not `famtree.get_parents` — so this print is no longer reachable via `trace_provenance`. Step 1's stdout test below now stands in for the general class of util that prints on an error path, e.g. `samweb_wrapper.describe_definition:182` via `dataset_details`, rather than exercising this specific one.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2212,6 +2218,14 @@ after review found the direct path never calls `check_inputs`
 idempotency guard under client timeouts. Until a follow-on spec lands,
 `/mu2epro-submit` is the submission path.
 ```
+
+This was the draft content proposed for this step; the shipped
+`wiki/pages/prodtools-mcp-server.md` is the authoritative version and
+was corrected on 2026-07-26 — the famtree/stdout bullet above is stale
+in the same way as the other citations in this plan (see the corrected
+note on Task 1 and Task 5 above): `famtree` is no longer on
+`trace_provenance`'s route, and the page now documents `max_nodes`,
+`MAX_LIMIT`, and the code-based auth classifier added in that fix wave.
 
 - [ ] **Step 5: Link it from the wiki index**
 

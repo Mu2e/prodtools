@@ -142,13 +142,21 @@ those two are simply the honest examples.)
 
 **2. Guard stdout.** In a stdio server, **stdout is the JSON-RPC
 channel.** Any `print()` inside a util injects plain text mid-protocol
-and corrupts the stream. This is not hypothetical:
-`famtree.get_first_file_from_dataset` prints `"No files found for
-dataset: …"` to stdout on the not-found path (`utils/famtree.py:71`),
-directly on `trace_provenance`'s composition path. Every tool call is
-therefore wrapped in `contextlib.redirect_stdout(sys.stderr)`. metacat
-survives without this only because its own server code never prints and
-its start script sends setup output to stderr
+and corrupts the stream. This was demonstrated against
+`famtree.get_first_file_from_dataset`, which prints `"No files found for
+dataset: …"` to stdout on the not-found path (`utils/famtree.py:71`); at
+the time of writing `trace_provenance` composed through that path.
+A subsequent fix (2026-07-26) removed `famtree` from every tool's
+composition path — `lineage.py`'s edge functions call
+`samweb_wrapper.parents_of_file`/`children_of_file` directly — so that
+specific print is no longer reachable from any tool. The guard remains
+load-bearing regardless: `samweb_wrapper.py` prints on error at several
+of its own call sites (e.g. `describe_definition:182`), and
+`definition_creation_date`'s text-fallback path (`samweb_wrapper.py:250`)
+reaches it, putting that print on `dataset_details`'s route. Every tool
+call is therefore wrapped in `contextlib.redirect_stdout(sys.stderr)`.
+metacat survives without this only because its own server code never
+prints and its start script sends setup output to stderr
 (`start_mcp.sh:16,26`) — it is luck, not design.
 
 **3. Build the error envelope.** See "Error contract".
@@ -271,6 +279,15 @@ translated. Results are capped at `limit` (default 500) with `truncated`
 reporting whether the cap bit, and `require_files=True` is refused above
 the cap rather than issuing one serial SAM query per record.
 
+**`limit` itself is capped at `MAX_LIMIT = 5000`** (post-review fix,
+2026-07-26). The `require_files=True` refusal's own remedy tells the
+caller to "raise limit deliberately" — without a ceiling that invites
+`require_files=True, limit=100000`, which still fans out thousands of
+serial SAM queries on the event loop; a bare `limit=100000` alone also
+pulls that many definition rows into one response. Validated the same
+way as `depth`/`max_nodes`: an `invalid_argument` `ToolError` for
+anything outside `1..MAX_LIMIT`.
+
 `fetch_definitions` is `samweb list-definitions`
 (`latestDatasets.py:47-48`): zero-file definitions appear, and
 `-LH`/`-CH` variants do not. `require_files=True` filters to
@@ -296,18 +313,19 @@ determined by file count, not definition listing.
 `None` for exactly the metadata-only `-LH`/`-CH` datasets this section
 warns about. `dataset_summary` does not carry a creation time.
 
-### `trace_provenance(name, direction="up", depth=3)`
+### `trace_provenance(name, direction="up", depth=3, max_nodes=500)`
 
 ```json
-{"root": "...", "direction": "up", "depth": 3, "truncated": false,
- "nodes": ["..."], "edges": [{"child": "...", "parent": "..."}]}
+{"root": "...", "direction": "up", "depth": 3, "max_nodes": 500,
+ "truncated": false, "nodes": ["..."],
+ "edges": [{"child": "...", "parent": "..."}]}
 ```
 
 **This is new traversal code, not a wrapper.**
 `famtree.topology_for_dataset` (`famtree.py:118`) has no depth limit, no
 truncation signal, and walks parents only — its recursion is a closure
 that cannot be parameterized. Nothing in `famtree` walks children;
-`samweb_wrapper.children_of_file` (`samweb_wrapper.py:417`) is per-file.
+`samweb_wrapper.children_of_file` (`samweb_wrapper.py:436`) is per-file.
 `lineage.py` implements a depth-bounded breadth-first walk, sets
 `truncated` when `depth` cuts the walk short, and returns edges and
 nodes as data — **not** the mermaid string, which is a presentation
@@ -316,7 +334,7 @@ format the caller can build itself.
 **Both edge functions must fail loudly.** They are
 `samweb_wrapper.parents_of_file` and `samweb_wrapper.children_of_file`
 — **not** `famtree.get_parents`, which delegates to `file_lineage` and
-returns `[]` on any error (`samweb_wrapper.py:248-260`). For a lineage
+returns `[]` on any error (`samweb_wrapper.py:260-265`). For a lineage
 caller that empty list is indistinguishable from "this file has no
 parents", i.e. "it is a primary", so an expired token would render as a
 confident, materially wrong answer. `parents_of_file` is the fail-loud
@@ -329,6 +347,29 @@ correct, but an unbounded cache in a long-lived server grows without
 limit; `lineage.py` uses its own bounded cache and does not rely on it.
 `lru_cache` does not memoize exceptions, so a raising edge function
 cannot poison that cache either.
+
+**`max_nodes` bounds query fan-out; `depth` alone does not** (post-review
+fix, 2026-07-26). Each level of the walk multiplies: a mixed `dig` file
+has ~33 parents, so a level-2 frontier is already ~1,000 nodes, and one
+`parents_of_file` call costs ~0.5s — the default `depth=3` could fan out
+to roughly 5,400 serial SAM queries (~47 minutes), and FastMCP runs sync
+tools inline on the event loop, so that blocks the whole server, not one
+call. `max_nodes` (default 500, hard ceiling `MAX_NODES = 2000`) mirrors
+`find_datasets`' `limit`. The check in `walk()`'s frontier loop runs
+**before** `edge_fn` is called for the next node — the budget stops new
+queries, it does not just trim the returned list after the fact, which
+is the entire point given the per-query cost. `truncated` is `True` when
+either `depth` or `max_nodes` cut the walk short; `max_nodes` is echoed
+in the response the way `limit` is. Validated with an `invalid_argument`
+`ToolError` the same way `depth` is, including rejecting `bool` (`depth`
+itself does not reject `bool`, since `isinstance(True, int)` is `True` —
+a pre-existing gap this fix does not extend to `depth`).
+
+Verified live against a real `MDC2025au` mixed `dig` file (2026-07-26):
+the file has 33 parents; the default call (`depth=3`, `max_nodes=500`)
+returned in under a second with `truncated: true`, having issued only a
+couple of `parents_of_file` calls rather than the thousands an unbudgeted
+walk would have made.
 
 ### `get_server_info()`
 
@@ -378,14 +419,34 @@ activity: `jobsub_q` performs implicit token acquisition of its own,
 whose "Attempting to …"/"Storing bearer token" noise `submissions.py:77`
 already skips as a matter of course.
 
+**5. `auth_expired` vs `catalog_unavailable` is decided by status code,
+not text** (post-review fix, 2026-07-26). The original classifier
+matched `('401', '403', 'token', 'unauthorized')` as substrings of
+`str(exc)`, which misfired in both directions.
+False positive: Mu2e filenames routinely contain digit runs like `403`
+(e.g. `dig.mu2e.FlatGamma.MDC2025au_best_v1_3.001430_00004031.art`), and
+`samweb_client.exceptions.SAMWebHTTPError.__str__` embeds the URL — and
+therefore the filename — for every 5xx, so a plain SAM outage on such a
+file misclassified as `auth_expired` and told the operator to renew a
+fine token instead of retrying. False negative: for 4xx,
+`SAMWebHTTPError.__str__` returns only `msg`, so the code never appeared
+in the text and real `401`/`403` fell through to `catalog_unavailable`.
+The fix keys on `getattr(exc, 'code', None)` — `SAMWebHTTPError.code` is
+a plain int, verified against the installed ops env — classifying
+`auth_expired` only for `401`/`403`. A word-only text fallback
+(`unauthorized`, `forbidden`, `credential`, `authentication failed`,
+`token` — never a bare digit) still covers exception types that carry no
+`.code` at all.
+
 ## Testing
 
 Tool functions are plain Python, so tests live in the existing
 `test/test_unit.py` (540 tests before this work; 624 after it and the
-post-review fix wave) with no MCP machinery. Dependencies
-inject as they already do elsewhere: `runner=` for subprocess,
-`sam_lister=` for catalog, `db_path=` pointed at a tmp sqlite carrying
-the real schema.
+first post-review fix wave; 633 after the blocker-fix wave that added
+`max_nodes`, the `MAX_LIMIT` ceiling, and the code-based auth
+classifier) with no MCP machinery. Dependencies inject as they already
+do elsewhere: `runner=` for subprocess, `sam_lister=` for catalog,
+`db_path=` pointed at a tmp sqlite carrying the real schema.
 
 Five cases carry the design's weight:
 
@@ -395,9 +456,15 @@ Five cases carry the design's weight:
    survives.**
 3. **SAM raises → `catalog_unavailable`, not an empty list.**
 4. **A tool whose composition path prints to stdout leaves stdout
-   clean.** Drive `trace_provenance` through the `famtree.py:71`
-   not-found path with stdout captured; assert nothing but JSON-RPC
-   reached stdout and the text landed on stderr.
+   clean.** `trace_provenance` no longer composes through `famtree` at
+   all (a later fix removed it from every tool's path), so driving this
+   through `famtree.py:71`'s not-found print is no longer possible —
+   this verification step is now exercised with a synthetic parents_fn
+   that prints, standing in for the class of util that does (e.g.
+   `samweb_wrapper.describe_definition:182`, reachable from
+   `dataset_details` via `definition_creation_date`'s text-fallback
+   path). Assert nothing but JSON-RPC reached stdout and the text landed
+   on stderr.
 5. **Ledger opens read-only.** Assert no DDL is issued, and that a DB
    missing an expected index surfaces `catalog_unavailable` rather than
    an `OperationalError` traceback.
