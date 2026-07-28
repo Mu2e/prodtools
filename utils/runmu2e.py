@@ -725,10 +725,38 @@ def _emit_manifest(log_path, manifest_files):
         f.write(f"# mu2egrid manifest selfcheck: {sc.hexdigest()}  -\n")
 
 
+def _is_terminal_push_error(output):
+    """True when pushOutput failed for a reason no retry can ever clear.
+
+    The known case: the target already exists on tape from an earlier
+    push that copied the file but never finished declaring it to SAM.
+    pushOutput's `recover` path then tries to gfal-rm the orphan so it
+    can rewrite it, and /pnfs/mu2e/tape is write-once — the delete 403s
+    every single time. Retrying re-runs mu2e for hours and dies at the
+    identical step, so the attempt cap is spent for nothing (three full
+    mixing jobs on CeMLeadingLog 2/418, 2026-07-27).
+
+    Deliberately narrow. A bare 403 is NOT enough: a 403 on the *write*
+    means a missing storage.modify scope, a different diagnosis with a
+    different remedy. Only the delete-during-recover pattern qualifies.
+    Unknown or unavailable output stays retryable — misclassifying a
+    transient failure as terminal would strand recoverable work.
+    """
+    if not output:
+        return False
+    text = str(output)
+    return 'rm failed' in text and ('HTTP 403' in text
+                                    or 'Permission refused' in text)
+
+
 def _push_with_retry(push_fn, *args, retries=3, base_delay=30, **kwargs):
     """Direct-mode wrapper for push_data / push_logs. Retries on
     CalledProcessError with exponential backoff, then raises so condor
-    sees a job failure (CB2: don't silently leave files unregistered)."""
+    sees a job failure (CB2: don't silently leave files unregistered).
+
+    Terminal failures (see _is_terminal_push_error) skip the retries
+    entirely and raise on the first attempt — retrying them only burns
+    grid time and delays the human who has to intervene."""
     last_exc = None
     for attempt in range(retries + 1):
         try:
@@ -736,6 +764,13 @@ def _push_with_retry(push_fn, *args, retries=3, base_delay=30, **kwargs):
             return
         except subprocess.CalledProcessError as e:
             last_exc = e
+            if _is_terminal_push_error(getattr(e, 'output', None)):
+                print(f"[direct] {push_fn.__name__} failed for a "
+                      f"NON-RETRYABLE reason (rc={e.returncode}): an "
+                      f"undeclared file already occupies the tape path and "
+                      f"cannot be removed. Not retrying — a human must "
+                      f"clear the orphan.")
+                raise
             if attempt == retries:
                 break
             delay = base_delay * (2 ** attempt)

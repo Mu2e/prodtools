@@ -14,6 +14,7 @@ pure-function consumers (jobsub_argv, unit tests) and dir:-mode
 resolution work without the Mu2e ops environment.
 """
 
+import hashlib
 import os
 import re
 import sys
@@ -99,6 +100,23 @@ def dataset_dir(dsname: str, location: str) -> str:
     if location == 'scratch':
         return f"/pnfs/mu2e/scratch/datasets/{base_path}/{ds_path}"
     return ""
+
+
+def tape_file_path(filename: str) -> str:
+    """Absolute /pnfs tape path for a file, including pushOutput's hash
+    fan-out directories.
+
+    pushOutput spreads files into `<sha256(filename)[0:2]>/<[2:4]>`
+    subdirectories beneath the dataset dir. Deriving that from the
+    filename alone is what makes an UNDECLARED file locatable: a file
+    sitting on tape with no SAM record has no other locator, and that is
+    exactly what a partly-completed push leaves behind (verified
+    2026-07-27 against the two real CeMLeadingLog orphans).
+    """
+    digest = hashlib.sha256(filename.encode()).hexdigest()
+    dsname = str(Mu2eName.parse(filename).dataset)
+    return (f"{dataset_dir(dsname, 'tape')}/"
+            f"{digest[0:2]}/{digest[2:4]}/{filename}")
 
 
 # Mu2e standard location → dCache area name (under `/pnfs/mu2e/<area>/`).

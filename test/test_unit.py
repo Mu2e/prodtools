@@ -4266,6 +4266,104 @@ class TestPushAllKeepsTheLog(unittest.TestCase):
         self.assertEqual(calls, ['log'])
 
 
+class TestTerminalPushError(unittest.TestCase):
+    """A 403-on-delete is terminal: no retry can ever clear it.
+
+    pushOutput's `recover` path deletes an existing target to replace it.
+    On /pnfs/mu2e/tape that delete always 403s (write-once, no delete
+    right), so retrying re-runs mu2e for hours and dies identically.
+    Burning the attempt cap this way cost three full mixing jobs on
+    CeMLeadingLog 2/418 before a human saw it.
+    """
+
+    ORPHAN_403 = (
+        "WARNING - output file exists for /pnfs/mu2e/tape/phy-sim/dig/mu2e/X\n"
+        "INFO - running recover\n"
+        "ERROR - rm failed for try 0 for https://fndcadoor.fnal.gov:2880/...\n"
+        "gfal-rm error: 1 (Operation not permitted) - DavPosix::unlink  "
+        "HTTP 403 : Permission refused\n"
+        "pushOutput status at exit: 2\n"
+    )
+
+    def test_orphan_403_is_terminal(self):
+        from utils import runmu2e
+        self.assertTrue(runmu2e._is_terminal_push_error(self.ORPHAN_403))
+
+    def test_transient_failure_is_not_terminal(self):
+        from utils import runmu2e
+        self.assertFalse(runmu2e._is_terminal_push_error(
+            "ERROR - copy failed for try 0\ncurl: (56) Recv failure\n"))
+
+    def test_no_output_is_not_terminal(self):
+        """Unknown output must stay retryable — fail open on classification,
+        closed on action."""
+        from utils import runmu2e
+        self.assertFalse(runmu2e._is_terminal_push_error(None))
+        self.assertFalse(runmu2e._is_terminal_push_error(''))
+
+    def test_403_without_rm_is_not_terminal(self):
+        """A 403 on the WRITE is a scope problem, not the orphan poison
+        pill — don't claim the same diagnosis for it."""
+        from utils import runmu2e
+        self.assertFalse(runmu2e._is_terminal_push_error(
+            "ERROR - copy failed\nHTTP 403 : Permission refused\n"))
+
+    def test_retry_stops_immediately_on_terminal(self):
+        """The whole point: one attempt, not four."""
+        from utils import runmu2e
+        calls = []
+
+        def push():
+            calls.append(1)
+            raise subprocess.CalledProcessError(2, 'pushOutput',
+                                                output=self.ORPHAN_403)
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            runmu2e._push_with_retry(push, retries=3, base_delay=0)
+        self.assertEqual(len(calls), 1,
+                         f"retried a terminal failure {len(calls)} times")
+
+    def test_retry_still_retries_transient(self):
+        """Don't over-fit: ordinary failures keep their retries."""
+        from utils import runmu2e
+        calls = []
+
+        def push():
+            calls.append(1)
+            raise subprocess.CalledProcessError(1, 'pushOutput',
+                                                output="curl: (56) Recv failure")
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            runmu2e._push_with_retry(push, retries=2, base_delay=0)
+        self.assertEqual(len(calls), 3)
+
+
+class TestTapeOrphanPath(unittest.TestCase):
+    """pushOutput fans files into sha256(filename)[0:2]/[2:4] subdirs.
+
+    Verified 2026-07-27 against the two real CeMLeadingLog orphans. This
+    is what makes an orphan detectable without a SAM record: the path is
+    computable from the filename alone.
+    """
+
+    def test_hash_subdirs_match_observed_orphans(self):
+        from utils.file_resolver import tape_file_path
+        p = tape_file_path(
+            'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art')
+        self.assertEqual(
+            p, '/pnfs/mu2e/tape/phy-sim/dig/mu2e/CeMLeadingLogMix1BB/'
+               'MDC2025au_best_v1_3/art/b2/ac/'
+               'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art')
+
+    def test_second_observed_orphan(self):
+        from utils.file_resolver import tape_file_path
+        p = tape_file_path(
+            'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00001597.art')
+        self.assertTrue(p.endswith('/d5/af/dig.mu2e.CeMLeadingLogMix1BB.'
+                                   'MDC2025au_best_v1_3.001430_00001597.art'),
+                        f"unexpected hash subdirs: {p}")
+
+
 class TestSingleBackend(unittest.TestCase):
     """submit_map is single-backend (direct): --backend is gone and
     rejected loudly as an unknown argument."""

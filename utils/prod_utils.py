@@ -1,3 +1,4 @@
+import collections
 import glob
 import json
 import logging
@@ -33,6 +34,12 @@ def setup_logging(verbose: bool) -> None:
         # Suppress samweb_client debug messages
         logging.getLogger("samweb_client").setLevel(logging.WARNING)
 
+# How many trailing output lines run() keeps for failure classification.
+# Enough to span pushOutput's recover/retry block; small enough that
+# streaming a full art job costs nothing.
+RUN_TAIL_LINES = 200
+
+
 def run(cmd, shell=False, retries=0, retry_delay=60):
     """
     Run a shell command with real-time output streaming.
@@ -46,11 +53,18 @@ def run(cmd, shell=False, retries=0, retry_delay=60):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] Running: {cmd}")
 
-        # Real-time streaming
+        # Real-time streaming, keeping a bounded tail so a caller can
+        # classify the failure (see runmu2e._is_terminal_push_error).
+        # Bounded because this same helper streams `mu2e -c`, whose output
+        # runs to hundreds of thousands of lines — the failure reason is
+        # always near the end.
+        tail = collections.deque(maxlen=RUN_TAIL_LINES)
         process = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in iter(process.stdout.readline, ''):
-            print(line.rstrip())
+            text = line.rstrip()
+            print(text)
+            tail.append(text)
             sys.stdout.flush()
 
         process.stdout.close()
@@ -63,7 +77,8 @@ def run(cmd, shell=False, retries=0, retry_delay=60):
             print(f"[{timestamp}] Command failed (attempt {attempt}/{attempts}), retrying in {retry_delay}s...")
             time.sleep(retry_delay)
         else:
-            raise subprocess.CalledProcessError(return_code, cmd)
+            raise subprocess.CalledProcessError(return_code, cmd,
+                                                output="\n".join(tail))
 
 
 def _fetch_file_local(filename, src_location='disk'):
