@@ -16,6 +16,7 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import types
 import tarfile
@@ -4183,6 +4184,86 @@ class TestPushLogsParents(unittest.TestCase):
             parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
                                     with_parents=True)
             self.assertEqual(parents, 'none')
+
+
+class TestPushAllKeepsTheLog(unittest.TestCase):
+    """A data-push failure must never skip the log push.
+
+    Root cause 2026-07-27, CeMLeadingLog indices 2 and 418: attempt 1 left
+    a partially-written file on tape without completing its SAM
+    declaration. Every retry then ran mu2e to completion (hours of CPU),
+    and pushOutput's `recover` path tried to gfal-rm the orphan to replace
+    it — HTTP 403, because tape is write-once. pushOutput exited 2, the
+    CalledProcessError propagated out of _push_with_retry, and the log
+    push that sits AFTER the data push never ran. Three attempts, zero
+    forensic evidence in SAM. The log is the only witness to a data-push
+    failure, so it has to survive one.
+    """
+
+    @staticmethod
+    def _cpe(rc=2):
+        return subprocess.CalledProcessError(rc, 'pushOutput')
+
+    def test_both_succeed_calls_both(self):
+        from utils import runmu2e
+        calls = []
+        runmu2e._push_all(lambda: calls.append('data'),
+                          lambda: calls.append('log'))
+        self.assertEqual(calls, ['data', 'log'])
+
+    def test_data_failure_still_pushes_log(self):
+        """The regression under test: log push runs despite the data raise."""
+        from utils import runmu2e
+        calls = []
+
+        def data():
+            calls.append('data')
+            raise self._cpe()
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            runmu2e._push_all(data, lambda: calls.append('log'))
+        self.assertIn('log', calls, "log push was skipped by the data failure")
+
+    def test_data_failure_propagates_so_condor_sees_it(self):
+        """Pushing the log must not swallow the failure — the job still fails."""
+        from utils import runmu2e
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            runmu2e._push_all(self._raise_data, lambda: None)
+        self.assertEqual(cm.exception.returncode, 2)
+
+    @staticmethod
+    def _raise_data():
+        raise subprocess.CalledProcessError(2, 'pushOutput')
+
+    def test_log_failure_does_not_mask_data_failure(self):
+        """When BOTH fail, the data-push error is the real story and wins."""
+        from utils import runmu2e
+
+        def log():
+            raise subprocess.CalledProcessError(7, 'pushOutput')
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            runmu2e._push_all(self._raise_data, log)
+        self.assertEqual(cm.exception.returncode, 2,
+                         "log-push rc masked the data-push rc")
+
+    def test_log_failure_alone_still_fails_the_job(self):
+        """Data fine but the log never landed: CB2 says don't pass silently."""
+        from utils import runmu2e
+
+        def log():
+            raise subprocess.CalledProcessError(5, 'pushOutput')
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            runmu2e._push_all(lambda: None, log)
+        self.assertEqual(cm.exception.returncode, 5)
+
+    def test_skipped_data_push_still_logs(self):
+        """mu2e-failed path passes a no-op data push; the log must still go."""
+        from utils import runmu2e
+        calls = []
+        runmu2e._push_all(lambda: None, lambda: calls.append('log'))
+        self.assertEqual(calls, ['log'])
 
 
 class TestSingleBackend(unittest.TestCase):

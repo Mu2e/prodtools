@@ -745,6 +745,45 @@ def _push_with_retry(push_fn, *args, retries=3, base_delay=30, **kwargs):
     raise last_exc
 
 
+def _push_all(data_push, log_push, prefix=''):
+    """Run `data_push`, then `log_push` — and run `log_push` even when
+    `data_push` raises.
+
+    A data-push failure is precisely when the log is the only surviving
+    evidence, so it must not be what skips the log. Observed 2026-07-27
+    on CeMLeadingLog indices 2 and 418: attempt 1 left a partly-written
+    file on tape without finishing its SAM declaration, and every retry
+    then ran mu2e to completion (hours of CPU) only for pushOutput's
+    `recover` path to try `gfal-rm` on the orphan — HTTP 403, because
+    tape is write-once. pushOutput exited 2, the CalledProcessError
+    propagated out of _push_with_retry, and the log push below it never
+    ran. Three attempts produced zero forensic trace in SAM.
+
+    Failure precedence: the data-push exception always wins, since a
+    log-push failure is a symptom next to it. When the data push
+    succeeded, a log-push failure still fails the job (CB2 — never
+    silently leave a file unregistered).
+    """
+    data_exc = None
+    try:
+        data_push()
+    except subprocess.CalledProcessError as exc:
+        data_exc = exc
+        print(f"{prefix}data push failed (rc={exc.returncode}) — pushing the "
+              f"log before failing the job")
+
+    try:
+        log_push()
+    except subprocess.CalledProcessError as exc:
+        if data_exc is None:
+            raise
+        print(f"{prefix}WARNING: log push also failed (rc={exc.returncode}); "
+              f"re-raising the data-push failure")
+
+    if data_exc is not None:
+        raise data_exc
+
+
 def _execute_mu2e(fcl, simjob_setup, args, prefix=''):
     """Shared execute step for both backends: build the mu2e command, run
     it, return True iff it failed. Callers push data only on success but
@@ -800,13 +839,6 @@ def _direct_dispatch(args, ops, index):
                 manifest_files.extend(sorted(Path('.').glob(pattern)))
         _emit_manifest(log_file, [str(f) for f in manifest_files])
 
-    # Push outputs only on success; logs always (so failures are debuggable).
-    if not job_failed:
-        _push_with_retry(push_data, outputs, infiles,
-                         simjob_setup=simjob_setup, track_parents=track_parents)
-    else:
-        print("[direct] mu2e failed — skipping data push, still pushing log")
-
     # Logs share the first output's location so the worker token's
     # storage.modify scope covers both. Without this, a non-mu2epro account
     # whose data outputs go to `scratch` would still try to push the log
@@ -814,8 +846,22 @@ def _direct_dispatch(args, ops, index):
     # doesn't grant. Production runs as mu2epro keep `disk` via the same
     # mechanism — the cnf's outputs[] specifies where data lands.
     log_location = log_storage_location(outputs)
-    _push_with_retry(push_logs, fcl, simjob_setup=simjob_setup,
-                     location=log_location)
+
+    def data_push():
+        if job_failed:
+            return
+        _push_with_retry(push_data, outputs, infiles,
+                         simjob_setup=simjob_setup, track_parents=track_parents)
+
+    def log_push():
+        _push_with_retry(push_logs, fcl, simjob_setup=simjob_setup,
+                         location=log_location)
+
+    if job_failed:
+        print("[direct] mu2e failed — skipping data push, still pushing log")
+    # Push outputs only on success; the log ALWAYS — including when the
+    # data push itself raises (see _push_all).
+    _push_all(data_push, log_push, prefix='[direct] ')
 
     return job_failed
 
@@ -903,12 +949,17 @@ def _dispatch_and_execute(mode, jobdesc, fname, args):
     job_failed = _execute_mu2e(fcl, simjob_setup, args)
 
     if not args.dry_run:
-        if not job_failed:
-            push_data(outputs, infiles, simjob_setup=simjob_setup, track_parents=track_parents)
-        else:
+        def data_push():
+            if job_failed:
+                return
+            push_data(outputs, infiles, simjob_setup=simjob_setup,
+                      track_parents=track_parents)
+
+        if job_failed:
             print("Job failed - skipping data file push, but uploading logs")
-        # Always upload logs, even on failure
-        push_logs(fcl, simjob_setup=simjob_setup)
+        # Always upload logs, even on failure — including when push_data
+        # itself raises, which used to skip this entirely (see _push_all).
+        _push_all(data_push, lambda: push_logs(fcl, simjob_setup=simjob_setup))
     else:
         print("[DRY RUN] Would run: pushOutput output.txt")
 
