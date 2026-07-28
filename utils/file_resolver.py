@@ -133,9 +133,22 @@ def storage_scope(filename: str, location) -> Optional[str]:
     """Narrowest dCache token scope covering writes of `filename` to
     `location`: /mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>.
 
-    Token-scope paths include `datasets/` for every area — matching
-    htvault's pre-allocated scopes — which intentionally differs from the
-    physical tape layout (no `datasets/` component; see dataset_dir).
+    The scope path is the PHYSICAL path with `/pnfs` stripped and nothing
+    else changed — upstream mu2ejobsub's `token_request_dirname` is
+    exactly `s|^/pnfs/mu2e|/mu2e|`. It therefore has to inherit
+    dataset_dir's layout asymmetry: disk and scratch carry a `datasets/`
+    component, tape does not.
+
+    This used to insert `datasets/` unconditionally, which made the tape
+    scope name a path nothing lives at, so it granted nothing. Writes
+    still worked through the separate broad `storage.create:/mu2e`, and
+    under the WLCG profile `storage.create` permits upload but NOT
+    overwrite or delete — so pushOutput's `recover` path could never
+    remove a stale target and 403'd on every retry, permanently
+    (CeMLeadingLog 2/418, 2026-07-27). Passing --need-storage-modify at
+    all replaces the role's default broad `storage.modify:/mu2e` (which
+    is what POMS jobs keep, and why POMS recoveries can overwrite), so a
+    wrong path here is a genuine downgrade rather than a no-op.
 
     Why narrowest: htvault rejects `--need-storage-modify
     /mu2e/scratch/datasets` as too broad with `PermissionError: Unable to
@@ -157,7 +170,12 @@ def storage_scope(filename: str, location) -> Optional[str]:
     if n.is_dataset:
         return None
     owner_prefix = "phy" if n.owner == "mu2e" else "usr"
-    return f"/mu2e/{area}/datasets/{owner_prefix}-{n.tier_class}/{n.tier}/{n.owner}"
+    leaf = f"{owner_prefix}-{n.tier_class}/{n.tier}/{n.owner}"
+    # Mirror dataset_dir: tape has no `datasets/` component, disk and
+    # scratch do. TestStorageScopeCoversPhysicalPath pins the invariant.
+    if location == "tape":
+        return f"/mu2e/{area}/{leaf}"
+    return f"/mu2e/{area}/datasets/{leaf}"
 
 
 def xroot_read_url(pnfs_path: str) -> str:

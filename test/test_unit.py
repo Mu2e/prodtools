@@ -4364,6 +4364,57 @@ class TestTapeOrphanPath(unittest.TestCase):
                         f"unexpected hash subdirs: {p}")
 
 
+class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
+    """A token scope must actually cover the path it is meant to protect.
+
+    Upstream mu2ejobsub derives a scope path by ONE rule
+    (token_request_dirname): strip the /pnfs prefix, change nothing else.
+    So `storage_scope(f, loc)` must be a prefix of `dataset_dir(ds, loc)`
+    with /pnfs removed -- for every location.
+
+    tape breaks that if you insert `datasets/` unconditionally: the
+    physical tape layout has no such component (see dataset_dir), so the
+    scope named a path nothing lives at and granted nothing. Writes kept
+    working via the separate broad `storage.create:/mu2e`, which under
+    the WLCG profile permits upload but NOT delete -- so pushOutput's
+    recover path could never remove a stale file and 403'd forever
+    (CeMLeadingLog 2/418, 2026-07-27).
+    """
+
+    DIG = 'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art'
+    LOG = 'log.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.log'
+
+    def _assert_scope_covers(self, filename, location):
+        from utils.file_resolver import dataset_dir, storage_scope
+        from utils.job_common import Mu2eName
+        scope = storage_scope(filename, location)
+        physical = dataset_dir(str(Mu2eName.parse(filename).dataset), location)
+        self.assertTrue(
+            physical.startswith('/pnfs' + scope + '/'),
+            f"scope {scope!r} does not cover physical path {physical!r}")
+
+    def test_tape_scope_covers_tape_path(self):
+        self._assert_scope_covers(self.DIG, 'tape')
+
+    def test_disk_scope_covers_disk_path(self):
+        self._assert_scope_covers(self.LOG, 'disk')
+
+    def test_scratch_scope_covers_scratch_path(self):
+        self._assert_scope_covers(self.DIG, 'scratch')
+
+    def test_tape_scope_has_no_datasets_component(self):
+        """The specific regression: tape's physical layout omits it."""
+        from utils.file_resolver import storage_scope
+        self.assertEqual(storage_scope(self.DIG, 'tape'),
+                         '/mu2e/tape/phy-sim/dig/mu2e')
+
+    def test_disk_scope_keeps_datasets_component(self):
+        """Don't over-correct -- disk's physical layout really does have it."""
+        from utils.file_resolver import storage_scope
+        self.assertEqual(storage_scope(self.LOG, 'disk'),
+                         '/mu2e/persistent/datasets/phy-etc/log/mu2e')
+
+
 class TestSingleBackend(unittest.TestCase):
     """submit_map is single-backend (direct): --backend is gone and
     rejected loudly as an unknown argument."""
