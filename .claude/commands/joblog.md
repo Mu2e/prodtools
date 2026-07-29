@@ -19,9 +19,17 @@ nonzero, either is fine). A job killed at the wall-clock limit
 (`SYSTEM_PERIODIC_HOLD Run Time/limit`) never transfers, so it has NO
 retrievable log — not while running, not while held, not after
 `condor_rm`. Verified 2026-07-28 against a control; three such logs were
-lost before the pattern was understood. To diagnose a job that is merely
-slow, catch it alive with `condor_ssh_to_job <cluster>.<proc>` (on PATH;
-`jobsub_ssh` is not) BEFORE it hits the wall.
+lost before the pattern was understood.
+
+To diagnose a job that is merely slow you must therefore catch it while
+it still exists. `condor_ssh_to_job` is on PATH (`jobsub_ssh` is not) and
+takes `-name <schedd> <cluster>.<proc> [command]` — but **this has NOT
+been verified to work for jobsub_lite grid jobs**, which run on remote
+OSG glideins and belong to mu2epro. Treat it as a lead, not a procedure,
+until someone confirms it end to end. Prefer the measured route first:
+`logparser <log-dataset> -n N` gives per-desc `Real`/`CPU` hours and
+`VmHWM`/`VmPeak` from logs already in SAM, with no live attach at all,
+and answers "is this desc slow or memory-hungry" directly.
 
 ## Usage
 
