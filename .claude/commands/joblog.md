@@ -13,6 +13,16 @@ fails leaves no log in SAM at all, so SAM tells you nothing.
 Works after the cluster has drained, which is the normal case by the
 time anyone looks.
 
+**Hard limit — know this before you promise a log.** The sandbox exists
+only for a job that **completed and transferred output back** (exit 0 or
+nonzero, either is fine). A job killed at the wall-clock limit
+(`SYSTEM_PERIODIC_HOLD Run Time/limit`) never transfers, so it has NO
+retrievable log — not while running, not while held, not after
+`condor_rm`. Verified 2026-07-28 against a control; three such logs were
+lost before the pattern was understood. To diagnose a job that is merely
+slow, catch it alive with `condor_ssh_to_job <cluster>.<proc>` (on PATH;
+`jobsub_ssh` is not) BEFORE it hits the wall.
+
 ## Usage
 
 ```
