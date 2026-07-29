@@ -18,7 +18,7 @@
       "RMCPhaseSpace0NExternal": 14,
       "RMCPhaseSpace1NExternal": 20,
       "RMCPhaseSpace1NInternal": 10,
-      "NoPrimary":               {"merge": 10, "fcl_overrides": {"#include": "Production/JobConfig/mixing/NoPrimary.fcl"}},
+      "NoPrimary":               {"merge": 5, "fcl_overrides": {"#include": "Production/JobConfig/mixing/NoPrimary.fcl"}},
       "MuCap1809keVCalo":        {"merge": 5, "fcl_overrides": {"#include": "Production/JobConfig/mixing/NoPrimary.fcl"}}
     },
     "input_data": ["dts.mu2e.{desc}.{campaign}.art"],
