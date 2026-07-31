@@ -157,6 +157,12 @@ def _creation_date_key(names):
     return lambda name: dates.get(name, datetime.min)
 
 
+def _order_key_for(latest_by, names):
+    """Resolve the --latest-by choice to an order_key for
+    _group_by_description. 'dsconf' -> None: lexicographic, zero SAM calls."""
+    return _creation_date_key(names) if latest_by == "time" else None
+
+
 def _narrow_to_latest_release(names):
     """From datasets spanning several releases of a family, keep only those of
     the single latest release (max campaign tag). The family wildcard discovers
@@ -278,7 +284,8 @@ def _emit(args):
     names = fetch_definitions(defname, args.user)
     if not family_wide:
         names = _narrow_to_latest_release(names)
-    rows, skipped = latest_per_description(names)
+    rows, skipped = latest_per_description(names,
+                                           _order_key_for(args.latest_by, names))
     latest = [latest_name for _, _, latest_name, _ in rows]
 
     # If the template names explicit descs (and has no {desc} wildcard), restrict
@@ -323,6 +330,16 @@ def main():
                          "(every non-latest version per description) instead of the "
                          "latest -- the inverse of the default output. Honors "
                          "--show-count (group version count) and --complete-only.")
+    ap.add_argument("--latest-by", choices=("dsconf", "time"), default="dsconf",
+                    help="how to pick the latest dataset per description: "
+                         "'dsconf' (default) sorts dsconf lexicographically -- "
+                         "correct within one naming series, and free of SAM "
+                         "queries; 'time' sorts by SAM definition creation "
+                         "date -- use it when a description spans naming "
+                         "series, where lex order is meaningless (the ntuple "
+                         "series MDC2020-001 sorts BELOW "
+                         "MDC2020aw_best_v1_3_v06_06_00 because '-' < 'a', yet "
+                         "was created six months later)")
     ap.add_argument("--emit", choices=("digi", "reco", "ntuple", "mix"),
                     help="synthesize a json2jobdef config for this stage, one entry "
                          "per latest input dataset (POMS-free chain hop)")
@@ -376,7 +393,8 @@ def main():
         ap.error("provide --defname/--user, --campaign, or --stdin")
 
     if args.superseded:
-        srows, sk2 = superseded_per_description(names)
+        srows, sk2 = superseded_per_description(
+            names, _order_key_for(args.latest_by, names))
         if args.complete_only:
             complete = set(_filter_complete([r[2] for r in srows]))
             srows = [r for r in srows if r[2] in complete]
@@ -386,7 +404,8 @@ def main():
             _vlog(f"# skipped {len(sk2)} name(s) with <5 dotted fields")
         return
 
-    rows, skipped = latest_per_description(names)
+    rows, skipped = latest_per_description(names,
+                                           _order_key_for(args.latest_by, names))
 
     if args.complete_only:
         complete = set(_filter_complete([r[2] for r in rows]))

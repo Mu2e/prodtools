@@ -494,11 +494,34 @@ configs for the next chain stage from `templates/<campaign>/<stage>.json`:
 ```bash
 latestDatasets --defname 'dig.mu2e.%.MDC2025%.art' --show-count
 latestDatasets --emit reco --campaign MDC2025ap --skip-produced
+
+# Datasets replaced by a newer dsconf, instead of the latest
+latestDatasets --defname 'nts.mu2e.%.MDC2020%.root' --superseded
+
+# Order within a description by SAM creation date instead of dsconf lex order
+latestDatasets --defname 'nts.mu2e.CeEndpointMix1BBTriggered.MDC2020%.root' --latest-by time
 ```
 
-Flags: `--defname`, `--user`, `--stdin`, `--show-count`,
-`--emit {digi,reco,ntuple,mix}`, `--campaign`, `--templates-dir`,
-`--dsconf`, `--complete-only`, `--skip-produced`, `-v/--verbose`.
+Flags: `--defname`, `--user`, `--stdin`, `--show-count`, `--superseded`,
+`--latest-by {dsconf,time}`, `--emit {digi,reco,ntuple,mix}`,
+`--campaign`, `--templates-dir`, `--dsconf`, `--complete-only`,
+`--skip-produced`, `-v/--verbose`.
+
+- `--superseded` prints the inverse of the default listing: every
+  non-latest version per description (the datasets a newer dsconf
+  replaced), honoring `--show-count` and `--complete-only`. It cannot be
+  combined with `--emit` or `--skip-produced`.
+- `--latest-by` picks how "latest" is decided within a description.
+  `dsconf` (the default) sorts the dsconf field lexicographically —
+  correct within a single naming series, and issues zero SAM queries, so
+  it is what `--emit` relies on for a fast chain hop. `time` sorts by
+  each dataset's SAM definition creation date instead — use it when a
+  description spans naming series, where lex order is meaningless (the
+  ntuple series `MDC2020-001` sorts BELOW
+  `MDC2020aw_best_v1_3_v06_06_00` lexicographically, because `-` < `a`,
+  even though it was created six months later). `time` mode queries SAM
+  only for contended descriptions (2+ versions) and applies identically
+  in lister mode, `--superseded`, and `--emit`.
 
 ### `mkrecovery`
 
@@ -893,3 +916,12 @@ by this repo — that is a one-time operator step (section 11
 - `MU2E_MAX_QUEUED is not an integer: '<value>'` — the env var must
   parse as an int; unset it or fix the value, or pass `--max-queued`
   directly to override it for one run.
+- `latestDatasets: --superseded cannot be combined with --emit or
+  --skip-produced` — `--superseded` is a lister-mode-only listing; drop
+  it to use `--emit`/`--skip-produced`, or drop those to list superseded
+  datasets.
+- `latestDatasets: --latest-by time: SAM has no creation date for:
+  <names>` — a contended description (2+ dsconf versions) has a member
+  with no SAM definition creation date; `--latest-by time` fails loud
+  rather than silently falling back to dsconf order, which would answer
+  a time-ordering question with a lexicographic result.

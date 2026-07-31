@@ -3422,6 +3422,21 @@ class TestLatestPerDescription(unittest.TestCase):
                 latestDatasets._creation_date_key([dated, undated])
         self.assertIn(undated, str(cm.exception))
 
+    def test_dsconf_mode_makes_no_sam_calls(self):
+        """The default path must stay free of SAM round trips -- the --emit
+        chain relies on it."""
+        from utils import latestDatasets
+
+        def boom(name):
+            raise AssertionError(f"SAM queried in dsconf mode: {name}")
+
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=boom):
+            key = latestDatasets._order_key_for(
+                "dsconf", ["nts.mu2e.A.MDC2020-000.root",
+                           "nts.mu2e.A.MDC2020-001.root"])
+        self.assertIsNone(key)
+
 
 # ---------------------------------------------------------------------------
 # 33. latestDatasets --emit arg validation
