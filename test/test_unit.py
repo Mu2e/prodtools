@@ -3437,6 +3437,75 @@ class TestLatestPerDescription(unittest.TestCase):
                            "nts.mu2e.A.MDC2020-001.root"])
         self.assertIsNone(key)
 
+    def test_duplicate_name_not_split_across_latest_and_superseded(self):
+        """A repeated input name (e.g. `cat a.txt b.txt | --stdin`) must not
+        land in both the latest and superseded listings -- that would
+        nominate a live dataset for retirement."""
+        from utils.latestDatasets import (latest_per_description,
+                                          superseded_per_description)
+        names = ["dts.mu2e.A.MDC2025ap.art", "dts.mu2e.A.MDC2025ap.art"]
+        rows, _ = latest_per_description(names)
+        self.assertEqual([r[2] for r in rows], ["dts.mu2e.A.MDC2025ap.art"])
+        srows, _ = superseded_per_description(names)
+        self.assertEqual(srows, [])
+
+    def test_order_key_for_time_ranks_by_mocked_date(self):
+        """_order_key_for('time', ...) must return a callable that ranks by
+        SAM creation date, and that key must actually change the winner
+        latest_per_description picks (proves the wiring isn't a no-op)."""
+        import datetime as _dt
+        from utils import latestDatasets
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: dates[n]):
+            key = latestDatasets._order_key_for("time", [stale, newest])
+        self.assertIsNotNone(key)
+        rows, _ = latestDatasets.latest_per_description([stale, newest], key)
+        self.assertEqual(rows[0][2], newest)
+
+    def test_main_stdin_latest_by_time_picks_newest_by_date(self):
+        """End-to-end: main() with --stdin --latest-by time must print the
+        newest-by-date name, not the lexicographic winner (which would be
+        `stale` here since '-' < 'a'). Mutating _order_key_for into a no-op
+        (lambda latest_by, names: None) makes this fail."""
+        import contextlib
+        import datetime as _dt
+        from utils import latestDatasets
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        stdin = io.StringIO(f"{stale}\n{newest}\n")
+        buf = io.StringIO()
+        with patch.object(sys, 'argv', ['latestDatasets', '--stdin', '--latest-by', 'time']), \
+             patch.object(sys, 'stdin', stdin), \
+             patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: dates[n]), \
+             contextlib.redirect_stdout(buf):
+            latestDatasets.main()
+        self.assertEqual(buf.getvalue().strip(), newest)
+
+    def test_main_superseded_latest_by_time_lists_the_older_one(self):
+        """Complement of the above: --superseded --latest-by time must list
+        the OLDER-by-date name (`stale`), not the newer one."""
+        import contextlib
+        import datetime as _dt
+        from utils import latestDatasets
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        stdin = io.StringIO(f"{stale}\n{newest}\n")
+        buf = io.StringIO()
+        with patch.object(sys, 'argv',
+                          ['latestDatasets', '--stdin', '--superseded', '--latest-by', 'time']), \
+             patch.object(sys, 'stdin', stdin), \
+             patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: dates[n]), \
+             contextlib.redirect_stdout(buf):
+            latestDatasets.main()
+        self.assertEqual(buf.getvalue().strip(), stale)
+
 
 # ---------------------------------------------------------------------------
 # 33. latestDatasets --emit arg validation

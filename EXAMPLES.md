@@ -520,8 +520,19 @@ Flags: `--defname`, `--user`, `--stdin`, `--show-count`, `--superseded`,
   ntuple series `MDC2020-001` sorts BELOW
   `MDC2020aw_best_v1_3_v06_06_00` lexicographically, because `-` < `a`,
   even though it was created six months later). `time` mode queries SAM
-  only for contended descriptions (2+ versions) and applies identically
-  in lister mode, `--superseded`, and `--emit`.
+  only for contended descriptions (2+ versions).
+- `--latest-by time` does NOT apply identically everywhere. `--emit
+  ntuple` and lister `--campaign` first narrow the discovered inputs to
+  the single latest release (max campaign tag, a dsconf-lexicographic
+  operation) before picking latest-per-description; that narrowing is
+  dsconf-order logic, so it runs only under `dsconf` mode — under `time`
+  mode it would delete newer-by-date datasets before the creation-date
+  key ever saw them, silently defeating `--latest-by time`. It is
+  therefore skipped in `time` mode for those two call sites.
+  `--emit digi`/`mix`/`reco` (family-wide discovery) and plain
+  `--defname`/`--stdin` lister mode (including `--superseded` fed from
+  either) have no release-narrowing step, so `time` mode there behaves
+  as the paragraph above describes with no caveat.
 
 ### `mkrecovery`
 

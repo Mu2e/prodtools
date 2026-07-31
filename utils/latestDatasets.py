@@ -65,10 +65,18 @@ def _group_by_description(names, order_key=None):
     group counts as latest. Default (None) orders by dsconf lexicographically,
     which tracks campaign letter then version WITHIN a single naming series.
     Pass a key when a description spans series, where lex order is meaningless
-    -- see _creation_date_key."""
+    -- see _creation_date_key.
+
+    Input names are deduplicated (order preserved) before grouping, so a
+    repeated name from a concatenated source (e.g. `cat a.txt b.txt |
+    --stdin`) is never split across both the latest and superseded listings.
+
+    Tiebreak: when order_key is given and two members rank equal, dsconf
+    (lexicographic) is the secondary key, so output order is deterministic
+    even if SAM ever returns day-granularity or colliding dates."""
     groups = defaultdict(list)
     skipped = []
-    for name in names:
+    for name in dict.fromkeys(names):
         parsed = parse_name(name)
         if parsed is None:
             skipped.append(name)
@@ -78,7 +86,7 @@ def _group_by_description(names, order_key=None):
     if order_key is None:
         rank = lambda item: item[0]             # item = (dsconf, name)
     else:
-        rank = lambda item: order_key(item[1])
+        rank = lambda item: (order_key(item[1]), item[0])
     for items in groups.values():
         items.sort(key=rank)
     return groups, skipped
@@ -131,9 +139,12 @@ def _creation_date_key(names):
     to dsconf order would answer a --latest-by time question with a
     lexicographic result -- the exact bug this mode exists to fix, made
     invisible. definition_creation_date is fail-soft and returns None on a SAM
-    error, so an outage lands here too and surfaces as a loud failure."""
+    error, so an outage lands here too and surfaces as a loud failure.
+
+    Input names are deduplicated (order preserved) first, so a repeated name
+    is never double-counted as contended and never costs a second SAM call."""
     by_desc = defaultdict(list)
-    for name in names:
+    for name in dict.fromkeys(names):
         parsed = parse_name(name)
         if parsed is not None:
             by_desc[parsed[0]].append(name)
@@ -282,7 +293,10 @@ def _emit(args):
     _vlog(f"# discovering inputs: {defname}")
 
     names = fetch_definitions(defname, args.user)
-    if not family_wide:
+    # Release narrowing ranks campaign tags as strings and DROPS the losers, so
+    # in time mode it would delete newer-by-date datasets before the key sees
+    # them. It is dsconf-order logic; skip it when the caller asked for time.
+    if not family_wide and args.latest_by == "dsconf":
         names = _narrow_to_latest_release(names)
     rows, skipped = latest_per_description(names,
                                            _order_key_for(args.latest_by, names))
@@ -339,7 +353,11 @@ def main():
                          "series, where lex order is meaningless (the ntuple "
                          "series MDC2020-001 sorts BELOW "
                          "MDC2020aw_best_v1_3_v06_06_00 because '-' < 'a', yet "
-                         "was created six months later)")
+                         "was created six months later); time mode SKIPS the "
+                         "latest-release narrowing used by --emit ntuple and "
+                         "lister --campaign, since that narrowing is dsconf-"
+                         "order logic and would delete newer-by-date datasets "
+                         "before this key ever saw them")
     ap.add_argument("--emit", choices=("digi", "reco", "ntuple", "mix"),
                     help="synthesize a json2jobdef config for this stage, one entry "
                          "per latest input dataset (POMS-free chain hop)")
@@ -388,7 +406,11 @@ def main():
     elif args.campaign:
         # Trailing % so a family tag (MDC2025) matches its releases (MDC2025ap).
         names = fetch_definitions(f"dts.mu2e.%.{args.campaign}%.art", args.user)
-        names = _narrow_to_latest_release(names)
+        # Same reason as the --emit gate above: narrowing is dsconf-order logic
+        # and would delete newer-by-date datasets before --latest-by time's key
+        # ever sees them.
+        if args.latest_by == "dsconf":
+            names = _narrow_to_latest_release(names)
     else:
         ap.error("provide --defname/--user, --campaign, or --stdin")
 
