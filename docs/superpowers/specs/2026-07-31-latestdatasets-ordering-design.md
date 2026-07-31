@@ -224,3 +224,54 @@ the function then **drops** every name whose campaign differs — so the newer
 ranking last. That is release narrowing, not version selection, and it needs
 its own decision about what "latest release" means when two series coexist. Not
 addressed here.
+
+**Implemented mitigation.** Rather than change that function, its two call
+sites (`_emit()` for the `ntuple` stage, and the lister's `--campaign` branch)
+now skip narrowing entirely when `--latest-by time` is in effect: release
+narrowing is campaign-order logic and would delete newer-by-date names before
+the key ever saw them. Ordering by campaign tag is still wrong on its own
+terms; it is simply no longer able to defeat time mode.
+
+## Measured: neither key is universally correct
+
+Checked against live SAM on 2026-07-31. Lexicographic and time ordering
+disagree **in both directions** on real production definitions, which is why
+`--latest-by` is a flag rather than a replacement:
+
+- **Time right, lex wrong** — 8 of 17 contended descriptions in
+  `dig.mu2e.%.Run1B%.art`. `Run1Bab2_best_v1_2` (created 2026-02-10) loses
+  lexicographically to `Run1Bab_best_v1_2` (2026-02-01) because `'_'` (0x5F)
+  sorts above `'2'` (0x32) — a revision losing to the thing it revises.
+- **Lex right, time wrong** — `NeutralsFlashCat` in `dts.mu2e.%.MDC2025%.art`.
+  `MDC2025ac` was re-created five hours *after* `MDC2025ad` on the same day, so
+  pure-time ordering would hand a chain the older campaign's data. Remakes and
+  backfills are routine in this project, so this is a live hazard.
+
+Reproduce with
+`/exp/mu2e/data/users/oksuzian/claude-scratch/probes/inversion_check.py`.
+
+## Residual follow-ups (recorded, not fixed)
+
+Surfaced by the final whole-branch review and deliberately left for a later
+pass. None is load-bearing for this feature.
+
+1. **The MCP server does not get the fix.** `mcp/src/prodtools_mcp/tools/
+   discovery.py:96` calls `latest_per_description(names)` with the default key,
+   so `find_datasets(latest_only=True)` still returns the lexicographic winner.
+   Since `CLAUDE.md` names MCP the preferred interface for status questions,
+   "end to end" currently means CLI-only. Deciding whether MCP should expose an
+   ordering choice, or always order by time, needs its own design pass.
+2. **A parseable non-definition name prints a SAM error to stdout.**
+   `utils/samweb_wrapper.py:182` uses a bare `print`, reached from
+   `_creation_date_key`. stdout is meant to stay machine-readable; the run does
+   exit non-zero, so the damage is contained. Fix belongs in `latestDatasets`
+   (redirect or pre-check), since `samweb_wrapper` is out of scope. The
+   fail-loud message ("SAM has no creation date for") also mis-describes both
+   real causes: a name that is not a definition, and a SAM outage.
+3. **The module docstring omits the narrowing caveat** that the `argparse` help
+   and `EXAMPLES.md` now carry.
+4. **An `EXAMPLES.md` troubleshooting entry is not a literal quote.** It gives
+   `latestDatasets: --superseded cannot be combined with ...`; `argparse`
+   actually emits `latestDatasets: error: --superseded cannot be combined
+   with ...`. `docs/EXAMPLES_schema.md` requires literal messages, so correct
+   it in the schema and regenerate — never by hand-editing `EXAMPLES.md`.
