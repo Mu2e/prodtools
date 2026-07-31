@@ -10,12 +10,19 @@ This tool queries `samweb list-definitions` (or reads names from stdin),
 groups by description, and prints the lexicographically-greatest dsconf
 per group. For Mu2e dsconfs like `MDC2025af_best_v1_3`, lex order tracks
 campaign letter then version.
+
+`--latest-by time` orders by SAM definition creation date instead. Use it
+when a description's dsconfs come from more than one naming series, where
+lex order is meaningless: the ntuple series `MDC2020-001` sorts BELOW the
+release series `MDC2020aw_best_v1_3_v06_06_00` ('-' < 'a') even though it
+was created six months later.
 """
 
 import argparse
 import os
 import sys
 from collections import defaultdict
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -48,8 +55,16 @@ def fetch_definitions(defname_pattern, user):
     return definitions_matching(defname=defname_pattern, user=user)
 
 
-def latest_per_description(names):
-    """Return list of (description, latest_dsconf, latest_name, count)."""
+def _group_by_description(names, order_key=None):
+    """Group dataset names by description (3rd field), each group's members
+    sorted ascending. Returns (groups, skipped) where groups maps
+    description -> [(dsconf, name), ...] and skipped holds unparseable names.
+
+    order_key: optional callable name -> sortable, deciding which member of a
+    group counts as latest. Default (None) orders by dsconf lexicographically,
+    which tracks campaign letter then version WITHIN a single naming series.
+    Pass a key when a description spans series, where lex order is meaningless
+    -- see _creation_date_key."""
     groups = defaultdict(list)
     skipped = []
     for name in names:
@@ -59,13 +74,47 @@ def latest_per_description(names):
             continue
         description, dsconf = parsed
         groups[description].append((dsconf, name))
+    if order_key is None:
+        rank = lambda item: item[0]             # item = (dsconf, name)
+    else:
+        rank = lambda item: order_key(item[1])
+    for items in groups.values():
+        items.sort(key=rank)
+    return groups, skipped
 
+
+def latest_per_description(names, order_key=None):
+    """Return list of (description, latest_dsconf, latest_name, count).
+
+    order_key decides which member of each group wins -- see
+    _group_by_description. Row order is always by description, independent of
+    the key: selection changes, presentation stays stable."""
+    groups, skipped = _group_by_description(names, order_key)
     rows = []
     for description, items in groups.items():
-        items.sort(key=lambda x: x[0])
         latest_dsconf, latest_name = items[-1]
         rows.append((description, latest_dsconf, latest_name, len(items)))
     rows.sort(key=lambda r: r[0])
+    return rows, skipped
+
+
+def superseded_per_description(names, order_key=None):
+    """Inverse of latest_per_description: every group member EXCEPT the latest,
+    i.e. datasets replaced by a newer sibling of the same description.
+    Returns (rows, skipped) with rows = (description, dsconf, name, count)
+    sorted by (description, dsconf); count is the total number of versions in
+    that description's group. Descriptions with a single version contribute
+    nothing (they have no replacement).
+
+    MUST be given the same order_key as latest_per_description -- the two are
+    set complements, so differing keys would put a dataset in both listings or
+    in neither."""
+    groups, skipped = _group_by_description(names, order_key)
+    rows = []
+    for description, items in groups.items():
+        for dsconf, name in items[:-1]:      # all but the latest = superseded
+            rows.append((description, dsconf, name, len(items)))
+    rows.sort(key=lambda r: (r[0], r[1]))
     return rows, skipped
 
 
@@ -230,6 +279,11 @@ def main():
                     help="read definition names from stdin instead of querying samweb")
     ap.add_argument("--show-count", action="store_true",
                     help="include a column with how many dsconfs were collapsed per description")
+    ap.add_argument("--superseded", action="store_true",
+                    help="list mode: print the datasets REPLACED by a newer dsconf "
+                         "(every non-latest version per description) instead of the "
+                         "latest -- the inverse of the default output. Honors "
+                         "--show-count (group version count) and --complete-only.")
     ap.add_argument("--emit", choices=("digi", "reco", "ntuple", "mix"),
                     help="synthesize a json2jobdef config for this stage, one entry "
                          "per latest input dataset (POMS-free chain hop)")
@@ -262,6 +316,9 @@ def main():
     global _VERBOSE
     _VERBOSE = args.verbose
 
+    if args.superseded and (args.emit or args.skip_produced):
+        ap.error("--superseded cannot be combined with --emit or --skip-produced")
+
     if args.emit:
         _emit(args)
         return
@@ -278,6 +335,17 @@ def main():
         names = _narrow_to_latest_release(names)
     else:
         ap.error("provide --defname/--user, --campaign, or --stdin")
+
+    if args.superseded:
+        srows, sk2 = superseded_per_description(names)
+        if args.complete_only:
+            complete = set(_filter_complete([r[2] for r in srows]))
+            srows = [r for r in srows if r[2] in complete]
+        for _, _, name, count in srows:
+            print(f"{count:3d}  {name}" if args.show_count else name)
+        if sk2:
+            _vlog(f"# skipped {len(sk2)} name(s) with <5 dotted fields")
+        return
 
     rows, skipped = latest_per_description(names)
 

@@ -3315,6 +3315,77 @@ class TestLatestPerDescription(unittest.TestCase):
             "dts.mu2e.FlatGamma.MDC2025ap.art",
         })
 
+    def test_superseded_is_complement_of_latest(self):
+        """superseded_per_description returns every non-latest version, and is
+        the exact set complement of the latest names."""
+        from utils.latestDatasets import (latest_per_description,
+                                          superseded_per_description)
+        names = [
+            "dts.mu2e.A.MDC2025ac.art",   # A: superseded (ac < ao < ap)
+            "dts.mu2e.A.MDC2025ao.art",   # A: superseded
+            "dts.mu2e.A.MDC2025ap.art",   # A: latest
+            "dts.mu2e.B.MDC2025ap.art",   # B: single version → never superseded
+        ]
+        srows, skipped = superseded_per_description(names)
+        sup = {name for _, _, name, _ in srows}
+        self.assertEqual(sup, {
+            "dts.mu2e.A.MDC2025ac.art",
+            "dts.mu2e.A.MDC2025ao.art",
+        })
+        self.assertEqual(skipped, [])
+        # count column reports the group's total version count
+        self.assertEqual({name: count for _, _, name, count in srows},
+                         {"dts.mu2e.A.MDC2025ac.art": 3,
+                          "dts.mu2e.A.MDC2025ao.art": 3})
+        # exact complement of the latest set (over parseable names)
+        latest = {name for _, _, name, _ in latest_per_description(names)[0]}
+        allnames = set(names)
+        self.assertEqual(sup, allnames - latest)
+
+    def test_superseded_skips_unparseable(self):
+        from utils.latestDatasets import superseded_per_description
+        srows, skipped = superseded_per_description(
+            ["not-a-name", "dts.mu2e.A.MDC2025ap.art"])
+        self.assertEqual(srows, [])          # single parseable version → nothing
+        self.assertEqual(len(skipped), 1)
+
+    def test_injected_order_key_overrides_dsconf(self):
+        """Real MDC2020 case: the ntuple series sorts BELOW the release series
+        lexicographically ('-' < 'a') but was created six months later. An
+        injected date key must beat dsconf order."""
+        import datetime as _dt
+        from utils.latestDatasets import latest_per_description
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        # dsconf order picks the stale one -- this is the bug being fixed
+        rows, _ = latest_per_description([stale, newest])
+        self.assertEqual(rows[0][2], stale)
+        # the injected key picks the actually-newest
+        rows, _ = latest_per_description([stale, newest], order_key=dates.__getitem__)
+        self.assertEqual(rows[0][2], newest)
+
+    def test_superseded_honors_same_order_key(self):
+        """--superseded means 'every version that is not the latest', so it must
+        order by the SAME key -- otherwise a dataset lands in both listings or
+        in neither."""
+        import datetime as _dt
+        from utils.latestDatasets import (latest_per_description,
+                                          superseded_per_description)
+        a_stale = "nts.mu2e.A.MDC2020aw_best_v1_3_v06_06_00.root"
+        a_new = "nts.mu2e.A.MDC2020-001.root"
+        b_only = "nts.mu2e.B.MDC2020-001.root"
+        names = [a_stale, a_new, b_only]
+        dates = {a_stale: _dt.datetime(2025, 9, 6),
+                 a_new: _dt.datetime(2026, 3, 10),
+                 b_only: _dt.datetime(2026, 3, 10)}
+        key = dates.__getitem__
+        latest = {n for _, _, n, _ in latest_per_description(names, key)[0]}
+        sup = {n for _, _, n, _ in superseded_per_description(names, key)[0]}
+        self.assertEqual(latest, {a_new, b_only})
+        self.assertEqual(sup, {a_stale})
+        self.assertEqual(sup, set(names) - latest)      # exact complement
+
 
 # ---------------------------------------------------------------------------
 # 33. latestDatasets --emit arg validation
