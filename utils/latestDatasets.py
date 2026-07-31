@@ -27,7 +27,8 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import Mu2eName
-from utils.samweb_wrapper import dataset_file_count, definitions_matching
+from utils.samweb_wrapper import (dataset_file_count, definition_creation_date,
+                                  definitions_matching)
 
 
 _VERBOSE = False
@@ -116,6 +117,44 @@ def superseded_per_description(names, order_key=None):
             rows.append((description, dsconf, name, len(items)))
     rows.sort(key=lambda r: (r[0], r[1]))
     return rows, skipped
+
+
+def _creation_date_key(names):
+    """Build an order_key ranking datasets by SAM definition creation date.
+
+    Only CONTENDED descriptions (2+ versions) are queried: a single-version
+    group has nothing to compare against, so its date is never needed. On a
+    ~20-desc --emit run where most descs have one version, that is ~2 SAM
+    calls instead of ~20.
+
+    Fails loudly if SAM has no date for a contended dataset. Quietly reverting
+    to dsconf order would answer a --latest-by time question with a
+    lexicographic result -- the exact bug this mode exists to fix, made
+    invisible. definition_creation_date is fail-soft and returns None on a SAM
+    error, so an outage lands here too and surfaces as a loud failure."""
+    by_desc = defaultdict(list)
+    for name in names:
+        parsed = parse_name(name)
+        if parsed is not None:
+            by_desc[parsed[0]].append(name)
+    contended = [n for group in by_desc.values() if len(group) > 1 for n in group]
+    if contended:
+        # Status to stderr (stdout stays machine-readable): one SAM round trip
+        # per dataset is the slow part, so signal it even when muted.
+        print(f"Querying creation dates for {len(contended)} dataset(s), "
+              f"please wait...", file=sys.stderr)
+    dates = {}
+    for name in contended:
+        dates[name] = definition_creation_date(name)
+        _vlog(f"# created {dates[name]}: {name}")
+    undated = sorted(n for n, d in dates.items() if d is None)
+    if undated:
+        sys.exit("latestDatasets: --latest-by time: SAM has no creation date "
+                 "for:\n" + "\n".join(f"  {n}" for n in undated))
+    # Uncontended names were never queried, so they are absent from `dates`.
+    # Their rank is never consulted (they are alone in their group), but a bare
+    # dates[name] would raise KeyError.
+    return lambda name: dates.get(name, datetime.min)
 
 
 def _narrow_to_latest_release(names):

@@ -3386,6 +3386,42 @@ class TestLatestPerDescription(unittest.TestCase):
         self.assertEqual(sup, {a_stale})
         self.assertEqual(sup, set(names) - latest)      # exact complement
 
+    def test_creation_date_key_queries_only_contended(self):
+        """Single-version descriptions have nothing to compare against, so they
+        must never cost a SAM call."""
+        import datetime as _dt
+        from utils import latestDatasets
+        a_one = "nts.mu2e.A.MDC2020aw_best_v1_3_v06_06_00.root"   # A: contended
+        a_two = "nts.mu2e.A.MDC2020-001.root"                     # A: contended
+        b_only = "nts.mu2e.B.MDC2020-001.root"                    # B: singleton
+        asked = []
+
+        def fake(name):
+            asked.append(name)
+            return _dt.datetime(2026, 3, 10)
+
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=fake):
+            key = latestDatasets._creation_date_key([a_one, a_two, b_only])
+        self.assertEqual(set(asked), {a_one, a_two})
+        self.assertNotIn(b_only, asked)
+        # the unqueried singleton still gets a usable rank, not a KeyError
+        self.assertEqual(key(b_only), _dt.datetime.min)
+
+    def test_creation_date_key_fails_loud_on_missing_date(self):
+        """No date for a contended dataset must abort, naming it -- never
+        silently revert to lexicographic order."""
+        import datetime as _dt
+        from utils import latestDatasets
+        dated = "nts.mu2e.A.MDC2020aw_best_v1_3_v06_06_00.root"
+        undated = "nts.mu2e.A.MDC2020-001.root"
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: None if n == undated
+                          else _dt.datetime(2025, 9, 6)):
+            with self.assertRaises(SystemExit) as cm:
+                latestDatasets._creation_date_key([dated, undated])
+        self.assertIn(undated, str(cm.exception))
+
 
 # ---------------------------------------------------------------------------
 # 33. latestDatasets --emit arg validation
