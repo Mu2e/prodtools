@@ -154,12 +154,40 @@ CosmicCRYAll   cnf njobs 12500   (capacity)
 The cnf-based comparison used by `latestDatasets --complete-only` can never be
 satisfied for such a campaign. This column does not inherit that bug.
 
-### Multiple campaigns producing one dataset
+### Multiple campaigns producing one dataset — take the MAX, not the sum
 
-The same tarball may be enqueued more than once as separate index windows —
-`RPCInternalPhysical` appears at 250 and again at 1667 in the ledger's history.
-Expected is the **sum** of `njobs` over all campaigns producing that dataset.
-Not exercised by `MDC2025au_best_v1_5` (all 22 are 1:1), but real in the data.
+A tarball may be enqueued more than once. Campaign `njobs` is an **absolute
+target index count**, not an increment: a later campaign resumes via its cursor
+from where the earlier one stopped, so the two **overlap** rather than
+partition. Expected is therefore `max(njobs)` across the campaigns producing a
+dataset.
+
+An earlier draft of this spec said "sum", and cited `RPCInternalPhysical` at
+250 then 1667 as the justifying example. That example disproves it. Measured
+2026-08-01 from the submission rows' index ranges:
+
+```
+RPCExternalPhysicalMix1BB            RPCInternalPhysicalMix1BB
+  row 48:   0..49    (50)              row 49:    0..249   (250)
+  row 61:  50..549  (500)              row 60:  250..749   (500)
+  row 67: 550..833  (284)              row 66:  750..1249  (500)
+                                       row 68: 1250..1666  (417)
+  union: 0..833  = 834                 union: 0..1666 = 1667
+  SAM holds:       834                 SAM holds:      1667
+  max(njobs) = max(50,834)  = 834      max(250,1667) = 1667   <- correct
+  sum(njobs) = 50+834       = 884      250+1667      = 1917   <- overstates
+```
+
+Summing double-counts the earlier campaign's window exactly, so both datasets —
+which are complete — reported `834/884 INCOMPLETE` and `1667/1917 INCOMPLETE`.
+
+`max` is a no-op for the 22 `MDC2025au_best_v1_5` digi campaigns, which are 1:1.
+
+The exact ground truth, if ever needed, is the union of `indices_json` over the
+`submissions` rows for that tarball — it handles overlaps *and* recovery
+children (rows 76/78/79 resubmitted single indices already inside earlier
+ranges). `max(njobs)` is the cheaper equivalent and also covers a campaign that
+is enqueued but has not yet submitted anything.
 
 ## Error handling
 
@@ -207,8 +235,10 @@ Unit tests inject `locate`, so no tarball or network access occurs:
 3. **Unresolvable tarball** — `locate` returns `None`; the tarball appears in
    `failures`, contributes nothing to `expected`, and the other campaigns still
    resolve normally.
-4. **Summed across campaigns** — two campaigns (250 and 1667) yielding the same
-   output dataset report `.../1917`.
+4. **Overlapping campaigns take the max** — two campaigns (250 and 1667)
+   yielding the same output dataset report `.../1667`, not `.../1917`. This is
+   the real `RPCInternalPhysical` case, where summing double-counted the first
+   window and made a complete dataset read `1667/1917 INCOMPLETE`.
 5. **Window, not capacity** — a campaign whose entry says 2500 while the cnf
    carries 12500 reports `/2500`. Guards the regression this design exists to
    avoid.
