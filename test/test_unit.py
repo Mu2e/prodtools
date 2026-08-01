@@ -8478,6 +8478,44 @@ class TestLedgerExpected(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 42. listNewDatasets completeness column (ledger-backed)
+# ---------------------------------------------------------------------------
+
+class TestListerCompleteness(unittest.TestCase):
+    """The COMPLETENESS column formats <landed>/<expected> from the ledger map.
+    listNewDatasets uses bare imports, so utils/ must be on sys.path."""
+
+    @classmethod
+    def setUpClass(cls):
+        d = os.path.join(os.path.dirname(__file__), '..', 'utils')
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        import listNewDatasets
+        cls.lnd = listNewDatasets
+
+    DS = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'
+
+    def _lister(self, expected, counts):
+        lister = self.lnd.DatasetLister(completeness=True)
+        lister._expected = expected
+        lister._total_files = lambda ds: counts.get(ds, 0)
+        return lister
+
+    def test_reports_landed_over_expected_with_incomplete_marker(self):
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432})
+        self.assertEqual(lister._get_completeness(self.DS),
+                         "1432/2500 INCOMPLETE")
+
+    def test_no_marker_once_landed_reaches_expected(self):
+        lister = self._lister({self.DS: 2500}, {self.DS: 2500})
+        self.assertEqual(lister._get_completeness(self.DS), "2500/2500")
+
+    def test_dataset_from_no_campaign_reports_dash(self):
+        lister = self._lister({}, {self.DS: 17})
+        self.assertEqual(lister._get_completeness(self.DS), "—")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
