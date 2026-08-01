@@ -8395,6 +8395,87 @@ class TestRecoveryResourceArgv(unittest.TestCase):
         self.assertIn('--expected-lifetime', cmd)
 
 
+# ---------------------------------------------------------------------------
+# 41. ledger_expected (utils/submissions.py)
+# ---------------------------------------------------------------------------
+
+class TestLedgerExpected(unittest.TestCase):
+    """Expected job counts per output dataset, sourced from the submission
+    ledger. The dataset NAME comes from the cnf tarball; the COUNT comes from
+    the ledger entry's njobs (the submitted window)."""
+
+    CRY = 'cnf.mu2e.CosmicCRYAll.MDC2025au_best_v1_5.0.tar'
+    MDS = 'cnf.mu2e.ensembleMDS3c.MDC2025au_best_v1_5.0.tar'
+    OTHER = 'cnf.mu2e.NoPrimary.MDC2025ar_best_v1_3.0.tar'
+    OUT = {
+        CRY: ['dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'],
+        MDS: ['dig.mu2e.ensembleMDS3cOnSpill.MDC2025au_best_v1_5.art'],
+        OTHER: ['dig.mu2e.NoPrimaryOnSpill.MDC2025ar_best_v1_3.art'],
+    }
+    CRY_DS = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'
+    MDS_DS = 'dig.mu2e.ensembleMDS3cOnSpill.MDC2025au_best_v1_5.art'
+
+    def _call(self, camps, dsconfs=None, unlocatable=()):
+        """Run ledger_expected with the tarball layer faked out.
+
+        locate is injected; Mu2eJobPars is reduced to identity so the 'path'
+        is just the tarball name, which extract_ then maps to datasets."""
+        from utils import submissions
+        asked = []
+
+        def fake_locate(tarball):
+            asked.append(tarball)
+            return None if tarball in unlocatable else tarball
+
+        with patch.object(submissions, 'Mu2eJobPars', lambda p: p), \
+             patch.object(submissions, 'extract_datasets_from_tarball',
+                          lambda job, njobs: self.OUT[job]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=camps):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', dsconfs=dsconfs, locate=fake_locate)
+        return expected, failures, asked
+
+    def test_maps_output_dataset_to_njobs(self):
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}},
+                 {'tarball': self.MDS, 'entry': {'njobs': 496}}]
+        expected, failures, _ = self._call(camps)
+        self.assertEqual(expected, {self.CRY_DS: 2500, self.MDS_DS: 496})
+        self.assertEqual(failures, {})
+
+    def test_uses_submitted_window_not_cnf_capacity(self):
+        """CosmicCRYAll's cnf carries 12500 capacity; the ledger entry says the
+        2500 that were actually submitted. The ledger value must win."""
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}}]
+        expected, _, _ = self._call(camps)
+        self.assertEqual(expected[self.CRY_DS], 2500)
+
+    def test_sums_when_one_tarball_is_enqueued_twice(self):
+        """A tarball can be enqueued as several index windows (RPCInternal-
+        Physical went out at 250 then 1667). Expected is their sum, and the
+        tarball is resolved only once."""
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 250}},
+                 {'tarball': self.CRY, 'entry': {'njobs': 1667}}]
+        expected, _, asked = self._call(camps)
+        self.assertEqual(expected[self.CRY_DS], 1917)
+        self.assertEqual(asked, [self.CRY])
+
+    def test_unresolvable_tarball_yields_failure_not_a_number(self):
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}},
+                 {'tarball': self.MDS, 'entry': {'njobs': 496}}]
+        expected, failures, _ = self._call(camps, unlocatable={self.CRY})
+        self.assertNotIn(self.CRY_DS, expected)
+        self.assertIn(self.CRY, failures)
+        self.assertEqual(expected[self.MDS_DS], 496)   # others unaffected
+
+    def test_dsconf_filter_skips_other_campaigns_without_resolving(self):
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}},
+                 {'tarball': self.OTHER, 'entry': {'njobs': 100}}]
+        expected, _, asked = self._call(
+            camps, dsconfs={'MDC2025au_best_v1_5'})
+        self.assertEqual(asked, [self.CRY])
+        self.assertEqual(list(expected), [self.CRY_DS])
+
 
 # ---------------------------------------------------------------------------
 # Entry point

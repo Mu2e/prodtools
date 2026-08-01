@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import submission_ledger
+from utils.job_common import Mu2eName
 from utils.jobquery import Mu2eJobPars
 from utils.mkrecovery import (build_file_maps, extract_datasets_from_tarball,
                               locate_tarball)
@@ -203,6 +204,63 @@ def verify_row(row, sam_lister=files_in_dataset):
     missing = sorted(missing_ct)
     partial = sorted(i for i in missing_ct if missing_ct[i] < expected[i])
     return missing, partial
+
+
+def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
+    """Map output dataset name -> expected job count, from the submission ledger.
+
+    The ledger entry carries njobs -- the SUBMITTED window, not the cnf's baked
+    capacity -- but names its outputs with a glob ("*.art"), so the dataset NAME
+    has to come from the cnf tarball. That is the same source verify_row uses,
+    and the only sound one: CosmicCRYAll produces ...CosmicCRYAllOnSpill... while
+    CosmicCRYExtracted takes no suffix, and FlatGamma is a prefix of
+    FlatGammaCalo, so neither convention nor prefix matching can be trusted.
+
+    dsconfs: optional set of dsconfs; when given, campaigns of other dsconfs are
+    skipped without resolving their tarball, so a short listing does not pay for
+    the whole ledger.
+
+    locate: injected for testing.
+
+    Returns (expected, failures). expected maps dataset -> summed njobs over
+    every campaign producing it (one tarball may be enqueued as several index
+    windows). failures maps tarball -> reason for campaigns that could not be
+    resolved; those contribute nothing rather than a guessed denominator. Note
+    a failed campaign's dataset is simply unknown -- it cannot be marked, since
+    its name was what the tarball would have supplied.
+    """
+    expected = {}
+    failures = {}
+    resolved = {}          # tarball -> [datasets], or None when unresolvable
+    for camp in submission_ledger.all_campaigns(db_path):
+        tarball = camp['tarball']
+        njobs = (camp.get('entry') or {}).get('njobs')
+        if not njobs:
+            continue
+        if dsconfs is not None:
+            try:
+                if Mu2eName.parse(tarball).dsconf not in dsconfs:
+                    continue
+            except ValueError:
+                continue
+        if tarball not in resolved:
+            try:
+                path = locate(tarball)
+                if not path:
+                    raise RuntimeError("tarball not locatable")
+                datasets = extract_datasets_from_tarball(Mu2eJobPars(path), njobs)
+                if not datasets:
+                    raise RuntimeError("no output datasets in tarball")
+                resolved[tarball] = datasets
+            except Exception as e:
+                failures[tarball] = str(e)
+                resolved[tarball] = None
+        datasets = resolved[tarball]
+        if datasets is None:
+            continue
+        for ds in datasets:
+            expected[ds] = expected.get(ds, 0) + njobs
+    return expected, failures
 
 
 @contextlib.contextmanager
