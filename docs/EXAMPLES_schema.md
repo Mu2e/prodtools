@@ -186,7 +186,7 @@ reading the code:
   phase (runs after its recovery pass, inside the same hourly cron tick)
   then feeds whole slices to active campaigns, round-robin oldest-first,
   while total mu2epro idle+running jobs stay under a cap resolved as
-  `--max-queued` flag > `MU2E_MAX_QUEUED` env > `10000` built-in
+  `--max-queued` flag > `MU2E_MAX_QUEUED` env > `5000` built-in
   default. A submit failure during top-up pauses the campaign rather
   than blind-retrying; an operator investigates and issues `submissions
   resume <ID>`. `--enqueue` refuses a second campaign for the same

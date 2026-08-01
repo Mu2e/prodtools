@@ -41,7 +41,7 @@ from utils.samweb_wrapper import files_in_dataset
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUBMIT_MAP = REPO_ROOT / 'bin' / 'submit_map'
 DEFAULT_MAX_ATTEMPTS = 3
-DEFAULT_MAX_QUEUED = 10000
+DEFAULT_MAX_QUEUED = 5000
 
 
 def resolve_cap(flag_value):
