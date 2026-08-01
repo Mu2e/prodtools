@@ -588,3 +588,24 @@ class Mu2eJobBase:
         return 0 if capacity is None else capacity
 
 
+def expected_outputs_for(input_fname, job_pars):
+    """Expected output filenames for one direct-input (draining) job.
+
+    THE single home for the input->output name mapping: delegates to
+    job_outputs(0, override_desc=, override_seq=) — the exact
+    substitution process_direct_input performs on the worker — so the
+    dispatcher, the verifier, and the worker cannot drift. Non-Mu2e-
+    named streams (paths like /dev/null) are dropped, mirroring
+    submit._read_cnf_facts. Raises ValueError on a malformed input name
+    and RuntimeError when the cnf yields no Mu2e-named outputs (fail
+    loud, never guess).
+    """
+    n = Mu2eName.parse(os.path.basename(input_fname))
+    if not n.is_file:
+        raise ValueError(f"not a Mu2e file name: {input_fname}")
+    out = job_pars.job_outputs(0, override_desc=n.description,
+                               override_seq=n.sequencer) or {}
+    names = sorted(v for v in out.values() if v and '/' not in v)
+    if not names:
+        raise RuntimeError(f"no Mu2e-named outputs in cnf for {input_fname}")
+    return names

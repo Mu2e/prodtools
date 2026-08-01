@@ -95,6 +95,16 @@ def firstjob_of(entry: dict) -> int:
     return firstjob
 
 
+def is_draining(entry: dict) -> bool:
+    """True for a draining (input_pattern) entry/campaign/row snapshot.
+
+    The single-owner kind discriminator for the direct backend: a
+    draining entry has `input_pattern` and no index space (no njobs/
+    firstjob). Callers must never sniff indices_json content instead.
+    """
+    return 'input_pattern' in entry
+
+
 def validate_window(firstjob: int, njobs: Optional[int], capacity: Optional[int]) -> None:
     """Validate a windowed entry (firstjob > 0) against its cnf.
 

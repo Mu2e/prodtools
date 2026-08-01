@@ -8574,6 +8574,74 @@ class TestListerCompleteness(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 43. Draining campaigns: foundations (is_draining, expected_outputs_for)
+# ---------------------------------------------------------------------------
+
+class TestIsDraining(unittest.TestCase):
+    """Campaign/row kind is discriminated ONLY by input_pattern presence."""
+
+    def test_pattern_entry_is_draining(self):
+        from utils.poms_entry import is_draining
+        self.assertTrue(is_draining(
+            {'tarball': 't', 'input_pattern': 'dig.mu2e.%.X.art'}))
+
+    def test_index_entry_is_not(self):
+        from utils.poms_entry import is_draining
+        self.assertFalse(is_draining({'tarball': 't', 'njobs': 100}))
+
+
+class TestExpectedOutputsFor(unittest.TestCase):
+    """The single input->output name mapping, delegating to job_outputs
+    (the exact worker-side substitution) so verifier and worker cannot
+    drift."""
+
+    IN = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.001202_00000042.art'
+
+    class FakePars:
+        def __init__(self, out):
+            self.out = out
+            self.calls = []
+
+        def job_outputs(self, index, override_desc=None, override_seq=None):
+            self.calls.append((index, override_desc, override_seq))
+            return self.out
+
+    def test_delegates_desc_and_sequencer_from_input_name(self):
+        from utils.job_common import expected_outputs_for
+        jp = self.FakePars({'Output':
+            'mcs.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.001202_00000042.art'})
+        outs = expected_outputs_for(self.IN, jp)
+        self.assertEqual(jp.calls, [(0, 'CosmicCRYAllOnSpill',
+                                     '001202_00000042')])
+        self.assertEqual(outs, ['mcs.mu2e.CosmicCRYAllOnSpill.'
+                                'MDC2025au_best_v1_5.001202_00000042.art'])
+
+    def test_filters_non_mu2e_streams_and_sorts(self):
+        from utils.job_common import expected_outputs_for
+        jp = self.FakePars({'b': 'nts.mu2e.X.C.000_000.root',
+                            'null': '/dev/null',
+                            'a': 'mcs.mu2e.X.C.000_000.art'})
+        self.assertEqual(expected_outputs_for(self.IN, jp),
+                         ['mcs.mu2e.X.C.000_000.art',
+                          'nts.mu2e.X.C.000_000.root'])
+
+    def test_dataset_name_rejected(self):
+        from utils.job_common import expected_outputs_for
+        with self.assertRaises(ValueError):
+            expected_outputs_for('dig.mu2e.X.C.art', self.FakePars({}))
+
+    def test_junk_name_rejected(self):
+        from utils.job_common import expected_outputs_for
+        with self.assertRaises(ValueError):
+            expected_outputs_for('not-a-mu2e-name', self.FakePars({}))
+
+    def test_no_outputs_is_a_hard_error(self):
+        from utils.job_common import expected_outputs_for
+        with self.assertRaises(RuntimeError):
+            expected_outputs_for(self.IN, self.FakePars({'n': '/dev/null'}))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
