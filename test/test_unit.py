@@ -8501,18 +8501,46 @@ class TestListerCompleteness(unittest.TestCase):
         lister._total_files = lambda ds: counts.get(ds, 0)
         return lister
 
-    def test_reports_landed_over_expected_with_incomplete_marker(self):
-        lister = self._lister({self.DS: 2500}, {self.DS: 1432})
-        self.assertEqual(lister._get_completeness(self.DS),
-                         "1432/2500 INCOMPLETE")
+    # The tty check gates plain-text vs coloured rendering (see
+    # _get_completeness). Patch it explicitly in every test rather than
+    # relying on how the test runner happens to be invoked (tty vs piped) —
+    # that ambient-state dependency is exactly the flakiness the tty gate
+    # is designed to avoid downstream, so the tests must not reintroduce it.
 
-    def test_no_marker_once_landed_reaches_expected(self):
+    def test_reports_landed_over_expected_with_incomplete_marker_non_tty(self):
+        """Piped/redirected output: today's plain-text marker, no escape
+        codes, so grep/awk consumers aren't corrupted."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432})
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "1432/2500 INCOMPLETE")
+
+    def test_reports_landed_over_expected_in_red_on_tty(self):
+        """Interactive output: red ANSI text, ' INCOMPLETE' suffix dropped."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432})
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "\033[31m1432/2500\033[0m")
+
+    def test_no_marker_once_landed_reaches_expected_non_tty(self):
         lister = self._lister({self.DS: 2500}, {self.DS: 2500})
-        self.assertEqual(lister._get_completeness(self.DS), "2500/2500")
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS), "2500/2500")
+
+    def test_no_marker_or_colour_once_landed_reaches_expected_tty(self):
+        """Complete rows are never coloured, even interactively."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 2500})
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS), "2500/2500")
 
     def test_dataset_from_no_campaign_reports_dash(self):
+        """The em dash ('no known campaign') is never coloured or marked,
+        in either mode."""
         lister = self._lister({}, {self.DS: 17})
-        self.assertEqual(lister._get_completeness(self.DS), "—")
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS), "—")
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS), "—")
 
 
 # ---------------------------------------------------------------------------

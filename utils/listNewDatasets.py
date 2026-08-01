@@ -17,6 +17,9 @@ from job_common import Mu2eName
 from submissions import ledger_expected
 from submission_ledger import DEFAULT_DB
 
+_ANSI_RED = "\033[31m"
+_ANSI_RESET = "\033[0m"
+
 
 class DatasetLister:
     """List and summarize recently created datasets from SAM."""
@@ -98,13 +101,26 @@ class DatasetLister:
         '—' when no known campaign produced it. There is deliberately no
         per-dataset '?': the dataset name comes FROM the cnf tarball, so an
         unresolvable tarball leaves its dataset unidentifiable. Those failures
-        are reported once on stderr by run() instead."""
+        are reported once on stderr by run() instead.
+
+        Incomplete rows (landed < expected) are flagged, but how depends on
+        whether stdout is a tty: interactively, the text is coloured red and
+        the ' INCOMPLETE' suffix is dropped (colour alone signals it, and a
+        human doesn't need a marker they can already see). Piped or
+        redirected, colour codes would corrupt downstream `grep`/`awk`
+        consumers, so it falls back to today's plain-text marker with no
+        escape codes at all. Complete rows are never coloured or marked,
+        in either mode."""
         expected = self._expected.get(dataset)
         if expected is None:
             return "—"
         landed = self._total_files(dataset)
-        marker = "" if landed >= expected else " INCOMPLETE"
-        return f"{landed}/{expected}{marker}"
+        text = f"{landed}/{expected}"
+        if landed >= expected:
+            return text
+        if sys.stdout.isatty():
+            return f"{_ANSI_RED}{text}{_ANSI_RESET}"
+        return f"{text} INCOMPLETE"
 
     def run(self):
         query = self.build_query()

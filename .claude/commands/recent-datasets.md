@@ -1,5 +1,5 @@
 ---
-description: List recently created datasets with completeness — sources Mu2e env + pyenv ana, defaults to last 1 day with --completeness column
+description: List recently created datasets with completeness — sources Mu2e env, defaults to last 1 day with --completeness column
 argument-hint: [days] [--query <pattern>] [extra listNewDatasets flags]
 allowed-tools: Bash
 ---
@@ -10,20 +10,18 @@ Thin wrapper over `bin/listNewDatasets --completeness` that does all
 the env setup so you can ask "what landed recently and is it
 complete?" with one command. Encodes:
 
-- `source setupmu2e-art.sh && muse setup ops && source /cvmfs/.../bin/pyenv.sh ana`
-  (the last is required for SQLAlchemy; without it
-  `--completeness` degrades to a warning. We source `pyenv.sh`
-  directly rather than calling the `pyenv` shell function because
-  the function defined in `setupmu2e-art.sh` doesn't survive into
-  non-interactive subshells reliably.)
+- `source setupmu2e-art.sh && muse setup ops`
 - `python3 bin/listNewDatasets` (not `bash` — the wrapper has a
   Python shebang)
-- `--completeness` flag on by default (auto-rebuilds the POMS DB
-  if any map is newer than the DB, within the lookback window)
+- `--completeness` flag on by default (expected counts come from
+  the submission ledger, `submissions.db`, via `--ledger-db`; no
+  rebuild step and no extra env setup beyond the Mu2e env sourced
+  above)
 - `--days 1` by default (more useful than the 7-day default for
   "what changed today")
-- Output filtered to drop the noisy `Skipping logparser ...`
-  rebuild trace lines
+- Output filtered to drop blank lines; kept as a heuristic hook for
+  future noisy trace lines, though the ledger-backed path doesn't
+  currently produce any
 
 ## Usage
 
@@ -32,13 +30,13 @@ complete?" with one command. Encodes:
 ```
 
 - `[days]` — optional first positional integer, sets `--days N`.
-  Default `1`. Also controls the DB-staleness lookback window.
+  Default `1`.
 - `--query <pattern>` — pass-through to `listNewDatasets --query`,
   for SAM where-clauses (e.g. `"dh.dataset like 'mcs.mu2e.PBI%'"`).
-  When given, `--days` only governs DB staleness, not the SAM
-  filter (the custom query overrides the date filter).
+  When given, `--days` has no effect — the custom query overrides
+  the date filter entirely.
 - Anything else — passed through verbatim
-  (`--user oksuzian`, `--filetype log`, `--no-rebuild`,
+  (`--user oksuzian`, `--filetype log`, `--ledger-db <path>`,
   `--size`, etc.).
 
 ## Examples
@@ -56,8 +54,8 @@ complete?" with one command. Encodes:
 # Last day, your own datasets, with file sizes
 /recent-datasets 1 --user oksuzian --size
 
-# Skip the auto-rebuild even if DB is stale
-/recent-datasets 7 --no-rebuild
+# Point at a non-default submission ledger
+/recent-datasets 7 --ledger-db /path/to/other/submissions.db
 ```
 
 ## Instructions
@@ -84,27 +82,28 @@ the listNewDatasets call:
 ```bash
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \
   && muse setup ops > /dev/null 2>&1 \
-  && source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana > /dev/null 2>&1 \
   && python3 <REPO>/bin/listNewDatasets --completeness --days <DAYS> <EXTRA_ARGS> 2>&1 \
-     | grep -v -E '^(Skipping logparser|Loading [0-9]+ JSON files|Loaded [0-9]+ job definitions|Removed [0-9]+ jobs|Computing completion status|Marked [0-9]+ jobs as complete|Discovered and cached [0-9]+ derived datasets|Error listing definition files|Error describing definition|Warning: Could not count files|  Template mode:|^$)'
+     | grep -v -E '^$'
 ```
 
 ### 4. Report
 
 Print the filtered output to the user. The table that survives the
 filter — header, dividers, dataset rows, completeness column — is
-what they actually want. The DB staleness/rebuild messages survive
-the filter on purpose: the user should know if a slow rebuild
-happened.
+what they actually want. Any `WARNING:` lines (an unresolvable
+ledger entry, or the ledger itself being unreadable) survive the
+filter on purpose: the user should know if the completeness column
+is degraded.
 
 ## Notes
 
-- The filter is heuristic; if a future `listNewDatasets` /
-  `db_builder` change introduces new noise lines, add their
-  prefixes to the grep. If a real warning gets accidentally
-  filtered, drop the matching pattern.
-- Read-only by design — no SAM writes, no DB rebuild beyond what
-  `listNewDatasets --completeness` already does internally.
+- The filter is heuristic; if a future `listNewDatasets` change
+  introduces new noise lines, add their prefixes to the grep. If a
+  real warning gets accidentally filtered, drop the matching
+  pattern.
+- Read-only by design — no SAM writes, no ledger writes.
+  `--completeness` reads `submissions.db` directly; there is no DB
+  rebuild step of any kind.
 - For "what's *not yet* in production", use `pomsMonitor
   --campaign <name> --outputs --incomplete` directly instead;
   this skill is for the "what landed in SAM" angle.
