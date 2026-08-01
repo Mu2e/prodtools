@@ -28,7 +28,8 @@ class DatasetLister:
                  user: str = "mu2epro", show_size: bool = False,
                  custom_query: Optional[str] = None,
                  completeness: bool = False,
-                 ledger_db: Optional[str] = None):
+                 ledger_db: Optional[str] = None,
+                 color: str = "auto"):
         self.filetype = filetype
         self.days = days
         self.user = user
@@ -37,6 +38,7 @@ class DatasetLister:
         self.ext = f".{filetype}"
         self.completeness = completeness
         self.ledger_db = ledger_db or DEFAULT_DB
+        self.color = color       # 'auto' | 'always' | 'never', ls/grep convention
         self._expected = {}      # dataset -> expected njobs, built in run()
 
     def build_query(self) -> str:
@@ -104,13 +106,18 @@ class DatasetLister:
         are reported once on stderr by run() instead.
 
         Incomplete rows (landed < expected) are flagged, but how depends on
-        whether stdout is a tty: interactively, the text is coloured red and
-        the ' INCOMPLETE' suffix is dropped (colour alone signals it, and a
-        human doesn't need a marker they can already see). Piped or
-        redirected, colour codes would corrupt downstream `grep`/`awk`
-        consumers, so it falls back to today's plain-text marker with no
-        escape codes at all. Complete rows are never coloured or marked,
-        in either mode."""
+        self.color, the ls/grep-style --color flag:
+        - 'auto' (default): red on a tty, dropping the ' INCOMPLETE' suffix
+          (colour alone signals it); plain '<landed>/<expected> INCOMPLETE'
+          with no escape codes otherwise, so piped/redirected consumers
+          (grep, awk) aren't corrupted by codes they can't strip.
+        - 'always': red with no suffix regardless of tty-ness — this is
+          what makes `| grep` usable with colour, since grep's own
+          --color=always only colours grep's match, it can't retroactively
+          add colour we already suppressed.
+        - 'never': plain text with the suffix regardless of tty-ness, for
+          reproducible captures.
+        Complete rows are never coloured or marked, in any mode."""
         expected = self._expected.get(dataset)
         if expected is None:
             return "—"
@@ -118,7 +125,9 @@ class DatasetLister:
         text = f"{landed}/{expected}"
         if landed >= expected:
             return text
-        if sys.stdout.isatty():
+        colourize = self.color == "always" or (
+            self.color == "auto" and sys.stdout.isatty())
+        if colourize:
             return f"{_ANSI_RED}{text}{_ANSI_RESET}"
         return f"{text} INCOMPLETE"
 
@@ -192,12 +201,19 @@ def main():
                              'known campaign show an em dash')
     parser.add_argument('--ledger-db', default=DEFAULT_DB,
                         help=f'Submission ledger SQLite path (default: {DEFAULT_DB})')
+    parser.add_argument('--color', choices=['auto', 'always', 'never'], default='auto',
+                        help='Colour the COMPLETENESS column red for incomplete rows: '
+                             'auto (default) colours only on a tty and drops the '
+                             'INCOMPLETE suffix there; always colours regardless of '
+                             'tty (for piping into grep --color); never disables '
+                             'colour regardless of tty')
     args = parser.parse_args()
 
     lister = DatasetLister(filetype=args.filetype, days=args.days, user=args.user,
                            show_size=args.size, custom_query=args.query,
                            completeness=args.completeness,
-                           ledger_db=args.ledger_db)
+                           ledger_db=args.ledger_db,
+                           color=args.color)
 
     lister.run()
 

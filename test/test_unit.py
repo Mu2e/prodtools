@@ -8503,8 +8503,8 @@ class TestListerCompleteness(unittest.TestCase):
 
     DS = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'
 
-    def _lister(self, expected, counts):
-        lister = self.lnd.DatasetLister(completeness=True)
+    def _lister(self, expected, counts, color='auto'):
+        lister = self.lnd.DatasetLister(completeness=True, color=color)
         lister._expected = expected
         lister._total_files = lambda ds: counts.get(ds, 0)
         return lister
@@ -8549,6 +8549,28 @@ class TestListerCompleteness(unittest.TestCase):
             self.assertEqual(lister._get_completeness(self.DS), "—")
         with patch('sys.stdout.isatty', return_value=True):
             self.assertEqual(lister._get_completeness(self.DS), "—")
+
+    # --color {auto,always,never}, the ls/grep convention (round 3). 'auto'
+    # is exercised by the tty/non-tty pair above (it's _lister's default).
+    # 'always' and 'never' must override the tty check in both directions —
+    # that's the whole point, since 'auto' alone left colour unreachable
+    # for anyone piping through grep.
+
+    def test_color_always_emits_escapes_even_off_a_tty(self):
+        """--color always is what makes `| grep` usable with colour: red,
+        no INCOMPLETE suffix, regardless of stdout.isatty()."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432}, color='always')
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "\033[31m1432/2500\033[0m")
+
+    def test_color_never_emits_plain_marker_even_on_a_tty(self):
+        """--color never is for reproducible captures: plain text with the
+        INCOMPLETE suffix, regardless of stdout.isatty()."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432}, color='never')
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "1432/2500 INCOMPLETE")
 
 
 # ---------------------------------------------------------------------------
