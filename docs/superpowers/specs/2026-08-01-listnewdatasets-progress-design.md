@@ -169,12 +169,32 @@ a visible marker rather than a number:
 | condition | column | notes |
 |---|---|---|
 | dataset in `expected` | `1432/2500` | plus ` INCOMPLETE` when landed < expected (existing marker semantics, unchanged) |
-| dataset absent from `expected` | `—` | not produced by a direct campaign |
-| tarball unlocatable / extraction failed | `?` | reason also written to stderr |
+| dataset absent from `expected` | `—` | no known campaign produced it |
 | ledger file missing or unreadable | column disabled | one warning, listing still prints |
 
-One unresolvable campaign never aborts the report. Failures are surfaced on
-stderr so a `?` is always explainable; stdout stays a clean table.
+One unresolvable campaign never aborts the report.
+
+**There is no per-dataset `?`.** An earlier draft of this spec claimed an
+unresolvable tarball would mark its dataset `?`. That is not implementable: the
+dataset name is *obtained from* the tarball, so when the tarball cannot be
+resolved we do not know which dataset it would have named. Such a dataset is
+therefore indistinguishable from one no campaign produced, and shows `—`.
+
+The failure is still surfaced — `ledger_expected` returns a `failures` map of
+tarball to reason, and the caller prints one stderr warning naming the
+unresolved tarballs. That tells the operator the denominators are incomplete
+without pretending to know which rows are affected.
+
+## Numerator: total dataset size, not the listing window
+
+The `COUNT` column counts files *created within the lookback window*. The
+completeness numerator must instead be the dataset's **total** file count in
+SAM, matching what the POMS column reported (`DatasetInfo.nfiles`). For a
+campaign that started before the window, the two differ, and using the windowed
+count would understate progress against a full-campaign denominator.
+
+This costs one `dataset_file_count` call per listed dataset when
+`--completeness` is on — the same per-dataset SAM cost `--size` already pays.
 
 ## Testing
 
@@ -184,8 +204,9 @@ Unit tests inject `locate`, so no tarball or network access occurs:
    `dig...CosmicCRYAllOnSpill...` reports `1432/2500 INCOMPLETE` at 1432 landed,
    and `2500/2500` with no marker at 2500.
 2. **Dataset absent** — a dataset from no campaign reports `—`.
-3. **Unresolvable tarball** — `locate` returns `None`; the dataset reports `?`,
-   the tarball appears in `failures`, and other datasets still report normally.
+3. **Unresolvable tarball** — `locate` returns `None`; the tarball appears in
+   `failures`, contributes nothing to `expected`, and the other campaigns still
+   resolve normally.
 4. **Summed across campaigns** — two campaigns (250 and 1667) yielding the same
    output dataset report `.../1917`.
 5. **Window, not capacity** — a campaign whose entry says 2500 while the cnf
