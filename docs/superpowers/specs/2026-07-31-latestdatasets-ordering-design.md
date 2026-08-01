@@ -243,9 +243,19 @@ disagree **in both directions** on real production definitions, which is why
   lexicographically to `Run1Bab_best_v1_2` (2026-02-01) because `'_'` (0x5F)
   sorts above `'2'` (0x32) — a revision losing to the thing it revises.
 - **Lex right, time wrong** — `NeutralsFlashCat` in `dts.mu2e.%.MDC2025%.art`.
-  `MDC2025ac` was re-created five hours *after* `MDC2025ad` on the same day, so
-  pure-time ordering would hand a chain the older campaign's data. Remakes and
-  backfills are routine in this project, so this is a live hazard.
+  Verified at file level, not just definition level:
+
+  | dataset | files | data produced |
+  |---|---|---|
+  | `MDC2025ad` | 1000 | 2025-11-14 20:57 → 2025-11-15 03:55 |
+  | `MDC2025ac` | **40** | 2025-11-15 05:52 → 05:57 |
+
+  The `ac` files were written about two hours after `ad`'s last file, so `ac`
+  is genuinely the later data — and it is a 40-file top-up or recovery run
+  carried out at the *older* campaign tag. Pure-time ordering would select
+  those 40 files over `ad`'s 1000, feeding a chain a fraction of the intended
+  statistics rather than merely a stale build. Remakes and backfills are
+  routine in this project, so this is a live hazard.
 
 Reproduce with
 `/exp/mu2e/data/users/oksuzian/claude-scratch/probes/inversion_check.py`.
