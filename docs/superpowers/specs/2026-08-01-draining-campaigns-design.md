@@ -133,7 +133,10 @@ guard) works unchanged. **No schema change.**
 
 ### The output-name mapping — one function, shared with the worker
 
-New thin wrapper (beside the ledger helpers in `utils/submissions.py`):
+New thin wrapper in `utils/job_common.py`, directly beside the
+`Mu2eJobBase.job_outputs` method it delegates to (both `submit_map` and
+the tick import it, so `job_common` — already imported by both — is the
+zero-cost single home):
 
 ```
 expected_outputs_for(input_fname, job_pars) -> list[str]
@@ -176,8 +179,12 @@ splits, which are never draining *inputs*.
 The `min_age` guard (the POMS `fts=` idea) exists because pushOutput
 declares metadata before locations settle, and a half-pushed upstream
 batch should not be raced. Requirement: no file younger than
-`min_age_minutes` dispatches. Implementation may use a `create_date`
-dims clause or batch metadata lookup — plan's choice.
+`min_age_minutes` dispatches. Implementation: one batched
+`metadata_for_files` call per tick on the candidate batch (at most
+`slice_size` files), comparing SAM `create_datetime` against the
+cutoff — a too-young or age-unknown file is withheld from the batch and
+re-evaluated next tick, equivalent to filtering at the inputs stage at
+a fraction of the query cost (age-unknown is fail-closed).
 
 Fcl-compatibility routing is the operator's job at campaign-creation
 time: the pattern plus `exclude_desc` must select only descs the cnf's
@@ -198,10 +205,12 @@ same order as one recovery-pass verification.
    server-side; re-requesting pending files is harmless). mdh failure →
    residency unknown → **no dispatch** for that campaign this tick
    (fail-closed).
-2. **Queue cap** — draining campaigns join `top_up`'s existing
-   headroom loop (oldest-first, interleaved with index campaigns, one
-   batch per campaign per cycle, first batch that would exceed the cap
-   stops the tick). A batch counts by its file count.
+2. **Queue cap** — draining campaigns are fed by a dedicated drain
+   phase that runs right after index top-up inside the same tick, under
+   the same cap (fresh queue count, so index slices submitted moments
+   earlier are already counted). Oldest-first, **one** gated batch per
+   campaign per tick; the first batch that would exceed the cap stops
+   the phase. A batch counts by its file count.
 3. **Batch** = first `slice_size` dispatchable files (stable order:
    sorted by filename, so re-ticks are deterministic).
 
@@ -269,20 +278,26 @@ cycles — the fix for both `drainingn`'s never-redeliver and
 
 ### Status and completion
 
-`submissions status` per draining campaign:
+The full state line is printed by the **tick** (which computes the sets
+anyway), including `--dry-run`:
 
 ```
-campaign 48 [draining] cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar
-  dig.mu2e.%.MDC2025au_best_v1_5.art
-  landed 3120/3170 (98.4%) | in-flight 40 | tape-only 6 | parked 4
+campaign 48: landed 3120/3170 (98.4%) | in-flight 40 | parked 4 | pending 6
+campaign 48: withheld 2 too-young, 6 tape-only
 ```
+
+(`tape-only`/`too-young` are batch-scoped — the gates only examine the
+candidate batch.) `submissions status` stays cheap and **ledger-only** —
+pattern, in-flight and exhausted-file counts, no SAM or mdh queries; a
+casual status must not cost 45 SAM round-trips. The drained fraction on
+demand is `submissions run --dry-run`.
 
 The percentage informs; it never triggers anything. Completion is the
 operator's call: `submissions complete <id>` — one new
 `manage_campaign` action targeting the existing `active → complete`
-transition — printing the final drained fraction and parked count as a
-confirmation line (non-blocking: closing at 98% with parked files is a
-legitimate operator decision).
+transition (non-blocking: closing at 98% with parked files is a
+legitimate operator decision; a paused campaign is resumed first, since
+`paused → complete` is not a ledger transition).
 
 Cascades need no machinery: enqueue reco-drain
 (`dig→mcs`) and evnt-drain (`mcs→nts`) together and the pipeline runs
