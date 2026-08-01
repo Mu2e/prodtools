@@ -222,12 +222,18 @@ def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
 
     locate: injected for testing.
 
-    Returns (expected, failures). expected maps dataset -> summed njobs over
-    every campaign producing it (one tarball may be enqueued as several index
-    windows). failures maps tarball -> reason for campaigns that could not be
-    resolved; those contribute nothing rather than a guessed denominator. Note
-    a failed campaign's dataset is simply unknown -- it cannot be marked, since
-    its name was what the tarball would have supplied.
+    Returns (expected, failures). expected maps dataset -> max njobs over every
+    campaign producing it. njobs is an ABSOLUTE target index count, not an
+    increment: when a tarball is enqueued a second time, the new campaign
+    resumes via its cursor from where the earlier one stopped, so the two
+    campaigns' index windows overlap rather than partition (e.g. 0..249 then
+    250..1666 -- the second campaign's njobs=1667 already covers the first
+    campaign's 250). Summing would double-count the earlier window; max is
+    the cheap equivalent of the true answer, the union of submitted indices.
+    failures maps tarball -> reason for campaigns that could not be resolved;
+    those contribute nothing rather than a guessed denominator. Note a failed
+    campaign's dataset is simply unknown -- it cannot be marked, since its
+    name was what the tarball would have supplied.
     """
     expected = {}
     failures = {}
@@ -259,7 +265,7 @@ def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
         if datasets is None:
             continue
         for ds in datasets:
-            expected[ds] = expected.get(ds, 0) + njobs
+            expected[ds] = max(expected.get(ds, 0), njobs)
     return expected, failures
 
 

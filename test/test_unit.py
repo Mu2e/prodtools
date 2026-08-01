@@ -8450,14 +8450,22 @@ class TestLedgerExpected(unittest.TestCase):
         expected, _, _ = self._call(camps)
         self.assertEqual(expected[self.CRY_DS], 2500)
 
-    def test_sums_when_one_tarball_is_enqueued_twice(self):
-        """A tarball can be enqueued as several index windows (RPCInternal-
-        Physical went out at 250 then 1667). Expected is their sum, and the
-        tarball is resolved only once."""
+    def test_overlapping_campaigns_take_the_max_not_the_sum(self):
+        """A tarball can be enqueued as several index windows, and njobs is
+        an ABSOLUTE target index count, not an increment: a later campaign
+        resumes via its cursor from where the earlier one stopped, so the
+        windows overlap rather than partition. Measured from
+        RPCInternalPhysicalMix1BB's real submission rows: campaign 1 covered
+        indices 0..249 (njobs=250), campaign 2 covered 0..1666 (njobs=1667,
+        already a superset of the first). Expected is max(250, 1667) = 1667,
+        not their sum 1917 -- summing double-counted the first window and
+        made two actually-complete datasets (this one and
+        RPCExternalPhysicalMix1BB) report INCOMPLETE. The tarball is
+        resolved only once regardless."""
         camps = [{'tarball': self.CRY, 'entry': {'njobs': 250}},
                  {'tarball': self.CRY, 'entry': {'njobs': 1667}}]
         expected, _, asked = self._call(camps)
-        self.assertEqual(expected[self.CRY_DS], 1917)
+        self.assertEqual(expected[self.CRY_DS], 1667)
         self.assertEqual(asked, [self.CRY])
 
     def test_unresolvable_tarball_yields_failure_not_a_number(self):
