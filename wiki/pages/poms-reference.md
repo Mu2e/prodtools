@@ -114,9 +114,25 @@ limitn, list, mod, multiparam, new, nfiles, stagedfiles (+ parallel
   the SAM definition text — POMS contributes nothing. What counts as
   "already done" is whatever the def says (typically `minus
   consumed_status consumed`), i.e. consumption, not output existence.
-- `drainingn` is the snapshot-cursor variant: `defname:%s minus
-  snapshot_id %d with limit %d`, cursor kept in `cs_last_split` —
-  "delivered = was in a previous snapshot", independent of consumption.
+- `drainingn(n)` is the snapshot-cursor variant (source-verified
+  2026-08-01): `cs_last_split` holds a **cumulative snapshot id** of
+  everything ever delivered. `peek()` creates a persistent SAM
+  definition `<dataset>_slice_<ls>_stage_<n>` with dims
+  `defname:<base> minus snapshot_id <ls> with limit <n>` (0 files →
+  StopIteration); `next()` snapshots the slice, unions it with the old
+  cumulative via a `<dataset>_full_<ls>_stage_<n>_<unixtime>`
+  definition, and stores the union's snapshot id as the new cursor.
+  Growth-safe and overflow-safe, but "delivered = was in a snapshot" —
+  the cursor advances at LAUNCH, independent of consumption and of
+  output existence; failed slices are never re-delivered by the split
+  type (that's the separate recovery layer's job). Side effect: the
+  `_slice_`/`_full_` definitions persist in SAM forever — Mu2e's 2022
+  `drainingn(1000)` ntuple stage over
+  `mcs.mu2e.CeEndpointMix1BBSignal.MDC2020r_perfect_v1_0.art` left
+  them behind, still visible in `samweb list-definitions --defname
+  '%_slice_%_stage_%'` in 2026. (The `develop`-branch file also has a
+  stray-backtick syntax error and a broken `len()` — the deployed
+  build must differ.)
 
 Completion (`wrapup_tasks`): while Running, `pct_complete >=
 completion_pct` promotes to Completed. `completion_type=complete`
