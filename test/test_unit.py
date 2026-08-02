@@ -4378,6 +4378,62 @@ class TestPushLogsParents(unittest.TestCase):
             self.assertEqual(parents, 'none')
 
 
+class TestPushDataExcludesInputs(unittest.TestCase):
+    """A job's inputs must never appear in the push manifest.
+
+    In direct-input mode the fetched input art file sits in cwd, so a
+    broad outputs glob ('*.art') matches it — pushOutput then treats the
+    original at its dataset path as a stale orphan and tries to DELETE
+    production data. Observed on smoke cluster 29444911 (2026-08-02);
+    only the mcs-only token scope blocked the delete.
+    """
+
+    IN = 'dig.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_5.001430_00000000.art'
+    OUT = 'mcs.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_1.001430_00000000.art'
+
+    def _pushed(self, tmpdir, outputs, infiles):
+        from utils import runmu2e
+        captured = {}
+
+        def fake_push_output(output_specs, output_file="output.txt",
+                             simjob_setup=None):
+            captured['specs'] = output_specs
+            return 0
+
+        (Path(tmpdir) / self.IN).write_text('input art\n')
+        (Path(tmpdir) / self.OUT).write_text('output art\n')
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            with patch.object(runmu2e, 'push_output', fake_push_output):
+                runmu2e.push_data(outputs, infiles)
+        finally:
+            os.chdir(cwd)
+        return [spec[1] for spec in captured['specs']]
+
+    def test_broad_glob_skips_the_input_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            pushed = self._pushed(
+                d, [{'dataset': '*.art', 'location': 'tape'}],
+                infiles=self.IN)
+            self.assertEqual(pushed, [self.OUT])
+
+    def test_parents_list_still_carries_the_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._pushed(d, [{'dataset': '*.art', 'location': 'tape'}],
+                         infiles=self.IN)
+            self.assertEqual(
+                (Path(d) / 'parents_list.txt').read_text(),
+                self.IN + '\n')
+
+    def test_no_infiles_pushes_everything(self):
+        """Resampler-style jobs (infiles='') keep the old behavior."""
+        with tempfile.TemporaryDirectory() as d:
+            pushed = self._pushed(
+                d, [{'dataset': '*.art', 'location': 'tape'}], infiles='')
+            self.assertEqual(sorted(pushed), sorted([self.IN, self.OUT]))
+
+
 class TestPushAllKeepsTheLog(unittest.TestCase):
     """A data-push failure must never skip the log push.
 
@@ -8664,7 +8720,7 @@ class TestValidateDrainingEntry(unittest.TestCase):
     BASE = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
             'inloc': 'tape',
             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
-            'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+            'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
 
     def _err(self, **over):
         from utils.submit import _validate_draining_entry
@@ -8696,6 +8752,15 @@ class TestValidateDrainingEntry(unittest.TestCase):
     def test_prestage_must_be_bool(self):
         self.assertIn('prestage', self._err(prestage='yes'))
 
+    def test_outputs_glob_matching_pattern_rejected(self):
+        """A '*.art' outputs glob matches the input pattern — the worker
+        would declare the fetched input for push and pushOutput's orphan
+        recovery would try to delete the production input (smoke cluster
+        29444911)."""
+        err = self._err(outputs=[{'dataset': '*.art', 'location': 'tape'}])
+        self.assertIn('input_pattern', err)
+        self.assertIn('*.art', err)
+
 
 class TestEnqueueDraining(unittest.TestCase):
     """--enqueue on a draining entry creates a campaign with the
@@ -8705,7 +8770,7 @@ class TestEnqueueDraining(unittest.TestCase):
     ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
              'inloc': 'tape',
              'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
-             'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+             'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
 
     def _opts(self, **over):
         from argparse import Namespace

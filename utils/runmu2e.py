@@ -541,12 +541,19 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     if track_parents:
         Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
 
-    # Build output specifications
+    # Build output specifications. A job's own inputs are never outputs:
+    # in direct-input mode the fetched input art file sits in cwd, so a
+    # broad outputs glob (e.g. '*.art') would otherwise declare it for
+    # push — and pushOutput, finding the original already at its dataset
+    # path, treats it as a stale orphan and tries to DELETE production
+    # data (smoke cluster 29444911; only the token scope blocked it).
+    parent_names = {Path(p).name for p in infiles.split()} if infiles else set()
     output_specs = []
     for output in outputs:
         dataset_pattern = output['dataset']
         location = output['location']
-        matching_files = glob.glob(dataset_pattern)
+        matching_files = [f for f in glob.glob(dataset_pattern)
+                          if Path(f).name not in parent_names]
         print(f"Pattern '{dataset_pattern}' matched {len(matching_files)} files: {matching_files}")
         for filename in matching_files:
             output_specs.append((location, filename, parents_field))

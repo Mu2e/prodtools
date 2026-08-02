@@ -16,6 +16,7 @@ Plans:
 """
 
 import argparse
+import fnmatch
 import getpass
 import json
 import os
@@ -251,6 +252,19 @@ def _validate_draining_entry(entry):
     if len(fields) != 5 or not all(fields):
         return (f"input_pattern {pattern!r} is not a 5-field "
                 f"tier.owner.desc.dsconf.ext pattern")
+    # An outputs glob that matches the input pattern would make the worker
+    # declare the fetched input copy as an output (push_data globs cwd),
+    # and pushOutput's orphan recovery then tries to delete the production
+    # input at its own dataset path. Heuristic gate (fnmatch of the pattern
+    # string, % treated as a literal); the worker also excludes its inputs
+    # as the authoritative defense.
+    for out in entry['outputs']:
+        out_glob = out.get('dataset', '')
+        if out_glob and fnmatch.fnmatchcase(pattern, out_glob):
+            return (f"outputs dataset glob {out_glob!r} matches "
+                    f"input_pattern {pattern!r} — the worker would push "
+                    f"input files back to their own dataset; use a "
+                    f"tier-specific glob (e.g. 'mcs.*.art')")
     excl = entry.get('exclude_desc', [])
     if not (isinstance(excl, list)
             and all(isinstance(d, str) for d in excl)):
