@@ -491,14 +491,16 @@ def submit_entry_direct(entry, idx, opts):
     """
     tarball_name = tarball_of(entry)
     desc = _jobsub_argv.description_from_tarball(tarball_name)
+    files = getattr(opts, 'files', None)
 
     # Tarball must be locally accessible to ship via -f dropbox://.
-    if opts.dry_run and not Path(tarball_name).resolve().is_file():
+    # Files mode always needs the REAL cnf (even on a dry run): the
+    # output-name mapping (expected_outputs_for) comes from parsing it,
+    # so the nonexistent-stand-in shortcut below must not apply.
+    if opts.dry_run and files is None and not Path(tarball_name).resolve().is_file():
         tarball_path = Path('/tmp') / tarball_name
     else:
         tarball_path = _ensure_local_tarball(tarball_name)
-
-    files = getattr(opts, 'files', None)
 
     # njobs from the cnf is authoritative; POMS-map's field is informational.
     # output_filenames feeds the per-(area, tier, owner) token scope derivation

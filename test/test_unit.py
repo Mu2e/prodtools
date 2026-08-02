@@ -8868,6 +8868,25 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
         self.assertEqual(result['njobs'], 2)
         rs.assert_not_called()
 
+    def test_files_dry_run_still_resolves_real_tarball(self):
+        """Regression: files mode needs the REAL cnf even on a dry run
+        (the output-name mapping comes from parsing it via
+        Mu2eJobPars/expected_outputs_for). The nonexistent-stand-in
+        shortcut is for index mode only. ENTRY['tarball'] does not
+        exist relative to cwd, so the old buggy guard (gated on
+        `opts.dry_run` alone) would have taken the stand-in branch
+        and never called `_ensure_local_tarball` at all."""
+        from utils import submit
+        self.assertFalse(Path(self.ENTRY['tarball']).resolve().is_file())
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')) as elt, \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_run_submit') as rs:
+            submit.submit_entry_direct(dict(self.ENTRY), 0,
+                                       self._opts(dry_run=True))
+        elt.assert_called_once_with(self.ENTRY['tarball'])
+        rs.assert_not_called()
+
 
 class TestSliceOverlapSkipsFileRows(unittest.TestCase):
     def test_file_keyed_row_never_matches_an_index_window(self):
