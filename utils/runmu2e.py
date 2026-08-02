@@ -861,12 +861,23 @@ def _direct_dispatch(args, ops, index):
             sys.exit(1)
         fname = files[index]
         print(f"[direct] files[{index}] = {fname}")
-        # Stage the input locally (direct mode has no POMS pre-staging;
-        # matches the copy_input=True convention of _direct_main).
-        _fetch_file_local(fname)
+        inloc = jobdesc[0].get('inloc')
+        # Stage the input locally (direct mode has no POMS pre-staging, and
+        # direct-input FCL has no xroot streaming fallback — it writes the
+        # bare local filename, so every draining input must be fetched).
+        # Resolve the file's REAL location via SAM rather than trusting
+        # _fetch_file_local's 'disk' default (the cnf-tarball convention) —
+        # every draining entry example ships inloc='tape'. Mirrors the
+        # single-file resolution process_jobdef's copy_input branch uses
+        # for its inputs (runmu2e.py ~356-366).
+        locations = locate_file_strict(fname)
+        if not locations or 'location_type' not in locations[0]:
+            raise RuntimeError(f"Could not detect location for file: {fname}")
+        file_inloc = locations[0]['location_type']
+        print(f"Detected location of {fname}: {file_inloc}")
+        _fetch_file_local(fname, src_location=file_inloc)
         fcl, simjob_setup, infiles, outputs = process_direct_input(
             jobdesc, fname, args)
-        inloc = jobdesc[0].get('inloc')
     else:
         if mode != False:  # noqa: E712 — validate_jobdesc returns False for normal
             print(f"ERROR: direct mode supports normal-mode jobdescs "

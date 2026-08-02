@@ -8930,20 +8930,27 @@ class TestDirectDispatchFiles(unittest.TestCase):
                     ops['jobdesc'][0]['outputs'])
 
         with patch.object(runmu2e, 'process_direct_input', fake_pdi), \
+             patch.object(runmu2e, 'locate_file_strict',
+                          return_value=[{'location_type': 'tape'}]) as lfs, \
              patch.object(runmu2e, '_fetch_file_local') as ffl, \
              patch.object(runmu2e, '_execute_mu2e',
                           return_value=False), \
              patch.object(runmu2e, '_push_all'):
             failed = runmu2e._direct_dispatch(self._args(), ops, index)
-        return failed, calls, ffl
+        return failed, calls, ffl, lfs
 
     def test_index_selects_the_file(self):
         ops = {'jobs': [0, 1], 'files': list(self.FILES),
                'jobdesc': [dict(self.DRAIN)]}
-        failed, calls, ffl = self._dispatch(ops, 1)
+        failed, calls, ffl, lfs = self._dispatch(ops, 1)
         self.assertFalse(failed)
         self.assertEqual(calls['fname'], self.FILES[1])
-        ffl.assert_any_call(self.FILES[1])
+        # The fetch must use the file's RESOLVED SAM location, not
+        # _fetch_file_local's 'disk' default — every draining entry
+        # example ships inloc='tape', and a wrong-tier `mdh copy-file`
+        # fails outright (regression: bare _fetch_file_local(fname)).
+        lfs.assert_any_call(self.FILES[1])
+        ffl.assert_any_call(self.FILES[1], src_location='tape')
 
     def test_index_out_of_range_exits(self):
         from utils import runmu2e
