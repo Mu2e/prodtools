@@ -9081,14 +9081,31 @@ class TestDrainingState(unittest.TestCase):
         self.assertEqual(st['pending'], fgc)
 
     def test_non_dataset_definition_names_are_ignored(self):
-        # drainingn-era _slice_/_full_ junk can match a pattern; a name
-        # that does not parse as a 5-field dataset is skipped.
+        # drainingn-era junk (`..._slice_0_stage_2`) still parses as a
+        # legal 5-field dataset name -- it is caught by the input_pattern
+        # field match, not by the is_dataset guard. The fake lister DOES
+        # return a file for the junk name, so this fails without the
+        # fix (the junk file would leak into inputs/pending).
+        from utils import submissions
         ins = [_mk_file('A', 0)]
-        st = self._state(
-            in_files=ins, out_files=[],
-            defs=['dig.mu2e.A.MDC2025au_best_v1_5.art',
-                  'dig.mu2e.A.MDC2025au_best_v1_5.art_slice_0_stage_2'])
+        in_ds = 'dig.mu2e.A.MDC2025au_best_v1_5.art'
+        out_ds = 'mcs.mu2e.A.MDC2025au_best_v1_5.art'
+        junk_ds = 'dig.mu2e.A.MDC2025au_best_v1_5.art_slice_0_stage_2'
+        junk_file = ('dig.mu2e.A.MDC2025au_best_v1_5.'
+                     '001202_00000099.art_slice_0_stage_2')
+        listing = {in_ds: list(ins), out_ds: [], junk_ds: [junk_file]}
+        with patch.object(submissions, 'Mu2eJobPars', _DrainPars), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[]):
+            st = submissions.draining_state(
+                self.CAMP, '/x.db',
+                defs_fn=lambda p: [in_ds, junk_ds],
+                sam_lister=lambda ds: listing.get(ds, []),
+                locate=lambda t: '/tmp/' + t)
         self.assertEqual(st['pending'], ins)
+        self.assertNotIn(junk_file, st['inputs'])
 
     def test_unlocatable_tarball_raises(self):
         from utils import submissions
@@ -9114,14 +9131,14 @@ class TestGateBatch(unittest.TestCase):
         return lambda fl: [{'file_name': f, 'create_datetime': stamp}
                            for f in fl]
 
-    def _gate(self, files, *, states, md=None):
+    def _gate(self, files, *, states, md=None, loc='enstore'):
         from utils import submissions
         return submissions._gate_batch(
             dict(self.ENTRY), files,
             locality=lambda loc, fl: {f: states.get(f, 'ERROR')
                                       for f in fl},
             metadata_fn=md or self._md(files),
-            dataset_location=lambda ds: 'enstore',
+            dataset_location=lambda ds: loc,
             now=self.NOW)
 
     def test_online_files_dispatch_nearline_withheld(self):
@@ -9155,6 +9172,65 @@ class TestGateBatch(unittest.TestCase):
         f1 = _mk_file('A', 1)
         with self.assertRaises(RuntimeError):
             self._gate([f1], states={f1: 'MISSING'})
+
+    def test_unknown_storage_location_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'ONLINE'}, loc='N/A')
+
+
+# ---------------------------------------------------------------------------
+# 48. _request_prestage: never-raises contract + tmpfile hygiene
+# ---------------------------------------------------------------------------
+
+class TestRequestPrestage(unittest.TestCase):
+    def test_runner_exception_does_not_raise(self):
+        from utils import submissions
+
+        def boom(*a, **k):
+            raise OSError('mdh not found')
+
+        submissions._request_prestage(['f1'], runner=boom)  # must not raise
+
+    def test_nonzero_returncode_does_not_raise_and_prints(self):
+        from utils import submissions
+
+        def fail(*a, **k):
+            return types.SimpleNamespace(returncode=1, stderr='boom')
+
+        old_stdout, sys.stdout = sys.stdout, io.StringIO()
+        try:
+            submissions._request_prestage(['f1'], runner=fail)
+            printed = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        self.assertIn('prestage request failed', printed)
+
+    def test_success_command_and_file_contents_then_unlinked(self):
+        from utils import submissions
+        calls = {}
+
+        def runner(cmd, **kw):
+            calls['cmd'] = cmd
+            with open(cmd[2]) as fh:
+                calls['content'] = fh.read()
+            return types.SimpleNamespace(returncode=0, stderr='')
+
+        submissions._request_prestage(['b', 'a'], runner=runner)
+        self.assertEqual(calls['cmd'][:2], ['mdh', 'prestage-files'])
+        self.assertEqual(calls['content'], 'a\nb\n')
+        self.assertFalse(os.path.exists(calls['cmd'][2]))
+
+    def test_empty_files_returns_early(self):
+        from utils import submissions
+        calls = []
+
+        def runner(cmd, **kw):
+            calls.append(cmd)
+            return types.SimpleNamespace(returncode=0)
+
+        submissions._request_prestage([], runner=runner)
+        self.assertEqual(calls, [])
 
 
 # ---------------------------------------------------------------------------

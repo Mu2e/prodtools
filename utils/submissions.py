@@ -20,6 +20,7 @@ Design: docs/superpowers/specs/2026-07-18-direct-recovery-design.md
 import argparse
 import contextlib
 import fcntl
+import fnmatch
 import json
 import os
 import re
@@ -281,6 +282,28 @@ def _dataset_of(fname):
     return str(Mu2eName.parse(fname).dataset)
 
 
+def _matches_pattern(name, pattern):
+    """True if a dot-name field-by-field matches a SAM '%'-wildcard
+    pattern (same field count, each field an fnmatch of the pattern
+    field with '%' translated to '*'; a literal pattern field must
+    match exactly).
+
+    `definitions_matching` (SAM's `list-definitions --defname`) does a
+    substring/prefix match against the pattern, not a field-grammar
+    match — it can hand back drainingn-era junk names whose LAST field
+    merely starts with the pattern's extension (e.g. an extension of
+    `art_slice_0_stage_2` against a pattern extension of `art`), and
+    such a name still parses as a legal 5-field dataset, so the
+    ValueError/is_dataset guard alone does not catch it. This is the
+    real filter for that case.
+    """
+    fields = pattern.split('.')
+    parts = name.split('.')
+    return len(parts) == len(fields) and all(
+        fnmatch.fnmatchcase(v, f.replace('%', '*'))
+        for v, f in zip(parts, fields))
+
+
 def draining_state(camp, db_path, *,
                    defs_fn=definitions_matching,
                    sam_lister=files_in_dataset,
@@ -295,10 +318,13 @@ def draining_state(camp, db_path, *,
         parked    files in exhausted rows whose outputs are still missing
         pending   inputs − landed − in_flight − parked   (sorted)
 
-    Dataset enumeration is definition-based (production convention);
-    matched names that don't parse as 5-field datasets (e.g. POMS-era
-    `_slice_`/`_full_` junk) are skipped. Raises on an unlocatable
-    tarball or a malformed input filename — never guesses.
+    Dataset enumeration is definition-based (production convention).
+    Each name SAM hands back is re-verified: it must parse as a 5-field
+    dataset, its description must not be excluded, and it must match
+    `input_pattern` field-by-field (see `_matches_pattern` — SAM's own
+    match is substring-based and lets drainingn-era `_slice_`/`_full_`
+    junk through). Raises on an unlocatable tarball or a malformed
+    input filename — never guesses.
     """
     entry = camp['entry']
     exclude = set(entry.get('exclude_desc', []))
@@ -313,6 +339,8 @@ def draining_state(camp, db_path, *,
         except ValueError:
             continue
         if not n.is_dataset or n.description in exclude:
+            continue
+        if not _matches_pattern(d, entry['input_pattern']):
             continue
         datasets.append(d)
     inputs = set()
@@ -392,18 +420,29 @@ def _request_prestage(files, runner=subprocess.run):
     """One batched `mdh prestage-files` request for tape-only pending
     files (entry opts in with `prestage: true`). Never raises — the
     request is an optimization and idempotent server-side; the tick
-    continues either way."""
+    continues either way. No-op on an empty batch; the scratch file is
+    always unlinked (this repo has a known /tmp-leak history)."""
+    if not files:
+        return
+    path = None
     try:
         with tempfile.NamedTemporaryFile(
                 'w', suffix='.txt', delete=False) as fh:
+            path = fh.name
             fh.write('\n'.join(sorted(files)) + '\n')
-        res = runner(['mdh', 'prestage-files', fh.name],
+        res = runner(['mdh', 'prestage-files', path],
                      capture_output=True, text=True, timeout=600)
         if res.returncode != 0:
             print(f"  prestage request failed rc={res.returncode}: "
                   f"{(res.stderr or '').strip()[:200]}")
     except Exception as e:
         print(f"  prestage request failed: {e}")
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 @contextlib.contextmanager
