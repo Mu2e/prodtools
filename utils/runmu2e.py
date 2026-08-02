@@ -279,7 +279,8 @@ def process_jobdef(jobdesc, fname, args):
     Args:
         jobdesc: List of job descriptions
         fname: Index filename
-        args: Command line arguments (needs copy_input attribute)
+        args: Command line arguments (needs copy_input attribute; the
+            resolved entry's 'copy_input' key overrides it when present)
 
     Returns:
         tuple: (fcl, simjob_setup, infiles, outputs)
@@ -337,9 +338,19 @@ def process_jobdef(jobdesc, fname, args):
         all_files.extend(file_list)
     infiles = " ".join(all_files)
     
+    # Local copy vs streaming: the entry's copy_input key wins when
+    # present (per-entry opt-in, e.g. for fat-runtime-tail descs where a
+    # mid-job xroot drop wastes the most CPU); otherwise the CLI
+    # --copy-input flag. Streaming is the default — the POMS launch
+    # template never passed --copy-input, so every POMS-era campaign
+    # streamed via xroot.
+    copy_input = jobdesc_entry.get('copy_input', bool(args.copy_input))
+    if not isinstance(copy_input, bool):
+        fail(f"Error: copy_input must be true or false, got {copy_input!r}")
+
     # Generate FCL - Normal mode with local input copy
     # Stash files are on CVMFS and resilient files use xrootd — no local copying needed
-    if args.copy_input and infiles.strip() and inloc not in ("none", "stash", "resilient"):
+    if copy_input and infiles.strip() and inloc not in ("none", "stash", "resilient"):
         print(f"Copying input files locally from {inloc}: {infiles}")
         fcl = write_fcl(tarball, f"dir:{os.getcwd()}/indir", 'file', job_index_num)
         
@@ -958,9 +969,11 @@ def _direct_main(args):
             os.symlink(src, jobdef_basename)
         # else: process_jobdef will _fetch_file_local() from SAM as a fallback.
 
-    # process_jobdef stages inputs locally when args.copy_input is set —
-    # required in direct mode because there's no POMS pre-staging step.
-    args.copy_input = True
+    # Inputs stream via xroot by default, matching the POMS-era worker
+    # (its launch template never passed --copy-input). A map entry opts
+    # in to local staging with "copy_input": true, read in
+    # process_jobdef. Forcing args.copy_input = True here (mu2ejobsub.sh
+    # stage-in parity) was reverted 2026-08-02.
 
     if _direct_dispatch(args, ops, index):
         sys.exit(1)

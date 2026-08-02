@@ -225,6 +225,19 @@ reading the code:
   = inputs whose expected outputs (computed per-file from the cnf's
   own `job_outputs` mapping) don't exist yet, minus files already
   in-flight or parked. Nothing counts as done until its output exists.
+- A draining entry's `outputs[].dataset` globs must be tier-specific
+  (`mcs.*.art`, never `*.art`): a glob that matches the input pattern
+  is refused at enqueue, because the worker's push manifest would
+  otherwise have declared the fetched input copy as an output —
+  pushOutput then tries to delete the production input at its own
+  dataset path (2026-08-02 smoke incident; the worker also excludes
+  its inputs as the authoritative defense).
+- Workers stream inputs via xroot by default (POMS-era parity). A map
+  entry sets `"copy_input": true` to stage inputs locally via mdh
+  instead — worth it only for descs with fat runtime tails, where a
+  mid-job xroot drop wastes the most CPU. The entry key wins over the
+  worker's `--copy-input` CLI flag; `stash`/`resilient`/`dir:` inlocs
+  always stream regardless.
 
 If any of the above stops being true, update this list — do not leave a
 stale caveat in the regenerated doc.

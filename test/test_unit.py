@@ -1498,6 +1498,65 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
         os.unlink(tar)
 
 
+class TestProcessJobdefCopyInputFlip(unittest.TestCase):
+    """Streaming is the default (POMS-era parity: the launch template
+    never passed --copy-input); an entry opts in to local staging with
+    copy_input: true, and the entry key wins over the CLI flag."""
+
+    FILE = "sim.mu2e.Test.TestConf.001440_00000000.art"
+
+    def _run(self, *, entry_extra=None, cli_copy=False):
+        from utils import runmu2e
+
+        jp = _root_input_jobpars([self.FILE], merge=1)
+        tar = _make_tarball(jp, "module_type : RootInput\n")
+        args = MagicMock()
+        args.copy_input = cli_copy
+        jobdesc = [{'tarball': tar, 'njobs': 1, 'inloc': 'tape',
+                    'outputs': [], **(entry_extra or {})}]
+        located = {self.FILE: [{'location_type': 'tape'}]}
+        try:
+            with patch('utils.runmu2e.write_fcl',
+                       return_value='x.fcl') as mock_wfcl, \
+                 patch('utils.runmu2e.run'), \
+                 patch('utils.runmu2e.locate_files_strict',
+                       return_value=located), \
+                 patch('utils.runmu2e._fetch_file_local') as mock_fetch, \
+                 patch('utils.jobquery.Mu2eJobPars') as mock_pars:
+                mock_pars.return_value.setup.return_value = "/cvmfs/s.sh"
+                runmu2e.process_jobdef(
+                    jobdesc, fname="cnf.mu2e.Test.TestConf.0.fcl",
+                    args=args)
+            return mock_wfcl.call_args[0], mock_fetch
+        finally:
+            os.unlink(tar)
+
+    def test_default_streams_from_tape(self):
+        (_, inloc, proto, _), fetch = self._run()
+        self.assertEqual((inloc, proto), ('tape', 'root'))
+        # Only the tarball itself may be fetched — never the inputs.
+        for call in fetch.call_args_list:
+            self.assertNotIn(self.FILE, str(call))
+
+    def test_entry_opt_in_copies(self):
+        (_, inloc, proto, _), fetch = self._run(
+            entry_extra={'copy_input': True})
+        self.assertTrue(inloc.startswith('dir:'), inloc)
+        self.assertEqual(proto, 'file')
+        fetched = [str(c) for c in fetch.call_args_list]
+        self.assertTrue(any(self.FILE in c for c in fetched),
+                        f"input not staged locally: {fetched}")
+
+    def test_entry_false_wins_over_cli_flag(self):
+        (_, inloc, proto, _), _ = self._run(
+            entry_extra={'copy_input': False}, cli_copy=True)
+        self.assertEqual((inloc, proto), ('tape', 'root'))
+
+    def test_non_bool_copy_input_fails(self):
+        with self.assertRaises(SystemExit):
+            self._run(entry_extra={'copy_input': 'yes'})
+
+
 # ---------------------------------------------------------------------------
 # 15. version field in tarball names
 # ---------------------------------------------------------------------------
