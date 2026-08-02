@@ -387,7 +387,12 @@ def _gate_batch(entry, candidates, *,
         md_by_name[md.get('file_name')] = md
     old_enough, young = [], []
     for f in candidates:
-        stamp = (md_by_name.get(f) or {}).get('create_datetime')
+        # Live SAM metadata carries 'create_date' (ISO string). Fall back
+        # to 'create_datetime' for tolerance with older/alternate servers
+        # — same key-tuple precedent as definition_creation_date.
+        md = md_by_name.get(f) or {}
+        stamp = next((md[k] for k in ('create_date', 'create_datetime')
+                     if md.get(k)), None)
         dt = _parse_sam_datetime(stamp) if stamp else None
         if dt is None:
             raise RuntimeError(
@@ -1004,14 +1009,17 @@ def print_status(db_path):
     never need mu2epro)."""
     rows = submission_ledger.all_rows(db_path)
     if not rows:
+        # A freshly-enqueued draining campaign has no ledger rows yet
+        # (nothing dispatched this tick) but is very much not "nothing to
+        # see" — fall through to the campaigns block instead of hiding it.
         print(f"Ledger is empty ({db_path}).")
-        return
-    print(f"{'id':>4} {'state':<10} {'att':>3} {'parent':>6} {'#idx':>5}  "
-          f"{'created':<20} tarball")
-    for r in rows:
-        print(f"{r['id']:>4} {r['state']:<10} {r['attempt']:>3} "
-              f"{str(r['parent_id'] or ''):>6} {len(r['indices']):>5}  "
-              f"{r['created_utc']:<20} {r['tarball']}")
+    else:
+        print(f"{'id':>4} {'state':<10} {'att':>3} {'parent':>6} {'#idx':>5}  "
+              f"{'created':<20} tarball")
+        for r in rows:
+            print(f"{r['id']:>4} {r['state']:<10} {r['attempt']:>3} "
+                  f"{str(r['parent_id'] or ''):>6} {len(r['indices']):>5}  "
+                  f"{r['created_utc']:<20} {r['tarball']}")
     camps = submission_ledger.all_campaigns(db_path)
     if camps:
         print(f"\n{'id':>4} {'state':<10} {'cursor':>12} {'slice':>6}  "
@@ -1174,7 +1182,8 @@ def _run_pass(args):
             or summary.get('campaign-paused')
             or summary.get('would-pause-overlap')
             or summary.get('count-error')
-            or summary.get('paused-campaign')):
+            or summary.get('paused-campaign')
+            or summary.get('drain-error')):
         sys.exit(2)
 
 

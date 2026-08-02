@@ -617,9 +617,11 @@ the structural fix for `drainingn`'s launch-time snapshot cursor (see
 [[poms-reference]] for the mechanics this replaces).
 
 **Two gates** before a candidate batch dispatches: a settling-age gate
-(`min_age_minutes`, default 60, against SAM `create_datetime`) and a
-dCache-residency gate (tape-only candidates are withheld unless the
-entry opts in with `prestage: true`). Both fail closed on any unknown.
+(`min_age_minutes`, default 60, against SAM `create_date` — the key
+live SAM metadata actually carries; `create_datetime` is tolerated as a
+legacy fallback) and a dCache-residency gate (tape-only candidates are
+withheld unless the entry opts in with `prestage: true`). Both fail
+closed on any unknown.
 
 `drain_tick` feeds **one gated batch per campaign per tick**, oldest-
 first, under the same queue cap as index top-up. File-keyed rows verify

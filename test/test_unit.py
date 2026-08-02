@@ -6363,6 +6363,20 @@ class TestSubmissionsExitHonesty(unittest.TestCase):
                                         'run']):
             submissions.main()  # no SystemExit
 
+    def test_drain_error_exits_2(self):
+        # A permanently stuck draining campaign (state_fn/gate_fn keeps
+        # raising) must not go silent — drain-error is a summary key
+        # exactly like count-error and must trigger the same exit-2.
+        from utils import submissions
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(submissions, 'drain_tick',
+                          return_value={'drain-error': 1}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
 
 class TestPauseNotePreservation(unittest.TestCase):
     def setUp(self):
@@ -8888,6 +8902,39 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
         elt.assert_called_once_with(self.ENTRY['tarball'])
         rs.assert_not_called()
 
+    def test_two_descs_scopes_cover_both_outputs(self):
+        """I2: with a desc-discriminating outputs glob (one desc's
+        mapped output goes to tape, the other's to disk), token scopes
+        must be derived from EVERY distinct desc in the batch, not just
+        files[0]'s. self.FILES carries desc A then desc B."""
+        from utils import submit
+        entry = {**self.ENTRY, 'outputs': [
+            {'dataset': 'mcs.mu2e.A.*', 'location': 'tape'},
+            {'dataset': 'mcs.mu2e.B.*', 'location': 'disk'},
+        ]}
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_bundle_prodtools',
+                          return_value=Path('/tmp/pt.tar')), \
+             patch.object(submit, '_run_submit',
+                          return_value={'tarball': entry['tarball'],
+                                        'cluster_id': '123',
+                                        'jobsub_id': '123.0@s',
+                                        'njobs': 2, 'status': 'submitted',
+                                        'raw_output': ''}) as rs, \
+             patch.object(submit, '_log_submission'), \
+             patch.object(submit.submission_ledger, 'record_submission',
+                          lambda *a, **k: 99):
+            submit.submit_entry_direct(entry, 0, self._opts())
+        cmd = rs.call_args[0][0]
+        scopes = [cmd[i + 1] for i, c in enumerate(cmd)
+                 if c == '--need-storage-modify']
+        self.assertTrue(any('/tape/' in s for s in scopes),
+                        f"missing desc-A (tape) scope in {scopes}")
+        self.assertTrue(any('/persistent/datasets/' in s for s in scopes),
+                        f"missing desc-B (disk) scope in {scopes}")
+
 
 class TestSliceOverlapSkipsFileRows(unittest.TestCase):
     def test_file_keyed_row_never_matches_an_index_window(self):
@@ -9129,6 +9176,13 @@ class TestGateBatch(unittest.TestCase):
         self.NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
 
     def _md(self, files, stamp=OLD):
+        # key verified against live SAM metadata 2026-08-02: files carry
+        # create_date, not create_datetime.
+        return lambda fl: [{'file_name': f, 'create_date': stamp}
+                           for f in fl]
+
+    def _md_legacy(self, files, stamp=OLD):
+        # Legacy-tolerance fixture: ONLY the old key, no create_date.
         return lambda fl: [{'file_name': f, 'create_datetime': stamp}
                            for f in fl]
 
@@ -9178,6 +9232,15 @@ class TestGateBatch(unittest.TestCase):
         f1 = _mk_file('A', 1)
         with self.assertRaises(RuntimeError):
             self._gate([f1], states={f1: 'ONLINE'}, loc='N/A')
+
+    def test_legacy_create_datetime_key_still_works(self):
+        # Tolerance for metadata carrying ONLY the old key name.
+        f1 = _mk_file('A', 1)
+        dispatch, young, tape = self._gate(
+            [f1], states={f1: 'ONLINE'}, md=self._md_legacy([f1]))
+        self.assertEqual(dispatch, [f1])
+        self.assertEqual(young, [])
+        self.assertEqual(tape, [])
 
 
 # ---------------------------------------------------------------------------
@@ -9671,6 +9734,26 @@ class TestStatusDrainingLine(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn('dig.mu2e.%.MDC2025au_best_v1_5.art', out)
         self.assertIn('in-flight 2', out)
+        self.assertIn('draining', out)
+
+    def test_empty_rows_still_shows_draining_campaign(self):
+        # Freshly-enqueued campaign, day 1: no ledger rows yet (nothing
+        # dispatched this tick), but the campaign itself must not be
+        # hidden behind the "Ledger is empty" early return.
+        from utils import submissions
+        import io, contextlib as _ctx
+        camp = {**TestDrainTick.CAMP,
+                'created_utc': '2026-08-01T00:00:00+00:00'}
+        buf = io.StringIO()
+        with patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[camp]), \
+             _ctx.redirect_stdout(buf):
+            submissions.print_status('/x.db')
+        out = buf.getvalue()
+        self.assertIn('empty', out.lower())
+        self.assertIn('dig.mu2e.%.MDC2025au_best_v1_5.art', out)
         self.assertIn('draining', out)
 
 

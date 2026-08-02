@@ -209,7 +209,7 @@ reading the code:
   dataset 1:1 through a generic cnf, rather than a fixed index range;
   enqueue with `submit_map --map M --enqueue --slice-size N`. Optional
   entry keys: `exclude_desc` (exact desc matches to skip),
-  `min_age_minutes` (default 60, SAM `create_datetime` age gate before
+  `min_age_minutes` (default 60, SAM `create_date` age gate before
   a file is eligible), `prestage` (default false, opt-in tape recall
   for tape-only candidates).
 - `submit_map --files LIST.txt` submits one direct-input job per

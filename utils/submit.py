@@ -508,16 +508,26 @@ def submit_entry_direct(entry, idx, opts):
     if files is not None:
         # Draining batch: one direct-input job per file. A generic cnf
         # has no index capacity — the jobset is positions into the
-        # batch. Scope granularity is (area, tier, owner); desc plays no
-        # role, so the FIRST file's mapped outputs cover the whole
-        # batch's scopes (expected_outputs_for is the worker's own
+        # batch. Scope granularity is (area, tier, owner), but the AREA
+        # itself is resolved per-output by fnmatching output_filenames
+        # against outputs[].dataset globs (output_storage_dirs) — a
+        # desc-discriminating glob (e.g. one desc to tape, another to
+        # disk) picks a different area per desc. So every distinct desc
+        # in the batch must contribute its mapped outputs, not just the
+        # first file's (expected_outputs_for is the worker's own
         # substitution, so the names are exact).
         from utils.jobquery import Mu2eJobPars
         jp = Mu2eJobPars(str(tarball_path))
         njobs_total = len(files)
         input_datasets = sorted({str(Mu2eName.parse(f).dataset)
                                  for f in files})
-        output_filenames = expected_outputs_for(files[0], jp)
+        seen_descs, output_filenames = set(), []
+        for f in files:
+            d = Mu2eName.parse(f).description
+            if d in seen_descs:
+                continue
+            seen_descs.add(d)
+            output_filenames.extend(expected_outputs_for(f, jp))
         firstjob = 0
         jobset = list(range(len(files)))
     elif opts.dry_run and not tarball_path.is_file():
