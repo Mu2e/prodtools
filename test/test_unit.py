@@ -8743,6 +8743,145 @@ class TestEnqueueDraining(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 45. Draining campaigns: --files dispatch
+# ---------------------------------------------------------------------------
+
+class TestParseFiles(unittest.TestCase):
+    F1 = 'dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art'
+    F2 = 'dig.mu2e.B.MDC2025au_best_v1_5.001202_00000002.art'
+
+    def _parse(self, text):
+        from utils.submit import _parse_files
+        with tempfile.NamedTemporaryFile('w', suffix='.txt',
+                                         delete=False) as fh:
+            fh.write(text)
+        try:
+            return _parse_files(fh.name)
+        finally:
+            os.unlink(fh.name)
+
+    def test_none_passthrough(self):
+        from utils.submit import _parse_files
+        self.assertIsNone(_parse_files(None))
+
+    def test_sorted_unique_with_comments(self):
+        got = self._parse(f"# header\n{self.F2}\n{self.F1}\n{self.F2}\n")
+        self.assertEqual(got, [self.F1, self.F2])
+
+    def test_junk_name_raises(self):
+        with self.assertRaises(ValueError):
+            self._parse("not-a-name\n")
+
+    def test_dataset_name_raises(self):
+        with self.assertRaises(ValueError):
+            self._parse("dig.mu2e.A.MDC2025au_best_v1_5.art\n")
+
+    def test_empty_raises(self):
+        with self.assertRaises(ValueError):
+            self._parse("# only a comment\n")
+
+
+class TestBuildOpsJsonFiles(unittest.TestCase):
+    def test_files_key_present_only_when_given(self):
+        from utils.jobsub_argv import build_ops_json
+        entry = {'tarball': 't', 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+        ops = build_ops_json(entry=entry, jobset=[0, 1],
+                             input_datasets=['dig.mu2e.A.C.art'],
+                             files=['f1.art', 'f2.art'])
+        self.assertEqual(ops['files'], ['f1.art', 'f2.art'])
+        ops2 = build_ops_json(entry=entry, jobset=[0, 1],
+                              input_datasets=['dig.mu2e.A.C.art'])
+        self.assertNotIn('files', ops2)
+
+
+class TestSubmitEntryDirectFiles(unittest.TestCase):
+    """Files mode: jobset = positions, ledger row stores filenames,
+    scopes derive from the mapped outputs of the batch."""
+
+    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+             'inloc': 'tape',
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+             'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+    FILES = ['dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art',
+             'dig.mu2e.B.MDC2025au_best_v1_5.001202_00000002.art']
+
+    class FakePars:
+        def __init__(self, path):
+            pass
+
+        def job_outputs(self, index, override_desc=None, override_seq=None):
+            return {'Output': f'mcs.mu2e.{override_desc}.'
+                              f'MDC2025au_best_v1_5.{override_seq}.art'}
+
+    def _opts(self, **over):
+        from argparse import Namespace
+        base = dict(dry_run=False, files=list(self.FILES), indices=None,
+                    first=None, num=None, memory=None, disk=None,
+                    expected_lifetime=None, role=None, wftop=None,
+                    wfproject=None, prodtools_tar=None, no_ledger=False,
+                    ledger_db='/x.db', ledger_parent=None, map='/m.json')
+        base.update(over)
+        return Namespace(**base)
+
+    def test_files_submission_records_filenames_in_ledger(self):
+        from utils import submit
+        recorded = {}
+
+        def fake_record(db, *, tarball, entry, indices, jobsub_id,
+                        cluster_id, map_path=None, parent_id=None):
+            recorded['indices'] = indices
+            return 99
+
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_bundle_prodtools',
+                          return_value=Path('/tmp/pt.tar')), \
+             patch.object(submit, '_run_submit',
+                          return_value={'tarball': self.ENTRY['tarball'],
+                                        'cluster_id': '123',
+                                        'jobsub_id': '123.0@s',
+                                        'njobs': 2, 'status': 'submitted',
+                                        'raw_output': ''}) as rs, \
+             patch.object(submit, '_log_submission'), \
+             patch.object(submit.submission_ledger, 'record_submission',
+                          fake_record):
+            result = submit.submit_entry_direct(dict(self.ENTRY), 0,
+                                                self._opts())
+        self.assertEqual(result['status'], 'submitted')
+        self.assertEqual(recorded['indices'], self.FILES)
+        # the jobsub argv references an ops JSON (shipped via dropbox)
+        cmd = rs.call_args[0][0]
+        self.assertEqual(cmd[0], 'jobsub_submit')
+        self.assertTrue(any('ops-' in c for c in cmd))
+
+    def test_files_dry_run_submits_nothing(self):
+        from utils import submit
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_run_submit') as rs:
+            result = submit.submit_entry_direct(dict(self.ENTRY), 0,
+                                                self._opts(dry_run=True))
+        self.assertEqual(result['status'], 'dry_run')
+        self.assertEqual(result['njobs'], 2)
+        rs.assert_not_called()
+
+
+class TestSliceOverlapSkipsFileRows(unittest.TestCase):
+    def test_file_keyed_row_never_matches_an_index_window(self):
+        from utils import submissions
+        row = {'tarball': 'cnf.mu2e.reco.X.0.tar',
+               'entry': {'input_pattern': 'dig.mu2e.%.X.art'},
+               'indices': ['dig.mu2e.A.X.001202_00000001.art']}
+        with patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[row]):
+            self.assertFalse(submissions._slice_overlaps_ledger(
+                '/x.db', 'cnf.mu2e.reco.X.0.tar', 0, 0, 100))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

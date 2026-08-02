@@ -30,7 +30,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.prod_utils import _fetch_file_local
-from utils.job_common import Mu2eName, log_storage_location
+from utils.job_common import (Mu2eName, log_storage_location,
+                              expected_outputs_for)
 from utils.poms_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
                               firstjob_of, validate_window, resources_of,
                               is_draining)
@@ -132,23 +133,27 @@ def _parse_jobsub_id(stdout):
     return m.group(1) if m else None
 
 
-def _record_in_ledger(entry, firstjob, jobset, result, opts):
+def _record_in_ledger(entry, firstjob, jobset, result, opts, files=None):
     """Append a ledger row for a successful direct submission.
 
     jobset is entry-relative; the ledger stores ABSOLUTE cnf indices
     (firstjob + i). For --indices submissions jobset is already absolute
-    and firstjob is 0, so the same expression holds.
+    and firstjob is 0, so the same expression holds. For a draining
+    batch (files given) the ledger stores the FILENAME list in
+    indices_json — file-keyed rows are discriminated by
+    is_draining(entry), never by content.
 
     Never raises: the submission already happened, so a ledger failure
     is reported with everything needed to insert the row manually.
     """
-    absolute = [firstjob + i for i in jobset]
+    payload = (list(files) if files is not None
+              else [firstjob + i for i in jobset])
     try:
         row_id = submission_ledger.record_submission(
             opts.ledger_db,
             tarball=result['tarball'],
             entry=entry,
-            indices=absolute,
+            indices=payload,
             jobsub_id=result.get('jobsub_id'),
             cluster_id=result['cluster_id'],
             map_path=opts.map,
@@ -158,7 +163,7 @@ def _record_in_ledger(entry, firstjob, jobset, result, opts):
     except Exception as e:
         print(f"WARNING: ledger write failed ({e}) — the submission DID "
               f"go through (cluster {result['cluster_id']}). Record "
-              f"manually: tarball={result['tarball']} indices={absolute} "
+              f"manually: tarball={result['tarball']} indices={payload} "
               f"jobsub_id={result.get('jobsub_id')} "
               f"parent={opts.ledger_parent} db={opts.ledger_db}")
 
@@ -171,17 +176,21 @@ def _submission_log_path(ledger_db):
                         f'submit-{stamp}.log')
 
 
-def _log_submission(firstjob, jobset, result, opts):
+def _log_submission(firstjob, jobset, result, opts, files=None):
     """Append a human-readable record of a direct-backend submission
     attempt — success AND failure (failures are exactly what gets
     debugged). Covers every origin (manual, cron slice, recovery
     resubmit): they all pass through here. Never raises: the attempt
     already happened; a log problem must not crash the submit."""
     try:
-        absolute = [firstjob + i for i in jobset]
-        idx_line = (f"indices: {len(absolute)} absolute "
-                    f"[{absolute[0]}..{absolute[-1]}]"
-                    if absolute else "indices: none")
+        if files is not None:
+            idx_line = (f"files: {len(files)} "
+                        f"[{files[0]} .. {files[-1]}]")
+        else:
+            absolute = [firstjob + i for i in jobset]
+            idx_line = (f"indices: {len(absolute)} absolute "
+                        f"[{absolute[0]}..{absolute[-1]}]"
+                        if absolute else "indices: none")
         block = '\n'.join([
             f"=== {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
             f"user={getpass.getuser()} status={result['status']}",
@@ -404,6 +413,27 @@ def _parse_indices(spec, path):
     return sorted(parsed)
 
 
+def _parse_files(path):
+    """Parse --files: one Mu2e art filename per line; `#` comments and
+    blank lines allowed. Returns a sorted unique list, or None when no
+    path was given. Every name must parse as a 6-field Mu2e file name —
+    fail loud at the CLI, not on a grid worker."""
+    if path is None:
+        return None
+    names = set()
+    for line in Path(path).read_text().splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        n = Mu2eName.parse(line)
+        if not n.is_file:
+            raise ValueError(f"--files: not a Mu2e file name: {line}")
+        names.add(line)
+    if not names:
+        raise ValueError("--files: no filenames given")
+    return sorted(names)
+
+
 def _compute_jobset(opts, njobs_total, firstjob=0, entry_njobs=None):
     """Resolve --first/--num/--indices into the list of job indices to submit.
 
@@ -468,10 +498,27 @@ def submit_entry_direct(entry, idx, opts):
     else:
         tarball_path = _ensure_local_tarball(tarball_name)
 
+    files = getattr(opts, 'files', None)
+
     # njobs from the cnf is authoritative; POMS-map's field is informational.
     # output_filenames feeds the per-(area, tier, owner) token scope derivation
     # so pushOutput can MAKE_PARENT in `/pnfs/mu2e/<area>/datasets/...`.
-    if opts.dry_run and not tarball_path.is_file():
+    if files is not None:
+        # Draining batch: one direct-input job per file. A generic cnf
+        # has no index capacity — the jobset is positions into the
+        # batch. Scope granularity is (area, tier, owner); desc plays no
+        # role, so the FIRST file's mapped outputs cover the whole
+        # batch's scopes (expected_outputs_for is the worker's own
+        # substitution, so the names are exact).
+        from utils.jobquery import Mu2eJobPars
+        jp = Mu2eJobPars(str(tarball_path))
+        njobs_total = len(files)
+        input_datasets = sorted({str(Mu2eName.parse(f).dataset)
+                                 for f in files})
+        output_filenames = expected_outputs_for(files[0], jp)
+        firstjob = 0
+        jobset = list(range(len(files)))
+    elif opts.dry_run and not tarball_path.is_file():
         # Capacity stand-in when the cnf isn't inspectable: the window end
         # (== njobs for plain entries), so validate_window never spuriously
         # fails a dry run. --indices addresses cnf indices far past the
@@ -482,23 +529,31 @@ def submit_entry_direct(entry, idx, opts):
             njobs_total = max(njobs_total, opts.indices[-1] + 1)
         input_datasets = []
         output_filenames = []
+        firstjob = firstjob_of(entry)
+        jobset = _compute_jobset(opts, njobs_total, firstjob=firstjob,
+                                 entry_njobs=njobs_of(entry))
     else:
         njobs_total, input_datasets, output_filenames = _read_cnf_facts(tarball_path)
-
-    firstjob = firstjob_of(entry)
-    jobset = _compute_jobset(opts, njobs_total, firstjob=firstjob,
-                             entry_njobs=njobs_of(entry))
+        firstjob = firstjob_of(entry)
+        jobset = _compute_jobset(opts, njobs_total, firstjob=firstjob,
+                                 entry_njobs=njobs_of(entry))
 
     print(f"\n{'='*60}")
-    print(f"Entry {idx}: {desc} (cnf njobs={njobs_total}, submitting {len(jobset)})")
-    print(f"  tarball: {tarball_name}")
-    print(f"  inloc:   {inloc_of(entry)}")
-    if firstjob and jobset:
-        print(f"  window:  cnf indices {firstjob + jobset[0]}..{firstjob + jobset[-1]} (firstjob={firstjob})")
-    if opts.indices is not None and jobset:
-        print(f"  indices: {len(jobset)} absolute cnf indices (recovery), "
-              f"{jobset[0]}..{jobset[-1]}")
-    print(f"  jobset:  {jobset if len(jobset) <= 10 else f'[{jobset[0]}..{jobset[-1]}] ({len(jobset)} indices)'}")
+    if files is not None:
+        print(f"Entry {idx}: {desc} (draining batch of {len(files)})")
+        print(f"  tarball: {tarball_name}")
+        print(f"  inloc:   {inloc_of(entry)}")
+        print(f"  files:   {files[0]} .. {files[-1]}")
+    else:
+        print(f"Entry {idx}: {desc} (cnf njobs={njobs_total}, submitting {len(jobset)})")
+        print(f"  tarball: {tarball_name}")
+        print(f"  inloc:   {inloc_of(entry)}")
+        if firstjob and jobset:
+            print(f"  window:  cnf indices {firstjob + jobset[0]}..{firstjob + jobset[-1]} (firstjob={firstjob})")
+        if opts.indices is not None and jobset:
+            print(f"  indices: {len(jobset)} absolute cnf indices (recovery), "
+                  f"{jobset[0]}..{jobset[-1]}")
+        print(f"  jobset:  {jobset if len(jobset) <= 10 else f'[{jobset[0]}..{jobset[-1]}] ({len(jobset)} indices)'}")
     print(f"{'='*60}")
 
     # `--indices` values ARE cnf indices, but the worker reaches a cnf index via
@@ -518,6 +573,7 @@ def submit_entry_direct(entry, idx, opts):
         entry=ops_entry,
         jobset=jobset,
         input_datasets=input_datasets,
+        files=files,
     )
     ops_path = Path('/tmp') / f'ops-{getpass.getuser()}-{desc}-{os.getpid()}.json'
     ops_path.write_text(json.dumps(ops, indent=2) + '\n')
@@ -583,10 +639,10 @@ def submit_entry_direct(entry, idx, opts):
 
     result = _run_submit(cmd, tarball_name, len(jobset))
     if not opts.no_ledger:
-        _log_submission(firstjob, jobset, result, opts)
+        _log_submission(firstjob, jobset, result, opts, files=files)
     if result['status'] == 'submitted' and not opts.no_ledger:
         _record_in_ledger(_snapshot_entry(entry, resources), firstjob,
-                          jobset, result, opts)
+                          jobset, result, opts, files=files)
     return result
 
 
@@ -662,14 +718,24 @@ def submit_map(map_path, opts):
         return []
 
     # A draining entry has no index space — it cannot be submitted via the
-    # ordinary indexed path. --files (Task 3) will let a caller hand it a
-    # concrete batch outside --enqueue; until then, refuse loudly rather
-    # than silently drop into submit_entry_direct with a missing njobs.
+    # ordinary indexed path. --files lets a caller hand it a concrete batch
+    # outside --enqueue; without it, refuse loudly rather than silently
+    # drop into submit_entry_direct with a missing njobs.
     for idx, entry in entries_to_submit:
         if is_draining(entry) and getattr(opts, 'files', None) is None:
             print(f"Error: entry {idx} is a draining entry "
                   f"(input_pattern) — use --enqueue (tick-fed) or "
                   f"--files <list>")
+            sys.exit(1)
+
+    if getattr(opts, 'files', None) is not None:
+        if len(entries_to_submit) != 1:
+            print("Error: --files requires exactly one entry "
+                  "(use --entry N on a multi-entry map)")
+            sys.exit(1)
+        if not is_draining(entries_to_submit[0][1]):
+            print("Error: --files requires a draining (input_pattern) "
+                  "entry")
             sys.exit(1)
 
     print(f"Map: {map_path}")
@@ -734,6 +800,13 @@ def main():
                         help='File of ABSOLUTE cnf indices, whitespace/'
                              'comma separated, `#` comments ignored. Consumes '
                              '`mkrecovery --print-indices` output directly.')
+    parser.add_argument('--files', default=None,
+                        help='File of input art filenames (one per line, '
+                             '`#` comments) for a draining '
+                             '(input_pattern) entry: one 1:1 direct-'
+                             'input job per file. Written by the '
+                             'submissions drain tick; also the operator '
+                             'path for re-dispatching parked files.')
     parser.add_argument('--ledger-db', default=submission_ledger.DEFAULT_DB,
                         help='Submission-ledger sqlite DB '
                              f'(default: {submission_ledger.DEFAULT_DB}, '
@@ -787,6 +860,18 @@ def main():
         args.indices = _parse_indices(args.indices, args.indices_file)
     except (ValueError, OSError) as e:
         print(f"Error: {e}")
+        sys.exit(1)
+
+    try:
+        args.files = _parse_files(args.files)
+    except (ValueError, OSError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    if args.files is not None and (
+            args.first is not None or args.num is not None
+            or args.indices is not None or args.enqueue):
+        print("Error: --files cannot be combined with "
+              "--first/--num/--indices/--indices-file/--enqueue")
         sys.exit(1)
 
     if args.enqueue:

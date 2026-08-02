@@ -36,7 +36,7 @@ from utils.job_common import Mu2eName
 from utils.jobquery import Mu2eJobPars
 from utils.mkrecovery import (build_file_maps, extract_datasets_from_tarball,
                               locate_tarball)
-from utils.poms_entry import njobs_of
+from utils.poms_entry import njobs_of, is_draining
 from utils.samweb_wrapper import files_in_dataset
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -406,6 +406,8 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
     for row in submission_ledger.all_rows(db_path):
         if row['tarball'] != tarball:
             continue
+        if is_draining(row['entry']):
+            continue   # file-keyed row — no index space to overlap
         if any(lo <= idx < hi for idx in row['indices']):
             return True
     return False
