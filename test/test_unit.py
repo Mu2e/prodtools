@@ -8901,6 +8901,74 @@ class TestSliceOverlapSkipsFileRows(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 46. Draining campaigns: worker files branch
+# ---------------------------------------------------------------------------
+
+class TestDirectDispatchFiles(unittest.TestCase):
+    DRAIN = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+             'inloc': 'tape',
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+             'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+    FILES = ['dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art',
+             'dig.mu2e.B.MDC2025au_best_v1_5.001202_00000002.art']
+
+    def _args(self):
+        from argparse import Namespace
+        return Namespace(dry_run=False, copy_input=True)
+
+    def _dispatch(self, ops, index):
+        from utils import runmu2e
+        calls = {}
+
+        def fake_pdi(jobdesc, fname, args):
+            calls['fname'] = fname
+            # Mirror real process_direct_input: fcl = <fname stem>.fcl, a
+            # valid 6-field dot-name (the untouched tail feeds it through
+            # replace_file_extensions -> Mu2eName.parse).
+            fcl = Path(fname).stem + '.fcl'
+            return (fcl, '/cvmfs/setup.sh', fname,
+                    ops['jobdesc'][0]['outputs'])
+
+        with patch.object(runmu2e, 'process_direct_input', fake_pdi), \
+             patch.object(runmu2e, '_fetch_file_local') as ffl, \
+             patch.object(runmu2e, '_execute_mu2e',
+                          return_value=False), \
+             patch.object(runmu2e, '_push_all'):
+            failed = runmu2e._direct_dispatch(self._args(), ops, index)
+        return failed, calls, ffl
+
+    def test_index_selects_the_file(self):
+        ops = {'jobs': [0, 1], 'files': list(self.FILES),
+               'jobdesc': [dict(self.DRAIN)]}
+        failed, calls, ffl = self._dispatch(ops, 1)
+        self.assertFalse(failed)
+        self.assertEqual(calls['fname'], self.FILES[1])
+        ffl.assert_any_call(self.FILES[1])
+
+    def test_index_out_of_range_exits(self):
+        from utils import runmu2e
+        ops = {'jobs': [0, 1, 2], 'files': list(self.FILES),
+               'jobdesc': [dict(self.DRAIN)]}
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(self._args(), ops, 2)
+
+    def test_files_with_normal_jobdesc_exits(self):
+        from utils import runmu2e
+        normal = dict(self.DRAIN, njobs=10)
+        normal.pop('input_pattern')
+        ops = {'jobs': [0], 'files': list(self.FILES),
+               'jobdesc': [normal]}
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(self._args(), ops, 0)
+
+    def test_direct_input_jobdesc_without_files_still_exits(self):
+        from utils import runmu2e
+        ops = {'jobs': [0], 'jobdesc': [dict(self.DRAIN)]}
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(self._args(), ops, 0)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

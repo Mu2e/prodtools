@@ -840,22 +840,43 @@ def _execute_mu2e(fcl, simjob_setup, args, prefix=''):
 
 
 def _direct_dispatch(args, ops, index):
-    """Direct-mode equivalent of _dispatch_and_execute(mode='normal'):
-    run process_jobdef → mu2e -c → manifest → push (with retries)."""
-    # Synthesize POMS-style inputs: jobdesc is shipped in ops JSON,
-    # fname encodes the resolved index.
+    """Direct-mode equivalent of _dispatch_and_execute: run the entry's
+    prep — normal index mode via process_jobdef, or a draining batch
+    (ops ships a `files` list) via process_direct_input — then the
+    shared mu2e -c → manifest → push (with retries) tail."""
     jobdesc = ops['jobdesc']
-    fname = _synthesize_direct_fname(index)
+    files = ops.get('files')
 
     mode = validate_jobdesc(jobdesc)
-    if mode != False:  # noqa: E712 — validate_jobdesc returns False for normal
-        print(f"ERROR: direct mode supports normal-mode jobdescs only, "
-              f"got '{mode}'. template/direct_input/g4bl entries run "
-              f"via POMS campaigns or the upstream mu2ejobsub/mu2eg4bl "
-              f"CLIs, not through submit_map.")
-        sys.exit(1)
-
-    fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(jobdesc, fname, args)
+    if files is not None:
+        # Draining batch: PROCESS → position in the batch → input file.
+        if mode != 'direct_input':
+            print(f"ERROR: ops carries a files list but the jobdesc is "
+                  f"'{mode or 'normal'}' mode — draining batches ship "
+                  f"direct-input entries only.")
+            sys.exit(1)
+        if not 0 <= index < len(files):
+            print(f"ERROR: job index {index} out of range for files "
+                  f"list of length {len(files)}")
+            sys.exit(1)
+        fname = files[index]
+        print(f"[direct] files[{index}] = {fname}")
+        # Stage the input locally (direct mode has no POMS pre-staging;
+        # matches the copy_input=True convention of _direct_main).
+        _fetch_file_local(fname)
+        fcl, simjob_setup, infiles, outputs = process_direct_input(
+            jobdesc, fname, args)
+        inloc = jobdesc[0].get('inloc')
+    else:
+        if mode != False:  # noqa: E712 — validate_jobdesc returns False for normal
+            print(f"ERROR: direct mode supports normal-mode jobdescs "
+                  f"only, got '{mode}'. direct_input entries run as "
+                  f"draining batches (submit_map --files); template/"
+                  f"g4bl via the upstream mu2ejobsub/mu2eg4bl CLIs.")
+            sys.exit(1)
+        fname = _synthesize_direct_fname(index)
+        fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(
+            jobdesc, fname, args)
 
     # `dir:<path>` inloc means inputs come from a locally-mounted FS and
     # have no SAM parents — match the POMS-mode logic in _dispatch_and_execute.
