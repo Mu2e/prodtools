@@ -680,6 +680,8 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
         for camp in camps:
             if camp['state'] != 'active':
                 continue
+            if is_draining(camp['entry']):
+                continue   # fed by drain_tick, not by index slices
             njobs = njobs_of(camp['entry'])
             remaining = njobs - camp['cursor']
             if remaining <= 0:
@@ -765,6 +767,111 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
                           f"row)")
                     bump('campaign-complete')
                 camp['state'] = 'complete'
+    return summary
+
+
+def submit_drain_batch(camp, files, db_path, runner=subprocess.run):
+    """Submit one draining batch through the submit_map CLI — the same
+    battle-tested path as index slices (token check, argv build, ledger
+    row, submit log). The snapshot entry ships VERBATIM."""
+    with _scratch_map_dir('drain-') as tmpdir:
+        map_path = tmpdir / 'drain-map.json'
+        map_path.write_text(json.dumps([camp['entry']], indent=2) + '\n')
+        files_path = tmpdir / 'files.txt'
+        files_path.write_text('\n'.join(files) + '\n')
+        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
+               '--files', str(files_path), '--ledger-db', str(db_path)]
+        print(f"  campaign {camp['id']}: batch of {len(files)}: "
+              f"{' '.join(cmd)}")
+        res = runner(cmd)
+    return res.returncode == 0
+
+
+def drain_tick(db_path, cap, dry_run=False, count_fn=total_queued,
+               submit_fn=submit_drain_batch, state_fn=draining_state,
+               gate_fn=_gate_batch, prestage_fn=_request_prestage):
+    """Feed draining campaigns: ONE gated batch per campaign per tick,
+    oldest-first, under the same queue cap as index top-up (fresh
+    count — index slices submitted moments earlier are already in it).
+    Draining state is recomputed from SAM each tick and every unknown
+    fails closed; a batch-submit failure pauses the campaign (no blind
+    retry — the Run1Ban rule)."""
+    summary = {}
+
+    def bump(key):
+        summary[key] = summary.get(key, 0) + 1
+
+    camps = [c for c in submission_ledger.active_campaigns(db_path)
+             if is_draining(c['entry'])]
+    if not camps:
+        return summary
+    count = count_fn()
+    if count is None:
+        print("drain: queue count failed — draining skipped this tick")
+        bump('count-error')
+        return summary
+    print(f"drain: {count} idle+running (cap {cap}), "
+          f"{len(camps)} draining campaign(s)")
+    for camp in camps:
+        cid = camp['id']
+        try:
+            st = state_fn(camp, db_path)
+        except Exception as e:
+            print(f"campaign {cid}: draining state failed: {e} — "
+                  f"skipped this tick (fail-closed)")
+            bump('drain-error')
+            continue
+        n_in = len(st['inputs'])
+        pct = 100.0 * len(st['landed']) / n_in if n_in else 0.0
+        print(f"campaign {cid}: landed {len(st['landed'])}/{n_in} "
+              f"({pct:.1f}%) | in-flight {len(st['in_flight'])} | "
+              f"parked {len(st['parked'])} | pending {len(st['pending'])}")
+        if not st['pending']:
+            bump('drain-idle')
+            continue
+        candidates = st['pending'][:camp['slice_size']]
+        try:
+            batch, young, tape_only = gate_fn(camp['entry'], candidates)
+        except Exception as e:
+            print(f"campaign {cid}: batch gate failed: {e} — no "
+                  f"dispatch this tick (fail-closed)")
+            bump('drain-error')
+            continue
+        if young or tape_only:
+            print(f"campaign {cid}: withheld {len(young)} too-young, "
+                  f"{len(tape_only)} tape-only")
+        if tape_only and camp['entry'].get('prestage'):
+            if dry_run:
+                print(f"campaign {cid}: would request prestage of "
+                      f"{len(tape_only)} file(s)")
+            else:
+                prestage_fn(tape_only)
+                print(f"campaign {cid}: prestage requested for "
+                      f"{len(tape_only)} file(s)")
+        if not batch:
+            bump('drain-gated')
+            continue
+        if count + len(batch) > cap:
+            print(f"drain: campaign {cid}: {count}+{len(batch)} > {cap} "
+                  f"— headroom < batch, waiting for next tick")
+            bump('drain-cap-wait')
+            break
+        if dry_run:
+            print(f"campaign {cid}: would submit batch of {len(batch)}")
+            bump('would-drain-batch')
+            count += len(batch)
+            continue
+        if not submit_fn(camp, batch, db_path):
+            submission_ledger.set_campaign_state(
+                db_path, cid, 'paused',
+                note='batch submit failed — check the submit log and '
+                     'jobsub_q, then `submissions resume <ID>`')
+            print(f"campaign {cid}: batch submit FAILED — PAUSED "
+                  f"(no blind retry)")
+            bump('campaign-paused')
+            continue
+        count += len(batch)
+        bump('drain-batch')
     return summary
 
 
@@ -1015,6 +1122,11 @@ def _run_pass(args):
         # the queue when the count is taken, so the cap covers them.
         for k, v in top_up(args.db, resolve_cap(args.max_queued),
                            dry_run=args.dry_run).items():
+            summary[k] = summary.get(k, 0) + v
+        # Draining campaigns are fed separately (file-keyed batches, no
+        # index cursor) but share the same queue cap as index top-up.
+        for k, v in drain_tick(args.db, resolve_cap(args.max_queued),
+                               dry_run=args.dry_run).items():
             summary[k] = summary.get(k, 0) + v
         # A paused campaign means "waiting on a human" — repeat the
         # exit-2 signal EVERY tick until someone resumes or cancels,

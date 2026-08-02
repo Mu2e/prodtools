@@ -9413,6 +9413,119 @@ class TestProcessRowKindDispatch(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 49. Draining campaigns: the drain tick
+# ---------------------------------------------------------------------------
+
+class TestDrainTick(unittest.TestCase):
+    CAMP = {'id': 48, 'state': 'active',
+            'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+            'entry': {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+                      'inloc': 'tape',
+                      'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                      'outputs': [{'dataset': '*.art', 'location': 'tape'}]},
+            'cursor': 0, 'slice_size': 2}
+
+    def _tick(self, *, pending, cap=100, count=10, dry_run=False,
+              gate=None, submit_ok=True, camps=None, prestage_camp=False):
+        from utils import submissions
+        camp = dict(self.CAMP)
+        if prestage_camp:
+            camp = {**camp, 'entry': {**camp['entry'], 'prestage': True}}
+        state = {'inputs': set(pending), 'landed': set(),
+                 'in_flight': set(), 'parked': set(),
+                 'pending': sorted(pending)}
+        submitted = []
+
+        def fake_submit(c, batch, db):
+            submitted.append(list(batch))
+            return submit_ok
+
+        prestaged = []
+        with patch.object(submissions.submission_ledger,
+                          'active_campaigns',
+                          return_value=camps if camps is not None
+                          else [camp]), \
+             patch.object(submissions.submission_ledger,
+                          'set_campaign_state') as scs:
+            summary = submissions.drain_tick(
+                '/x.db', cap, dry_run=dry_run,
+                count_fn=lambda: count,
+                submit_fn=fake_submit,
+                state_fn=lambda c, db: dict(state),
+                gate_fn=gate or (lambda e, cand: (list(cand), [], [])),
+                prestage_fn=lambda fl: prestaged.append(list(fl)))
+        return summary, submitted, prestaged, scs
+
+    def test_one_gated_batch_per_campaign(self):
+        pend = [_mk_file('A', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(pending=pend)
+        self.assertEqual(summary.get('drain-batch'), 1)
+        self.assertEqual(submitted, [sorted(pend)[:2]])   # slice_size=2
+
+    def test_idle_campaign_reports_and_submits_nothing(self):
+        summary, submitted, _, _ = self._tick(pending=[])
+        self.assertEqual(summary.get('drain-idle'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_cap_stops_the_phase(self):
+        pend = [_mk_file('A', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(pending=pend, cap=11,
+                                              count=10)
+        self.assertEqual(summary.get('drain-cap-wait'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_gate_failure_is_fail_closed(self):
+        def bad_gate(entry, cand):
+            raise RuntimeError('mdh down')
+        pend = [_mk_file('A', 1)]
+        summary, submitted, _, _ = self._tick(pending=pend, gate=bad_gate)
+        self.assertEqual(summary.get('drain-error'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_submit_failure_pauses_campaign(self):
+        pend = [_mk_file('A', 1)]
+        summary, _, _, scs = self._tick(pending=pend, submit_ok=False)
+        self.assertEqual(summary.get('campaign-paused'), 1)
+        scs.assert_called_once()
+        self.assertEqual(scs.call_args[0][2], 'paused')
+
+    def test_dry_run_submits_nothing_but_counts(self):
+        pend = [_mk_file('A', 1)]
+        summary, submitted, _, _ = self._tick(pending=pend, dry_run=True)
+        self.assertEqual(summary.get('would-drain-batch'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_prestage_requested_for_tape_only(self):
+        pend = [_mk_file('A', 1), _mk_file('A', 2)]
+
+        def gate(entry, cand):
+            return [cand[0]], [], [cand[1]]
+        summary, submitted, prestaged, _ = self._tick(
+            pending=pend, gate=gate, prestage_camp=True)
+        self.assertEqual(prestaged, [[sorted(pend)[1]]])
+        self.assertEqual(submitted, [[sorted(pend)[0]]])
+
+    def test_index_campaigns_are_ignored(self):
+        camps = [{'id': 1, 'state': 'active', 'tarball': 't',
+                  'entry': {'njobs': 100}, 'cursor': 0, 'slice_size': 10}]
+        summary, submitted, _, _ = self._tick(pending=[], camps=camps)
+        self.assertEqual(summary, {})
+        self.assertEqual(submitted, [])
+
+
+class TestTopUpSkipsDraining(unittest.TestCase):
+    def test_draining_campaign_never_reaches_index_arithmetic(self):
+        from utils import submissions
+        camp = dict(TestDrainTick.CAMP)   # no njobs -> would TypeError
+        with patch.object(submissions.submission_ledger,
+                          'active_campaigns', return_value=[camp]):
+            summary = submissions.top_up('/x.db', 100,
+                                         count_fn=lambda: 0,
+                                         submit_fn=lambda *a: True)
+        self.assertEqual(summary, {})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
