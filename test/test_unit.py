@@ -23,6 +23,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # Make the package root importable when running from any directory
@@ -9231,6 +9232,91 @@ class TestRequestPrestage(unittest.TestCase):
 
         submissions._request_prestage([], runner=runner)
         self.assertEqual(calls, [])
+
+
+# ---------------------------------------------------------------------------
+# 49. Draining campaigns: file-keyed verify + recovery
+# ---------------------------------------------------------------------------
+
+class TestVerifyFilesRow(unittest.TestCase):
+    ROW = {'id': 7, 'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+           'entry': {'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                     'inloc': 'tape',
+                     'outputs': [{'dataset': '*.art', 'location': 'tape'}]},
+           'indices': [_mk_file('A', 1), _mk_file('B', 2)],
+           'attempt': 1, 'cluster_id': '123', 'parent_id': None}
+
+    def _verify(self, existing_outputs):
+        from utils import submissions
+        with patch.object(submissions, 'locate_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions, 'Mu2eJobPars', _DrainPars):
+            return submissions.verify_files_row(
+                dict(self.ROW), sam_lister=lambda ds: existing_outputs)
+
+    def test_all_outputs_present_is_complete(self):
+        missing, partial = self._verify([_mk_out('A', 1), _mk_out('B', 2)])
+        self.assertEqual(missing, [])
+        self.assertEqual(partial, [])
+
+    def test_missing_output_names_the_input_file(self):
+        missing, partial = self._verify([_mk_out('A', 1)])
+        self.assertEqual(missing, [_mk_file('B', 2)])
+        self.assertEqual(partial, [])
+
+    def test_unlocatable_tarball_raises(self):
+        from utils import submissions
+        with patch.object(submissions, 'locate_tarball',
+                          return_value=None):
+            with self.assertRaises(RuntimeError):
+                submissions.verify_files_row(dict(self.ROW))
+
+
+class TestResubmitFiles(unittest.TestCase):
+    def test_child_submission_uses_files_flag_and_parent(self):
+        from utils import submissions
+        row = dict(TestVerifyFilesRow.ROW)
+        missing = [_mk_file('B', 2)]
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen['cmd'] = list(cmd)
+            seen['files_text'] = Path(
+                cmd[cmd.index('--files') + 1]).read_text()
+            return SimpleNamespace(returncode=0)
+
+        ok = submissions.resubmit_files(row, missing, '/x.db',
+                                        runner=fake_run)
+        self.assertTrue(ok)
+        cmd = seen['cmd']
+        self.assertIn('--files', cmd)
+        self.assertIn('--ledger-parent', cmd)
+        self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
+        self.assertIn(missing[0], seen['files_text'])
+        # recovery resource floor applies (entry names no resources)
+        self.assertIn('--memory', cmd)
+
+
+class TestProcessRowKindDispatch(unittest.TestCase):
+    def test_draining_row_uses_file_verify_and_file_resubmit(self):
+        from utils import submissions
+        row = dict(TestVerifyFilesRow.ROW)
+        called = {}
+
+        def fake_verify(r):
+            called['verify'] = True
+            return [], []
+
+        with patch.object(submissions, 'verify_files_row', fake_verify), \
+             patch.object(submissions.submission_ledger, 'close_row'):
+            action = submissions.process_row(
+                row, '/x.db', 3,
+                clusters={},   # cluster absent from snapshot -> drained
+                dry_run=False)
+        self.assertEqual(action, 'complete')
+        self.assertTrue(called.get('verify'))
 
 
 # ---------------------------------------------------------------------------

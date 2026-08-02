@@ -521,6 +521,60 @@ def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
     return res.returncode == 0
 
 
+def verify_files_row(row, sam_lister=files_in_dataset):
+    """SAM-verify one file-keyed (draining) ledger row.
+
+    The exact analog of verify_row, keyed by input FILENAMES: expected
+    outputs come from expected_outputs_for — the worker's own name
+    substitution — so verification can never drift from what the job
+    actually produced. Returns (missing, partial) as input filenames.
+    Raises on anything that prevents verification (unlocatable tarball,
+    SAM failure): a row is never guessed complete.
+    """
+    tarball_path = locate_tarball(row['tarball'])
+    if not tarball_path or not os.path.exists(tarball_path):
+        raise RuntimeError(f"cannot locate tarball {row['tarball']}")
+    jp = Mu2eJobPars(tarball_path)
+    files = row['indices']            # filenames for a draining row
+    out_of = {f: expected_outputs_for(f, jp) for f in files}
+    out_datasets = {_dataset_of(o)
+                    for outs in out_of.values() for o in outs}
+    existing = {ds: set(sam_lister(ds)) for ds in sorted(out_datasets)}
+    missing, partial = [], []
+    for f in files:
+        absent = [o for o in out_of[f]
+                  if o not in existing[_dataset_of(o)]]
+        if absent:
+            missing.append(f)
+            if len(absent) < len(out_of[f]):
+                partial.append(f)
+    return missing, partial
+
+
+def resubmit_files(row, missing, db_path, dry_run=False,
+                   runner=subprocess.run):
+    """Draining analog of resubmit(): child submission of exactly the
+    missing input files via `submit_map --files` (child ledger row via
+    --ledger-parent, attempt+1; the recovery resource floor applies)."""
+    entry = row['entry']
+    with _scratch_map_dir('recover-') as tmpdir:
+        map_path = tmpdir / 'recovery-map.json'
+        map_path.write_text(json.dumps([entry], indent=2) + '\n')
+        files_path = tmpdir / 'files.txt'
+        files_path.write_text(f"# {row['tarball']}\n"
+                              + '\n'.join(missing) + '\n')
+        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
+               '--files', str(files_path),
+               '--ledger-parent', str(row['id']),
+               '--ledger-db', str(db_path)]
+        cmd += recovery_resource_argv(entry)
+        if dry_run:
+            cmd.append('--dry-run')
+        print(f"  resubmit: {' '.join(cmd)}")
+        res = runner(cmd)
+    return res.returncode == 0
+
+
 def total_queued(user='mu2epro', runner=subprocess.run):
     """Total idle+running jobs for `user` — the top-up throttle gate —
     or None when the count cannot be trusted (caller skips the phase).
@@ -728,17 +782,27 @@ def manage_campaign(db_path, camp_id, action, note=None):
 
 
 def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
-                queue_state_fn=cluster_queue_state, verify_fn=verify_row,
-                resubmit_fn=resubmit):
+                queue_state_fn=cluster_queue_state, verify_fn=None,
+                resubmit_fn=None):
     """Drive one ledger row through the gate/verify/act sequence.
     `clusters` is the per-tick live_clusters() snapshot the drain-check
     reads (None → the snapshot failed → every row skips as queue-error).
+
+    verify_fn/resubmit_fn default per row kind: file-keyed (draining)
+    rows verify via verify_files_row and recover via resubmit_files;
+    index rows keep verify_row/resubmit. Explicit injections win.
 
     Returns the action taken: 'running' | 'held' | 'queue-error' |
     'verify-error' | 'complete' | 'resubmitted' | 'resubmit-error' |
     'exhausted' | 'would-resubmit' | 'would-complete' | 'would-exhaust' |
     'child-active' | 'child-missing' | 'would-recover'.
     """
+    if verify_fn is None:
+        verify_fn = (verify_files_row if is_draining(row['entry'])
+                     else verify_row)
+    if resubmit_fn is None:
+        resubmit_fn = (resubmit_files if is_draining(row['entry'])
+                       else resubmit)
     rid = row['id']
     if not row['cluster_id']:
         print(f"row {rid}: no cluster id recorded — cannot "
