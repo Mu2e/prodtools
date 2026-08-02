@@ -9238,6 +9238,28 @@ class TestRequestPrestage(unittest.TestCase):
 # 49. Draining campaigns: file-keyed verify + recovery
 # ---------------------------------------------------------------------------
 
+class _DrainParsTwoStream:
+    """Fake Mu2eJobPars with TWO output streams per job (mcs + nts).
+
+    verify_files_row's partial branch (some but not all of an input's
+    expected outputs landed) can never fire against the shared
+    single-stream _DrainPars fake — every file has exactly one expected
+    output, so it is either wholly present or wholly missing. This fake
+    gives each input two independently-landable streams.
+    """
+
+    def __init__(self, path):
+        pass
+
+    def job_outputs(self, index, override_desc=None, override_seq=None):
+        return {
+            'Output': f'mcs.mu2e.{override_desc}.MDC2025au_best_v1_5.'
+                      f'{override_seq}.art',
+            'ntuple': f'nts.mu2e.{override_desc}.MDC2025au_best_v1_5.'
+                      f'{override_seq}.root',
+        }
+
+
 class TestVerifyFilesRow(unittest.TestCase):
     ROW = {'id': 7, 'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
            'entry': {'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
@@ -9272,6 +9294,37 @@ class TestVerifyFilesRow(unittest.TestCase):
                           return_value=None):
             with self.assertRaises(RuntimeError):
                 submissions.verify_files_row(dict(self.ROW))
+
+    def test_one_stream_missing_flags_partial_both_missing_does_not(self):
+        # A: mcs landed, nts didn't -> missing AND partial.
+        # B: neither stream landed -> missing only (not partial: ALL
+        # expected outputs are absent, not just some).
+        from utils import submissions
+
+        def mcs(desc, i):
+            return (f'mcs.mu2e.{desc}.MDC2025au_best_v1_5.'
+                    f'001202_{i:08d}.art')
+
+        def nts(desc, i):
+            return (f'nts.mu2e.{desc}.MDC2025au_best_v1_5.'
+                    f'001202_{i:08d}.root')
+
+        listing = {
+            'mcs.mu2e.A.MDC2025au_best_v1_5.art': [mcs('A', 1)],
+            'nts.mu2e.A.MDC2025au_best_v1_5.root': [],
+            'mcs.mu2e.B.MDC2025au_best_v1_5.art': [],
+            'nts.mu2e.B.MDC2025au_best_v1_5.root': [],
+        }
+        with patch.object(submissions, 'locate_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions, 'Mu2eJobPars', _DrainParsTwoStream):
+            missing, partial = submissions.verify_files_row(
+                dict(self.ROW), sam_lister=lambda ds: listing.get(ds, []))
+        a_file, b_file = _mk_file('A', 1), _mk_file('B', 2)
+        self.assertEqual(missing, [a_file, b_file])
+        self.assertEqual(partial, [a_file])
 
 
 class TestResubmitFiles(unittest.TestCase):
@@ -9317,6 +9370,46 @@ class TestProcessRowKindDispatch(unittest.TestCase):
                 dry_run=False)
         self.assertEqual(action, 'complete')
         self.assertTrue(called.get('verify'))
+
+    def test_draining_row_dispatches_resubmit_files_not_resubmit(self):
+        # Missing-outputs path: confirms the resubmit_fn half of the
+        # per-kind dispatch (untested until now) resolves to
+        # resubmit_files, not resubmit, for a draining row.
+        from utils import submissions
+        row = dict(TestVerifyFilesRow.ROW)
+        missing = [_mk_file('B', 2)]
+        calls = {}
+
+        def fake_verify(r):
+            return list(missing), []
+
+        def fake_resubmit_files(r, miss, db_path):
+            calls['resubmit_files'] = (r, list(miss), db_path)
+            return True
+
+        def fake_resubmit(r, miss, db_path):
+            calls['resubmit'] = True
+            return True
+
+        # open_rows is consulted twice on the resubmit path: once for the
+        # crash-window "child already active" pre-check (no children yet),
+        # once after resubmit_fn succeeds to find the new child row (see
+        # TestRecoverLoop, which fakes this via a real ledger; here it's
+        # patched directly since this test uses a fake db_path).
+        child_row = {'id': 8, 'parent_id': row['id'], 'state': 'active'}
+
+        with patch.object(submissions, 'verify_files_row', fake_verify), \
+             patch.object(submissions, 'resubmit_files', fake_resubmit_files), \
+             patch.object(submissions, 'resubmit', fake_resubmit), \
+             patch.object(submissions.submission_ledger, 'close_row'), \
+             patch.object(submissions.submission_ledger, 'open_rows',
+                          side_effect=[[], [child_row]]):
+            action = submissions.process_row(
+                row, '/x.db', 3, clusters={}, dry_run=False)
+        self.assertEqual(action, 'resubmitted')
+        self.assertIn('resubmit_files', calls)
+        self.assertEqual(calls['resubmit_files'], (row, missing, '/x.db'))
+        self.assertNotIn('resubmit', calls)
 
 
 # ---------------------------------------------------------------------------
