@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import Mu2eName, log_storage_location
 from utils.poms_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
-                              firstjob_of, validate_window, resources_of)
+                              firstjob_of, validate_window, resources_of,
+                              is_draining)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
 from utils.check_inputs import check_inputs, format_report, Problem
@@ -224,6 +225,35 @@ def _snapshot_entry(entry, resources):
     return snap
 
 
+def _validate_draining_entry(entry):
+    """Shape check for an input_pattern (draining) map entry. Returns an
+    error string or None. njobs/firstjob are index-mode concepts — a
+    draining campaign has no index space; draining state lives in SAM
+    and the submissions rows, never in a cursor."""
+    if 'njobs' in entry:
+        return "has both input_pattern and njobs — pick one mode"
+    if 'firstjob' in entry:
+        return "has input_pattern and firstjob — draining has no index space"
+    for key in ('tarball', 'inloc', 'outputs'):
+        if not entry.get(key):
+            return f"draining entry missing required key {key!r}"
+    pattern = entry['input_pattern']
+    fields = pattern.split('.')
+    if len(fields) != 5 or not all(fields):
+        return (f"input_pattern {pattern!r} is not a 5-field "
+                f"tier.owner.desc.dsconf.ext pattern")
+    excl = entry.get('exclude_desc', [])
+    if not (isinstance(excl, list)
+            and all(isinstance(d, str) for d in excl)):
+        return "exclude_desc must be a list of desc strings"
+    age = entry.get('min_age_minutes', 60)
+    if not (isinstance(age, int) and not isinstance(age, bool) and age >= 0):
+        return "min_age_minutes must be a non-negative integer"
+    if not isinstance(entry.get('prestage', False), bool):
+        return "prestage must be true or false"
+    return None
+
+
 def _enqueue_entries(entries_to_submit, map_path, opts):
     """Register entries as sliced-submission campaigns (cursor 0) —
     submits NOTHING; the submissions cron feeds slices while the
@@ -237,6 +267,31 @@ def _enqueue_entries(entries_to_submit, map_path, opts):
     a traceback. Returns new campaign ids."""
     ids = []
     for idx, entry in entries_to_submit:
+        if is_draining(entry):
+            err = _validate_draining_entry(entry)
+            if err:
+                sys.exit(f"submit_map: entry {idx} {err}")
+            _ensure_local_tarball(tarball_of(entry))
+            # No check_inputs: a generic cnf bakes no inputs — the tick
+            # gates every batch (residency + settling age) at dispatch.
+            snap = _snapshot_entry(entry, _effective_resources(entry, opts))
+            if opts.dry_run:
+                print(f"[DRY RUN] would enqueue draining campaign: "
+                      f"{tarball_of(entry)} "
+                      f"pattern={entry['input_pattern']} "
+                      f"slice={opts.slice_size}")
+                continue
+            try:
+                camp_id = submission_ledger.create_campaign(
+                    opts.ledger_db, tarball=tarball_of(entry), entry=snap,
+                    slice_size=opts.slice_size, map_path=map_path)
+            except (ValueError, sqlite3.Error) as e:
+                sys.exit(f"submit_map: {e}")
+            print(f"Enqueued draining campaign {camp_id}: "
+                  f"{tarball_of(entry)} pattern={entry['input_pattern']} "
+                  f"slice={opts.slice_size} (db {opts.ledger_db})")
+            ids.append(camp_id)
+            continue
         tarball_path = _ensure_local_tarball(tarball_of(entry))
         ok, problems = check_inputs(str(tarball_path), inloc_of(entry))
         if not ok:
@@ -584,12 +639,16 @@ def submit_map(map_path, opts):
         entries_to_submit = list(enumerate(entries))
 
     # Skip entries without njobs (generic/direct-input tarballs) unless
-    # there's only one entry (direct-input mode)
+    # there's only one entry (direct-input mode). Draining (input_pattern)
+    # entries have no njobs by design — they are not generic/direct-input,
+    # so they survive this filter.
     if len(entries_to_submit) > 1:
         filtered = []
         for idx, entry in entries_to_submit:
-            if njobs_of(entry) is None:
-                print(f"[INFO] Skipping entry {idx} ({entry.get('tarball', '?')}): no njobs (generic tarball)")
+            if njobs_of(entry) is None and not is_draining(entry):
+                print(f"[INFO] Skipping entry {idx} "
+                      f"({entry.get('tarball', '?')}): no njobs "
+                      f"(generic tarball)")
                 continue
             filtered.append((idx, entry))
         entries_to_submit = filtered
@@ -601,6 +660,17 @@ def submit_map(map_path, opts):
     if getattr(opts, 'enqueue', False):
         _enqueue_entries(entries_to_submit, map_path, opts)
         return []
+
+    # A draining entry has no index space — it cannot be submitted via the
+    # ordinary indexed path. --files (Task 3) will let a caller hand it a
+    # concrete batch outside --enqueue; until then, refuse loudly rather
+    # than silently drop into submit_entry_direct with a missing njobs.
+    for idx, entry in entries_to_submit:
+        if is_draining(entry) and getattr(opts, 'files', None) is None:
+            print(f"Error: entry {idx} is a draining entry "
+                  f"(input_pattern) — use --enqueue (tick-fed) or "
+                  f"--files <list>")
+            sys.exit(1)
 
     print(f"Map: {map_path}")
     print(f"Entries to submit: {len(entries_to_submit)}")

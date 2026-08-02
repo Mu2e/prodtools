@@ -8642,6 +8642,107 @@ class TestExpectedOutputsFor(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 44. Draining campaigns: enqueue validation
+# ---------------------------------------------------------------------------
+
+class TestValidateDrainingEntry(unittest.TestCase):
+    BASE = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+            'inloc': 'tape',
+            'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+            'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+
+    def _err(self, **over):
+        from utils.submit import _validate_draining_entry
+        return _validate_draining_entry({**self.BASE, **over})
+
+    def test_valid_entry_passes(self):
+        self.assertIsNone(self._err())
+
+    def test_njobs_and_pattern_conflict(self):
+        self.assertIn('njobs', self._err(njobs=100))
+
+    def test_firstjob_rejected(self):
+        self.assertIn('firstjob', self._err(firstjob=500))
+
+    def test_pattern_must_be_five_fields(self):
+        self.assertIn('5-field', self._err(input_pattern='dig.mu2e.%.art'))
+
+    def test_missing_required_key(self):
+        entry = {k: v for k, v in self.BASE.items() if k != 'outputs'}
+        from utils.submit import _validate_draining_entry
+        self.assertIn('outputs', _validate_draining_entry(entry))
+
+    def test_exclude_desc_must_be_string_list(self):
+        self.assertIn('exclude_desc', self._err(exclude_desc='NoPrimary'))
+
+    def test_min_age_must_be_nonnegative_int(self):
+        self.assertIn('min_age', self._err(min_age_minutes=-5))
+
+    def test_prestage_must_be_bool(self):
+        self.assertIn('prestage', self._err(prestage='yes'))
+
+
+class TestEnqueueDraining(unittest.TestCase):
+    """--enqueue on a draining entry creates a campaign with the
+    snapshotted entry; check_inputs is skipped (a generic cnf bakes no
+    inputs — the tick gates each batch instead)."""
+
+    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+             'inloc': 'tape',
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+             'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+
+    def _opts(self, **over):
+        from argparse import Namespace
+        base = dict(dry_run=False, slice_size=500, ledger_db='/x.db',
+                    memory=None, disk=None, expected_lifetime=None)
+        base.update(over)
+        return Namespace(**base)
+
+    def test_creates_campaign_without_check_inputs(self):
+        from utils import submit
+        created = {}
+
+        def fake_create(db, *, tarball, entry, slice_size, map_path):
+            created.update(tarball=tarball, entry=entry,
+                           slice_size=slice_size)
+            return 48
+
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submit, 'check_inputs') as ci, \
+             patch.object(submit.submission_ledger, 'create_campaign',
+                          fake_create):
+            ids = submit._enqueue_entries([(0, dict(self.ENTRY))],
+                                          '/m.json', self._opts())
+        self.assertEqual(ids, [48])
+        ci.assert_not_called()
+        self.assertEqual(created['slice_size'], 500)
+        self.assertEqual(created['entry']['input_pattern'],
+                         self.ENTRY['input_pattern'])
+
+    def test_invalid_draining_entry_exits(self):
+        from utils import submit
+        bad = dict(self.ENTRY, njobs=100)
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'):
+            with self.assertRaises(SystemExit):
+                submit._enqueue_entries([(0, bad)], '/m.json', self._opts())
+
+    def test_dry_run_creates_nothing(self):
+        from utils import submit
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submit.submission_ledger,
+                          'create_campaign') as cc:
+            ids = submit._enqueue_entries([(0, dict(self.ENTRY))],
+                                          '/m.json',
+                                          self._opts(dry_run=True))
+        self.assertEqual(ids, [])
+        cc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
