@@ -9630,6 +9630,51 @@ class TestTopUpSkipsDraining(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 50. Draining campaigns: status + complete verb
+# ---------------------------------------------------------------------------
+
+class TestCompleteVerb(unittest.TestCase):
+    def test_complete_closes_an_active_campaign(self):
+        from utils import submissions
+        with patch.object(submissions.submission_ledger,
+                          'set_campaign_state') as scs:
+            submissions.manage_campaign('/x.db', 48, 'complete')
+        scs.assert_called_once()
+        self.assertEqual(scs.call_args[0][2], 'complete')
+
+    def test_parser_accepts_complete(self):
+        from utils import submissions
+        args = submissions.build_parser().parse_args(['complete', '48'])
+        self.assertEqual(args.verb, 'complete')
+        self.assertEqual(args.camp_id, 48)
+
+
+class TestStatusDrainingLine(unittest.TestCase):
+    def test_draining_campaign_prints_pattern_and_ledger_counts(self):
+        from utils import submissions
+        import io, contextlib as _ctx
+        camp = {**TestDrainTick.CAMP,
+                'created_utc': '2026-08-01T00:00:00+00:00'}
+        row = {'id': 1, 'state': 'active', 'attempt': 1, 'parent_id': None,
+               'tarball': camp['tarball'], 'entry': camp['entry'],
+               'indices': [_mk_file('A', 1), _mk_file('A', 2)],
+               'created_utc': '2026-08-01T00:00:00+00:00',
+               'cluster_id': '123', 'jobsub_id': '1.0@s',
+               'map_path': None, 'closed_utc': None, 'note': None}
+        buf = io.StringIO()
+        with patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[row]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[camp]), \
+             _ctx.redirect_stdout(buf):
+            submissions.print_status('/x.db')
+        out = buf.getvalue()
+        self.assertIn('dig.mu2e.%.MDC2025au_best_v1_5.art', out)
+        self.assertIn('in-flight 2', out)
+        self.assertIn('draining', out)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

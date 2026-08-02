@@ -91,12 +91,14 @@ When regenerating, read in this order:
       submits nothing) and the `--enqueue --no-ledger` refusal
       (contradictory flags; one-line `submit_map:` error, no traceback).
     - `submissions` — name, one-line role ("direct-submission subsystem
-      CLI — status/run/pause/resume/cancel"), the verb table (`status`
-      is the default/read-only verb; `run` with `--dry-run`/`--row`/
-      `--max-attempts`/`--max-queued`; `pause CAMP_ID [--note TEXT]`;
-      `resume CAMP_ID`; `cancel CAMP_ID`), the global `--db` flag, the
-      read-only guarantees (`status` and `run --dry-run` take no lock
-      and submit nothing), and the extended exit-2 list for `run`: held,
+      CLI — status/run/pause/resume/cancel/complete"), the verb table
+      (`status` is the default/read-only verb; `run` with `--dry-run`/
+      `--row`/`--max-attempts`/`--max-queued`; `pause CAMP_ID [--note
+      TEXT]`; `resume CAMP_ID`; `cancel CAMP_ID`; `complete CAMP_ID
+      [--note TEXT]` — the operator close-out for a draining campaign),
+      the global `--db` flag, the read-only guarantees (`status` and
+      `run --dry-run` take no lock and submit nothing), and the
+      extended exit-2 list for `run`: held,
       exhausted, child-missing, campaign paused (submit failure),
       campaign paused (crash-window overlap), queue-count failure,
       lingering paused campaign (repeats every tick until a human
@@ -202,6 +204,27 @@ reading the code:
 - Every submission attempt — manual, cron-fed slice, or recovery
   resubmit — appends a block to `submit-YYYYMMDD.log` beside the ledger
   DB (one file per UTC day, plain appends, no rotation).
+- Draining campaigns: a map entry with `input_pattern` (a 5-field
+  dataset pattern, `%` wildcards) and NO `njobs` drains a growing
+  dataset 1:1 through a generic cnf, rather than a fixed index range;
+  enqueue with `submit_map --map M --enqueue --slice-size N`. Optional
+  entry keys: `exclude_desc` (exact desc matches to skip),
+  `min_age_minutes` (default 60, SAM `create_datetime` age gate before
+  a file is eligible), `prestage` (default false, opt-in tape recall
+  for tape-only candidates).
+- `submit_map --files LIST.txt` submits one direct-input job per
+  filename listed against a draining entry — the file is written by
+  the `submissions run` tick (parked files) and this is the operator
+  path for re-dispatching them. Mutually exclusive with `--first`/
+  `--num`/`--indices`/`--indices-file`/`--enqueue`.
+- `submissions complete <id>` is the operator close-out for a draining
+  campaign — it never auto-completes, because the input set keeps
+  growing until the upstream production finishes, and only the
+  operator knows when that point has been reached.
+- Draining campaigns track pending work in SAM, not a cursor: pending
+  = inputs whose expected outputs (computed per-file from the cnf's
+  own `job_outputs` mapping) don't exist yet, minus files already
+  in-flight or parked. Nothing counts as done until its output exists.
 
 If any of the above stops being true, update this list — do not leave a
 stale caveat in the regenerated doc.

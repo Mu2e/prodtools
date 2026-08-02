@@ -1,8 +1,8 @@
 ---
 title: Direct-backend recovery loop — ledger + submissions + cron
-tags: [decision, recovery, direct-backend, submit_map, operations, sliced-campaigns]
-sources: [docs/superpowers/specs/2026-07-18-direct-recovery-design.md, docs/superpowers/specs/2026-07-18-sliced-submission-design.md, docs/superpowers/specs/2026-07-19-workflow-hardening-design.md]
-updated: 2026-07-19
+tags: [decision, recovery, direct-backend, submit_map, operations, sliced-campaigns, draining-campaigns]
+sources: [docs/superpowers/specs/2026-07-18-direct-recovery-design.md, docs/superpowers/specs/2026-07-18-sliced-submission-design.md, docs/superpowers/specs/2026-07-19-workflow-hardening-design.md, docs/superpowers/specs/2026-08-01-draining-campaigns-design.md]
+updated: 2026-08-01
 ---
 
 # Direct-backend recovery loop — ledger + submissions + cron
@@ -597,6 +597,41 @@ if that submission was genuinely partial (jobs were actually queued
 before the parse failure), a later manual resubmission of those same
 indices double-runs them. Verify with `jobsub_q` before resubmitting by
 hand in that specific situation.
+
+## Draining campaigns (2026-08-01)
+
+A third campaign shape, alongside recovery and sliced top-up: a map
+entry with `input_pattern` (5-field dataset pattern, `%` wildcards) and
+NO `njobs` drains a growing input dataset 1:1 through a generic cnf,
+enqueued the same way (`submit_map --map M --enqueue --slice-size N`).
+`is_draining(entry)` (`utils/poms_entry.py`) is the single-owner kind
+discriminator everywhere in `submissions.py` — never sniff
+`indices_json`/`entry` shape by hand.
+
+**Pending predicate.** No cursor: `draining_state` recomputes fresh
+from SAM every tick — `pending = inputs − landed − in_flight − parked`,
+where `landed` means every one of a file's expected outputs (computed
+per-file from the cnf's own `job_outputs`, via `expected_outputs_for`)
+already exists in SAM. Nothing counts as done until its output exists —
+the structural fix for `drainingn`'s launch-time snapshot cursor (see
+[[poms-reference]] for the mechanics this replaces).
+
+**Two gates** before a candidate batch dispatches: a settling-age gate
+(`min_age_minutes`, default 60, against SAM `create_datetime`) and a
+dCache-residency gate (tape-only candidates are withheld unless the
+entry opts in with `prestage: true`). Both fail closed on any unknown.
+
+`drain_tick` feeds **one gated batch per campaign per tick**, oldest-
+first, under the same queue cap as index top-up. File-keyed rows verify
+and resubmit by filename (`verify_files_row`/`resubmit_files`, the
+draining analogs of `verify_row`/`resubmit`); an exhausted row's still-
+missing files become **parked** — held out of `pending` until a human
+re-dispatches them via `submit_map --files LIST.txt`. `submissions
+complete <id>` is the operator close-out — draining never auto-
+completes, since the input set keeps growing until the upstream
+finishes.
+
+Design: `docs/superpowers/specs/2026-08-01-draining-campaigns-design.md`.
 
 ## Related
 

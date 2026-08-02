@@ -879,9 +879,12 @@ def manage_campaign(db_path, camp_id, action, note=None):
     """Operator switches. cancel closes the campaign only —
     already-submitted ledger rows still get recovered normally. note
     applies to pause/cancel; resume never writes one (the stored pause
-    reason is preserved)."""
+    reason is preserved). complete is the operator close-out for
+    draining campaigns — non-blocking: closing with parked files is a
+    legitimate decision. A paused campaign must be resumed first;
+    paused -> complete is not a ledger transition."""
     target = {'pause': 'paused', 'resume': 'active',
-              'cancel': 'cancelled'}[action]
+              'cancel': 'cancelled', 'complete': 'complete'}[action]
     submission_ledger.set_campaign_state(
         db_path, camp_id, target,
         note=note if note is not None else f'operator {action}')
@@ -1014,6 +1017,21 @@ def print_status(db_path):
         print(f"\n{'id':>4} {'state':<10} {'cursor':>12} {'slice':>6}  "
               f"{'created':<20} tarball")
         for c in camps:
+            if is_draining(c['entry']):
+                mine = [r for r in rows
+                        if r['tarball'] == c['tarball']
+                        and is_draining(r['entry'])]
+                infl = sum(len(r['indices']) for r in mine
+                           if r['state'] == 'active')
+                exh = sum(len(r['indices']) for r in mine
+                          if r['state'] == 'exhausted')
+                print(f"{c['id']:>4} {c['state']:<10} "
+                      f"{'draining':>12} {c['slice_size']:>6}  "
+                      f"{c['created_utc']:<20} {c['tarball']}")
+                print(f"{'':>4} pattern {c['entry']['input_pattern']}  "
+                      f"in-flight {infl}  exhausted-files {exh}  "
+                      f"(drained fraction: `submissions run --dry-run`)")
+                continue
             njobs = njobs_of(c['entry'])
             print(f"{c['id']:>4} {c['state']:<10} "
                   f"{str(c['cursor']) + '/' + str(njobs):>12} "
@@ -1069,6 +1087,15 @@ def build_parser():
                             help='Cancel a campaign (already-submitted '
                                  'rows still get recovered)')
     cancel.add_argument('camp_id', type=int)
+    comp = sub.add_parser('complete',
+                          help='Close a campaign complete (operator '
+                               'close-out for draining campaigns; '
+                               'already-submitted rows still get '
+                               'verified/recovered)')
+    comp.add_argument('camp_id', type=int)
+    comp.add_argument('--note', default=None,
+                      help='Reason recorded on the campaign (default: '
+                           '"operator complete")')
 
     # Bare invocation (no verb) IS status — an explicit default, not a
     # hidden fallthrough (spec Change 1). Must come AFTER
@@ -1160,7 +1187,7 @@ def main():
         print_status(args.db)
         return
 
-    if verb in ('pause', 'resume', 'cancel'):
+    if verb in ('pause', 'resume', 'cancel', 'complete'):
         _acquire_lock(args.db)
         try:
             manage_campaign(args.db, args.camp_id, verb,
