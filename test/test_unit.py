@@ -8976,6 +8976,188 @@ class TestDirectDispatchFiles(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 47. Draining campaigns: pending predicate + batch gates
+# ---------------------------------------------------------------------------
+
+def _mk_file(desc, i):
+    return f'dig.mu2e.{desc}.MDC2025au_best_v1_5.001202_{i:08d}.art'
+
+
+def _mk_out(desc, i):
+    return f'mcs.mu2e.{desc}.MDC2025au_best_v1_5.001202_{i:08d}.art'
+
+
+class _DrainPars:
+    """Fake Mu2eJobPars: identity dig->mcs mapping (desc preserved)."""
+
+    def __init__(self, path):
+        pass
+
+    def job_outputs(self, index, override_desc=None, override_seq=None):
+        return {'Output': f'mcs.mu2e.{override_desc}.'
+                          f'MDC2025au_best_v1_5.{override_seq}.art'}
+
+
+class TestDrainingState(unittest.TestCase):
+    CAMP = {'id': 48, 'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+            'entry': {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+                      'inloc': 'tape',
+                      'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                      'outputs': [{'dataset': '*.art', 'location': 'tape'}]},
+            'cursor': 0, 'slice_size': 500}
+
+    def _state(self, *, in_files, out_files, rows=(), exclude=None,
+               defs=None):
+        from utils import submissions
+        camp = {**self.CAMP,
+                'entry': {**self.CAMP['entry'],
+                          **({'exclude_desc': exclude} if exclude else {})}}
+        in_ds = 'dig.mu2e.A.MDC2025au_best_v1_5.art'
+        out_ds = 'mcs.mu2e.A.MDC2025au_best_v1_5.art'
+        listing = {in_ds: list(in_files), out_ds: list(out_files)}
+        if defs is None:
+            defs = [in_ds]
+
+        def lister(ds):
+            return listing.get(ds, [])
+
+        with patch.object(submissions, 'Mu2eJobPars', _DrainPars), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=list(rows)):
+            return submissions.draining_state(
+                camp, '/x.db', defs_fn=lambda p: list(defs),
+                sam_lister=lister, locate=lambda t: '/tmp/' + t)
+
+    def test_growth_pending_is_inputs_minus_landed(self):
+        ins = [_mk_file('A', i) for i in range(4)]
+        outs = [_mk_out('A', 0), _mk_out('A', 1)]
+        st = self._state(in_files=ins, out_files=outs)
+        self.assertEqual(st['pending'], sorted(ins[2:]))
+        self.assertEqual(len(st['landed']), 2)
+
+    def test_in_flight_and_parked_excluded(self):
+        ins = [_mk_file('A', i) for i in range(4)]
+        rows = [{'tarball': self.CAMP['tarball'], 'state': 'active',
+                 'entry': self.CAMP['entry'], 'indices': [ins[0]]},
+                {'tarball': self.CAMP['tarball'], 'state': 'exhausted',
+                 'entry': self.CAMP['entry'], 'indices': [ins[1]]}]
+        st = self._state(in_files=ins, out_files=[], rows=rows)
+        self.assertEqual(st['pending'], sorted(ins[2:]))
+        self.assertEqual(st['in_flight'], {ins[0]})
+        self.assertEqual(st['parked'], {ins[1]})
+
+    def test_landed_exhausted_file_is_not_parked(self):
+        ins = [_mk_file('A', 0)]
+        rows = [{'tarball': self.CAMP['tarball'], 'state': 'exhausted',
+                 'entry': self.CAMP['entry'], 'indices': [ins[0]]}]
+        st = self._state(in_files=ins, out_files=[_mk_out('A', 0)],
+                         rows=rows)
+        self.assertEqual(st['parked'], set())
+        self.assertEqual(st['pending'], [])
+
+    def test_exclude_desc_drops_whole_dataset_exact_match(self):
+        from utils import submissions
+        # FlatGamma excluded must NOT drop FlatGammaCalo
+        defs = ['dig.mu2e.FlatGamma.MDC2025au_best_v1_5.art',
+                'dig.mu2e.FlatGammaCalo.MDC2025au_best_v1_5.art']
+        fg = [_mk_file('FlatGamma', 0)]
+        fgc = [_mk_file('FlatGammaCalo', 0)]
+        listing = {defs[0]: fg, defs[1]: fgc,
+                   'mcs.mu2e.FlatGammaCalo.MDC2025au_best_v1_5.art': []}
+        with patch.object(submissions, 'Mu2eJobPars', _DrainPars), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[]):
+            st = submissions.draining_state(
+                {**self.CAMP,
+                 'entry': {**self.CAMP['entry'],
+                           'exclude_desc': ['FlatGamma']}},
+                '/x.db', defs_fn=lambda p: defs,
+                sam_lister=lambda ds: listing.get(ds, []),
+                locate=lambda t: '/tmp/' + t)
+        self.assertEqual(st['pending'], fgc)
+
+    def test_non_dataset_definition_names_are_ignored(self):
+        # drainingn-era _slice_/_full_ junk can match a pattern; a name
+        # that does not parse as a 5-field dataset is skipped.
+        ins = [_mk_file('A', 0)]
+        st = self._state(
+            in_files=ins, out_files=[],
+            defs=['dig.mu2e.A.MDC2025au_best_v1_5.art',
+                  'dig.mu2e.A.MDC2025au_best_v1_5.art_slice_0_stage_2'])
+        self.assertEqual(st['pending'], ins)
+
+    def test_unlocatable_tarball_raises(self):
+        from utils import submissions
+        with self.assertRaises(RuntimeError):
+            with patch.object(submissions.submission_ledger, 'all_rows',
+                              return_value=[]):
+                submissions.draining_state(
+                    self.CAMP, '/x.db', defs_fn=lambda p: [],
+                    sam_lister=lambda ds: [], locate=lambda t: None)
+
+
+class TestGateBatch(unittest.TestCase):
+    ENTRY = {'inloc': 'tape', 'min_age_minutes': 60,
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art'}
+    OLD = '2026-08-01T00:00:00+00:00'
+    NOW = None  # set in setUp
+
+    def setUp(self):
+        from datetime import datetime, timezone
+        self.NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _md(self, files, stamp=OLD):
+        return lambda fl: [{'file_name': f, 'create_datetime': stamp}
+                           for f in fl]
+
+    def _gate(self, files, *, states, md=None):
+        from utils import submissions
+        return submissions._gate_batch(
+            dict(self.ENTRY), files,
+            locality=lambda loc, fl: {f: states.get(f, 'ERROR')
+                                      for f in fl},
+            metadata_fn=md or self._md(files),
+            dataset_location=lambda ds: 'enstore',
+            now=self.NOW)
+
+    def test_online_files_dispatch_nearline_withheld(self):
+        f1, f2 = _mk_file('A', 1), _mk_file('A', 2)
+        dispatch, young, tape = self._gate(
+            [f1, f2], states={f1: 'ONLINE_AND_NEARLINE', f2: 'NEARLINE'})
+        self.assertEqual(dispatch, [f1])
+        self.assertEqual(tape, [f2])
+        self.assertEqual(young, [])
+
+    def test_too_young_withheld(self):
+        f1 = _mk_file('A', 1)
+        fresh = '2026-08-01T11:30:00+00:00'   # 30 min old, min_age 60
+        dispatch, young, tape = self._gate(
+            [f1], states={f1: 'ONLINE'}, md=self._md([f1], fresh))
+        self.assertEqual(dispatch, [])
+        self.assertEqual(young, [f1])
+
+    def test_unknown_age_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'ONLINE'},
+                       md=lambda fl: [])   # no metadata returned
+
+    def test_locality_error_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'ERROR'})
+
+    def test_missing_file_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'MISSING'})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

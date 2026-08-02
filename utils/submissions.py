@@ -27,17 +27,21 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import submission_ledger
-from utils.job_common import Mu2eName
+from utils.check_inputs import _default_locality, _LOC_TO_MDH
+from utils.file_resolver import infer_dataset_location
+from utils.job_common import Mu2eName, expected_outputs_for
 from utils.jobquery import Mu2eJobPars
 from utils.mkrecovery import (build_file_maps, extract_datasets_from_tarball,
                               locate_tarball)
 from utils.poms_entry import njobs_of, is_draining
-from utils.samweb_wrapper import files_in_dataset
+from utils.samweb_wrapper import (files_in_dataset, definitions_matching,
+                                  metadata_for_files, _parse_sam_datetime)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUBMIT_MAP = REPO_ROOT / 'bin' / 'submit_map'
@@ -267,6 +271,139 @@ def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
         for ds in datasets:
             expected[ds] = max(expected.get(ds, 0), njobs)
     return expected, failures
+
+
+DEFAULT_MIN_AGE_MINUTES = 60
+
+
+def _dataset_of(fname):
+    """Dataset name of a Mu2e file name (drop the sequencer)."""
+    return str(Mu2eName.parse(fname).dataset)
+
+
+def draining_state(camp, db_path, *,
+                   defs_fn=definitions_matching,
+                   sam_lister=files_in_dataset,
+                   locate=locate_tarball):
+    """One draining campaign's file sets, computed fresh from SAM + the
+    ledger — draining has NO cursor; nothing counts as done until its
+    output exists (the fix for POMS drainingn's launch-time cursor).
+
+        inputs    pattern datasets' files (exclude_desc removed)
+        landed    inputs whose expected outputs ALL exist in SAM
+        in_flight files in this campaign's ACTIVE rows
+        parked    files in exhausted rows whose outputs are still missing
+        pending   inputs − landed − in_flight − parked   (sorted)
+
+    Dataset enumeration is definition-based (production convention);
+    matched names that don't parse as 5-field datasets (e.g. POMS-era
+    `_slice_`/`_full_` junk) are skipped. Raises on an unlocatable
+    tarball or a malformed input filename — never guesses.
+    """
+    entry = camp['entry']
+    exclude = set(entry.get('exclude_desc', []))
+    path = locate(camp['tarball'])
+    if not path or not os.path.exists(path):
+        raise RuntimeError(f"cannot locate tarball {camp['tarball']}")
+    jp = Mu2eJobPars(path)
+    datasets = []
+    for d in defs_fn(entry['input_pattern']):
+        try:
+            n = Mu2eName.parse(d)
+        except ValueError:
+            continue
+        if not n.is_dataset or n.description in exclude:
+            continue
+        datasets.append(d)
+    inputs = set()
+    for ds in datasets:
+        inputs.update(sam_lister(ds))
+    out_of = {f: expected_outputs_for(f, jp) for f in sorted(inputs)}
+    out_datasets = {_dataset_of(o)
+                    for outs in out_of.values() for o in outs}
+    existing = {ds: set(sam_lister(ds)) for ds in sorted(out_datasets)}
+    landed = {f for f, outs in out_of.items()
+              if all(o in existing[_dataset_of(o)] for o in outs)}
+    in_flight, exhausted = set(), set()
+    for r in submission_ledger.all_rows(db_path):
+        if r['tarball'] != camp['tarball'] or not is_draining(r['entry']):
+            continue
+        if r['state'] == 'active':
+            in_flight.update(r['indices'])
+        elif r['state'] == 'exhausted':
+            exhausted.update(r['indices'])
+    parked = exhausted - landed
+    pending = sorted(inputs - landed - in_flight - parked)
+    return {'inputs': inputs, 'landed': landed, 'in_flight': in_flight,
+            'parked': parked, 'pending': pending}
+
+
+def _gate_batch(entry, candidates, *,
+                locality=_default_locality,
+                metadata_fn=metadata_for_files,
+                dataset_location=infer_dataset_location,
+                now=None):
+    """Gate a candidate batch: (dispatch, young, tape_only).
+
+    Settling age first (the POMS fts= idea: pushOutput declares metadata
+    before locations settle — never race a half-pushed upstream batch),
+    then dCache residency (never a job that hangs on tape recall).
+    Raises RuntimeError whenever age or residency cannot be established:
+    fail closed, no dispatch on unknowns.
+    """
+    now = now or datetime.now(timezone.utc)
+    min_age = entry.get('min_age_minutes', DEFAULT_MIN_AGE_MINUTES)
+    cutoff = now - timedelta(minutes=min_age)
+    md_by_name = {}
+    for md in metadata_fn(list(candidates)):
+        md_by_name[md.get('file_name')] = md
+    old_enough, young = [], []
+    for f in candidates:
+        stamp = (md_by_name.get(f) or {}).get('create_datetime')
+        dt = _parse_sam_datetime(stamp) if stamp else None
+        if dt is None:
+            raise RuntimeError(
+                f"no SAM create time for {f} — age unknown (fail closed)")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        (old_enough if dt <= cutoff else young).append(f)
+    by_ds = {}
+    for f in old_enough:
+        by_ds.setdefault(_dataset_of(f), []).append(f)
+    dispatch, tape_only = [], []
+    for ds, fl in sorted(by_ds.items()):
+        mdh_loc = _LOC_TO_MDH.get(dataset_location(ds))
+        if mdh_loc is None:
+            raise RuntimeError(f"unknown storage location for {ds}")
+        states = locality(mdh_loc, fl)
+        for f in fl:
+            st = states.get(f, 'ERROR')
+            if st in ('ONLINE', 'ONLINE_AND_NEARLINE'):
+                dispatch.append(f)
+            elif st == 'NEARLINE':
+                tape_only.append(f)
+            else:
+                raise RuntimeError(f"locality {st!r} for {f} — "
+                                   f"residency unknown (fail closed)")
+    return dispatch, young, tape_only
+
+
+def _request_prestage(files, runner=subprocess.run):
+    """One batched `mdh prestage-files` request for tape-only pending
+    files (entry opts in with `prestage: true`). Never raises — the
+    request is an optimization and idempotent server-side; the tick
+    continues either way."""
+    try:
+        with tempfile.NamedTemporaryFile(
+                'w', suffix='.txt', delete=False) as fh:
+            fh.write('\n'.join(sorted(files)) + '\n')
+        res = runner(['mdh', 'prestage-files', fh.name],
+                     capture_output=True, text=True, timeout=600)
+        if res.returncode != 0:
+            print(f"  prestage request failed rc={res.returncode}: "
+                  f"{(res.stderr or '').strip()[:200]}")
+    except Exception as e:
+        print(f"  prestage request failed: {e}")
 
 
 @contextlib.contextmanager
