@@ -9425,33 +9425,57 @@ class TestDrainTick(unittest.TestCase):
                       'outputs': [{'dataset': '*.art', 'location': 'tape'}]},
             'cursor': 0, 'slice_size': 2}
 
-    def _tick(self, *, pending, cap=100, count=10, dry_run=False,
-              gate=None, submit_ok=True, camps=None, prestage_camp=False):
+    RAISE = object()   # state_map sentinel: this campaign's state_fn raises
+
+    def _tick(self, *, pending=None, cap=100, count=10, dry_run=False,
+              gate=None, submit_ok=True, camps=None, prestage_camp=False,
+              state_map=None):
+        """state_map: optional {camp_id: pending_list | TestDrainTick.RAISE}
+        for multi-campaign scenarios — RAISE makes that campaign's
+        state_fn raise (pins the fail-closed `continue`). Without it,
+        every campaign in `camps` (or the single default CAMP) gets
+        `pending` (default []) — the original single-campaign shape.
+        Records self.state_calls / self.submit_calls — the campaign ids
+        state_fn/submit_fn were actually invoked for, in call order —
+        so a campaign after a cap-wait `break` can be asserted as never
+        reached, not just inferred from an empty submitted list."""
         from utils import submissions
-        camp = dict(self.CAMP)
-        if prestage_camp:
-            camp = {**camp, 'entry': {**camp['entry'], 'prestage': True}}
-        state = {'inputs': set(pending), 'landed': set(),
-                 'in_flight': set(), 'parked': set(),
-                 'pending': sorted(pending)}
+        if camps is None:
+            camp = dict(self.CAMP)
+            if prestage_camp:
+                camp = {**camp, 'entry': {**camp['entry'], 'prestage': True}}
+            camps = [camp]
+        if state_map is None:
+            state_map = {c['id']: (pending if pending is not None else [])
+                         for c in camps}
+        self.state_calls = []
+        self.submit_calls = []
         submitted = []
 
+        def fake_state(c, db):
+            self.state_calls.append(c['id'])
+            val = state_map[c['id']]
+            if val is self.RAISE:
+                raise RuntimeError('state boom')
+            return {'inputs': set(val), 'landed': set(),
+                    'in_flight': set(), 'parked': set(),
+                    'pending': sorted(val)}
+
         def fake_submit(c, batch, db):
+            self.submit_calls.append(c['id'])
             submitted.append(list(batch))
             return submit_ok
 
         prestaged = []
         with patch.object(submissions.submission_ledger,
-                          'active_campaigns',
-                          return_value=camps if camps is not None
-                          else [camp]), \
+                          'active_campaigns', return_value=camps), \
              patch.object(submissions.submission_ledger,
                           'set_campaign_state') as scs:
             summary = submissions.drain_tick(
                 '/x.db', cap, dry_run=dry_run,
                 count_fn=lambda: count,
                 submit_fn=fake_submit,
-                state_fn=lambda c, db: dict(state),
+                state_fn=fake_state,
                 gate_fn=gate or (lambda e, cand: (list(cand), [], [])),
                 prestage_fn=lambda fl: prestaged.append(list(fl)))
         return summary, submitted, prestaged, scs
@@ -9511,6 +9535,86 @@ class TestDrainTick(unittest.TestCase):
         summary, submitted, _, _ = self._tick(pending=[], camps=camps)
         self.assertEqual(summary, {})
         self.assertEqual(submitted, [])
+
+    # -- multi-campaign control-flow contracts -----------------------
+
+    def test_cap_wait_breaks_before_next_campaign(self):
+        # camp_a's batch alone exceeds the cap -> drain-cap-wait AND
+        # the loop breaks: camp_b (oldest-first, second in line) must
+        # never be evaluated this tick, not merely "not submitted".
+        camp_a = {**self.CAMP, 'id': 101}
+        camp_b = {**self.CAMP, 'id': 102}
+        pend_a = [_mk_file('A', i) for i in range(5)]
+        pend_b = [_mk_file('B', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(
+            camps=[camp_a, camp_b], cap=11, count=10,
+            state_map={101: pend_a, 102: pend_b})
+        self.assertEqual(summary.get('drain-cap-wait'), 1)
+        self.assertEqual(submitted, [])
+        self.assertEqual(self.state_calls, [101])
+        self.assertEqual(self.submit_calls, [])
+
+    def test_state_error_continues_to_next_campaign(self):
+        # camp_a's state_fn raises (fail-closed, drain-error) but the
+        # tick must continue: camp_b still gets evaluated and submits
+        # its normal batch.
+        camp_a = {**self.CAMP, 'id': 201}
+        camp_b = {**self.CAMP, 'id': 202}
+        pend_b = [_mk_file('B', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(
+            camps=[camp_a, camp_b], cap=100, count=10,
+            state_map={201: self.RAISE, 202: pend_b})
+        self.assertEqual(summary.get('drain-error'), 1)
+        self.assertEqual(summary.get('drain-batch'), 1)
+        self.assertEqual(submitted, [sorted(pend_b)[:2]])
+        self.assertEqual(self.state_calls, [201, 202])
+        self.assertEqual(self.submit_calls, [202])
+
+    def test_dry_run_cap_accumulates_across_campaigns(self):
+        # cap=3, count=0, batch=2 each: camp_a's dry-run batch must be
+        # ADDED to the running count before camp_b is checked, or
+        # camp_b would also read as within cap (would-drain-batch=2,
+        # drain-cap-wait=0) instead of hitting cap-wait.
+        camp_a = {**self.CAMP, 'id': 301}
+        camp_b = {**self.CAMP, 'id': 302}
+        pend_a = [_mk_file('A', i) for i in range(5)]
+        pend_b = [_mk_file('B', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(
+            camps=[camp_a, camp_b], cap=3, count=0, dry_run=True,
+            state_map={301: pend_a, 302: pend_b})
+        self.assertEqual(summary.get('would-drain-batch'), 1)
+        self.assertEqual(summary.get('drain-cap-wait'), 1)
+        self.assertEqual(submitted, [])
+        self.assertEqual(self.state_calls, [301, 302])
+
+    def test_tape_only_without_prestage_opt_in_skips_request(self):
+        # Negative case: tape-only candidates exist but the entry did
+        # not opt in with prestage: true -> prestage_fn must not fire.
+        pend = [_mk_file('A', 1), _mk_file('A', 2)]
+
+        def gate(entry, cand):
+            return [cand[0]], [], [cand[1]]
+        summary, submitted, prestaged, _ = self._tick(
+            pending=pend, gate=gate)   # prestage_camp defaults False
+        self.assertEqual(prestaged, [])
+        self.assertEqual(submitted, [[sorted(pend)[0]]])
+
+    def test_dry_run_prestage_does_not_call_but_prints(self):
+        # dry-run + prestage: true + tape-only -> prints the "would
+        # request" line but never calls prestage_fn (no side effect
+        # under --dry-run).
+        import contextlib
+        pend = [_mk_file('A', 1), _mk_file('A', 2)]
+
+        def gate(entry, cand):
+            return [cand[0]], [], [cand[1]]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            summary, submitted, prestaged, _ = self._tick(
+                pending=pend, gate=gate, prestage_camp=True, dry_run=True)
+        self.assertEqual(prestaged, [])
+        self.assertEqual(submitted, [])
+        self.assertIn('would request prestage', buf.getvalue())
 
 
 class TestTopUpSkipsDraining(unittest.TestCase):
