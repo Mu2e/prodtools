@@ -7654,6 +7654,29 @@ class TestMcpCondor(unittest.TestCase):
 
 
 class TestMcpCampaignStatus(unittest.TestCase):
+    DRAIN_TARBALL = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+    # A draining entry: input_pattern, NO njobs, and an outputs glob that
+    # is a worker cwd filename pattern rather than a dataset name.
+    DRAIN_ENTRY = {'tarball': DRAIN_TARBALL, 'inloc': 'tape',
+                   'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                   'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
+
+    def _make_draining_db(self, tmpdir):
+        """Draining campaign with 3 input files dispatched: 2 of desc
+        AAA, 1 of desc BBB — so per-dataset dispatched counts differ."""
+        from utils import submission_ledger
+        db = os.path.join(tmpdir, 'ledger.db')
+        submission_ledger.create_campaign(
+            db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
+            slice_size=500, map_path='/tmp/map_drain.json')
+        submission_ledger.record_submission(
+            db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
+            indices=[_mk_file('AAA', 1), _mk_file('AAA', 2),
+                     _mk_file('BBB', 1)],
+            jobsub_id='29448530.0@sched', cluster_id='29448530',
+            map_path='/tmp/map_drain.json')
+        return db
+
     def _make_db(self, tmpdir):
         from utils import submission_ledger
         db = os.path.join(tmpdir, 'ledger.db')
@@ -7730,6 +7753,101 @@ class TestMcpCampaignStatus(unittest.TestCase):
         self.assertEqual(out['submitted'], 500)
         self.assertEqual(out['expected_at_completion'], 4000)
         self.assertEqual(out['produced'], 500)
+
+    def test_draining_outputs_name_real_datasets_not_the_worker_glob(self):
+        """REGRESSION: a draining entry's outputs[].dataset is the
+        worker's cwd filename glob ('mcs.*.art'), not a dataset. Feeding
+        it to a SAM dimension raised 'Parse error ... dh.dataset
+        mcs.*.art', so EVERY draining campaign reported outputs
+        state='unknown' and was invisible to campaign_status (observed
+        live on production campaign 48, 2026-08-02)."""
+        from prodtools_mcp.tools import status
+        asked = []
+
+        def count_fn(ds):
+            asked.append(ds)
+            return 7
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=count_fn, job_pars_fn=lambda tb: _DrainPars(tb))
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'known')
+        self.assertNotIn('mcs.*.art', asked)
+        self.assertEqual(
+            sorted(d['dataset'] for d in block['datasets']),
+            ['mcs.mu2e.AAA.MDC2025au_best_v1_5.art',
+             'mcs.mu2e.BBB.MDC2025au_best_v1_5.art'])
+
+    def test_draining_outputs_count_dispatched_per_dataset(self):
+        """Two inputs of desc AAA and one of BBB were dispatched; the
+        per-dataset denominator must follow the input desc, not the
+        campaign total."""
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 0,
+                job_pars_fn=lambda tb: _DrainPars(tb))
+        got = {d['dataset']: d['dispatched']
+               for d in result['campaigns'][0]['outputs']['datasets']}
+        self.assertEqual(got['mcs.mu2e.AAA.MDC2025au_best_v1_5.art'], 2)
+        self.assertEqual(got['mcs.mu2e.BBB.MDC2025au_best_v1_5.art'], 1)
+
+    def test_draining_outputs_omit_expected_at_completion(self):
+        """The input dataset is still growing, so no completion
+        denominator exists. Emitting njobs (None) as a denominator would
+        invite a division and a bogus percentage."""
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 3,
+                job_pars_fn=lambda tb: _DrainPars(tb))
+        for d in result['campaigns'][0]['outputs']['datasets']:
+            self.assertNotIn('expected_at_completion', d)
+
+    def test_draining_outputs_unreadable_cnf_is_unknown_not_zero(self):
+        """Fail-closed, like the queue block: an unlocatable tarball must
+        not render as produced=0, which reads as 'nothing landed' and
+        could trigger a recovery pass against good data."""
+        from prodtools_mcp.tools import status
+
+        def boom(tarball):
+            raise RuntimeError('tarball not locatable in SAM')
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 0, job_pars_fn=boom)
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'unknown')
+        self.assertNotIn('datasets', block)
+        self.assertIn('not locatable', block['reason'])
+
+    def test_draining_outputs_before_first_dispatch(self):
+        """Day 1: the campaign exists but nothing has been handed to the
+        grid, so no output dataset is nameable yet. That is 'known and
+        empty', not 'unknown' — nothing failed."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'ledger.db')
+            submission_ledger.create_campaign(
+                db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
+                slice_size=500, map_path='/tmp/map_drain.json')
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 0,
+                job_pars_fn=lambda tb: _DrainPars(tb))
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['datasets'], [])
 
     def test_row_counts_are_per_state_not_open_closed(self):
         """`exhausted` is where a human must take over. Bucketed as

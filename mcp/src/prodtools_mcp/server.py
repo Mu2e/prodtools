@@ -59,6 +59,13 @@ READING THE RESULTS:
   (indices actually handed to the grid) and `expected_at_completion`
   (njobs). Every direct campaign is sliced, so compare against
   `submitted` to judge what is in flight.
+- A DRAINING campaign (`njobs: null`) reports outputs differently: one
+  row per output dataset with `dispatched` (input files handed to the
+  grid that map to it) and `produced`, and NO `expected_at_completion` —
+  the input dataset is still growing, so no completion denominator
+  exists. Only datasets dispatched so far appear; more descs show up as
+  the campaign drains. `produced` can exceed `dispatched` when an
+  earlier round or a smoke wrote into the same dataset.
 - campaign_status `rows` is a count per submission state. `exhausted`
   means the attempt cap was reached and a human must take over.
 - Errors arrive as {"error": {"kind", "message", "remedy"}}. Never retry
