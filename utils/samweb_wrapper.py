@@ -26,6 +26,11 @@ from typing import Dict, List, Optional
 from samweb_client import SAMWebClient #type: ignore
 
 
+# SAM rejects getMultipleMetadata outright above this many names
+# ("Too many files requested (max 1000)") rather than truncating, so
+# every batch caller has to respect it.
+MAX_METADATA_BATCH = 1000
+
 # ---------------------------------------------------------------------------
 # SAM dimension grammar — query-string builders
 # ---------------------------------------------------------------------------
@@ -329,12 +334,21 @@ class SAMWebWrapper:
         return self.client.locateFiles(filenames)
 
     def metadata_for_files(self, filenames: List[str]) -> List[Dict]:
-        """Batch metadata: one HTTP round-trip for the whole list instead
-        of one per file. Files unknown to SAM are silently absent from
-        the result (samweb behavior). Raises on SAM errors — callers
-        wanting warn-and-continue chunk the list and fall back to
+        """Batch metadata: one HTTP round-trip per MAX_METADATA_BATCH
+        files instead of one per file.
+
+        Chunking lives here, not in callers: SAM rejects an oversized
+        request outright, so a caller that skipped it got a hard failure
+        rather than a slow path, and every new caller had to rediscover
+        the limit. Files unknown to SAM are silently absent from the
+        result (samweb behavior). Raises on SAM errors — callers wanting
+        warn-and-continue still chunk themselves and fall back to
         get_metadata per file."""
-        return self.client.getMultipleMetadata(filenames)
+        out: List[Dict] = []
+        for i in range(0, len(filenames), MAX_METADATA_BATCH):
+            out.extend(self.client.getMultipleMetadata(
+                filenames[i:i + MAX_METADATA_BATCH]))
+        return out
 
     def definitions_matching(self, defname: Optional[str] = None,
                              user: Optional[str] = None) -> List[str]:

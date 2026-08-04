@@ -8331,6 +8331,49 @@ class TestMcpDatasetDetails(unittest.TestCase):
 # samweb_wrapper.parents_of_file — the fail-loud lineage edge function
 # ---------------------------------------------------------------------------
 
+class TestSamwebMetadataChunking(unittest.TestCase):
+    """SAM rejects getMultipleMetadata above MAX_METADATA_BATCH names
+    outright ('Too many files requested'), so the wrapper chunks. A
+    2000-file draining batch hit this as a hard gate failure."""
+
+    def _wrapper(self):
+        from utils.samweb_wrapper import SAMWebWrapper
+        w = SAMWebWrapper.__new__(SAMWebWrapper)
+        calls = []
+
+        class Client:
+            @staticmethod
+            def getMultipleMetadata(names):
+                calls.append(len(names))
+                return [{'file_name': n} for n in names]
+        w.client = Client()
+        return w, calls
+
+    def test_oversized_list_is_split_and_concatenated(self):
+        from utils.samweb_wrapper import MAX_METADATA_BATCH
+        w, calls = self._wrapper()
+        names = [f'f{i}.art' for i in range(2000)]
+        out = w.metadata_for_files(names)
+        self.assertEqual(calls, [MAX_METADATA_BATCH, MAX_METADATA_BATCH])
+        self.assertEqual([m['file_name'] for m in out], names)
+
+    def test_ragged_tail_chunk(self):
+        w, calls = self._wrapper()
+        out = w.metadata_for_files([f'f{i}.art' for i in range(2501)])
+        self.assertEqual(calls, [1000, 1000, 501])
+        self.assertEqual(len(out), 2501)
+
+    def test_small_list_is_one_round_trip(self):
+        w, calls = self._wrapper()
+        w.metadata_for_files(['a.art', 'b.art'])
+        self.assertEqual(calls, [2])
+
+    def test_empty_list_makes_no_call(self):
+        w, calls = self._wrapper()
+        self.assertEqual(w.metadata_for_files([]), [])
+        self.assertEqual(calls, [])
+
+
 class TestSamwebParentsOfFile(unittest.TestCase):
     def _wrapper(self, listfiles):
         """A wrapper with a stub client. __init__ builds a real samweb
