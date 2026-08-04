@@ -46,8 +46,8 @@ class Mu2eName:
     (`.dataset`, `.with_sequencer`, `.as_tier`, ...) return new
     Mu2eName instances rather than mutating in place.
 
-    The legacy `Mu2eFilename` symbol is an alias of this class, preserved
-    to keep the Perl-parity contract on `relpathname()` traceable.
+    `relpathname()` reproduces the Perl Mu2eFilename hash-prefixed path
+    (SHA256 of the basename) for parity with the legacy tooling.
     """
 
     __slots__ = ("filename", "tier", "owner", "description", "dsconf",
@@ -182,32 +182,38 @@ class Mu2eName:
 
     # path / parity ----------------------------------------------------------
 
-    def basename(self) -> str:
-        return self.filename
-
     def relpathname(self) -> str:
         """SHA256 hash-prefixed relative path, matching Perl Mu2eFilename->relpathname()."""
         h = hashlib.sha256(self.filename.encode()).hexdigest()
         return f"{h[:2]}/{h[2:4]}/{self.filename}"
 
 
-# Legacy alias — preserves the Perl-parity association on the original symbol.
-Mu2eFilename = Mu2eName
-
-
 def log_storage_location(outputs) -> str:
-    """First output's location from a POMS-map outputs list, or 'disk' if absent.
+    """Where a job's log dataset goes, given its POMS-map outputs list.
+
+    Mu2e convention: logs live on persistent disk
+    (`/pnfs/mu2e/persistent/datasets/phy-etc/log/...`) regardless of where
+    the data lands, so they stay cheap to read without a tape recall. This
+    matches the POMS path, which calls push_logs() with its 'disk' default.
+
+    The one exception is `scratch`: a non-mu2epro account whose data goes to
+    scratch has no storage.modify scope on /mu2e/persistent/datasets, so a
+    'disk' log push would 403. Those runs keep logs beside their data.
+
+    Do NOT let logs inherit 'tape' from the data outputs — small log files
+    on tape are wasteful and diverge from every POMS-submitted sibling
+    dataset. (Regression fixed 2026-07-21 after the first direct campaign
+    put 500 logs on tape.)
 
     Accepts the bare outputs list (`[{'location': ..., 'dataset': ...}, ...]`)
-    or a POMS-map entry dict containing one. Logs share this location so the
-    worker token's storage.modify scope covers both data and log writes.
-    Used by submit.py and runmu2e.py.
+    or a POMS-map entry dict containing one. Used by submit.py (to scope the
+    worker token) and runmu2e.py (to place the push).
     """
     if isinstance(outputs, dict):
         outputs = outputs.get('outputs')
     if not outputs:
         return 'disk'
-    return outputs[0].get('location', 'disk')
+    return 'scratch' if outputs[0].get('location') == 'scratch' else 'disk'
 
 def default_owner() -> str:
     """Dataset owner defaulted from $USER; mu2epro maps to mu2e (production
@@ -282,6 +288,10 @@ class Mu2eJobBase:
         # defaults — same behavior Mu2eJobFCL always had.
         self.owner = self.json_data.get('owner', default_owner())
         self.dsconf = self.json_data.get('dsconf', 'unknown')
+
+    def setup(self):
+        """The SimJob setup-script path recorded in jobpars.json."""
+        return self.json_data.get('setup', '')
 
     def _extract_member(self, suffix: str) -> bytes:
         """Return the bytes of the first tar member whose name ends with ``suffix``.
@@ -578,3 +588,24 @@ class Mu2eJobBase:
         return 0 if capacity is None else capacity
 
 
+def expected_outputs_for(input_fname, job_pars):
+    """Expected output filenames for one direct-input (draining) job.
+
+    THE single home for the input->output name mapping: delegates to
+    job_outputs(0, override_desc=, override_seq=) — the exact
+    substitution process_direct_input performs on the worker — so the
+    dispatcher, the verifier, and the worker cannot drift. Non-Mu2e-
+    named streams (paths like /dev/null) are dropped, mirroring
+    submit._read_cnf_facts. Raises ValueError on a malformed input name
+    and RuntimeError when the cnf yields no Mu2e-named outputs (fail
+    loud, never guess).
+    """
+    n = Mu2eName.parse(os.path.basename(input_fname))
+    if not n.is_file:
+        raise ValueError(f"not a Mu2e file name: {input_fname}")
+    out = job_pars.job_outputs(0, override_desc=n.description,
+                               override_seq=n.sequencer) or {}
+    names = sorted(v for v in out.values() if v and '/' not in v)
+    if not names:
+        raise RuntimeError(f"no Mu2e-named outputs in cnf for {input_fname}")
+    return names

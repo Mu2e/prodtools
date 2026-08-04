@@ -246,13 +246,7 @@
 </head>
 <body>
     <h1>Mu2e Production Monitor</h1>
-    
-    <div class="nav" style="margin-bottom: 20px;">
-        <a href="/json2jobdef" style="color: #007bff; text-decoration: none; margin-right: 15px;">JobDesc Generator</a>
-        <a href="/json-editor" style="color: #007bff; text-decoration: none; margin-right: 15px;">JSON Editor</a>
-        <a href="/" style="color: #007bff; text-decoration: none; margin-right: 15px;">Home</a>
-        <button onclick="reloadData()" style="background: #6c757d; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;">Rebuild DB</button>
-    </div>
+    <p style="color:#666; margin: -8px 0 16px 0; font-size: 0.7em;">Read-only static snapshot &middot; Last refreshed: @@REFRESHED_AT@@</p>
     
     <div class="toolbar">
         <div class="group">
@@ -321,18 +315,14 @@
         }
 
         function loadJobs() {
-            fetch('/api/jobs')
-                .then(r => r.json())
-                .then(data => { currentData = data; displayJobs(data); })
-                .catch(err => showError(err.message));
-        }
-
-        function reloadData() {
-            document.getElementById('jobs-content').innerHTML = 'Rebuilding database from MDC JSON files...';
-            fetch('/api/reload', { method: 'POST' })
-                .then(r => r.json())
-                .then(data => data.success ? loadJobs() : showError('rebuilding: ' + data.error))
-                .catch(err => showError('rebuilding: ' + err.message));
+            Promise.all([
+                fetch('jobs.json').then(function(r) { return r.json(); }),
+                fetch('lineage.json').then(function(r) { return r.ok ? r.json() : {}; }).catch(function() { return {}; })
+            ]).then(function(arr) {
+                window._lineage = arr[1];
+                currentData = arr[0];
+                displayJobs(arr[0]);
+            }).catch(function(err) { showError(err.message); });
         }
 
         function displayJobs(data) {
@@ -507,44 +497,97 @@
             filterDatasets();
         }
 
-        function openJsonInEditor(sourceFile) {
-            window.location.href = '/json-editor?file=' + encodeURIComponent(sourceFile);
-        }
-
         function showDatasetInfo(datasetName) {
             var modal = document.getElementById('diagramModal');
             var modalTitle = document.getElementById('modalTitle');
             var modalContent = document.getElementById('modalContent');
-            var url = '/api/dataset/' + encodeURIComponent(datasetName);
-            if (document.getElementById('statsToggle').checked) url += '?stats=true';
-            
             modalTitle.textContent = 'Dataset: ' + datasetName;
-            modalContent.innerHTML = 'Loading...';
             modal.style.display = 'block';
-            
-            fetch(url)
-                .then(r => r.json())
-                .then(function(data) {
-                    if (!data.success) {
-                        modalContent.innerHTML = '<p class="error">Error: ' + data.output + '</p>';
-                        return;
-                    }
-                    
-                        if (data.has_mermaid) {
-                        // Extract mermaid code block - handle various newline patterns
-                        var match = data.output.match(/```mermaid\s*\n([\s\S]*?)\n?```/);
-                        if (match) {
-                            modalContent.innerHTML = '<div class="mermaid">' + match[1] + '</div>';
-                            mermaid.initialize({ startOnLoad: false, theme: currentMermaidTheme(), flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 9999 }, securityLevel: 'loose' });
-                            setTimeout(function() { mermaid.init(undefined, modalContent.querySelector('.mermaid')); }, 100);
-                        } else {
-                            modalContent.innerHTML = '<h3>Mermaid file content:</h3><pre>' + data.output + '</pre><p><em>Could not extract Mermaid code</em></p>';
-                        }
-                    } else {
-                        modalContent.innerHTML = '<h3>Raw famtree output:</h3><pre>' + data.output + '</pre>' + (data.error ? '<p class="warning">Note: ' + data.error + '</p>' : '');
-                    }
-                })
-                .catch(err => modalContent.innerHTML = '<p class="error">Error: ' + err.message + '</p>');
+            modalContent.innerHTML = 'Computing lineage...';
+            setTimeout(function() {
+                var lineage = window._lineage || {};
+                if (!window._childrenMap) window._childrenMap = buildChildrenMap(lineage);
+                if (!(datasetName in lineage)) {
+                    modalContent.innerHTML = '<p class="warning">Dataset not found in lineage cache.</p>';
+                    return;
+                }
+                var walk = walkLineage(lineage, window._childrenMap, datasetName);
+                var withStats = document.getElementById('statsToggle').checked;
+                var mermaidCode = renderLineageMermaid(lineage, walk, withStats, datasetName);
+                modalContent.innerHTML = '<div class="mermaid">' + mermaidCode + '</div>';
+                mermaid.initialize({ startOnLoad: false, theme: currentMermaidTheme(), flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 9999 }, securityLevel: 'loose' });
+                mermaid.init(undefined, modalContent.querySelector('.mermaid'));
+            }, 50);
+        }
+
+        function buildChildrenMap(lineage) {
+            var children = {};
+            Object.keys(lineage).forEach(function(child) {
+                var entry = lineage[child] || {};
+                (entry.parents || []).forEach(function(parent) {
+                    if (!children[parent]) children[parent] = [];
+                    if (children[parent].indexOf(child) < 0) children[parent].push(child);
+                });
+            });
+            return children;
+        }
+
+        function walkLineage(lineage, childrenMap, start) {
+            var nodes = {}; nodes[start] = true;
+            var edges = []; var seen = {};
+            function pushEdge(a, b) {
+                var k = a + '' + b;
+                if (seen[k]) return;
+                seen[k] = true; edges.push([a, b]);
+            }
+            var q = [start];
+            while (q.length) {
+                var n = q.shift();
+                var entry = lineage[n];
+                if (!entry) continue;
+                (entry.parents || []).forEach(function(p) {
+                    pushEdge(p, n);
+                    if (!nodes[p]) { nodes[p] = true; q.push(p); }
+                });
+            }
+            q = [start];
+            while (q.length) {
+                var n = q.shift();
+                (childrenMap[n] || []).forEach(function(c) {
+                    pushEdge(n, c);
+                    if (!nodes[c]) { nodes[c] = true; q.push(c); }
+                });
+            }
+            return {nodes: Object.keys(nodes), edges: edges};
+        }
+
+        function renderLineageMermaid(lineage, walk, withStats, focus) {
+            var ids = {}; var counter = 0;
+            function id(name) {
+                if (!(name in ids)) ids[name] = 'n' + (counter++);
+                return ids[name];
+            }
+            var lines = ['graph TD'];
+            walk.nodes.forEach(function(name) {
+                var label = name;
+                var entry = lineage[name];
+                if (withStats && entry && entry.stats && entry.stats.gen != null) {
+                    var s = entry.stats;
+                    var note = s.extrapolated ? ' (extrapolated)' : '';
+                    label += '<br/>eff=' + Number(s.eff).toFixed(4) +
+                             ', trig: ' + Number(s.passed).toLocaleString() +
+                             ', gen: ' + Number(s.gen).toLocaleString() + note;
+                    if (s.nfiles != null) label += '<br/>nfiles=' + s.nfiles;
+                }
+                var line = '  ' + id(name) + '["' + label + '"]';
+                if (name === focus) line += ':::focus';
+                lines.push(line);
+            });
+            walk.edges.forEach(function(e) {
+                lines.push('  ' + id(e[0]) + ' --> ' + id(e[1]));
+            });
+            lines.push('  classDef focus fill:#ffeb3b,stroke:#f57f17,stroke-width:3px');
+            return lines.join('\n');
         }
 
         function sortTable(columnIndex) {

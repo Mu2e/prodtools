@@ -26,13 +26,29 @@ Examples:
 """
 
 import argparse
+import functools
 import os
-from samweb_wrapper import file_lineage, list_definition_files, get_samweb_wrapper
-from genFilterEff import process_dataset
-from job_common import Mu2eName
 
+# Package-first imports with bare fallback: keeps one module identity
+# when loaded as utils.famtree (web dashboard, cron) while still
+# supporting the bin/ stubs that put utils/ itself on the path.
+try:
+    from utils.samweb_wrapper import (file_lineage, first_file_in_definition,
+                                      get_samweb_wrapper)
+    from utils.genFilterEff import process_dataset
+    from utils.job_common import Mu2eName
+except ImportError:
+    from samweb_wrapper import (file_lineage, first_file_in_definition,
+                                get_samweb_wrapper)
+    from genFilterEff import process_dataset
+    from job_common import Mu2eName
+
+@functools.lru_cache(maxsize=None)
 def get_parents(file_name):
-    """Get parent files using samweb file-lineage parents command, filtering out etc files."""
+    """Get parent files using samweb file-lineage parents command, filtering out etc files.
+
+    Memoized: diamond ancestry (mix inputs converging on one beam chain)
+    revisits the same file — the SAM lineage call is paid once per file."""
     parents = file_lineage(file_name, 'parents')
     return [p for p in parents if not (p.startswith('etc.') and p.endswith('.txt'))]
 
@@ -40,15 +56,20 @@ def get_dataset_name(file_name):
     """Return dataset name (drop run_subrun part) for 6-field names"""
     return str(Mu2eName.parse(file_name).dataset)
 
+def output_stem(name):
+    """Stable output-file stem for a file/dataset name: drop the extension
+    and sequencer. Shared with the web dashboard, which reconstructs this
+    stem to locate famtree's .md output."""
+    n = Mu2eName.parse(name)
+    return f"{n.tier}.{n.owner}.{n.description}.{n.dsconf}"
+
 def get_first_file_from_dataset(dataset_name):
     """Get the first file from a dataset name (without run/subrun)."""
-    # Use list_definition_files since dataset names are definitions in SAM
-    files = list_definition_files(dataset_name)
-    if files:
-        return files[0]
-    else:
+    # Dataset names are definitions in SAM; streamed read stops at one name
+    first = first_file_in_definition(dataset_name)
+    if first is None:
         print(f"No files found for dataset: {dataset_name}")
-        return None
+    return first
 
 def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extrapolate=True):
     """Get efficiency statistics for a dataset using process_dataset from genFilterEff.
@@ -66,10 +87,10 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extr
         is_extrapolated indicates if the stats were extrapolated from a sample.
     """
     try:
-        # Get total number of files in dataset
-        file_list = samweb.files_in_dataset(dataset_name, availability='anylocation')
-        num_files_total = len(file_list)
-        
+        # Total number of files in dataset — server-side count, no need to
+        # transfer the full name list just to len() it
+        num_files_total = samweb.dataset_file_count(dataset_name)
+
         # Use the same process_dataset function from genFilterEff
         summary = process_dataset(
             dataset_name,
@@ -94,7 +115,7 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extr
         # Dataset doesn't have gencount or other issue
         return None
 
-def topology_for_dataset(dataset_name):
+def topology_for_dataset(dataset_name, known=None):
     """Return {dataset: [parent_dataset, ...]} subgraph rooted at dataset_name.
 
     Walks SAM file-lineage from the first file of the dataset, aggregates
@@ -102,12 +123,17 @@ def topology_for_dataset(dataset_name):
     datasets. Used by the static pomsMonitor dashboard to cache lineage
     topology — stable per dataset, so cron only walks new datasets.
     Returns None if the dataset has no files.
+
+    Pass `known` (dataset names the caller already has cached) to stop
+    the walk at their boundary — N new mix/reco datasets sharing one
+    beam ancestry then cost N short walks, not N full ones.
     """
     visited = {}
+    known = known if known is not None else ()
 
     def walk(file_name):
         ds = get_dataset_name(file_name)
-        if ds in visited:
+        if ds in visited or ds in known:
             return
         visited[ds] = []
         ds_to_parent_file = {}
@@ -206,13 +232,18 @@ def main():
     # Extract nodes and connections, optionally add stats
     nodes = []
     connections = []
+    # Shared ancestors appear as several node tuples with the same dataset
+    # label — compute each label's stats (2 SAM queries + N metadata) once.
+    stats_cache = {}
     for part in diagram_parts:
         if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], str):
             nid, lbl = part
-            
+
             # Add efficiency stats if requested
             if args.stats and samweb:
-                stats = get_dataset_efficiency(lbl, samweb, max_files=args.max_files)
+                if lbl not in stats_cache:
+                    stats_cache[lbl] = get_dataset_efficiency(lbl, samweb, max_files=args.max_files)
+                stats = stats_cache[lbl]
                 if stats:
                     passed, generated, eff, num_files, is_extrapolated = stats
                     extrapolated_note = " (extrapolated)" if is_extrapolated else ""
@@ -244,8 +275,7 @@ def main():
     mermaid_lines.append("```")
         
     # Use original input for output filename (drop ext+sequencer for a stable stem)
-    n = Mu2eName.parse(args.filename)
-    stem = f"{n.tier}.{n.owner}.{n.description}.{n.dsconf}"
+    stem = output_stem(args.filename)
     out_path = f"{stem}.md"
     with open(out_path, 'w') as f:
         for line in mermaid_lines:

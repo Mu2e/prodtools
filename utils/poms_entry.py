@@ -23,9 +23,26 @@ bare `entry[...]` or `entry.get(...)` so a malformed POMS-map is caught
 at the boundary, not as a downstream crash.
 """
 
+import os
 from typing import Optional
 
 from utils.job_common import Mu2eName
+
+# Where production POMS maps live and which basenames are map files.
+# Shared by the DB builder, the staleness check, and the dashboards —
+# one home so a rebuild and its staleness glob cannot drift apart.
+DEFAULT_POMS_DIR = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map"
+POMS_MAP_PATTERN = "MDC202*"
+
+
+def default_db_path() -> str:
+    """Default path of the poms_data.db SQLite cache (repo root), or the
+    POMS_DB_PATH env override — web deployments point it at a copied DB."""
+    env_path = os.environ.get("POMS_DB_PATH")
+    if env_path:
+        return env_path
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo_root, "poms_data.db")
 
 
 def tarball_of(entry: dict) -> str:
@@ -78,6 +95,16 @@ def firstjob_of(entry: dict) -> int:
     return firstjob
 
 
+def is_draining(entry: dict) -> bool:
+    """True for a draining (input_pattern) entry/campaign/row snapshot.
+
+    The single-owner kind discriminator for the direct backend: a
+    draining entry has `input_pattern` and no index space (no njobs/
+    firstjob). Callers must never sniff indices_json content instead.
+    """
+    return 'input_pattern' in entry
+
+
 def validate_window(firstjob: int, njobs: Optional[int], capacity: Optional[int]) -> None:
     """Validate a windowed entry (firstjob > 0) against its cnf.
 
@@ -94,3 +121,21 @@ def validate_window(firstjob: int, njobs: Optional[int], capacity: Optional[int]
     if capacity and firstjob + njobs > capacity:
         raise ValueError(
             f"window [{firstjob}, {firstjob + njobs}) exceeds cnf capacity {capacity}")
+
+
+RESOURCE_KEYS = ('memory', 'disk', 'expected_lifetime')
+
+
+def resources_of(entry: dict) -> dict:
+    """Optional per-entry resource requests (subset of RESOURCE_KEYS
+    actually present). Values are jobsub-format strings ('4000MB',
+    '50GB', '48h'); anything else is a malformed map."""
+    res = {}
+    for key in RESOURCE_KEYS:
+        if key in entry:
+            if not isinstance(entry[key], str):
+                raise ValueError(
+                    f"POMS entry {key!r} must be a string "
+                    f"(jobsub format), got {entry[key]!r}")
+            res[key] = entry[key]
+    return res

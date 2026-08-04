@@ -14,8 +14,10 @@ pure-function consumers (jobsub_argv, unit tests) and dir:-mode
 resolution work without the Mu2e ops environment.
 """
 
+import hashlib
 import os
 import re
+import sys
 from typing import Optional
 
 from .job_common import Mu2eName, remove_storage_prefix
@@ -100,6 +102,23 @@ def dataset_dir(dsname: str, location: str) -> str:
     return ""
 
 
+def tape_file_path(filename: str) -> str:
+    """Absolute /pnfs tape path for a file, including pushOutput's hash
+    fan-out directories.
+
+    pushOutput spreads files into `<sha256(filename)[0:2]>/<[2:4]>`
+    subdirectories beneath the dataset dir. Deriving that from the
+    filename alone is what makes an UNDECLARED file locatable: a file
+    sitting on tape with no SAM record has no other locator, and that is
+    exactly what a partly-completed push leaves behind (verified
+    2026-07-27 against the two real CeMLeadingLog orphans).
+    """
+    digest = hashlib.sha256(filename.encode()).hexdigest()
+    dsname = str(Mu2eName.parse(filename).dataset)
+    return (f"{dataset_dir(dsname, 'tape')}/"
+            f"{digest[0:2]}/{digest[2:4]}/{filename}")
+
+
 # Mu2e standard location → dCache area name (under `/pnfs/mu2e/<area>/`).
 # Mirrors Mu2eFNBase::location_root values.
 LOCATION_AREA = {
@@ -114,9 +133,22 @@ def storage_scope(filename: str, location) -> Optional[str]:
     """Narrowest dCache token scope covering writes of `filename` to
     `location`: /mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>.
 
-    Token-scope paths include `datasets/` for every area — matching
-    htvault's pre-allocated scopes — which intentionally differs from the
-    physical tape layout (no `datasets/` component; see dataset_dir).
+    The scope path is the PHYSICAL path with `/pnfs` stripped and nothing
+    else changed — upstream mu2ejobsub's `token_request_dirname` is
+    exactly `s|^/pnfs/mu2e|/mu2e|`. It therefore has to inherit
+    dataset_dir's layout asymmetry: disk and scratch carry a `datasets/`
+    component, tape does not.
+
+    This used to insert `datasets/` unconditionally, which made the tape
+    scope name a path nothing lives at, so it granted nothing. Writes
+    still worked through the separate broad `storage.create:/mu2e`, and
+    under the WLCG profile `storage.create` permits upload but NOT
+    overwrite or delete — so pushOutput's `recover` path could never
+    remove a stale target and 403'd on every retry, permanently
+    (CeMLeadingLog 2/418, 2026-07-27). Passing --need-storage-modify at
+    all replaces the role's default broad `storage.modify:/mu2e` (which
+    is what POMS jobs keep, and why POMS recoveries can overwrite), so a
+    wrong path here is a genuine downgrade rather than a no-op.
 
     Why narrowest: htvault rejects `--need-storage-modify
     /mu2e/scratch/datasets` as too broad with `PermissionError: Unable to
@@ -138,7 +170,12 @@ def storage_scope(filename: str, location) -> Optional[str]:
     if n.is_dataset:
         return None
     owner_prefix = "phy" if n.owner == "mu2e" else "usr"
-    return f"/mu2e/{area}/datasets/{owner_prefix}-{n.tier_class}/{n.tier}/{n.owner}"
+    leaf = f"{owner_prefix}-{n.tier_class}/{n.tier}/{n.owner}"
+    # Mirror dataset_dir: tape has no `datasets/` component, disk and
+    # scratch do. TestStorageScopeCoversPhysicalPath pins the invariant.
+    if location == "tape":
+        return f"/mu2e/{area}/{leaf}"
+    return f"/mu2e/{area}/datasets/{leaf}"
 
 
 def xroot_read_url(pnfs_path: str) -> str:
@@ -166,6 +203,23 @@ def path_from_sam_location(filename, location):
     return path
 
 
+def path_from_sam_locations(filename, locations, prefer_location=None):
+    """Pick a record from a locate result (preferring `prefer_location`
+    when given, else the first record) and return its physical path — the
+    record-selection half of sam_physical_path, shared with batch-locate
+    consumers (stash copy, dashboards). Raises ValueError when the
+    locations list is empty or the record is malformed."""
+    if not locations:
+        raise ValueError(f"no SAM locations for {filename}")
+    chosen = locations[0]
+    if prefer_location:
+        preferred = [loc for loc in locations
+                     if loc.get('location_type') == prefer_location]
+        if preferred:
+            chosen = preferred[0]
+    return path_from_sam_location(filename, chosen)
+
+
 def sam_physical_path(filename, prefer_location=None):
     """Readable physical path for `filename` from its SAM locations (one
     locate call). Prefers records whose location_type matches
@@ -178,16 +232,50 @@ def sam_physical_path(filename, prefer_location=None):
     because its output must stay byte-identical.
     """
     from .samweb_wrapper import locate_file_strict
-    locations = locate_file_strict(filename)
-    if not locations:
-        raise ValueError(f"no SAM locations for {filename}")
-    chosen = locations[0]
-    if prefer_location:
-        preferred = [loc for loc in locations
-                     if loc.get('location_type') == prefer_location]
-        if preferred:
-            chosen = preferred[0]
-    return path_from_sam_location(filename, chosen)
+    return path_from_sam_locations(filename, locate_file_strict(filename),
+                                   prefer_location)
+
+
+def classify_sam_location(raw: Optional[str]) -> str:
+    """Normalize a SAM location string (location / location_type /
+    full_path) to the storage system it names: 'enstore', 'dcache', or
+    'N/A' for anything else."""
+    if not raw:
+        return 'N/A'
+    if raw.startswith('enstore'):
+        return 'enstore'
+    if raw.startswith('dcache'):
+        return 'dcache'
+    return 'N/A'
+
+
+# Sentinel for infer_dataset_location's first_file: "not supplied" (fetch
+# it) is distinct from None ("known to have no files" — skip the fetch).
+_UNSET = object()
+
+
+def infer_dataset_location(dataset_name, first_file=_UNSET) -> str:
+    """Normalized storage location (dcache/enstore/N/A) of a dataset from
+    its first file's SAM location records. Pass first_file to reuse a
+    file the caller already fetched. Fail-soft: the dashboard consumers
+    treat an unknown location as 'N/A', not fatal."""
+    from .samweb_wrapper import first_file_in_definition, locate_file_strict
+    try:
+        if first_file is _UNSET:
+            first_file = first_file_in_definition(dataset_name)
+        if not first_file:
+            return 'N/A'
+        for entry in locate_file_strict(first_file):
+            loc = entry.get('location') or entry.get('location_type')
+            if loc:
+                return classify_sam_location(loc)
+            full_path = entry.get('full_path')
+            if full_path:
+                return classify_sam_location(full_path)
+    except Exception as e:
+        print(f"Warning: infer_dataset_location failed for {dataset_name}: {e}",
+              file=sys.stderr)
+    return 'N/A'
 
 
 # ---------------------------------------------------------------------------

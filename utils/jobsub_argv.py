@@ -15,7 +15,6 @@ backend to actually invoke jobsub_submit with the resulting argv.
 import os
 import re
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -155,19 +154,24 @@ def build_inspec(input_datasets, inloc):
     return {ds: [proto, inloc] for ds in input_datasets}
 
 
-def build_ops_json(*, entry, jobset, input_datasets):
-    """Worker-side ops JSON. Three top-level keys:
+def build_ops_json(*, entry, jobset, input_datasets, files=None):
+    """Worker-side ops JSON. Top-level keys:
 
     - `jobs`: PROCESS → real-job-index lookup table (replaces `mu2ejobmap`)
     - `inspec`: per-input-dataset (protocol, location)
     - `jobdesc`: single-element POMS-map entry, consumed by
       `runmu2e._direct_dispatch` via `process_jobdef`
+    - `files` (draining batches only): job index → input art filename;
+      the worker runs process_direct_input on files[index]
     """
-    return {
+    ops = {
         "jobs": list(jobset),
         "inspec": build_inspec(input_datasets, inloc_of(entry)),
         "jobdesc": [dict(entry)],
     }
+    if files is not None:
+        ops["files"] = list(files)
+    return ops
 
 
 # --- argv ---

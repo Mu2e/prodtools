@@ -8,19 +8,20 @@ import os
 import sys
 import argparse
 from typing import List, Optional
-from pathlib import Path
 
 # Handle both module and standalone imports
 try:
     from .job_common import Mu2eName
     from .file_resolver import path_from_sam_location
-    from .samweb_wrapper import get_samweb_wrapper
+    from .samweb_wrapper import (files_in_dataset, list_definition_files,
+                                 locate_files_strict)
 except ImportError:
     # When running as standalone script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from utils.job_common import Mu2eName
     from utils.file_resolver import path_from_sam_location
-    from utils.samweb_wrapper import get_samweb_wrapper
+    from utils.samweb_wrapper import (files_in_dataset, list_definition_files,
+                                      locate_files_strict)
 
 
 def _dataset_dir(dsname: str, location: str) -> str:
@@ -92,17 +93,21 @@ Options:
         --help               Print this message.
 """)
 
-def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List[str]:
+def get_dataset_files(dataset_name: str, location: Optional[str] = None,
+                      max_files: Optional[int] = None) -> List[str]:
     """
     Get all files in a dataset as a list of full paths.
-    
+
     Args:
         dataset_name: Dataset name to query
         location: Optional location ('disk', 'tape', 'scratch'). If None, auto-detects.
-        
+        max_files: If set, build paths for only the first max_files names
+            (sorted order) — per-file path construction is capped at the
+            source instead of sliced by the caller afterwards.
+
     Returns:
         List of full paths to all files in the dataset
-        
+
     Raises:
         RuntimeError: If dataset not found or multiple locations exist
     """
@@ -110,8 +115,7 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     stdloc = ['disk', 'tape', 'scratch']
     
     # Get files from SAM
-    samweb = get_samweb_wrapper()
-    fns = samweb.files_in_dataset(dataset_name)
+    fns = files_in_dataset(dataset_name)
 
     if not fns:
         raise RuntimeError(f"No files with dh.dataset={dataset_name} are registered in SAM.")
@@ -133,7 +137,11 @@ def get_dataset_files(dataset_name: str, location: Optional[str] = None) -> List
     locroot = _dataset_dir(dataset_name, fileloc)
     file_paths = []
 
-    for f in sorted(fns):
+    fns = sorted(fns)
+    if max_files is not None:
+        fns = fns[:max_files]
+
+    for f in fns:
         relpath = Mu2eName.parse(f).relpathname()
         full_path = f"{locroot}/{relpath}"
         file_paths.append(full_path)
@@ -150,15 +158,12 @@ def get_definition_files(definition_name: str) -> List[str]:
     Returns:
         List of full file paths
     """
-    samweb = get_samweb_wrapper()
-    fns = sorted(samweb.list_definition_files(definition_name))
+    fns = sorted(list_definition_files(definition_name))
 
     # One SAM round-trip for the whole definition (thousands of files for
-    # log datasets) instead of one locate per file.
-    try:
-        locations_map = samweb.locate_files(fns) if fns else {}
-    except Exception:
-        locations_map = {}
+    # log datasets) instead of one locate per file. Fail loud: a SAM
+    # outage must not masquerade as an empty file list.
+    locations_map = locate_files_strict(fns) if fns else {}
 
     file_paths = []
     for f in fns:
@@ -178,8 +183,7 @@ def main():
     
     # Handle --basename mode (just print filenames)
     if args.basename:
-        samweb = get_samweb_wrapper()
-        fns = samweb.files_in_dataset(dsname)
+        fns = files_in_dataset(dsname)
         for f in sorted(fns):
             try:
                 print(f)

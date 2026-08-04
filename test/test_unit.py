@@ -10,18 +10,29 @@ Run with:  python -m pytest test/test_unit.py -v
        or: python test/test_unit.py
 """
 
+import copy
 import hashlib
 import io
 import json
 import os
+import sqlite3
+import subprocess
 import sys
+import types
 import tarfile
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # Make the package root importable when running from any directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# The MCP server package lives outside utils/; add its src root so the
+# server's tools are testable in this suite without MCP machinery.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'mcp', 'src'))
 
 # samweb_client and other Fermilab-specific modules are not available outside
 # the Mu2e environment. Stub them before any utils import occurs so that the
@@ -47,7 +58,7 @@ requires_sqlalchemy = unittest.skipUnless(
     _HAVE_SQLALCHEMY,
     "requires SQLAlchemy (source pyenv.sh ana after muse setup ops)")
 
-from utils.job_common import Mu2eFilename, remove_storage_prefix, Mu2eJobBase
+from utils.job_common import Mu2eName, remove_storage_prefix, Mu2eJobBase
 
 
 # ---------------------------------------------------------------------------
@@ -130,13 +141,13 @@ def _empty_event_jobpars(run=1430, events=1000, owner='mu2e', dsconf='TestConf')
 
 
 # ---------------------------------------------------------------------------
-# 1. Mu2eFilename (job_common.py)
+# 1. Mu2eName Perl-parity contract (job_common.py, formerly Mu2eName)
 # ---------------------------------------------------------------------------
 
-class TestMu2eFilename(unittest.TestCase):
+class TestMu2eNameParity(unittest.TestCase):
 
     def test_parse_standard_filename(self):
-        fn = Mu2eFilename("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
+        fn = Mu2eName("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
         self.assertEqual(fn.tier, "dts")
         self.assertEqual(fn.owner, "mu2e")
         self.assertEqual(fn.description, "CeEndpoint")
@@ -145,41 +156,41 @@ class TestMu2eFilename(unittest.TestCase):
         self.assertEqual(fn.extension, "art")
 
     def test_parse_sim_filename(self):
-        fn = Mu2eFilename("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000000.art")
+        fn = Mu2eName("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000000.art")
         self.assertEqual(fn.tier, "sim")
         self.assertEqual(fn.sequencer, "001430_00000000")
         self.assertEqual(fn.dsconf, "MDC2025ac")
 
     def test_parse_nts_filename(self):
-        fn = Mu2eFilename("nts.mu2e.CosmicCRYExtracted.MDC2020av.001205_00000000.root")
+        fn = Mu2eName("nts.mu2e.CosmicCRYExtracted.MDC2020av.001205_00000000.root")
         self.assertEqual(fn.tier, "nts")
         self.assertEqual(fn.extension, "root")
 
-    def test_basename_returns_filename(self):
+    def test_str_returns_filename(self):
         name = "dig.mu2e.CosmicCRYAllMix1BB.MDC2025af.001430_00000076.art"
-        fn = Mu2eFilename(name)
-        self.assertEqual(fn.basename(), name)
+        fn = Mu2eName(name)
+        self.assertEqual(str(fn), name)
 
     def test_invalid_filename_raises(self):
         with self.assertRaises(ValueError):
-            Mu2eFilename("too.few.parts")
+            Mu2eName("too.few.parts")
 
     def test_invalid_filename_seven_parts_raises(self):
         with self.assertRaises(ValueError):
-            Mu2eFilename("a.b.c.d.e.f.g")  # only 5 or 6 fields are valid
+            Mu2eName("a.b.c.d.e.f.g")  # only 5 or 6 fields are valid
 
     def test_parse_six_parts_ok(self):
-        fn = Mu2eFilename("a.b.c.d.e.f")
+        fn = Mu2eName("a.b.c.d.e.f")
         self.assertEqual(fn.tier, "a")
         self.assertEqual(fn.extension, "f")
 
     def test_dataset_derivation(self):
         """Dataset name can be derived from filename by dropping sequencer."""
-        fn = Mu2eFilename("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
+        fn = Mu2eName("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
         self.assertEqual(str(fn.dataset), "dts.mu2e.CeEndpoint.Run1Bab.art")
 
     def test_dataset_derivation_sim(self):
-        fn = Mu2eFilename("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000007.art")
+        fn = Mu2eName("sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000007.art")
         self.assertEqual(str(fn.dataset), "sim.mu2e.MuminusStopsCat.MDC2025ac.art")
 
 
@@ -190,13 +201,9 @@ class TestMu2eFilename(unittest.TestCase):
 class TestMu2eName(unittest.TestCase):
     """Exercise the unified parse/build/derivation surface of Mu2eName.
 
-    Mu2eFilename is an alias of Mu2eName; this class pins the new behavior
-    while TestMu2eFilename keeps the historical contract intact.
+    TestMu2eNameParity above pins the historical (Perl Mu2eName)
+    contract; this class pins the extended interface.
     """
-
-    def test_alias(self):
-        from utils.job_common import Mu2eName, Mu2eFilename as MF
-        self.assertIs(Mu2eName, MF)
 
     # parse / discriminators
 
@@ -493,7 +500,7 @@ class TestMyRandom(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestLocateFile(unittest.TestCase):
-    """Tests for _locate_file without SAM (uses dir: prefix)."""
+    """Tests for resolver.locate without SAM (uses dir: prefix)."""
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
@@ -507,22 +514,22 @@ class TestLocateFile(unittest.TestCase):
 
     def test_dir_prefix_no_sam(self):
         job = self.Cls(self.tar, inloc='dir:/data/inputs', proto='file')
-        path = job._locate_file("myfile.art")
+        path = job._resolver.locate("myfile.art")
         self.assertEqual(path, "/data/inputs/myfile.art")
 
     def test_dir_prefix_trailing_slash_stripped(self):
         job = self.Cls(self.tar, inloc='dir:/data/inputs/', proto='file')
-        path = job._locate_file("myfile.art")
+        path = job._resolver.locate("myfile.art")
         self.assertEqual(path, "/data/inputs/myfile.art")
 
     def test_dir_prefix_with_subdirectory(self):
         job = self.Cls(self.tar, inloc='dir:/a/b/c', proto='file')
-        path = job._locate_file("x.art")
+        path = job._resolver.locate("x.art")
         self.assertEqual(path, "/a/b/c/x.art")
 
 
 class TestLocateFileSAM(unittest.TestCase):
-    """Tests for _locate_file when SAM is involved (mocked)."""
+    """Tests for resolver.locate when SAM is involved (mocked)."""
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
@@ -541,7 +548,7 @@ class TestLocateFileSAM(unittest.TestCase):
         ]
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
             job = self.Cls(self.tar, inloc='tape', proto='file')
-            path = job._locate_file("f.art")
+            path = job._resolver.locate("f.art")
         self.assertEqual(path, '/pnfs/mu2e/tape/phy-sim/f.art')
 
     def test_disk_location_preferred(self):
@@ -551,7 +558,7 @@ class TestLocateFileSAM(unittest.TestCase):
         ]
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
             job = self.Cls(self.tar, inloc='disk', proto='file')
-            path = job._locate_file("f.art")
+            path = job._resolver.locate("f.art")
         self.assertEqual(path, '/pnfs/mu2e/persistent/datasets/phy-sim/f.art')
 
     def test_fallback_to_first_when_no_match(self):
@@ -561,21 +568,21 @@ class TestLocateFileSAM(unittest.TestCase):
         ]
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
             job = self.Cls(self.tar, inloc='disk', proto='file')
-            path = job._locate_file("f.art")
+            path = job._resolver.locate("f.art")
         self.assertEqual(path, '/pnfs/mu2e/tape/phy-sim/f.art')
 
     def test_no_locations_raises(self):
         with patch('utils.samweb_wrapper.locate_file_strict', return_value=[]):
             job = self.Cls(self.tar, inloc='tape', proto='file')
             with self.assertRaises(ValueError):
-                job._locate_file("f.art")
+                job._resolver.locate("f.art")
 
     def test_sam_exception_raises(self):
         with patch('utils.samweb_wrapper.locate_file_strict',
                    side_effect=Exception("SAM unavailable")):
             job = self.Cls(self.tar, inloc='tape', proto='file')
             with self.assertRaises(ValueError):
-                job._locate_file("f.art")
+                job._resolver.locate("f.art")
 
 
 class TestFormatFilename(unittest.TestCase):
@@ -1028,16 +1035,16 @@ class TestMu2eDSName(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 10. datasetFileList Mu2eFilename hash paths
+# 10. datasetFileList Mu2eName hash paths
 # ---------------------------------------------------------------------------
 
 class TestDatasetFileListFilename(unittest.TestCase):
 
     def setUp(self):
-        # datasetFileList no longer re-exports Mu2eFilename; pull directly
+        # datasetFileList no longer re-exports Mu2eName; pull directly
         # from job_common (where the alias still points at Mu2eName).
-        from utils.job_common import Mu2eFilename
-        self.Cls = Mu2eFilename
+        from utils.job_common import Mu2eName
+        self.Cls = Mu2eName
 
     def test_relpathname_has_three_parts(self):
         fn = self.Cls("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
@@ -1083,14 +1090,14 @@ class TestStashPathDerivation(unittest.TestCase):
 
     The formula is:
         STASH_READ_ROOT/datasets/<tier>/<owner>/<description>/<dsconf>/<ext>/<filename>
-    derived purely from the filename via Mu2eFilename.
+    derived purely from the filename via Mu2eName.
     """
 
     STASH_ROOT = "/cvmfs/mu2e.osgstorage.org/pnfs/fnal.gov/usr/mu2e/persistent/stash"
 
     def _stash_path(self, filename: str) -> str:
         """Reference implementation of stash path building (not yet in code)."""
-        fn = Mu2eFilename(filename)
+        fn = Mu2eName(filename)
         dataset = f"{fn.tier}.{fn.owner}.{fn.description}.{fn.dsconf}.{fn.extension}"
         ds_path = dataset.replace('.', '/')
         return f"{self.STASH_ROOT}/datasets/{ds_path}/{filename}"
@@ -1133,7 +1140,7 @@ class TestStashPathDerivation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 12. jobfcl stash integration (_locate_file and _format_filename)
+# 12. jobfcl stash integration (resolver.locate and _format_filename)
 # ---------------------------------------------------------------------------
 
 STASH_READ_DEFAULT = "/cvmfs/mu2e.osgstorage.org/pnfs/fnal.gov/usr/mu2e/persistent/stash"
@@ -1141,7 +1148,7 @@ STASH_WRITE_DEFAULT = "/pnfs/mu2e/persistent/stash"
 
 
 class TestLocateFileStash(unittest.TestCase):
-    """_locate_file with inloc='stash' — path derived from filename (SAM only as fallback)."""
+    """resolver.locate with inloc='stash' — path derived from filename (SAM only as fallback)."""
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
@@ -1162,13 +1169,13 @@ class TestLocateFileStash(unittest.TestCase):
         with patch('utils.samweb_wrapper.locate_file_strict') as mock_locate:
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
-            job._locate_file("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
+            job._resolver.locate("dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art")
         mock_locate.assert_not_called()
 
     def test_stash_path_structure(self):
         job = self.Cls(self.tar, inloc='stash', proto='file')
         fname = "dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art"
-        path = job._locate_file(fname)
+        path = job._resolver.locate(fname)
         expected = (
             f"{STASH_READ_DEFAULT}/datasets/dts/mu2e/CeEndpoint/Run1Bab/art/{fname}"
         )
@@ -1177,7 +1184,7 @@ class TestLocateFileStash(unittest.TestCase):
     def test_stash_path_sim_file(self):
         job = self.Cls(self.tar, inloc='stash', proto='file')
         fname = "sim.mu2e.MuminusStopsCat.MDC2025ac.001430_00000007.art"
-        path = job._locate_file(fname)
+        path = job._resolver.locate(fname)
         self.assertIn("/datasets/sim/mu2e/MuminusStopsCat/MDC2025ac/art/", path)
         self.assertTrue(path.endswith(fname))
 
@@ -1190,7 +1197,7 @@ class TestLocateFileStash(unittest.TestCase):
             importlib.reload(jfcl_mod)
             job = jfcl_mod.Mu2eJobFCL(self.tar, inloc='stash', proto='file')
             fname = "dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art"
-            path = job._locate_file(fname)
+            path = job._resolver.locate(fname)
             self.assertTrue(path.startswith(custom_root))
             # Restore
             importlib.reload(jfcl_mod)
@@ -1306,7 +1313,7 @@ class TestStashUtils(unittest.TestCase):
         self.assertTrue(path.endswith(fname))
 
     def test_copy_dataset_dry_run(self):
-        """dry_run=True must not invoke cp or makedirs."""
+        """dry_run=True must not copy or makedirs."""
         from utils import stash_utils
 
         mock_files = ["dts.mu2e.CeEndpoint.Run1Bab.001440_00000000.art",
@@ -1317,9 +1324,10 @@ class TestStashUtils(unittest.TestCase):
         ]
 
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
-             patch('utils.samweb_wrapper.locate_file_strict', return_value=mock_locations), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}), \
              patch('os.makedirs') as mock_mkdir, \
-             patch('subprocess.run') as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             n = stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
@@ -1331,8 +1339,11 @@ class TestStashUtils(unittest.TestCase):
         mock_run.assert_not_called()
         self.assertEqual(n, 2)
 
-    def test_copy_dataset_calls_cp(self):
-        """copy_dataset_to_stash must call subprocess.run with cp."""
+    def test_copy_dataset_calls_copyfile(self):
+        """Copies via shutil.copyfile(src, dest) — not a `cp` subprocess.
+
+        copyfile, not copy2/copy: the destination is dCache, where the
+        metadata/permission copy those do is not reliably supported."""
         from utils import stash_utils
 
         mock_files = ["dts.mu2e.CeEndpoint.Run1Bab.001440_00000000.art"]
@@ -1340,13 +1351,11 @@ class TestStashUtils(unittest.TestCase):
             {'location_type': 'disk',
              'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'}
         ]
-        mock_run_result = MagicMock()
-        mock_run_result.returncode = 0
-
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
-             patch('utils.samweb_wrapper.locate_file_strict', return_value=mock_locations), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}), \
              patch('os.makedirs'), \
-             patch('subprocess.run', return_value=mock_run_result) as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             n = stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
@@ -1355,8 +1364,36 @@ class TestStashUtils(unittest.TestCase):
             )
 
         self.assertEqual(n, 1)
-        call_args = mock_run.call_args[0][0]
-        self.assertEqual(call_args[0], 'cp')
+        src, dest = mock_run.call_args[0]
+        self.assertTrue(src.endswith(mock_files[0]))
+        self.assertTrue(dest.endswith(mock_files[0]))
+
+    def test_copy_dataset_counts_oserror_as_failure(self):
+        """A copy that raises OSError is a failure, not a silent success.
+
+        The old code read subprocess returncode; shutil raises instead, so
+        the failure path must catch OSError or a failed copy would be
+        counted as copied."""
+        from utils import stash_utils
+
+        mock_files = ["dts.mu2e.CeEndpoint.Run1Bab.001440_00000000.art",
+                      "dts.mu2e.CeEndpoint.Run1Bab.001440_00000001.art"]
+        mock_locations = [
+            {'location_type': 'disk',
+             'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'}
+        ]
+
+        with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}), \
+             patch('os.makedirs'), \
+             patch('utils.stash_utils.shutil.copyfile',
+                   side_effect=OSError(28, "No space left on device")):
+            n = stash_utils.copy_dataset_to_stash(
+                "dts.mu2e.CeEndpoint.Run1Bab.art",
+                source_loc='disk', dry_run=False, verbose=False)
+
+        self.assertEqual(n, 0)
 
     def test_copy_dataset_limit(self):
         """--limit N should copy at most N files."""
@@ -1367,13 +1404,11 @@ class TestStashUtils(unittest.TestCase):
             {'location_type': 'disk',
              'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'}
         ]
-        mock_run_result = MagicMock()
-        mock_run_result.returncode = 0
-
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
-             patch('utils.samweb_wrapper.locate_file_strict', return_value=mock_locations), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: mock_locations for f in fns}) as mock_loc, \
              patch('os.makedirs'), \
-             patch('subprocess.run', return_value=mock_run_result) as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
@@ -1381,6 +1416,9 @@ class TestStashUtils(unittest.TestCase):
                 dry_run=False,
                 verbose=False,
             )
+        # one batch locate for the (limited) copy list, not one per file
+        mock_loc.assert_called_once()
+        self.assertEqual(len(mock_loc.call_args[0][0]), 3)
 
         self.assertEqual(mock_run.call_count, 3)
 
@@ -1393,7 +1431,7 @@ class TestStashUtils(unittest.TestCase):
         with patch('utils.stash_utils.files_in_dataset', return_value=mock_files), \
              patch('utils.samweb_wrapper.locate_file_strict', return_value=[]), \
              patch('os.makedirs'), \
-             patch('subprocess.run') as mock_run:
+             patch('utils.stash_utils.shutil.copyfile') as mock_run:
             n = stash_utils.copy_dataset_to_stash(
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk',
@@ -1406,7 +1444,7 @@ class TestStashUtils(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 14. prod_utils: stash skips copy_input
+# 14. runmu2e: stash skips copy_input
 # ---------------------------------------------------------------------------
 
 class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
@@ -1416,7 +1454,7 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
     """
 
     def test_stash_does_not_call_mdh_copy(self):
-        from utils import prod_utils
+        from utils import runmu2e
 
         files = ["sim.mu2e.Test.TestConf.001440_00000000.art"]
         jp = _root_input_jobpars(files, merge=1)
@@ -1434,13 +1472,13 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
 
         mock_fcl = tar.replace('.tar', '.fcl')
 
-        with patch('utils.prod_utils.write_fcl', return_value=mock_fcl) as mock_wfcl, \
-             patch('utils.prod_utils.run') as mock_run, \
+        with patch('utils.runmu2e.write_fcl', return_value=mock_fcl) as mock_wfcl, \
+             patch('utils.runmu2e.run') as mock_run, \
              patch('utils.jobquery.Mu2eJobPars') as mock_pars:
 
             mock_pars.return_value.setup.return_value = "/cvmfs/test/setup.sh"
 
-            prod_utils.process_jobdef(
+            runmu2e.process_jobdef(
                 jobdesc,
                 fname="cnf.mu2e.Test.TestConf.0.fcl",
                 args=args,
@@ -1458,6 +1496,65 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
                              "mdh copy-file must not be called for stash inloc")
 
         os.unlink(tar)
+
+
+class TestProcessJobdefCopyInputFlip(unittest.TestCase):
+    """Streaming is the default (POMS-era parity: the launch template
+    never passed --copy-input); an entry opts in to local staging with
+    copy_input: true, and the entry key wins over the CLI flag."""
+
+    FILE = "sim.mu2e.Test.TestConf.001440_00000000.art"
+
+    def _run(self, *, entry_extra=None, cli_copy=False):
+        from utils import runmu2e
+
+        jp = _root_input_jobpars([self.FILE], merge=1)
+        tar = _make_tarball(jp, "module_type : RootInput\n")
+        args = MagicMock()
+        args.copy_input = cli_copy
+        jobdesc = [{'tarball': tar, 'njobs': 1, 'inloc': 'tape',
+                    'outputs': [], **(entry_extra or {})}]
+        located = {self.FILE: [{'location_type': 'tape'}]}
+        try:
+            with patch('utils.runmu2e.write_fcl',
+                       return_value='x.fcl') as mock_wfcl, \
+                 patch('utils.runmu2e.run'), \
+                 patch('utils.runmu2e.locate_files_strict',
+                       return_value=located), \
+                 patch('utils.runmu2e._fetch_file_local') as mock_fetch, \
+                 patch('utils.jobquery.Mu2eJobPars') as mock_pars:
+                mock_pars.return_value.setup.return_value = "/cvmfs/s.sh"
+                runmu2e.process_jobdef(
+                    jobdesc, fname="cnf.mu2e.Test.TestConf.0.fcl",
+                    args=args)
+            return mock_wfcl.call_args[0], mock_fetch
+        finally:
+            os.unlink(tar)
+
+    def test_default_streams_from_tape(self):
+        (_, inloc, proto, _), fetch = self._run()
+        self.assertEqual((inloc, proto), ('tape', 'root'))
+        # Only the tarball itself may be fetched — never the inputs.
+        for call in fetch.call_args_list:
+            self.assertNotIn(self.FILE, str(call))
+
+    def test_entry_opt_in_copies(self):
+        (_, inloc, proto, _), fetch = self._run(
+            entry_extra={'copy_input': True})
+        self.assertTrue(inloc.startswith('dir:'), inloc)
+        self.assertEqual(proto, 'file')
+        fetched = [str(c) for c in fetch.call_args_list]
+        self.assertTrue(any(self.FILE in c for c in fetched),
+                        f"input not staged locally: {fetched}")
+
+    def test_entry_false_wins_over_cli_flag(self):
+        (_, inloc, proto, _), _ = self._run(
+            entry_extra={'copy_input': False}, cli_copy=True)
+        self.assertEqual((inloc, proto), ('tape', 'root'))
+
+    def test_non_bool_copy_input_fails(self):
+        with self.assertRaises(SystemExit):
+            self._run(entry_extra={'copy_input': 'yes'})
 
 
 # ---------------------------------------------------------------------------
@@ -1483,16 +1580,6 @@ class TestVersionField(unittest.TestCase):
     def test_version_five(self):
         from utils.json2jobdef import get_parfile_name
         self.assertEqual(get_parfile_name(self._cfg(version=5)), 'cnf.mu2e.TestDesc.TestConf.5.tar')
-
-    # --- get_fcl_name ---
-
-    def test_fcl_name_default_version(self):
-        from utils.json2jobdef import get_fcl_name
-        self.assertEqual(get_fcl_name(self._cfg()), 'cnf.mu2e.TestDesc.TestConf.0.fcl')
-
-    def test_fcl_name_with_version(self):
-        from utils.json2jobdef import get_fcl_name
-        self.assertEqual(get_fcl_name(self._cfg(version=3)), 'cnf.mu2e.TestDesc.TestConf.3.fcl')
 
     # --- version + tarball_append ---
 
@@ -1554,7 +1641,7 @@ class TestWriteFclFilenameDerivation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestStashFallback(unittest.TestCase):
-    """When inloc='stash' and the file is not on CVMFS, _locate_file falls back to SAM."""
+    """When inloc='stash' and the file is not on CVMFS, resolver.locate falls back to SAM."""
 
     _TAPE_DIR = '/pnfs/mu2e/tape/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'
     _FNAME = 'dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art'
@@ -1582,7 +1669,7 @@ class TestStashFallback(unittest.TestCase):
                    return_value=self._sam_locations()) as mock_locate:
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
-            job._locate_file(self._FNAME)
+            job._resolver.locate(self._FNAME)
         mock_locate.assert_called_once_with(self._FNAME)
 
     def test_fallback_returns_sam_path(self):
@@ -1591,7 +1678,7 @@ class TestStashFallback(unittest.TestCase):
                    return_value=self._sam_locations()):
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
-            path = job._locate_file(self._FNAME)
+            path = job._resolver.locate(self._FNAME)
         self.assertEqual(path, self._TAPE_DIR)
 
     def test_fallback_raises_when_sam_has_no_locations(self):
@@ -1600,7 +1687,7 @@ class TestStashFallback(unittest.TestCase):
             from utils.jobfcl import Mu2eJobFCL
             job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
             with self.assertRaises(ValueError):
-                job._locate_file(self._FNAME)
+                job._resolver.locate(self._FNAME)
 
     def test_fallback_format_filename_applies_xroot(self):
         """_format_filename with proto='root' converts the SAM tape path to an xroot URL."""
@@ -1841,44 +1928,44 @@ class TestGetOutputDatasetNames(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 22. validate_jobdesc — three-way mode detection (prod_utils.py)
+# 22. validate_jobdesc — three-way mode detection (runmu2e.py)
 # ---------------------------------------------------------------------------
 
 class TestValidateJobdesc(unittest.TestCase):
 
     def test_template_mode(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'fcl_template': 'base.fcl', 'setup_script': '/s/setup.sh',
                'inloc': 'tape', 'outputs': []}]
         self.assertEqual(validate_jobdesc(jd), 'template')
 
     def test_direct_input_mode(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
                'inloc': 'tape', 'outputs': []}]
         self.assertEqual(validate_jobdesc(jd), 'direct_input')
 
     def test_normal_mode(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
                'inloc': 'tape', 'outputs': []}]
         self.assertFalse(validate_jobdesc(jd))
 
     def test_direct_input_is_truthy(self):
         """'direct_input' string must be truthy for backward-compatible if-checks."""
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
                'inloc': 'tape', 'outputs': []}]
         self.assertTrue(validate_jobdesc(jd))
 
     def test_normal_mode_is_falsy(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
                'inloc': 'tape', 'outputs': []}]
         self.assertFalse(validate_jobdesc(jd))
 
     def test_direct_input_multiple_entries_exits(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [
             {'tarball': 'a.tar', 'inloc': 'tape', 'outputs': []},
             {'tarball': 'b.tar', 'inloc': 'tape', 'outputs': []},
@@ -1887,21 +1974,21 @@ class TestValidateJobdesc(unittest.TestCase):
             validate_jobdesc(jd)
 
     def test_direct_input_missing_outputs_exits(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar', 'inloc': 'tape'}]
         with self.assertRaises(SystemExit):
             validate_jobdesc(jd)
 
     def test_normal_mode_missing_njobs_exits(self):
         """Entry without tarball: falls through to normal-mode validation which requires njobs."""
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [{'inloc': 'tape', 'outputs': []}]  # no tarball, no njobs
         with self.assertRaises(SystemExit):
             validate_jobdesc(jd)
 
     def test_normal_mode_with_generic_entry_ignored(self):
         """Normal-mode jobdesc with a trailing generic tarball (no njobs) is valid."""
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         jd = [
             {'tarball': 'a.tar', 'njobs': 100, 'inloc': 'tape', 'outputs': []},
             {'tarball': 'b.tar', 'njobs': 200, 'inloc': 'tape', 'outputs': []},
@@ -1911,7 +1998,7 @@ class TestValidateJobdesc(unittest.TestCase):
         self.assertFalse(validate_jobdesc(jd))
 
     def test_empty_list_exits(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         with self.assertRaises(SystemExit):
             validate_jobdesc([])
 
@@ -2051,13 +2138,12 @@ class TestGenericTarballGuard(unittest.TestCase):
         with patch.object(json2jobdef, 'validate_output_filenames') as guard, \
              patch.object(json2jobdef, 'create_jobdef'), \
              patch.object(json2jobdef, 'get_parfile_name', return_value='cnf.x.0.tar'), \
-             patch.object(json2jobdef, 'get_fcl_name', return_value='cnf.x.0.fcl'), \
              patch.object(json2jobdef, 'append_jobdef'):
             cfg = {'desc': 'reco', 'dsconf': 'D', 'owner': 'mu2e',
                    'simjob_setup': 's', 'inloc': 'tape', 'generic_tarball': True,
                    'fcl': 'f.fcl', 'outloc': {'*.art': 'tape'}}
             try:
-                json2jobdef.build_jobdef(cfg, job_args=[], json_output=True)
+                json2jobdef.build_jobdef(cfg, job_args=[])
             except Exception:
                 pass  # downstream packaging is mocked/partial; we only assert the guard
             guard.assert_not_called()
@@ -2245,7 +2331,7 @@ class TestReplacePlaceholdersDeferKeys(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 25. process_direct_input (prod_utils.py)
+# 25. process_direct_input (runmu2e.py)
 # ---------------------------------------------------------------------------
 
 class TestProcessDirectInput(unittest.TestCase):
@@ -2267,7 +2353,7 @@ class TestProcessDirectInput(unittest.TestCase):
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def _run(self, fname):
-        from utils.prod_utils import process_direct_input
+        from utils.runmu2e import process_direct_input
         jobdesc = [{
             'tarball': self._tar,
             'inloc': 'tape',
@@ -2348,7 +2434,7 @@ class TestProcessDirectInput(unittest.TestCase):
         self.assertIn('/cvmfs/', simjob_setup)
 
     def test_bad_fname_format_exits(self):
-        from utils.prod_utils import process_direct_input
+        from utils.runmu2e import process_direct_input
         jobdesc = [{'tarball': self._tar, 'inloc': 'tape', 'outputs': []}]
         with self.assertRaises(SystemExit):
             process_direct_input(jobdesc, "only.four.parts.art", MagicMock())
@@ -2456,7 +2542,7 @@ class TestSequencerRunNumber(unittest.TestCase):
             os.unlink(tar)
 
     def test_runNumber_bypasses_filename_parsing(self):
-        # Input filename that would fail Mu2eFilename parsing — verifies
+        # Input filename that would fail Mu2eName parsing — verifies
         # the short-circuit fires before the fallback path.
         from utils.jobfcl import Mu2eJobFCL
         jp = _pbi_sequence_jobpars(run=1430, files=["not-a-mu2e-name.txt"])
@@ -2764,6 +2850,218 @@ class TestJobdefLookup(unittest.TestCase):
             self.assertEqual(m.get(("CeEndpointOnSpill", "dig")), 20)
         finally:
             os.unlink(tar)
+
+
+# ---------------------------------------------------------------------------
+# 31b. chain_emit: per-description merge factor in one entry
+# ---------------------------------------------------------------------------
+
+class TestChainEmitDescMapping(unittest.TestCase):
+    """`desc` as a {name: settings} mapping — the preferred shape. Keeps
+    the merge factor in exactly one place and drops the repeated "desc"
+    key that the list-of-dicts form required."""
+
+    TEMPLATE = [{
+        "desc": {
+            "CeMLeadingLog": 4,
+            "NoPrimary": {"merge": 5,
+                          "fcl_overrides": {"#include": "mixing/NoPrimary.fcl"}},
+        },
+        "input_data": ["dts.mu2e.{desc}.{campaign}.art"],
+        "dsconf": ["{out_campaign}_best_v1_3"],
+        "pbeam": ["Mix1BB"],
+        "inloc": ["resilient"],
+        "simjob_setup": ["/cvmfs/x/{out_campaign}/setup.sh"],
+        "fcl_overrides": [{"services.DbService.version": "v1_3"}],
+    }]
+
+    def test_explicit_descs_reads_mapping(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit.explicit_descriptions(self.TEMPLATE),
+                         ["CeMLeadingLog", "NoPrimary"])
+
+    def test_scalar_value_is_the_merge_factor(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit._input_merge(self.TEMPLATE[0], "CeMLeadingLog"), 4)
+
+    def test_dict_value_carries_merge_and_overrides(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit._input_merge(self.TEMPLATE[0], "NoPrimary"), 5)
+
+    def test_input_data_is_bare_pattern(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit._input_pattern(self.TEMPLATE[0]),
+                         "dts.mu2e.{desc}.{campaign}.art")
+
+    def test_synthesize_pins_merge_from_mapping(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.CeMLeadingLog.MDC2025ap.art": 4}])
+
+    def test_synthesize_applies_mapping_fcl_overrides(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.NoPrimary.MDC2025af.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['fcl_overrides'][0]["#include"], "mixing/NoPrimary.fcl")
+        self.assertEqual(out['fcl_overrides'][0]["services.DbService.version"], "v1_3")
+
+    def test_mapping_desc_dropped_when_deferred(self):
+        """The whole mapping must not leak into the emitted config."""
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.CeMLeadingLog.MDC2025ap.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertNotIn('desc', out)
+
+    def test_missing_merge_fails_loud(self):
+        """A desc added without a merge must error, not silently become 1 —
+        that would emit an undersized round with several times the jobs."""
+        from utils import chain_emit
+        tmpl = copy.deepcopy(self.TEMPLATE)
+        tmpl[0]['desc']['Forgotten'] = {}
+        with self.assertRaises(ValueError) as cm:
+            chain_emit._input_merge(tmpl[0], "Forgotten")
+        self.assertIn("merge factor", str(cm.exception))
+
+    def test_bad_mapping_value_rejected(self):
+        from utils import chain_emit
+        tmpl = copy.deepcopy(self.TEMPLATE)
+        tmpl[0]['desc']['Bogus'] = "4"
+        with self.assertRaises(ValueError):
+            chain_emit._desc_map(tmpl[0])
+
+
+class TestChainEmitPerDescMerge(unittest.TestCase):
+    """One template entry, per-desc merge factors. Without this, giving a
+    single desc a different merge means duplicating the entry's whole
+    pileup/dsconf/override block — two copies that drift."""
+
+    TEMPLATE = [{
+        "desc": ["NoPrimary", {"desc": "MuCap1809keVCalo", "merge": 5}],
+        "input_data": [{"dts.mu2e.{desc}.{campaign}.art": 1}],
+        "dsconf": ["{out_campaign}_best_v1_3"],
+        "pbeam": ["Mix1BB"],
+        "inloc": ["resilient"],
+        "simjob_setup": ["/cvmfs/x/{out_campaign}/setup.sh"],
+    }]
+
+    def test_explicit_descs_reads_both_forms(self):
+        from utils import chain_emit
+        self.assertEqual(chain_emit.explicit_descriptions(self.TEMPLATE),
+                         ["NoPrimary", "MuCap1809keVCalo"])
+
+    def test_match_entry_finds_dict_form_desc(self):
+        from utils import chain_emit
+        e = chain_emit.match_entry(self.TEMPLATE, "MuCap1809keVCalo")
+        self.assertIs(e, self.TEMPLATE[0])
+
+    def test_per_desc_merge_overrides_base(self):
+        from utils import chain_emit
+        entry = self.TEMPLATE[0]
+        self.assertEqual(chain_emit._input_merge(entry, "MuCap1809keVCalo"), 5)
+
+    def test_plain_string_desc_keeps_base_merge(self):
+        from utils import chain_emit
+        entry = self.TEMPLATE[0]
+        self.assertEqual(chain_emit._input_merge(entry, "NoPrimary"), 1)
+
+    def test_synthesize_applies_per_desc_merge(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5}])
+
+    def test_synthesize_other_desc_unaffected(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.NoPrimary.MDC2025af.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.NoPrimary.MDC2025af.art": 1}])
+
+    def test_dict_desc_without_name_fails_loud(self):
+        """A malformed desc item must raise, not silently vanish from the
+        roster — a silently-dropped desc is a whole dataset not produced."""
+        from utils import chain_emit
+        bad = [{**self.TEMPLATE[0], "desc": [{"merge": 5}]}]
+        with self.assertRaises(ValueError):
+            chain_emit.explicit_descriptions(bad)
+
+
+class TestChainEmitPerDescOverrides(unittest.TestCase):
+    """Per-desc `fcl_overrides` PATCH the entry's base overrides. Without
+    this, one desc needing a single extra override (e.g. the NoPrimary.fcl
+    trigger include) forces a duplicate of the entry's whole
+    pileup/dsconf/fcl block."""
+
+    TEMPLATE = [{
+        "desc": [
+            "CeMLeadingLog",
+            {"desc": "NoPrimary",
+             "fcl_overrides": {"#include": "Production/JobConfig/mixing/NoPrimary.fcl"}},
+            {"desc": "MuCap1809keVCalo", "merge": 5,
+             "fcl_overrides": {"#include": "Production/JobConfig/mixing/NoPrimary.fcl"}},
+        ],
+        "input_data": [{"dts.mu2e.{desc}.{campaign}.art": 1}],
+        "dsconf": ["{out_campaign}_best_v1_3"],
+        "pbeam": ["Mix1BB"],
+        "inloc": ["resilient"],
+        "simjob_setup": ["/cvmfs/x/{out_campaign}/setup.sh"],
+        "fcl_overrides": [{
+            "services.DbService.purpose": "Sim_best",
+            "physics.producers.PBISim.SDF": 0.8,
+        }],
+    }]
+
+    def _ov(self, dataset):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(self.TEMPLATE, dataset,
+                                          out_campaign="MDC2025au", defer_desc=True)
+        ov = out['fcl_overrides']
+        return ov[0] if isinstance(ov, list) else ov
+
+    def test_per_desc_override_is_added_to_base(self):
+        ov = self._ov("dts.mu2e.NoPrimary.MDC2025af.art")
+        self.assertEqual(ov["#include"], "Production/JobConfig/mixing/NoPrimary.fcl")
+        # base keys survive the patch
+        self.assertEqual(ov["services.DbService.purpose"], "Sim_best")
+        self.assertEqual(ov["physics.producers.PBISim.SDF"], 0.8)
+
+    def test_desc_without_overrides_gets_base_only(self):
+        ov = self._ov("dts.mu2e.CeMLeadingLog.MDC2025ap.art")
+        self.assertNotIn("#include", ov)
+        self.assertEqual(ov["services.DbService.purpose"], "Sim_best")
+
+    def test_merge_and_overrides_combine(self):
+        from utils import chain_emit
+        out = chain_emit.synthesize_entry(
+            self.TEMPLATE, "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art",
+            out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['input_data'],
+                         [{"dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5}])
+        ov = out['fcl_overrides'][0]
+        self.assertEqual(ov["#include"], "Production/JobConfig/mixing/NoPrimary.fcl")
+
+    def test_per_desc_override_wins_over_base_key(self):
+        from utils import chain_emit
+        tmpl = copy.deepcopy(self.TEMPLATE)
+        tmpl[0]['desc'][1]['fcl_overrides']["physics.producers.PBISim.SDF"] = 0.5
+        out = chain_emit.synthesize_entry(tmpl, "dts.mu2e.NoPrimary.MDC2025af.art",
+                                          out_campaign="MDC2025au", defer_desc=True)
+        self.assertEqual(out['fcl_overrides'][0]["physics.producers.PBISim.SDF"], 0.5)
+
+    def test_base_template_not_mutated_across_calls(self):
+        """Patching must not leak into the shared template dict — the next
+        desc would silently inherit the previous one's overrides."""
+        self._ov("dts.mu2e.NoPrimary.MDC2025af.art")
+        ov = self._ov("dts.mu2e.CeMLeadingLog.MDC2025ap.art")
+        self.assertNotIn("#include", ov)
 
 
 # ---------------------------------------------------------------------------
@@ -3077,6 +3375,197 @@ class TestLatestPerDescription(unittest.TestCase):
             "dts.mu2e.FlatGamma.MDC2025ap.art",
         })
 
+    def test_superseded_is_complement_of_latest(self):
+        """superseded_per_description returns every non-latest version, and is
+        the exact set complement of the latest names."""
+        from utils.latestDatasets import (latest_per_description,
+                                          superseded_per_description)
+        names = [
+            "dts.mu2e.A.MDC2025ac.art",   # A: superseded (ac < ao < ap)
+            "dts.mu2e.A.MDC2025ao.art",   # A: superseded
+            "dts.mu2e.A.MDC2025ap.art",   # A: latest
+            "dts.mu2e.B.MDC2025ap.art",   # B: single version → never superseded
+        ]
+        srows, skipped = superseded_per_description(names)
+        sup = {name for _, _, name, _ in srows}
+        self.assertEqual(sup, {
+            "dts.mu2e.A.MDC2025ac.art",
+            "dts.mu2e.A.MDC2025ao.art",
+        })
+        self.assertEqual(skipped, [])
+        # count column reports the group's total version count
+        self.assertEqual({name: count for _, _, name, count in srows},
+                         {"dts.mu2e.A.MDC2025ac.art": 3,
+                          "dts.mu2e.A.MDC2025ao.art": 3})
+        # exact complement of the latest set (over parseable names)
+        latest = {name for _, _, name, _ in latest_per_description(names)[0]}
+        allnames = set(names)
+        self.assertEqual(sup, allnames - latest)
+
+    def test_superseded_skips_unparseable(self):
+        from utils.latestDatasets import superseded_per_description
+        srows, skipped = superseded_per_description(
+            ["not-a-name", "dts.mu2e.A.MDC2025ap.art"])
+        self.assertEqual(srows, [])          # single parseable version → nothing
+        self.assertEqual(len(skipped), 1)
+
+    def test_injected_order_key_overrides_dsconf(self):
+        """Real MDC2020 case: the ntuple series sorts BELOW the release series
+        lexicographically ('-' < 'a') but was created six months later. An
+        injected date key must beat dsconf order."""
+        import datetime as _dt
+        from utils.latestDatasets import latest_per_description
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        # dsconf order picks the stale one -- this is the bug being fixed
+        rows, _ = latest_per_description([stale, newest])
+        self.assertEqual(rows[0][2], stale)
+        # the injected key picks the actually-newest
+        rows, _ = latest_per_description([stale, newest], order_key=dates.__getitem__)
+        self.assertEqual(rows[0][2], newest)
+
+    def test_superseded_honors_same_order_key(self):
+        """--superseded means 'every version that is not the latest', so it must
+        order by the SAME key -- otherwise a dataset lands in both listings or
+        in neither."""
+        import datetime as _dt
+        from utils.latestDatasets import (latest_per_description,
+                                          superseded_per_description)
+        a_stale = "nts.mu2e.A.MDC2020aw_best_v1_3_v06_06_00.root"
+        a_new = "nts.mu2e.A.MDC2020-001.root"
+        b_only = "nts.mu2e.B.MDC2020-001.root"
+        names = [a_stale, a_new, b_only]
+        dates = {a_stale: _dt.datetime(2025, 9, 6),
+                 a_new: _dt.datetime(2026, 3, 10),
+                 b_only: _dt.datetime(2026, 3, 10)}
+        key = dates.__getitem__
+        latest = {n for _, _, n, _ in latest_per_description(names, key)[0]}
+        sup = {n for _, _, n, _ in superseded_per_description(names, key)[0]}
+        self.assertEqual(latest, {a_new, b_only})
+        self.assertEqual(sup, {a_stale})
+        self.assertEqual(sup, set(names) - latest)      # exact complement
+
+    def test_creation_date_key_queries_only_contended(self):
+        """Single-version descriptions have nothing to compare against, so they
+        must never cost a SAM call."""
+        import datetime as _dt
+        from utils import latestDatasets
+        a_one = "nts.mu2e.A.MDC2020aw_best_v1_3_v06_06_00.root"   # A: contended
+        a_two = "nts.mu2e.A.MDC2020-001.root"                     # A: contended
+        b_only = "nts.mu2e.B.MDC2020-001.root"                    # B: singleton
+        asked = []
+
+        def fake(name):
+            asked.append(name)
+            return _dt.datetime(2026, 3, 10)
+
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=fake):
+            key = latestDatasets._creation_date_key([a_one, a_two, b_only])
+        self.assertEqual(set(asked), {a_one, a_two})
+        self.assertNotIn(b_only, asked)
+        # the unqueried singleton still gets a usable rank, not a KeyError
+        self.assertEqual(key(b_only), _dt.datetime.min)
+
+    def test_creation_date_key_fails_loud_on_missing_date(self):
+        """No date for a contended dataset must abort, naming it -- never
+        silently revert to lexicographic order."""
+        import datetime as _dt
+        from utils import latestDatasets
+        dated = "nts.mu2e.A.MDC2020aw_best_v1_3_v06_06_00.root"
+        undated = "nts.mu2e.A.MDC2020-001.root"
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: None if n == undated
+                          else _dt.datetime(2025, 9, 6)):
+            with self.assertRaises(SystemExit) as cm:
+                latestDatasets._creation_date_key([dated, undated])
+        self.assertIn(undated, str(cm.exception))
+
+    def test_dsconf_mode_makes_no_sam_calls(self):
+        """The default path must stay free of SAM round trips -- the --emit
+        chain relies on it."""
+        from utils import latestDatasets
+
+        def boom(name):
+            raise AssertionError(f"SAM queried in dsconf mode: {name}")
+
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=boom):
+            key = latestDatasets._order_key_for(
+                "dsconf", ["nts.mu2e.A.MDC2020-000.root",
+                           "nts.mu2e.A.MDC2020-001.root"])
+        self.assertIsNone(key)
+
+    def test_duplicate_name_not_split_across_latest_and_superseded(self):
+        """A repeated input name (e.g. `cat a.txt b.txt | --stdin`) must not
+        land in both the latest and superseded listings -- that would
+        nominate a live dataset for retirement."""
+        from utils.latestDatasets import (latest_per_description,
+                                          superseded_per_description)
+        names = ["dts.mu2e.A.MDC2025ap.art", "dts.mu2e.A.MDC2025ap.art"]
+        rows, _ = latest_per_description(names)
+        self.assertEqual([r[2] for r in rows], ["dts.mu2e.A.MDC2025ap.art"])
+        srows, _ = superseded_per_description(names)
+        self.assertEqual(srows, [])
+
+    def test_order_key_for_time_ranks_by_mocked_date(self):
+        """_order_key_for('time', ...) must return a callable that ranks by
+        SAM creation date, and that key must actually change the winner
+        latest_per_description picks (proves the wiring isn't a no-op)."""
+        import datetime as _dt
+        from utils import latestDatasets
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        with patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: dates[n]):
+            key = latestDatasets._order_key_for("time", [stale, newest])
+        self.assertIsNotNone(key)
+        rows, _ = latestDatasets.latest_per_description([stale, newest], key)
+        self.assertEqual(rows[0][2], newest)
+
+    def test_main_stdin_latest_by_time_picks_newest_by_date(self):
+        """End-to-end: main() with --stdin --latest-by time must print the
+        newest-by-date name, not the lexicographic winner (which would be
+        `stale` here since '-' < 'a'). Mutating _order_key_for into a no-op
+        (lambda latest_by, names: None) makes this fail."""
+        import contextlib
+        import datetime as _dt
+        from utils import latestDatasets
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        stdin = io.StringIO(f"{stale}\n{newest}\n")
+        buf = io.StringIO()
+        with patch.object(sys, 'argv', ['latestDatasets', '--stdin', '--latest-by', 'time']), \
+             patch.object(sys, 'stdin', stdin), \
+             patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: dates[n]), \
+             contextlib.redirect_stdout(buf):
+            latestDatasets.main()
+        self.assertEqual(buf.getvalue().strip(), newest)
+
+    def test_main_superseded_latest_by_time_lists_the_older_one(self):
+        """Complement of the above: --superseded --latest-by time must list
+        the OLDER-by-date name (`stale`), not the newer one."""
+        import contextlib
+        import datetime as _dt
+        from utils import latestDatasets
+        stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
+        newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
+        dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
+        stdin = io.StringIO(f"{stale}\n{newest}\n")
+        buf = io.StringIO()
+        with patch.object(sys, 'argv',
+                          ['latestDatasets', '--stdin', '--superseded', '--latest-by', 'time']), \
+             patch.object(sys, 'stdin', stdin), \
+             patch.object(latestDatasets, 'definition_creation_date',
+                          side_effect=lambda n: dates[n]), \
+             contextlib.redirect_stdout(buf):
+            latestDatasets.main()
+        self.assertEqual(buf.getvalue().strip(), stale)
+
 
 # ---------------------------------------------------------------------------
 # 33. latestDatasets --emit arg validation
@@ -3118,7 +3607,7 @@ class TestSkipProduced(unittest.TestCase):
 
 @requires_sqlalchemy
 class TestDatasetInfoGencount(unittest.TestCase):
-    """DatasetInfo.gen_per_file and .filter_eff derived from gencount."""
+    """DatasetInfo.filter_eff derived from gencount."""
 
     def _info(self, **kw):
         from utils.poms_db import DatasetInfo
@@ -3128,16 +3617,9 @@ class TestDatasetInfoGencount(unittest.TestCase):
         i = self._info(nfiles=2000, nevts=2761, gencount=5000)
         self.assertAlmostEqual(i.filter_eff, 2761 / 5000)
 
-    def test_gen_per_file(self):
-        i = self._info(nfiles=2000, nevts=2761, gencount=10_000_000)
-        self.assertEqual(i.gen_per_file, 5000)
-
     def test_filter_eff_none_without_gencount(self):
         self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=None).filter_eff)
         self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=0).filter_eff)
-
-    def test_gen_per_file_none_without_gencount(self):
-        self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=None).gen_per_file)
 
 
 @requires_sqlalchemy
@@ -3146,8 +3628,8 @@ class TestGetDatasetGencount(unittest.TestCase):
 
     def test_multiplies_per_file_by_nfiles(self):
         from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files',
-                          return_value=['f0.art', 'f1.art']), \
+        with patch.object(db_builder, 'first_file_in_definition',
+                          return_value='f0.art'), \
              patch.object(db_builder, 'get_metadata',
                           return_value={'dh.gencount': 5000}) as gm:
             self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)
@@ -3155,7 +3637,7 @@ class TestGetDatasetGencount(unittest.TestCase):
 
     def test_none_when_no_gencount_field(self):
         from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files', return_value=['f0.art']), \
+        with patch.object(db_builder, 'first_file_in_definition', return_value='f0.art'), \
              patch.object(db_builder, 'get_metadata', return_value={'event_count': 5}):
             self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
 
@@ -3165,9 +3647,42 @@ class TestGetDatasetGencount(unittest.TestCase):
 
     def test_none_on_exception(self):
         from utils import db_builder
-        with patch.object(db_builder, 'list_definition_files',
+        with patch.object(db_builder, 'first_file_in_definition',
                           side_effect=Exception('SAM down')):
             self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
+
+    def test_supplied_first_file_skips_the_list_fetch(self):
+        """When the build loop passes first_file, the probes must NOT re-fetch
+        the dataset's first file (the round-trip the optimization eliminates).
+        infer_dataset_location now lives in file_resolver and does a lazy
+        `from .samweb_wrapper import ...` at call time, so its fetch is
+        patched on samweb_wrapper."""
+        from utils import db_builder, file_resolver, samweb_wrapper
+        with patch.object(db_builder, 'first_file_in_definition') as lst, \
+             patch.object(samweb_wrapper, 'first_file_in_definition') as lst2, \
+             patch.object(db_builder, 'get_metadata',
+                          return_value={'dh.gencount': 5000}), \
+             patch.object(db_builder, 'children_of_file', return_value=['c.art']), \
+             patch.object(samweb_wrapper, 'locate_file_strict',
+                          return_value=[{'location_type': 'dcache:/pnfs/x'}]):
+            self.assertEqual(
+                db_builder._get_dataset_gencount('ds', 2000, 'f0.art'), 5000 * 2000)
+            self.assertTrue(db_builder._check_dataset_has_children('ds', 'f0.art'))
+            self.assertEqual(
+                file_resolver.infer_dataset_location('ds', 'f0.art'), 'dcache')
+            lst.assert_not_called()   # first_file supplied -> zero fetches
+            lst2.assert_not_called()
+
+    def test_omitted_first_file_still_self_fetches(self):
+        """Standalone callers (db_analyzer, tests) that omit first_file keep
+        the self-fetch behavior."""
+        from utils import db_builder
+        with patch.object(db_builder, 'first_file_in_definition',
+                          return_value='f0.art') as lst, \
+             patch.object(db_builder, 'get_metadata',
+                          return_value={'dh.gencount': 5000}):
+            self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)
+            lst.assert_called_once()
 
 
 @requires_sqlalchemy
@@ -3363,6 +3878,81 @@ class TestJobArithmeticConsolidation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 32b. Mu2eJobPars.recipe (reconstruct the build config from a cnf)
+# ---------------------------------------------------------------------------
+
+class TestJobParsRecipe(unittest.TestCase):
+    """A cnf in SAM is sometimes the ONLY surviving record of how it was
+    built — the MDC2025ar generic reco/evnt entries were never committed.
+    recipe() surfaces the embedded template fcl (the `fcl` + `fcl_overrides`
+    of the json2jobdef entry), which neither jobquery's other queries nor
+    fcldump exposed."""
+
+    FCL = ('#include "Production/JobConfig/recoMC/OnSpill.fcl"\n'
+           'outputs.LoopHelixOutput.fileName: "mcs.owner.{desc}.version.sequencer.art"\n'
+           'services.DbService.purpose: "Sim_best"\n'
+           'services.DbService.version: "v1_1"\n')
+
+    def _tar(self):
+        jp = {
+            "code": "",
+            "setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh",
+            "jobname": "cnf.mu2e.reco.MDC2025au_best_v1_1.0.tar",
+            "tbs": {"outfiles": {
+                "outputs.LoopHelixOutput.fileName":
+                    "mcs.mu2e.{desc}.MDC2025au_best_v1_1.sequencer.art"}},
+        }
+        return _make_tarball(jp, self.FCL)
+
+    def test_recipe_reports_jobpars_fields(self):
+        from utils.jobquery import Mu2eJobPars
+        tar = self._tar()
+        try:
+            out = Mu2eJobPars(tar).recipe()
+        finally:
+            os.unlink(tar)
+        self.assertIn("cnf.mu2e.reco.MDC2025au_best_v1_1.0.tar", out)
+        self.assertIn("SimJob/MDC2025au/setup.sh", out)
+        self.assertIn("njobs: 0", out)  # no tbs capacity -> generic
+        self.assertIn("mcs.mu2e.{desc}.MDC2025au_best_v1_1.sequencer.art", out)
+
+    def test_recipe_includes_override_block_verbatim(self):
+        """The override lines are the part you cannot get anywhere else."""
+        from utils.jobquery import Mu2eJobPars
+        tar = self._tar()
+        try:
+            out = Mu2eJobPars(tar).recipe()
+        finally:
+            os.unlink(tar)
+        for line in self.FCL.strip().splitlines():
+            self.assertIn(line, out)
+
+    def test_recipe_without_embedded_fcl_reports_absence(self):
+        """A code-tarball cnf has no mu2e.fcl; say so rather than raising —
+        the jobpars half of the recipe is still worth printing."""
+        from utils.jobquery import Mu2eJobPars
+        import tempfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w') as tar_w:
+            jp_bytes = json.dumps({"code": "", "setup": "/cvmfs/test/setup.sh",
+                                   "jobname": "cnf.mu2e.X.TC.0.tar",
+                                   "tbs": {}}).encode()
+            ti = tarfile.TarInfo(name='jobpars.json')
+            ti.size = len(jp_bytes)
+            tar_w.addfile(ti, io.BytesIO(jp_bytes))
+        buf.seek(0)
+        tmp = tempfile.NamedTemporaryFile(suffix='.tar', delete=False)
+        tmp.write(buf.read())
+        tmp.close()
+        try:
+            out = Mu2eJobPars(tmp.name).recipe()
+        finally:
+            os.unlink(tmp.name)
+        self.assertIn("cnf.mu2e.X.TC.0.tar", out)
+        self.assertIn("no embedded mu2e.fcl", out)
+
+
+# ---------------------------------------------------------------------------
 # 33. jobdef._resolve_njobs (build-time tbs.njobs embedding)
 # ---------------------------------------------------------------------------
 
@@ -3405,43 +3995,6 @@ class TestResolveNjobs(unittest.TestCase):
         from utils.jobdef import _resolve_njobs
         tbs = {"samplinginput": {"source.fileNames": [4, self._files(10)]}}
         self.assertEqual(_resolve_njobs({"njobs": -1}, tbs), 3)
-
-
-# ---------------------------------------------------------------------------
-# 32. mu2ejobsub backend protocol selection (submit.py → jobsub_argv table)
-# ---------------------------------------------------------------------------
-
-class TestMu2ejobsubProtocol(unittest.TestCase):
-    """The mu2ejobsub backend must take its --default-protocol from the
-    single inloc→protocol table in jobsub_argv (submit.py used to carry a
-    divergent copy that silently lacked `resilient`)."""
-
-    def _argv(self, inloc):
-        from types import SimpleNamespace
-        from utils.submit import build_mu2ejobsub_argv
-        entry = {'tarball': 'cnf.mu2e.Desc.MDC2025af.0.tar', 'njobs': 5,
-                 'inloc': inloc, 'outputs': []}
-        opts = SimpleNamespace(dry_run=False, verbose=False, wfproject=None,
-                               role=None, disk=None, memory=None,
-                               expected_lifetime=None)
-        return build_mu2ejobsub_argv(entry, '/tmp/cnf.tar', opts)
-
-    def _protocol(self, argv):
-        return argv[argv.index('--default-protocol') + 1]
-
-    def test_resilient_maps_to_root(self):
-        self.assertEqual(self._protocol(self._argv('resilient')), 'root')
-
-    def test_tape_maps_to_ifdh(self):
-        self.assertEqual(self._protocol(self._argv('tape')), 'ifdh')
-
-    def test_dir_maps_to_ifdh(self):
-        self.assertEqual(self._protocol(self._argv('dir:/pnfs/mu2e/x')), 'ifdh')
-
-    def test_none_skips_location_and_protocol(self):
-        argv = self._argv('none')
-        self.assertNotIn('--default-location', argv)
-        self.assertNotIn('--default-protocol', argv)
 
 
 # ---------------------------------------------------------------------------
@@ -3593,9 +4146,9 @@ class TestComputeJobsetWindow(unittest.TestCase):
     """Direct backend: jobset stays entry-relative (PROCESS space); a
     windowed entry sizes it from the entry's njobs and validates capacity."""
 
-    def _opts(self, first=None, num=None):
+    def _opts(self, first=None, num=None, indices=None):
         from types import SimpleNamespace
-        return SimpleNamespace(first=first, num=num)
+        return SimpleNamespace(first=first, num=num, indices=indices)
 
     def test_plain_uses_cnf_njobs(self):
         from utils.submit import _compute_jobset
@@ -3632,32 +4185,560 @@ class TestComputeJobsetWindow(unittest.TestCase):
                             firstjob=5000, entry_njobs=4),
             [1, 2])
 
+    def test_indices_returns_exact_scattered_set(self):
+        """--indices is the whole point: a set --first/--num cannot express."""
+        from utils.submit import _compute_jobset
+        self.assertEqual(
+            _compute_jobset(self._opts(indices=[14719, 15944, 24301]), 0),
+            [14719, 15944, 24301])
 
-class TestMu2ejobsubArgvFirstjob(unittest.TestCase):
-    """mu2ejobsub backend: windowed entries map to --firstjob/--njobs,
-    plain entries keep --all."""
+    def test_indices_on_open_ended_cnf(self):
+        """capacity 0 = open-ended: no upper bound to check against."""
+        from utils.submit import _compute_jobset
+        self.assertEqual(_compute_jobset(self._opts(indices=[99999]), 0), [99999])
 
-    def _argv(self, entry):
-        from types import SimpleNamespace
-        from utils.submit import build_mu2ejobsub_argv
-        opts = SimpleNamespace(dry_run=False, verbose=False, wfproject=None,
-                               role=None, disk=None, memory=None,
-                               expected_lifetime=None)
-        return build_mu2ejobsub_argv(entry, '/tmp/cnf.tar', opts)
+    def test_indices_within_closed_capacity(self):
+        from utils.submit import _compute_jobset
+        self.assertEqual(_compute_jobset(self._opts(indices=[0, 9]), 10), [0, 9])
 
-    def test_plain_entry_uses_all(self):
-        argv = self._argv({'tarball': 'cnf.mu2e.D.MDC2025af.0.tar',
-                           'njobs': 5, 'inloc': 'tape', 'outputs': []})
-        self.assertIn('--all', argv)
-        self.assertNotIn('--firstjob', argv)
+    def test_indices_beyond_closed_capacity_raises(self):
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(indices=[0, 10]), 10)
 
-    def test_windowed_entry_uses_firstjob_njobs(self):
-        argv = self._argv({'tarball': 'cnf.mu2e.D.MDC2025af.0.tar',
-                           'njobs': 100, 'firstjob': 5000,
-                           'inloc': 'tape', 'outputs': []})
-        i = argv.index('--firstjob')
-        self.assertEqual(argv[i:i + 4], ['--firstjob', '5000', '--njobs', '100'])
-        self.assertNotIn('--all', argv)
+    def test_indices_rejects_windowed_entry(self):
+        """Indices are absolute; a firstjob offset would double-count."""
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(indices=[5001]), 0,
+                            firstjob=5000, entry_njobs=10)
+
+    def test_indices_rejects_first_num(self):
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(first=1, indices=[5]), 0)
+
+    def test_indices_negative_raises(self):
+        from utils.submit import _compute_jobset
+        with self.assertRaises(ValueError):
+            _compute_jobset(self._opts(indices=[-1, 5]), 0)
+
+
+class TestParseIndices(unittest.TestCase):
+    """--indices/--indices-file parsing: sorted, deduped, comment-tolerant."""
+
+    def test_none_when_neither_given(self):
+        from utils.submit import _parse_indices
+        self.assertIsNone(_parse_indices(None, None))
+
+    def test_comma_and_whitespace_separated(self):
+        from utils.submit import _parse_indices
+        self.assertEqual(_parse_indices('3,1 2', None), [1, 2, 3])
+
+    def test_sorts_and_dedupes(self):
+        from utils.submit import _parse_indices
+        self.assertEqual(_parse_indices('5,1,5,1', None), [1, 5])
+
+    def test_mutually_exclusive(self):
+        from utils.submit import _parse_indices
+        with self.assertRaises(ValueError):
+            _parse_indices('1', '/tmp/whatever')
+
+    def test_non_integer_raises(self):
+        from utils.submit import _parse_indices
+        with self.assertRaises(ValueError):
+            _parse_indices('1,abc', None)
+
+    def test_empty_spec_raises(self):
+        from utils.submit import _parse_indices
+        with self.assertRaises(ValueError):
+            _parse_indices(' , ', None)
+
+    def test_file_ignores_comments_and_blanks(self):
+        """Consumes `mkrecovery --print-indices` output, whose `# <tarball>`
+        headers must not parse as indices."""
+        import tempfile
+        from utils.submit import _parse_indices
+        with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as f:
+            f.write("# cnf.mu2e.MuStopPileup.Run1Ban-001.0.tar\n"
+                    "14719\n"
+                    "\n"
+                    "15944  # trailing comment\n")
+            path = f.name
+        try:
+            self.assertEqual(_parse_indices(None, path), [14719, 15944])
+        finally:
+            os.unlink(path)
+
+
+class TestIndicesOpsEntryContract(unittest.TestCase):
+    """The worker-side half of --indices: submit_entry_direct ships
+    `{**entry, firstjob: 0, njobs: max+1}`, which must make resolve_map_index
+    an identity (local == the absolute cnf index) for every submitted index."""
+
+    def test_resolve_map_index_is_identity(self):
+        from utils.prod_utils import resolve_map_index
+        indices = [14719, 15944, 24301]
+        ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0,
+                     'njobs': indices[-1] + 1}          # mirrors submit.py
+        for k in indices:
+            entry, _, local = resolve_map_index([ops_entry], k)
+            self.assertIsNotNone(entry, f"index {k} unreachable")
+            self.assertEqual(local, k)
+
+    def test_njobs_without_the_plus_one_drops_the_max_index(self):
+        """Pins the +1: resolve_map_index gates on `global < njobs`, so
+        njobs == max would put the largest index out of range."""
+        from utils.prod_utils import resolve_map_index
+        ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0, 'njobs': 24301}
+        self.assertEqual(resolve_map_index([ops_entry], 24301), (None, None, None))
+
+
+class TestMkrecoveryPrintIndices(unittest.TestCase):
+    """print_indices emits ABSOLUTE cnf indices (firstjob + window-relative)."""
+
+    def test_adds_firstjob_offset_and_headers(self):
+        import contextlib
+        from utils.mkrecovery import print_indices
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_indices('cnf.mu2e.X.0.tar', 15000, {944, 991})
+        self.assertEqual(buf.getvalue().splitlines(),
+                         ['# cnf.mu2e.X.0.tar', '15944', '15991'])
+
+    def test_zero_firstjob_is_identity(self):
+        import contextlib
+        from utils.mkrecovery import print_indices
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_indices('cnf.mu2e.X.0.tar', 0, {7})
+        self.assertEqual(buf.getvalue().splitlines(), ['# cnf.mu2e.X.0.tar', '7'])
+
+
+class TestLogStorageLocation(unittest.TestCase):
+    """Logs go to persistent disk regardless of where data lands — the
+    Mu2e convention and what the POMS path does. Only `scratch` runs keep
+    logs beside their data (no persistent scope for non-mu2epro accounts).
+
+    Regression: the first direct campaign put 500 log files on tape
+    because logs inherited the data output's location.
+    """
+
+    def test_tape_data_keeps_logs_on_disk(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'}]
+        self.assertEqual(log_storage_location(outputs), 'disk')
+
+    def test_scratch_data_keeps_logs_on_scratch(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'scratch'}]
+        self.assertEqual(log_storage_location(outputs), 'scratch')
+
+    def test_disk_data_keeps_logs_on_disk(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'disk'}]
+        self.assertEqual(log_storage_location(outputs), 'disk')
+
+    def test_accepts_entry_dict(self):
+        from utils.job_common import log_storage_location
+        entry = {'tarball': 'cnf.mu2e.X.0.tar',
+                 'outputs': [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'}]}
+        self.assertEqual(log_storage_location(entry), 'disk')
+
+    def test_missing_outputs_defaults_to_disk(self):
+        from utils.job_common import log_storage_location
+        self.assertEqual(log_storage_location([]), 'disk')
+        self.assertEqual(log_storage_location({}), 'disk')
+
+    def test_only_first_output_consulted_for_scratch(self):
+        """A tape-first entry stays on disk even with a scratch sibling."""
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'},
+                   {'dataset': 'nts.mu2e.*.root', 'location': 'scratch'}]
+        self.assertEqual(log_storage_location(outputs), 'disk')
+
+
+class TestPushLogsParents(unittest.TestCase):
+    """The log push must never name a parents file that isn't on disk.
+
+    pushOutput reports `ERROR - parents file parents_list.txt not found`
+    and then exits 0, so a missing parents file makes the log push a
+    silent no-op — the log never reaches SAM. That bites hardest on the
+    failure path, where push_data is skipped and the log is the only
+    evidence left. Observed 2026-07-21 on index 519.
+    """
+
+    def _capture(self, tmpdir, *, log_file=None, fcl=None, with_parents):
+        """Run push_logs in tmpdir and return the parents column it chose."""
+        from utils import runmu2e
+        captured = {}
+
+        def fake_push_output(output_specs, output_file="output.txt",
+                             simjob_setup=None):
+            captured['specs'] = output_specs
+            return 0
+
+        logname = log_file or runmu2e.replace_file_extensions(fcl, "log", "log")
+        (Path(tmpdir) / logname).write_text('log contents\n')
+        if with_parents:
+            (Path(tmpdir) / 'parents_list.txt').write_text('in1.art\n')
+
+        cwd = os.getcwd()
+        env = dict(os.environ)
+        os.environ.pop('JSB_TMP', None)   # don't pull in a jobsub log
+        try:
+            os.chdir(tmpdir)
+            with patch.object(runmu2e, 'push_output', fake_push_output):
+                runmu2e.push_logs(fcl=fcl, log_file=log_file)
+        finally:
+            os.chdir(cwd)
+            os.environ.clear()
+            os.environ.update(env)
+
+        self.assertIn('specs', captured, "push_output was never called")
+        self.assertEqual(len(captured['specs']), 1)
+        return captured['specs'][0][2]
+
+    def test_art_success_uses_parents_list(self):
+        """Data push ran and wrote parents_list.txt — use it."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
+                                    with_parents=True)
+            self.assertEqual(parents, 'parents_list.txt')
+
+    def test_art_failure_falls_back_to_none(self):
+        """mu2e failed, push_data was skipped, so parents_list.txt does not
+        exist — the log must still be declarable."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
+                                    with_parents=False)
+            self.assertEqual(parents, 'none')
+
+    def test_untracked_parents_falls_back_to_none(self):
+        """track_parents=False (inloc dir:, non-SAM inputs) also leaves no
+        parents_list.txt even though the job succeeded."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, fcl='cnf.mu2e.Y.MDC2025ar.7.fcl',
+                                    with_parents=False)
+            self.assertEqual(parents, 'none')
+
+    def test_g4bl_still_none(self):
+        """g4bl passes log_file explicitly and has no SAM parents."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
+                                    with_parents=False)
+            self.assertEqual(parents, 'none')
+
+    def test_g4bl_ignores_stray_parents_file(self):
+        """Even if a parents_list.txt is lying around, g4bl stays 'none'."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
+                                    with_parents=True)
+            self.assertEqual(parents, 'none')
+
+
+class TestPushDataExcludesInputs(unittest.TestCase):
+    """A job's inputs must never appear in the push manifest.
+
+    In direct-input mode the fetched input art file sits in cwd, so a
+    broad outputs glob ('*.art') matches it — pushOutput then treats the
+    original at its dataset path as a stale orphan and tries to DELETE
+    production data. Observed on smoke cluster 29444911 (2026-08-02);
+    only the mcs-only token scope blocked the delete.
+    """
+
+    IN = 'dig.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_5.001430_00000000.art'
+    OUT = 'mcs.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_1.001430_00000000.art'
+
+    def _pushed(self, tmpdir, outputs, infiles):
+        from utils import runmu2e
+        captured = {}
+
+        def fake_push_output(output_specs, output_file="output.txt",
+                             simjob_setup=None):
+            captured['specs'] = output_specs
+            return 0
+
+        (Path(tmpdir) / self.IN).write_text('input art\n')
+        (Path(tmpdir) / self.OUT).write_text('output art\n')
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            with patch.object(runmu2e, 'push_output', fake_push_output):
+                runmu2e.push_data(outputs, infiles)
+        finally:
+            os.chdir(cwd)
+        return [spec[1] for spec in captured['specs']]
+
+    def test_broad_glob_skips_the_input_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            pushed = self._pushed(
+                d, [{'dataset': '*.art', 'location': 'tape'}],
+                infiles=self.IN)
+            self.assertEqual(pushed, [self.OUT])
+
+    def test_parents_list_still_carries_the_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._pushed(d, [{'dataset': '*.art', 'location': 'tape'}],
+                         infiles=self.IN)
+            self.assertEqual(
+                (Path(d) / 'parents_list.txt').read_text(),
+                self.IN + '\n')
+
+    def test_no_infiles_pushes_everything(self):
+        """Resampler-style jobs (infiles='') keep the old behavior."""
+        with tempfile.TemporaryDirectory() as d:
+            pushed = self._pushed(
+                d, [{'dataset': '*.art', 'location': 'tape'}], infiles='')
+            self.assertEqual(sorted(pushed), sorted([self.IN, self.OUT]))
+
+
+class TestPushAllKeepsTheLog(unittest.TestCase):
+    """A data-push failure must never skip the log push.
+
+    Root cause 2026-07-27, CeMLeadingLog indices 2 and 418: attempt 1 left
+    a partially-written file on tape without completing its SAM
+    declaration. Every retry then ran mu2e to completion (hours of CPU),
+    and pushOutput's `recover` path tried to gfal-rm the orphan to replace
+    it — HTTP 403, because tape is write-once. pushOutput exited 2, the
+    CalledProcessError propagated out of _push_with_retry, and the log
+    push that sits AFTER the data push never ran. Three attempts, zero
+    forensic evidence in SAM. The log is the only witness to a data-push
+    failure, so it has to survive one.
+    """
+
+    @staticmethod
+    def _cpe(rc=2):
+        return subprocess.CalledProcessError(rc, 'pushOutput')
+
+    def test_both_succeed_calls_both(self):
+        from utils import runmu2e
+        calls = []
+        runmu2e._push_all(lambda: calls.append('data'),
+                          lambda: calls.append('log'))
+        self.assertEqual(calls, ['data', 'log'])
+
+    def test_data_failure_still_pushes_log(self):
+        """The regression under test: log push runs despite the data raise."""
+        from utils import runmu2e
+        calls = []
+
+        def data():
+            calls.append('data')
+            raise self._cpe()
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            runmu2e._push_all(data, lambda: calls.append('log'))
+        self.assertIn('log', calls, "log push was skipped by the data failure")
+
+    def test_data_failure_propagates_so_condor_sees_it(self):
+        """Pushing the log must not swallow the failure — the job still fails."""
+        from utils import runmu2e
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            runmu2e._push_all(self._raise_data, lambda: None)
+        self.assertEqual(cm.exception.returncode, 2)
+
+    @staticmethod
+    def _raise_data():
+        raise subprocess.CalledProcessError(2, 'pushOutput')
+
+    def test_log_failure_does_not_mask_data_failure(self):
+        """When BOTH fail, the data-push error is the real story and wins."""
+        from utils import runmu2e
+
+        def log():
+            raise subprocess.CalledProcessError(7, 'pushOutput')
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            runmu2e._push_all(self._raise_data, log)
+        self.assertEqual(cm.exception.returncode, 2,
+                         "log-push rc masked the data-push rc")
+
+    def test_log_failure_alone_still_fails_the_job(self):
+        """Data fine but the log never landed: CB2 says don't pass silently."""
+        from utils import runmu2e
+
+        def log():
+            raise subprocess.CalledProcessError(5, 'pushOutput')
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            runmu2e._push_all(lambda: None, log)
+        self.assertEqual(cm.exception.returncode, 5)
+
+    def test_skipped_data_push_still_logs(self):
+        """mu2e-failed path passes a no-op data push; the log must still go."""
+        from utils import runmu2e
+        calls = []
+        runmu2e._push_all(lambda: None, lambda: calls.append('log'))
+        self.assertEqual(calls, ['log'])
+
+
+class TestTerminalPushError(unittest.TestCase):
+    """A 403-on-delete is terminal: no retry can ever clear it.
+
+    pushOutput's `recover` path deletes an existing target to replace it.
+    On /pnfs/mu2e/tape that delete always 403s (write-once, no delete
+    right), so retrying re-runs mu2e for hours and dies identically.
+    Burning the attempt cap this way cost three full mixing jobs on
+    CeMLeadingLog 2/418 before a human saw it.
+    """
+
+    ORPHAN_403 = (
+        "WARNING - output file exists for /pnfs/mu2e/tape/phy-sim/dig/mu2e/X\n"
+        "INFO - running recover\n"
+        "ERROR - rm failed for try 0 for https://fndcadoor.fnal.gov:2880/...\n"
+        "gfal-rm error: 1 (Operation not permitted) - DavPosix::unlink  "
+        "HTTP 403 : Permission refused\n"
+        "pushOutput status at exit: 2\n"
+    )
+
+    def test_orphan_403_is_terminal(self):
+        from utils import runmu2e
+        self.assertTrue(runmu2e._is_terminal_push_error(self.ORPHAN_403))
+
+    def test_transient_failure_is_not_terminal(self):
+        from utils import runmu2e
+        self.assertFalse(runmu2e._is_terminal_push_error(
+            "ERROR - copy failed for try 0\ncurl: (56) Recv failure\n"))
+
+    def test_no_output_is_not_terminal(self):
+        """Unknown output must stay retryable — fail open on classification,
+        closed on action."""
+        from utils import runmu2e
+        self.assertFalse(runmu2e._is_terminal_push_error(None))
+        self.assertFalse(runmu2e._is_terminal_push_error(''))
+
+    def test_403_without_rm_is_not_terminal(self):
+        """A 403 on the WRITE is a scope problem, not the orphan poison
+        pill — don't claim the same diagnosis for it."""
+        from utils import runmu2e
+        self.assertFalse(runmu2e._is_terminal_push_error(
+            "ERROR - copy failed\nHTTP 403 : Permission refused\n"))
+
+    def test_retry_stops_immediately_on_terminal(self):
+        """The whole point: one attempt, not four."""
+        from utils import runmu2e
+        calls = []
+
+        def push():
+            calls.append(1)
+            raise subprocess.CalledProcessError(2, 'pushOutput',
+                                                output=self.ORPHAN_403)
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            runmu2e._push_with_retry(push, retries=3, base_delay=0)
+        self.assertEqual(len(calls), 1,
+                         f"retried a terminal failure {len(calls)} times")
+
+    def test_retry_still_retries_transient(self):
+        """Don't over-fit: ordinary failures keep their retries."""
+        from utils import runmu2e
+        calls = []
+
+        def push():
+            calls.append(1)
+            raise subprocess.CalledProcessError(1, 'pushOutput',
+                                                output="curl: (56) Recv failure")
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            runmu2e._push_with_retry(push, retries=2, base_delay=0)
+        self.assertEqual(len(calls), 3)
+
+
+class TestTapeOrphanPath(unittest.TestCase):
+    """pushOutput fans files into sha256(filename)[0:2]/[2:4] subdirs.
+
+    Verified 2026-07-27 against the two real CeMLeadingLog orphans. This
+    is what makes an orphan detectable without a SAM record: the path is
+    computable from the filename alone.
+    """
+
+    def test_hash_subdirs_match_observed_orphans(self):
+        from utils.file_resolver import tape_file_path
+        p = tape_file_path(
+            'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art')
+        self.assertEqual(
+            p, '/pnfs/mu2e/tape/phy-sim/dig/mu2e/CeMLeadingLogMix1BB/'
+               'MDC2025au_best_v1_3/art/b2/ac/'
+               'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art')
+
+    def test_second_observed_orphan(self):
+        from utils.file_resolver import tape_file_path
+        p = tape_file_path(
+            'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00001597.art')
+        self.assertTrue(p.endswith('/d5/af/dig.mu2e.CeMLeadingLogMix1BB.'
+                                   'MDC2025au_best_v1_3.001430_00001597.art'),
+                        f"unexpected hash subdirs: {p}")
+
+
+class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
+    """A token scope must actually cover the path it is meant to protect.
+
+    Upstream mu2ejobsub derives a scope path by ONE rule
+    (token_request_dirname): strip the /pnfs prefix, change nothing else.
+    So `storage_scope(f, loc)` must be a prefix of `dataset_dir(ds, loc)`
+    with /pnfs removed -- for every location.
+
+    tape breaks that if you insert `datasets/` unconditionally: the
+    physical tape layout has no such component (see dataset_dir), so the
+    scope named a path nothing lives at and granted nothing. Writes kept
+    working via the separate broad `storage.create:/mu2e`, which under
+    the WLCG profile permits upload but NOT delete -- so pushOutput's
+    recover path could never remove a stale file and 403'd forever
+    (CeMLeadingLog 2/418, 2026-07-27).
+    """
+
+    DIG = 'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art'
+    LOG = 'log.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.log'
+
+    def _assert_scope_covers(self, filename, location):
+        from utils.file_resolver import dataset_dir, storage_scope
+        from utils.job_common import Mu2eName
+        scope = storage_scope(filename, location)
+        physical = dataset_dir(str(Mu2eName.parse(filename).dataset), location)
+        self.assertTrue(
+            physical.startswith('/pnfs' + scope + '/'),
+            f"scope {scope!r} does not cover physical path {physical!r}")
+
+    def test_tape_scope_covers_tape_path(self):
+        self._assert_scope_covers(self.DIG, 'tape')
+
+    def test_disk_scope_covers_disk_path(self):
+        self._assert_scope_covers(self.LOG, 'disk')
+
+    def test_scratch_scope_covers_scratch_path(self):
+        self._assert_scope_covers(self.DIG, 'scratch')
+
+    def test_tape_scope_has_no_datasets_component(self):
+        """The specific regression: tape's physical layout omits it."""
+        from utils.file_resolver import storage_scope
+        self.assertEqual(storage_scope(self.DIG, 'tape'),
+                         '/mu2e/tape/phy-sim/dig/mu2e')
+
+    def test_disk_scope_keeps_datasets_component(self):
+        """Don't over-correct -- disk's physical layout really does have it."""
+        from utils.file_resolver import storage_scope
+        self.assertEqual(storage_scope(self.LOG, 'disk'),
+                         '/mu2e/persistent/datasets/phy-etc/log/mu2e')
+
+
+class TestSingleBackend(unittest.TestCase):
+    """submit_map is single-backend (direct): --backend is gone and
+    rejected loudly as an unknown argument."""
+
+    def test_backend_flag_rejected(self):
+        from utils import submit
+        with patch.object(sys, 'argv',
+                          ['submit_map', '--map', 'x.json',
+                           '--backend', 'direct']):
+            with self.assertRaises(SystemExit) as cm:
+                submit.main()
+        self.assertEqual(cm.exception.code, 2)  # argparse usage error
+
+    def test_mu2ejobsub_helpers_gone(self):
+        from utils import submit
+        self.assertFalse(hasattr(submit, 'build_mu2ejobsub_argv'))
+        self.assertFalse(hasattr(submit, '_submit_entry_mu2ejobsub'))
 
 
 class TestRunSubmitClusterVerification(unittest.TestCase):
@@ -3763,17 +4844,5316 @@ class TestValidateJobdescFirstjob(unittest.TestCase):
     (maps are hand-edited; a silently-dropped window duplicates physics)."""
 
     def test_firstjob_without_njobs_rejected(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         bad = [{'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
                 'outputs': [], 'firstjob': 5000}]
         with self.assertRaises(SystemExit):
             validate_jobdesc(bad)
 
     def test_firstjob_with_njobs_accepted(self):
-        from utils.prod_utils import validate_jobdesc
+        from utils.runmu2e import validate_jobdesc
         ok = [{'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
                'outputs': [], 'firstjob': 5000, 'njobs': 10}]
         self.assertEqual(validate_jobdesc(ok), False)  # normal mode
+
+
+# ---------------------------------------------------------------------------
+# 35. jobs_payload: static dashboard data builder (web/pomsMonitor/jobs_payload.py)
+# ---------------------------------------------------------------------------
+
+@requires_sqlalchemy
+class TestJobsPayload(unittest.TestCase):
+    """build_jobs_payload replaces the Flask /api/jobs route for render_static."""
+
+    @classmethod
+    def setUpClass(cls):
+        d = os.path.join(os.path.dirname(__file__), '..', 'web', 'pomsMonitor')
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        import jobs_payload
+        cls.jp = jobs_payload
+
+    def test_empty_db_yields_empty_list_and_closes_session(self):
+        mock_session = MagicMock()
+        mock_session.query.return_value.all.return_value = []
+        with patch.object(self.jp, 'get_db_session', return_value=mock_session), \
+             patch.object(self.jp, 'build_dataset_info_map', return_value={}):
+            self.assertEqual(self.jp.build_jobs_payload('/nonexistent.db'), [])
+        mock_session.close.assert_called_once()
+
+    def test_job_row_shape_matches_api_jobs(self):
+        job = MagicMock(njobs=3, tarball='', source_file='x.json',
+                        complete=True, avg_real_h=None, avg_vmhwm_gb=None,
+                        outputs=[])
+        mock_session = MagicMock()
+        mock_session.query.return_value.all.return_value = [job]
+        with patch.object(self.jp, 'get_db_session', return_value=mock_session), \
+             patch.object(self.jp, 'build_dataset_info_map', return_value={}):
+            payload = self.jp.build_jobs_payload('/nonexistent.db')
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]['njobs'], 3)
+        self.assertEqual(payload[0]['setup_script'], '')
+        self.assertEqual(payload[0]['outputs'], [])
+        self.assertEqual(
+            sorted(payload[0].keys()),
+            sorted(['njobs', 'tarball', 'source_file', 'setup_script',
+                    'complete', 'avg_real_h', 'avg_vmhwm_gb', 'outputs']))
+
+# ---------------------------------------------------------------------------
+# Submission ledger (utils/submission_ledger.py) — direct-backend recovery
+# ---------------------------------------------------------------------------
+class TestSubmissionLedger(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 5, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+
+    def _record(self, indices=(0, 1, 2), parent=None):
+        return self.sl.record_submission(
+            self.db, tarball=self.entry['tarball'], entry=self.entry,
+            indices=list(indices), jobsub_id='12345678.0@jobsub03.fnal.gov',
+            cluster_id='12345678', map_path='/tmp/map.json', parent_id=parent)
+
+    def test_record_and_read_roundtrip(self):
+        rid = self._record()
+        rows = self.sl.open_rows(self.db)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row['id'], rid)
+        self.assertEqual(row['state'], 'active')
+        self.assertEqual(row['attempt'], 1)
+        self.assertIsNone(row['parent_id'])
+        self.assertEqual(row['indices'], [0, 1, 2])
+        self.assertEqual(row['entry'], self.entry)
+        self.assertEqual(row['jobsub_id'], '12345678.0@jobsub03.fnal.gov')
+        self.assertEqual(row['cluster_id'], '12345678')
+
+    def test_indices_stored_sorted(self):
+        self._record(indices=(7, 2, 5))
+        self.assertEqual(self.sl.open_rows(self.db)[0]['indices'], [2, 5, 7])
+
+    def test_child_attempt_increments(self):
+        rid = self._record()
+        child = self._record(indices=(2,), parent=rid)
+        rows = {r['id']: r for r in self.sl.open_rows(self.db)}
+        self.assertEqual(rows[child]['attempt'], 2)
+        self.assertEqual(rows[child]['parent_id'], rid)
+
+    def test_unknown_parent_rejected(self):
+        with self.assertRaises(ValueError):
+            self._record(parent=999)
+
+    def test_close_row_removes_from_open(self):
+        rid = self._record()
+        self.sl.close_row(self.db, rid, 'complete', note='all verified')
+        self.assertEqual(self.sl.open_rows(self.db), [])
+        allr = self.sl.all_rows(self.db)
+        self.assertEqual(allr[0]['state'], 'complete')
+        self.assertEqual(allr[0]['note'], 'all verified')
+        self.assertIsNotNone(allr[0]['closed_utc'])
+
+    def test_close_invalid_state_rejected(self):
+        rid = self._record()
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'bogus')
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'active')
+
+    def test_close_nonactive_row_rejected(self):
+        rid = self._record()
+        self.sl.close_row(self.db, rid, 'complete')
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'exhausted')
+
+    def test_missing_db_dir_fails_loudly(self):
+        import sqlite3
+        with self.assertRaises(sqlite3.OperationalError):
+            self.sl.record_submission(
+                '/nonexistent-dir-recovery-test/sub.db', tarball='t',
+                entry={}, indices=[0], jobsub_id=None, cluster_id='1')
+
+
+class TestCampaignLedger(unittest.TestCase):
+    """campaigns table in utils/submission_ledger.py (sliced submission)."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 10, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+
+    def _create(self, tarball=None, slice_size=4):
+        return self.sl.create_campaign(
+            self.db, tarball=tarball or self.entry['tarball'],
+            entry=self.entry, slice_size=slice_size,
+            map_path='/tmp/map.json')
+
+    def test_create_and_read_roundtrip(self):
+        cid = self._create()
+        camps = self.sl.active_campaigns(self.db)
+        self.assertEqual(len(camps), 1)
+        c = camps[0]
+        self.assertEqual(c['id'], cid)
+        self.assertEqual(c['state'], 'active')
+        self.assertEqual(c['cursor'], 0)
+        self.assertEqual(c['slice_size'], 4)
+        self.assertEqual(c['entry'], self.entry)
+        self.assertEqual(c['map_path'], '/tmp/map.json')
+        self.assertIsNone(c['closed_utc'])
+
+    def test_duplicate_active_tarball_refused(self):
+        self._create()
+        with self.assertRaises(ValueError):
+            self._create()
+
+    def test_duplicate_paused_tarball_refused(self):
+        """A paused campaign still owns its index space: enqueue-after-
+        pause then resume would feed two campaigns into the same
+        indices (double submit) — refuse it just like an active one."""
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        with self.assertRaises(ValueError) as cm:
+            self._create()
+        self.assertIn('paused', str(cm.exception))
+
+    def test_reenqueue_allowed_after_close(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'cancelled')
+        self._create()  # must not raise
+        self.assertEqual(len(self.sl.all_campaigns(self.db)), 2)
+
+    def test_slice_size_validated(self):
+        with self.assertRaises(ValueError):
+            self._create(slice_size=0)
+
+    def test_advance_cursor(self):
+        cid = self._create()
+        self.sl.advance_campaign(self.db, cid, 4)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['cursor'], 4)
+
+    def test_advance_backward_refused(self):
+        cid = self._create()
+        self.sl.advance_campaign(self.db, cid, 4)
+        with self.assertRaises(ValueError):
+            self.sl.advance_campaign(self.db, cid, 2)
+
+    def test_advance_nonactive_refused(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        with self.assertRaises(ValueError):
+            self.sl.advance_campaign(self.db, cid, 4)
+
+    def test_state_transitions(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused', note='op pause')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'paused')
+        self.sl.set_campaign_state(self.db, cid, 'active')   # resume
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'active')
+        self.assertIsNone(c['closed_utc'])                   # reopened
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        self.assertIsNotNone(self.sl.all_campaigns(self.db)[0]['closed_utc'])
+
+    def test_invalid_transitions_raise(self):
+        cid = self._create()
+        with self.assertRaises(ValueError):
+            self.sl.set_campaign_state(self.db, cid, 'nonsense')
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError):
+            self.sl.set_campaign_state(self.db, cid, 'active')  # complete is terminal
+        with self.assertRaises(ValueError):
+            self.sl.set_campaign_state(self.db, 999, 'paused')  # no such id
+
+
+# ---------------------------------------------------------------------------
+# Entry resource keys (utils/poms_entry.py, utils/submit.py)
+# ---------------------------------------------------------------------------
+class TestEntryResources(unittest.TestCase):
+    """memory/disk/expected_lifetime: entry keys, precedence, snapshot."""
+
+    def _opts(self, memory=None, disk=None, expected_lifetime=None):
+        import argparse
+        return argparse.Namespace(memory=memory, disk=disk,
+                                  expected_lifetime=expected_lifetime)
+
+    def test_resources_of_subset(self):
+        from utils.poms_entry import resources_of
+        self.assertEqual(resources_of({'tarball': 't'}), {})
+        self.assertEqual(
+            resources_of({'memory': '4000MB', 'njobs': 5}),
+            {'memory': '4000MB'})
+        self.assertEqual(
+            resources_of({'memory': '4000MB', 'disk': '50GB',
+                          'expected_lifetime': '48h'}),
+            {'memory': '4000MB', 'disk': '50GB', 'expected_lifetime': '48h'})
+
+    def test_resources_of_nonstring_raises(self):
+        from utils.poms_entry import resources_of
+        with self.assertRaises(ValueError):
+            resources_of({'memory': 4000})
+
+    def test_effective_cli_beats_entry(self):
+        from utils.submit import _effective_resources
+        eff = _effective_resources({'memory': '4000MB'},
+                                   self._opts(memory='8000MB'))
+        self.assertEqual(eff['memory'], '8000MB')
+
+    def test_effective_entry_beats_default(self):
+        from utils.submit import _effective_resources
+        eff = _effective_resources({'memory': '4000MB'}, self._opts())
+        self.assertEqual(eff['memory'], '4000MB')
+        self.assertIsNone(eff['disk'])            # None -> jobsub_argv builtin
+        self.assertIsNone(eff['expected_lifetime'])
+
+    def test_snapshot_merges_without_mutating(self):
+        from utils.submit import _snapshot_entry
+        entry = {'tarball': 't', 'njobs': 5}
+        snap = _snapshot_entry(entry, {'memory': '8000MB', 'disk': None,
+                                       'expected_lifetime': None})
+        self.assertEqual(snap['memory'], '8000MB')
+        self.assertNotIn('disk', snap)
+        self.assertNotIn('memory', entry)         # original untouched
+
+    def test_append_jobdef_passes_resource_keys(self):
+        import tempfile
+        from utils import json2jobdef
+        out = os.path.join(tempfile.mkdtemp(), 'map.json')
+        config = {'desc': 'TestDesc', 'dsconf': 'TestConf', 'owner': 'mu2e',
+                  'inloc': 'tape', 'njobs': 5, 'memory': '4000MB',
+                  'outloc': {'sim.mu2e.TestDesc.TestConf.art': 'tape'}}
+        json2jobdef.append_jobdef(config, jobdefs_file=out)
+        with open(out) as f:
+            entry = json.load(f)[0]
+        self.assertEqual(entry['memory'], '4000MB')
+        self.assertNotIn('disk', entry)           # absent key stays absent
+
+    def _drain_config(self, **over):
+        cfg = {'desc': 'evnt', 'dsconf': 'TestConf', 'owner': 'mu2e',
+               'inloc': 'tape', 'generic_tarball': True,
+               'input_pattern': 'mcs.mu2e.%OnSpill.TestConf.art',
+               'prestage': True,
+               'outloc': {'nts.*.root': 'tape'}}
+        cfg.update(over)
+        return cfg
+
+    def _append(self, config):
+        import tempfile
+        from utils import json2jobdef
+        out = os.path.join(tempfile.mkdtemp(), 'map.json')
+        json2jobdef.append_jobdef(config, jobdefs_file=out)
+        with open(out) as f:
+            return json.load(f)[0]
+
+    def test_append_jobdef_passes_draining_keys(self):
+        """A draining map must come out of --jobdefs ready to enqueue.
+        input_pattern and prestage are read off the MAP entry (is_draining,
+        _validate_draining_entry, drain_tick's residency gate), so leaving
+        them in the JSON config alone silently produced a non-draining map
+        and forced a hand-edit of the generated file."""
+        entry = self._append(self._drain_config())
+        self.assertEqual(entry['input_pattern'],
+                         'mcs.mu2e.%OnSpill.TestConf.art')
+        self.assertIs(entry['prestage'], True)
+        self.assertNotIn('njobs', entry)          # generic => no index space
+
+    def test_draining_outputs_glob_comes_from_outloc(self):
+        """The tier-specific glob is config, not a hand edit: '*.art' outputs
+        on a draining entry let the worker declare its own fetched INPUT for
+        push, which pushOutput's orphan recovery then tried to DELETE from
+        tape (2026-08-02 smoke). outloc is where that is fixed once."""
+        entry = self._append(self._drain_config())
+        self.assertEqual(entry['outputs'],
+                         [{'dataset': 'nts.*.root', 'location': 'tape'}])
+
+    def test_input_pattern_without_generic_tarball_is_refused(self):
+        """Emitting both input_pattern and njobs would leave the map
+        self-contradictory: is_draining() says draining while njobs claims a
+        fixed window. Refuse rather than write it."""
+        from utils import json2jobdef
+        cfg = self._drain_config(njobs=5)
+        del cfg['generic_tarball']
+        with self.assertRaises(SystemExit):
+            self._append(cfg)
+
+    def test_non_draining_entry_gains_no_draining_keys(self):
+        entry = self._append({
+            'desc': 'TestDesc', 'dsconf': 'TestConf', 'owner': 'mu2e',
+            'inloc': 'tape', 'njobs': 5,
+            'outloc': {'sim.mu2e.TestDesc.TestConf.art': 'tape'}})
+        self.assertNotIn('input_pattern', entry)
+        self.assertNotIn('prestage', entry)
+
+
+class TestSubmitEntryDirectResourceWiring(unittest.TestCase):
+    """submit_entry_direct must actually pass the EFFECTIVE resources
+    (entry key, no CLI flag) into build_jobsub_argv — the precedence
+    logic itself is covered above (_effective_resources), this closes
+    the gap that nothing proved submit_entry_direct wires it through."""
+
+    def test_entry_memory_reaches_build_jobsub_argv(self):
+        import argparse
+        from utils.submit import submit_entry_direct
+
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}], 'memory': '4000MB'}
+        opts = argparse.Namespace(
+            dry_run=True, indices=None, first=None, num=None,
+            prodtools_tar=None, role=None, wftop=None, wfproject=None,
+            disk=None, memory=None, expected_lifetime=None,
+            no_ledger=True, ledger_db='/tmp/unused-resource-wiring.db',
+            ledger_parent=None, map='/tmp/m.json', verbose=False)
+
+        captured = {}
+
+        def fake_build_jobsub_argv(**kwargs):
+            captured.update(kwargs)
+            return ['--fake-argv']
+
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   side_effect=fake_build_jobsub_argv), \
+             patch('utils.submit._bundle_prodtools',
+                   return_value=Path('/tmp/fake-prodtools.tar')):
+            result = submit_entry_direct(entry, 0, opts)
+
+        self.assertEqual(result['status'], 'dry_run')
+        # entry key, no CLI flag -> _effective_resources picks the entry
+        self.assertEqual(captured['memory'], '4000MB')
+        self.assertIsNone(captured['disk'])
+        self.assertIsNone(captured['expected_lifetime'])
+
+
+# ---------------------------------------------------------------------------
+# submit_map --enqueue (utils/submit.py) — sliced-campaign submission
+# ---------------------------------------------------------------------------
+class TestEnqueue(unittest.TestCase):
+    """submit_map --enqueue: campaign registration, no submission."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        from utils import submit
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 10, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+        # Task 6 enqueue gate reads the tarball; stub tarball resolution
+        # and the pre-flight check so these campaign-registration tests
+        # stay file-free (as they were before the gate existed).
+        tb_patcher = patch.object(submit, '_ensure_local_tarball',
+                                  return_value=Path(self.entry['tarball']))
+        ci_patcher = patch.object(submit, 'check_inputs',
+                                  return_value=(True, []))
+        tb_patcher.start()
+        ci_patcher.start()
+        self.addCleanup(tb_patcher.stop)
+        self.addCleanup(ci_patcher.stop)
+
+    def _opts(self, dry_run=False, slice_size=100, memory=None):
+        import argparse
+        return argparse.Namespace(
+            ledger_db=self.db, slice_size=slice_size, dry_run=dry_run,
+            memory=memory, disk=None, expected_lifetime=None)
+
+    def test_enqueue_writes_campaign(self):
+        from utils.submit import _enqueue_entries
+        ids = _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+        camps = self.sl.active_campaigns(self.db)
+        self.assertEqual([c['id'] for c in camps], ids)
+        c = camps[0]
+        self.assertEqual(c['tarball'], self.entry['tarball'])
+        self.assertEqual(c['slice_size'], 100)
+        self.assertEqual(c['cursor'], 0)
+        self.assertEqual(c['map_path'], '/tmp/m.json')
+        self.assertEqual(c['entry'], self.entry)
+        # nothing submitted: the submissions table stays empty
+        self.assertEqual(self.sl.open_rows(self.db), [])
+
+    def test_enqueue_merges_cli_resources_into_snapshot(self):
+        from utils.submit import _enqueue_entries
+        _enqueue_entries([(0, self.entry)], '/tmp/m.json',
+                         self._opts(memory='4000MB'))
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['entry']['memory'], '4000MB')
+        self.assertNotIn('memory', self.entry)     # original untouched
+
+    def test_enqueue_dry_run_writes_nothing(self):
+        from utils.submit import _enqueue_entries
+        ids = _enqueue_entries([(0, self.entry)], '/tmp/m.json',
+                               self._opts(dry_run=True))
+        self.assertEqual(ids, [])
+        self.assertEqual(self.sl.all_campaigns(self.db), [])
+
+    def test_enqueue_duplicate_is_hard_error(self):
+        from utils.submit import _enqueue_entries
+        _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+        with self.assertRaises(SystemExit):
+            _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+
+    def test_enqueue_generic_entry_refused(self):
+        from utils.submit import _enqueue_entries
+        generic = {'tarball': 'cnf.mu2e.G.C.0.tar', 'inloc': 'tape',
+                   'outputs': []}   # no njobs
+        with self.assertRaises(SystemExit):
+            _enqueue_entries([(0, generic)], '/tmp/m.json', self._opts())
+
+    def test_enqueue_zero_njobs_refused(self):
+        """njobs_of(entry) is None misses njobs: 0 — a zero-job campaign
+        is nonsensical and must be refused just like the missing case."""
+        from utils.submit import _enqueue_entries
+        zero = {'tarball': 'cnf.mu2e.Z.C.0.tar', 'njobs': 0,
+                'inloc': 'tape', 'outputs': []}
+        with self.assertRaises(SystemExit):
+            _enqueue_entries([(0, zero)], '/tmp/m.json', self._opts())
+
+    def test_enqueue_db_failure_is_hard_error(self):
+        from utils.submit import _enqueue_entries
+        import argparse
+        opts = argparse.Namespace(
+            ledger_db='/nonexistent-dir-enqueue-test/s.db', slice_size=10,
+            dry_run=False, memory=None, disk=None, expected_lifetime=None)
+        with self.assertRaises(SystemExit):
+            _enqueue_entries([(0, self.entry)], '/tmp/m.json', opts)
+
+
+class TestEnqueueErrorStyle(unittest.TestCase):
+    """Operator-reachable enqueue failures are one-line submit_map:
+    messages, not tracebacks; --enqueue --no-ledger is refused."""
+
+    def setUp(self):
+        import tempfile
+        from types import SimpleNamespace
+        from utils import submit
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, 'sub.db')
+        self.opts = SimpleNamespace(
+            ledger_db=self.db, slice_size=10, dry_run=False,
+            memory=None, disk=None, expected_lifetime=None)
+        # Task 6 enqueue gate reads the tarball; stub tarball resolution
+        # and the pre-flight check so these tests stay file-free.
+        tb_patcher = patch.object(submit, '_ensure_local_tarball',
+                                  return_value=Path('cnf.mu2e.E.C.0.tar'))
+        ci_patcher = patch.object(submit, 'check_inputs',
+                                  return_value=(True, []))
+        tb_patcher.start()
+        ci_patcher.start()
+        self.addCleanup(tb_patcher.stop)
+        self.addCleanup(ci_patcher.stop)
+
+    def _entry(self, tarball='cnf.mu2e.E.C.0.tar'):
+        return {'tarball': tarball, 'njobs': 50}
+
+    def test_duplicate_enqueue_one_line_no_traceback(self):
+        from utils import submit
+        submit._enqueue_entries([(0, self._entry())], 'm.json', self.opts)
+        with self.assertRaises(SystemExit) as cm:
+            submit._enqueue_entries([(0, self._entry())], 'm.json',
+                                    self.opts)
+        msg = str(cm.exception.code)
+        self.assertTrue(msg.startswith('submit_map: '), msg)
+        self.assertNotIn('\n', msg)
+        self.assertNotIn('Traceback', msg)
+
+    def test_db_error_one_line(self):
+        from utils import submit
+        self.opts.ledger_db = os.path.join(self.tmp, 'no', 'such',
+                                           'dir', 'sub.db')
+        with self.assertRaises(SystemExit) as cm:
+            submit._enqueue_entries([(0, self._entry())], 'm.json',
+                                    self.opts)
+        self.assertTrue(str(cm.exception.code).startswith('submit_map: '))
+
+    def test_enqueue_no_ledger_refused(self):
+        from utils import submit
+        import io as _io
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf), \
+             patch.object(sys, 'argv',
+                          ['submit_map', '--map', 'nonexistent.json',
+                           '--enqueue', '--no-ledger']):
+            with self.assertRaises(SystemExit) as cm:
+                submit.main()
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn('--no-ledger contradicts it', buf.getvalue())
+
+
+# ---------------------------------------------------------------------------
+# Submission log (utils/submit.py) — dated per-attempt record
+# ---------------------------------------------------------------------------
+class TestSubmissionLog(unittest.TestCase):
+    """Dated per-submission log beside the ledger DB (all origins:
+    manual runs, cron slices, recovery resubmits)."""
+
+    def setUp(self):
+        import tempfile
+        self.dbdir = tempfile.mkdtemp()
+        self.db = os.path.join(self.dbdir, 'submissions.db')
+
+    def _opts(self, no_ledger=False):
+        import argparse
+        return argparse.Namespace(ledger_db=self.db, no_ledger=no_ledger,
+                                  map='/tmp/m.json')
+
+    def _result(self, status='submitted'):
+        return {'tarball': 'cnf.mu2e.T.C.0.tar', 'cluster_id': '123',
+                'jobsub_id': '123.0@js.fnal.gov', 'njobs': 3,
+                'status': status,
+                'raw_output': 'Use job id 123.0@js.fnal.gov ...\n'}
+
+    def _read_log(self):
+        from utils.submit import _submission_log_path
+        with open(_submission_log_path(self.db)) as f:
+            return f.read()
+
+    def test_success_block_appended(self):
+        from utils.submit import _log_submission
+        _log_submission(100, [0, 1, 2], self._result(), self._opts())
+        text = self._read_log()
+        self.assertIn('status=submitted', text)
+        self.assertIn('cnf.mu2e.T.C.0.tar', text)
+        self.assertIn('[100..102]', text)          # absolute indices
+        self.assertIn('Use job id 123.0@js.fnal.gov', text)
+
+    def test_failure_block_appended(self):
+        from utils.submit import _log_submission
+        _log_submission(0, [0], self._result(status='failed'), self._opts())
+        self.assertIn('status=failed', self._read_log())
+
+    def test_appends_not_truncates(self):
+        from utils.submit import _log_submission
+        _log_submission(0, [0], self._result(), self._opts())
+        _log_submission(0, [1], self._result(), self._opts())
+        self.assertEqual(self._read_log().count('=== end'), 2)
+
+    def test_write_failure_never_raises(self):
+        from utils.submit import _log_submission
+        import argparse
+        opts = argparse.Namespace(
+            ledger_db='/nonexistent-dir-submitlog-test/s.db',
+            no_ledger=False, map='/tmp/m.json')
+        _log_submission(0, [0], self._result(), opts)  # must not raise
+
+    def test_run_submit_carries_raw_output(self):
+        from utils import submit
+        fake = MagicMock(
+            returncode=0, stderr='warn\n',
+            stdout='1 job(s) submitted to cluster 12345678.\n'
+                   'Use job id 12345678.0@jobsub03.fnal.gov to retrieve output\n')
+        with patch('utils.submit.subprocess.run', return_value=fake):
+            r = submit._run_submit(['jobsub_submit'], 'cnf.tar', 3)
+        self.assertIn('Use job id', r['raw_output'])
+        self.assertIn('warn', r['raw_output'])
+
+    def test_run_submit_failure_carries_raw_output(self):
+        from utils import submit
+        fake = MagicMock(returncode=1, stderr='boom\n', stdout='')
+        with patch('utils.submit.subprocess.run', return_value=fake):
+            r = submit._run_submit(['jobsub_submit'], 'cnf.tar', 3)
+        self.assertEqual(r['status'], 'failed')
+        self.assertIn('boom', r['raw_output'])
+
+
+class TestRecoverCap(unittest.TestCase):
+    """Cap resolution + queue counting for the top-up phase."""
+
+    def test_resolve_cap_flag_wins(self):
+        from utils import submissions as recover
+        with patch.dict(os.environ, {'MU2E_MAX_QUEUED': '5'}):
+            self.assertEqual(recover.resolve_cap(42), 42)
+
+    def test_resolve_cap_env_beats_default(self):
+        from utils import submissions as recover
+        with patch.dict(os.environ, {'MU2E_MAX_QUEUED': '5'}):
+            self.assertEqual(recover.resolve_cap(None), 5)
+
+    def test_resolve_cap_default(self):
+        from utils import submissions as recover
+        env = {k: v for k, v in os.environ.items() if k != 'MU2E_MAX_QUEUED'}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(recover.resolve_cap(None),
+                             recover.DEFAULT_MAX_QUEUED)
+
+    def test_resolve_cap_bad_env_exits(self):
+        from utils import submissions as recover
+        with patch.dict(os.environ, {'MU2E_MAX_QUEUED': 'lots'}):
+            with self.assertRaises(SystemExit):
+                recover.resolve_cap(None)
+
+    def _runner(self, stdout, rc=0):
+        def run(cmd, capture_output=True, text=True):
+            self.cmd = cmd
+            return MagicMock(returncode=rc, stdout=stdout, stderr='')
+        return run
+
+    # Realistic jobsub_q DEFAULT-table shapes (captured 2026-07-21).
+    # The -af JobStatus passthrough is unreliable on jobsub_lite (blank
+    # values / dropped --user filter), so the probes parse this table.
+    _HDR = ('JOBSUBJOBID                             OWNER       \t'
+            'SUBMITTED     RUNTIME   ST PRIO   SIZE  COMMAND')
+    _SUM = ('0 total; 0 completed, 0 removed, 0 idle, 0 running, '
+            '0 held, 0 suspended')
+
+    @staticmethod
+    def _row(jobid, owner, st):
+        return (f'{jobid}            {owner}   \t01/09 06:00   '
+                f'0+00:00:00 {st}    0    0.0 job.sh ')
+
+    def test_total_queued_counts_idle_and_running_only(self):
+        from utils.submissions import total_queued
+        table = '\n'.join([
+            self._HDR, self._SUM,
+            self._row('1.0@jobsub01.fnal.gov', 'mu2epro', 'I'),
+            self._row('2.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
+            self._row('3.0@jobsub02.fnal.gov', 'mu2epro', 'R'),
+            self._row('4.0@jobsub02.fnal.gov', '|-WORKER_12', 'H'),
+            self._row('5.0@jobsub02.fnal.gov', 'mu2epro', 'X'),
+        ]) + '\n'
+        n = total_queued(runner=self._runner(table))
+        self.assertEqual(n, 3)              # held / removed excluded
+        self.assertEqual(self.cmd, ['jobsub_q', '--user', 'mu2epro'])
+
+    def test_total_queued_empty_table_is_zero(self):
+        from utils.submissions import total_queued
+        table = self._HDR + '\n' + self._SUM + '\n'
+        self.assertEqual(total_queued(runner=self._runner(table)), 0)
+
+    def test_total_queued_headerless_is_none(self):
+        # No JOBSUBJOBID header = we did not get the table (error page,
+        # empty stdout, or the -af blank-line failure mode) — fail closed.
+        from utils.submissions import total_queued
+        self.assertIsNone(total_queued(runner=self._runner('')))
+        self.assertIsNone(total_queued(runner=self._runner('\n\n\n')))
+
+    def test_total_queued_failure_is_none(self):
+        from utils.submissions import total_queued
+        self.assertIsNone(total_queued(runner=self._runner('', rc=1)))
+
+    def test_total_queued_garbage_row_is_none(self):
+        from utils.submissions import total_queued
+        table = '\n'.join([self._HDR,
+                           self._row('1.0@jobsub01.fnal.gov', 'mu2epro',
+                                     'I'),
+                           'some unexpected diagnostic line']) + '\n'
+        self.assertIsNone(total_queued(runner=self._runner(table)))
+
+    def test_total_queued_unknown_state_is_none(self):
+        from utils.submissions import total_queued
+        table = '\n'.join([self._HDR,
+                           self._row('1.0@jobsub01.fnal.gov', 'mu2epro',
+                                     'Z')]) + '\n'
+        self.assertIsNone(total_queued(runner=self._runner(table)))
+
+    def test_total_queued_skips_token_noise(self):
+        from utils.submissions import total_queued
+        table = '\n'.join([
+            'Attempting to get token from https://htvaultprod ... ok',
+            'Storing bearer token in /tmp/bt_token_mu2e_x',
+            self._HDR, self._SUM,
+            self._row('1.0@jobsub01.fnal.gov', 'mu2epro', 'I'),
+        ]) + '\n'
+        self.assertEqual(total_queued(runner=self._runner(table)), 1)
+
+
+class TestTopUp(unittest.TestCase):
+    """Slice feeding: cap gate, whole slices, round-robin, pause."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.calls = []
+
+    def _campaign(self, tarball='cnf.mu2e.A.C.0.tar', njobs=10, slice=4):
+        entry = {'tarball': tarball, 'njobs': njobs, 'inloc': 'tape',
+                 'outputs': []}
+        return self.sl.create_campaign(self.db, tarball=tarball,
+                                       entry=entry, slice_size=slice)
+
+    def _submit(self, ok=True):
+        def fn(camp, n, db_path):
+            self.calls.append((camp['id'], camp['cursor'], n))
+            return ok
+        return fn
+
+    def test_feeds_until_complete(self):
+        from utils.submissions import top_up
+        cid = self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [(cid, 0, 4), (cid, 4, 4), (cid, 8, 2)])
+        self.assertEqual(s['slice'], 3)
+        self.assertEqual(s['campaign-complete'], 1)
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'complete')
+
+    def test_cap_stops_whole_slice(self):
+        from utils.submissions import top_up
+        self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=100, count_fn=lambda: 97,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])            # 97+4 > 100: wait
+        self.assertEqual(s['cap-wait'], 1)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['cursor'], 0)
+
+    def test_cap_exact_fit_submits(self):
+        from utils.submissions import top_up
+        self._campaign(njobs=4, slice=4)
+        top_up(self.db, cap=100, count_fn=lambda: 96,
+               submit_fn=self._submit())
+        self.assertEqual(len(self.calls), 1)        # 96+4 == 100 fits
+
+    def test_submitted_slices_consume_headroom(self):
+        from utils.submissions import top_up
+        self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=8, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(len(self.calls), 2)        # 0+4, 4+4; 8+2 > 8 waits
+        self.assertEqual(s['cap-wait'], 1)
+
+    def test_failure_pauses_without_advancing(self):
+        from utils.submissions import top_up
+        cid = self._campaign()
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit(ok=False))
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'paused')
+        self.assertEqual(c['cursor'], 0)
+        self.assertEqual(s['campaign-paused'], 1)
+
+    def test_round_robin_two_campaigns(self):
+        from utils.submissions import top_up
+        a = self._campaign(tarball='cnf.mu2e.A.C.0.tar', njobs=4, slice=2)
+        b = self._campaign(tarball='cnf.mu2e.B.C.0.tar', njobs=2, slice=2)
+        top_up(self.db, cap=100, count_fn=lambda: 0,
+               submit_fn=self._submit())
+        self.assertEqual(self.calls,
+                         [(a, 0, 2), (b, 0, 2), (a, 2, 2)])
+
+    def test_no_campaigns_skips_count(self):
+        from utils.submissions import top_up
+        def boom():
+            raise AssertionError("count_fn must not be called")
+        self.assertEqual(top_up(self.db, cap=100, count_fn=boom), {})
+
+    def test_count_failure_skips_topup(self):
+        from utils.submissions import top_up
+        self._campaign()
+        s = top_up(self.db, cap=100, count_fn=lambda: None,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])
+        self.assertEqual(s['count-error'], 1)
+
+    def test_dry_run_reports_and_writes_nothing(self):
+        from utils.submissions import top_up
+        def boom(camp, n, db_path):
+            raise AssertionError("submit_fn must not be called in dry-run")
+        self._campaign(njobs=10, slice=4)
+        s = top_up(self.db, cap=100, dry_run=True, count_fn=lambda: 0,
+                   submit_fn=boom)
+        self.assertEqual(s['would-slice'], 3)
+        self.assertEqual(s['would-campaign-complete'], 1)
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['cursor'], 0)            # DB untouched
+        self.assertEqual(c['state'], 'active')
+
+    # -- crash-window / ledger-overlap guard (Fix 2) -----------------------
+
+    def test_overlap_pauses_without_submitting(self):
+        """A ledger row already covering part of the next slice window
+        (crash-window: parent submit_map died after jobsub_submit
+        succeeded but before its own ledger write) must pause the
+        campaign rather than resubmit — never a blind double-submit."""
+        from utils.submissions import top_up
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        cid = self._campaign(tarball=tarball, njobs=10, slice=4)
+        self.sl.record_submission(
+            self.db, tarball=tarball, entry={}, indices=[2],
+            jobsub_id='9.0@js', cluster_id='9')  # inside [0,4)
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'paused')
+        self.assertEqual(c['cursor'], 0)
+        self.assertIn('crash-window', c['note'])
+        self.assertEqual(s['campaign-paused'], 1)
+
+    def test_overlap_below_cursor_does_not_block(self):
+        """Ledger rows for the same tarball covering only windows BELOW
+        the cursor (e.g. the recovery loop's own resubmits of already-
+        submitted-but-missing indices) must not block a future slice —
+        those indices can never intersect [cursor, cursor+n)."""
+        from utils.submissions import top_up
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        cid = self._campaign(tarball=tarball, njobs=10, slice=4)
+        self.sl.advance_campaign(self.db, cid, 4)  # simulate prior slice
+        self.sl.record_submission(
+            self.db, tarball=tarball, entry={}, indices=[0, 1, 2, 3],
+            jobsub_id='9.0@js', cluster_id='9')  # all below cursor=4
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [(cid, 4, 4), (cid, 8, 2)])
+        self.assertNotIn('campaign-paused', s)
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'complete')
+
+    def test_overlap_dry_run_reports_and_writes_nothing(self):
+        from utils.submissions import top_up
+        def boom(camp, n, db_path):
+            raise AssertionError("submit_fn must not be called in dry-run")
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        self._campaign(tarball=tarball, njobs=10, slice=4)
+        self.sl.record_submission(
+            self.db, tarball=tarball, entry={}, indices=[1],
+            jobsub_id='9.0@js', cluster_id='9')  # inside [0,4)
+        s = top_up(self.db, cap=100, dry_run=True, count_fn=lambda: 0,
+                   submit_fn=boom)
+        self.assertEqual(s['would-pause-overlap'], 1)
+        self.assertNotIn('would-slice', s)
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['cursor'], 0)            # DB untouched
+        self.assertEqual(c['state'], 'active')
+
+    # -- self-heal fully-submitted-but-unclosed campaigns (Fix 3) ----------
+
+    def test_self_heal_closes_stuck_complete_campaign(self):
+        """cursor == njobs but state still 'active' (crash between
+        advance_campaign and set_campaign_state('complete') on a prior
+        tick) must self-heal to 'complete', not stay stuck forever."""
+        from utils.submissions import top_up
+        cid = self._campaign(njobs=6, slice=4)
+        self.sl.advance_campaign(self.db, cid, 6)  # fully submitted already
+        s = top_up(self.db, cap=100, count_fn=lambda: 0,
+                   submit_fn=self._submit())
+        self.assertEqual(self.calls, [])            # nothing left to submit
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'complete')
+        self.assertIn('self-heal', c['note'])
+        self.assertEqual(s['campaign-complete'], 1)
+
+    def test_self_heal_dry_run_leaves_active(self):
+        from utils.submissions import top_up
+        cid = self._campaign(njobs=6, slice=4)
+        self.sl.advance_campaign(self.db, cid, 6)
+        s = top_up(self.db, cap=100, dry_run=True, count_fn=lambda: 0,
+                   submit_fn=lambda *a: self.fail('must not submit'))
+        self.assertEqual(s['would-campaign-complete'], 1)
+        c = self.sl.active_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'active')       # DB untouched
+
+
+class TestSubmitSlice(unittest.TestCase):
+    """submit_slice shells out through the submit_map CLI."""
+
+    def test_argv_and_map_content(self):
+        import tempfile
+        from utils import submissions as recover
+        entry = {'tarball': 'cnf.mu2e.W.C.0.tar', 'njobs': 50,
+                 'firstjob': 100, 'inloc': 'tape', 'outputs': [],
+                 'memory': '4000MB'}
+        camp = {'id': 7, 'cursor': 10, 'slice_size': 5, 'entry': entry,
+                'tarball': entry['tarball']}
+        captured = {}
+        def runner(cmd, **kw):
+            captured['cmd'] = cmd
+            # Read the map file content during the runner call (before cleanup)
+            map_path = cmd[cmd.index('--map') + 1]
+            with open(map_path) as f:
+                captured['map_content'] = json.load(f)
+            return MagicMock(returncode=0)
+        ok = recover.submit_slice(camp, 5, '/tmp/led.db', runner=runner)
+        self.assertTrue(ok)
+        cmd = captured['cmd']
+        self.assertEqual(cmd[cmd.index('--first') + 1], '10')
+        self.assertEqual(cmd[cmd.index('--num') + 1], '5')
+        self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
+        self.assertEqual(captured['map_content'], [entry])  # firstjob PRESERVED
+
+    def test_nonzero_exit_is_failure(self):
+        from utils import submissions as recover
+        camp = {'id': 1, 'cursor': 0, 'slice_size': 2, 'tarball': 't',
+                'entry': {'tarball': 't', 'njobs': 2}}
+        ok = recover.submit_slice(
+            camp, 2, '/tmp/led.db',
+            runner=lambda cmd, **kw: MagicMock(returncode=1))
+        self.assertFalse(ok)
+
+
+class TestScratchDirCleanup(unittest.TestCase):
+    """Hourly cron must not accumulate /tmp scratch dirs: the child
+    submit_map's map/indices files are removed after it returns,
+    success or failure."""
+
+    def setUp(self):
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.camp = {'id': 1, 'cursor': 0, 'slice_size': 5,
+                     'tarball': 'cnf.mu2e.S.C.0.tar',
+                     'entry': {'tarball': 'cnf.mu2e.S.C.0.tar',
+                               'njobs': 10}}
+        self.row = {'id': 7, 'tarball': 'cnf.mu2e.S.C.0.tar',
+                    'entry': {'tarball': 'cnf.mu2e.S.C.0.tar',
+                              'njobs': 10}}
+
+    def _run_and_capture_dir(self, fn, rc):
+        from utils import submissions
+        import types
+        seen = {}
+        real_mkdtemp = tempfile.mkdtemp
+
+        def spy_mkdtemp(*a, **k):
+            seen['dir'] = real_mkdtemp(*a, **k)
+            return seen['dir']
+
+        runner = lambda cmd, **k: types.SimpleNamespace(returncode=rc)
+        with patch.object(submissions.tempfile, 'mkdtemp', spy_mkdtemp):
+            fn(runner)
+        return seen['dir']
+
+    def test_submit_slice_cleans_up_on_success(self):
+        from utils import submissions
+        d = self._run_and_capture_dir(
+            lambda r: submissions.submit_slice(self.camp, 5, self.db,
+                                               runner=r), 0)
+        self.assertFalse(os.path.exists(d))
+
+    def test_submit_slice_cleans_up_on_failure(self):
+        from utils import submissions
+        d = self._run_and_capture_dir(
+            lambda r: submissions.submit_slice(self.camp, 5, self.db,
+                                               runner=r), 1)
+        self.assertFalse(os.path.exists(d))
+
+    def test_resubmit_cleans_up(self):
+        from utils import submissions
+        d = self._run_and_capture_dir(
+            lambda r: submissions.resubmit(self.row, [2, 4], self.db,
+                                           runner=r), 0)
+        self.assertFalse(os.path.exists(d))
+
+
+class TestManageCampaign(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.cid = sl.create_campaign(
+            self.db, tarball='cnf.mu2e.M.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.M.C.0.tar', 'njobs': 5},
+            slice_size=2)
+
+    def test_pause_resume_cancel(self):
+        from utils.submissions import manage_campaign
+        manage_campaign(self.db, self.cid, 'pause')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'paused')
+        manage_campaign(self.db, self.cid, 'resume')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'active')
+        manage_campaign(self.db, self.cid, 'cancel')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'cancelled')
+
+    def test_resume_active_raises(self):
+        from utils.submissions import manage_campaign
+        with self.assertRaises(ValueError):
+            manage_campaign(self.db, self.cid, 'resume')
+
+
+# ---------------------------------------------------------------------------
+# submissions CLI verb structure (utils/submissions.py) — workflow hardening
+# ---------------------------------------------------------------------------
+class TestSubmissionsVerbs(unittest.TestCase):
+    """Safe-by-default CLI: bare invocation is read-only status; the
+    mutating tick requires the `run` verb; campaign management verbs
+    validate transitions and fail with one-line errors."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.dbdir = tempfile.mkdtemp()
+        self.db = os.path.join(self.dbdir, 'sub.db')
+
+    def _campaign(self, tarball='cnf.mu2e.V.C.0.tar', njobs=4):
+        return self.sl.create_campaign(
+            self.db, tarball=tarball,
+            entry={'tarball': tarball, 'njobs': njobs},
+            slice_size=2, map_path='m.json')
+
+    def test_bare_invocation_is_status(self):
+        from utils import submissions
+        import io as _io
+        self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.V.C.0.tar', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf), \
+             patch.object(submissions, 'process_row',
+                          side_effect=AssertionError('bare must not run')), \
+             patch.object(submissions, 'top_up',
+                          side_effect=AssertionError('bare must not top up')), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db]):
+            submissions.main()
+        out = buf.getvalue()
+        self.assertIn('queue cap in effect', out)
+        self.assertIn('cnf.mu2e.V.C.0.tar', out)
+        # read-only: no lock file created
+        self.assertFalse(
+            os.path.exists(os.path.join(self.dbdir, 'submissions.lock')))
+
+    def test_status_verb_same_as_bare(self):
+        from utils import submissions
+        import io as _io
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'status']):
+            submissions.main()
+        self.assertIn('empty', buf.getvalue().lower())
+
+    def test_run_verb_processes_rows_and_locks(self):
+        from utils import submissions
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(submissions, 'process_row',
+                          return_value='complete') as pr, \
+             patch.object(submissions, 'live_clusters', return_value={}), \
+             patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            submissions.main()
+        self.assertEqual(pr.call_count, 1)
+        self.assertTrue(
+            os.path.exists(os.path.join(self.dbdir, 'submissions.lock')))
+
+    def test_run_dry_run_takes_no_lock(self):
+        from utils import submissions
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run', '--dry-run']):
+            submissions.main()
+        self.assertFalse(
+            os.path.exists(os.path.join(self.dbdir, 'submissions.lock')))
+
+    def test_pause_and_resume_verbs(self):
+        from utils import submissions
+        cid = self._campaign()
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'pause', str(cid)]):
+            submissions.main()
+        camp = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(camp['state'], 'paused')
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'resume', str(cid)]):
+            submissions.main()
+        camp = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(camp['state'], 'active')
+
+    def test_cancel_verb(self):
+        from utils import submissions
+        cid = self._campaign()
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'cancel', str(cid)]):
+            submissions.main()
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'cancelled')
+
+    def test_invalid_transition_one_line_exit_1(self):
+        from utils import submissions
+        cid = self._campaign()
+        self.sl.set_campaign_state(self.db, cid, 'cancelled')
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'resume', str(cid)]):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        msg = str(cm.exception.code)
+        self.assertIn('submissions:', msg)
+        self.assertNotIn('\n', msg)
+
+    def test_old_style_flags_rejected(self):
+        from utils import submissions
+        for bad in (['--status'], ['--dry-run'], ['--pause-campaign', '1']):
+            with patch.object(sys, 'argv',
+                              ['submissions', '--db', self.db] + bad):
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main()
+            self.assertNotEqual(cm.exception.code, 0)
+
+
+# ---------------------------------------------------------------------------
+# submit_map ledger hook (utils/submit.py) — direct-backend recovery
+# ---------------------------------------------------------------------------
+class TestSubmitLedgerHook(unittest.TestCase):
+    """Direct-backend ledger hook in utils/submit.py."""
+
+    def test_parse_jobsub_id_full_form(self):
+        from utils.submit import _parse_jobsub_id
+        out = ("Transferring files...\n"
+               "1 job(s) submitted to cluster 12345678.\n"
+               "Use job id 12345678.0@jobsub03.fnal.gov to retrieve output\n")
+        self.assertEqual(_parse_jobsub_id(out),
+                         '12345678.0@jobsub03.fnal.gov')
+
+    def test_parse_jobsub_id_absent(self):
+        from utils.submit import _parse_jobsub_id
+        self.assertIsNone(_parse_jobsub_id("submitted to cluster 12345678\n"))
+
+    def test_run_submit_carries_jobsub_id(self):
+        from utils import submit
+        fake = MagicMock(
+            returncode=0, stderr='',
+            stdout='1 job(s) submitted to cluster 12345678.\n'
+                   'Use job id 12345678.0@jobsub03.fnal.gov to retrieve output\n')
+        with patch('utils.submit.subprocess.run', return_value=fake):
+            r = submit._run_submit(['jobsub_submit'], 'cnf.tar', 3)
+        self.assertEqual(r['status'], 'submitted')
+        self.assertEqual(r['jobsub_id'], '12345678.0@jobsub03.fnal.gov')
+
+    def _opts(self, db, parent=None):
+        import argparse
+        return argparse.Namespace(ledger_db=db, ledger_parent=parent,
+                                  no_ledger=False, map='/tmp/m.json')
+
+    def test_record_in_ledger_absolute_indices(self):
+        import tempfile
+        from utils import submit, submission_ledger
+        db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        entry = {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 3, 'firstjob': 100}
+        result = {'tarball': 'cnf.mu2e.T.C.0.tar', 'cluster_id': '1',
+                  'jobsub_id': '1.0@js.fnal.gov', 'njobs': 3,
+                  'status': 'submitted'}
+        submit._record_in_ledger(entry, 100, [0, 1, 2], result, self._opts(db))
+        row = submission_ledger.open_rows(db)[0]
+        self.assertEqual(row['indices'], [100, 101, 102])
+        self.assertEqual(row['entry'], entry)
+        self.assertEqual(row['jobsub_id'], '1.0@js.fnal.gov')
+        self.assertEqual(row['map_path'], '/tmp/m.json')
+
+    def test_record_in_ledger_parent_chains(self):
+        import tempfile
+        from utils import submit, submission_ledger
+        db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        rid = submission_ledger.record_submission(
+            db, tarball='t', entry={}, indices=[0, 1],
+            jobsub_id='1.0@js', cluster_id='1')
+        result = {'tarball': 't', 'cluster_id': '2', 'jobsub_id': '2.0@js',
+                  'njobs': 1, 'status': 'submitted'}
+        submit._record_in_ledger({}, 0, [1], result, self._opts(db, parent=rid))
+        rows = submission_ledger.open_rows(db)
+        self.assertEqual(rows[1]['attempt'], 2)
+        self.assertEqual(rows[1]['parent_id'], rid)
+
+    def test_ledger_failure_does_not_raise(self):
+        from utils import submit
+        result = {'tarball': 't', 'cluster_id': '1', 'jobsub_id': None,
+                  'njobs': 1, 'status': 'submitted'}
+        # nonexistent directory → sqlite3.OperationalError inside, warning out
+        submit._record_in_ledger(
+            {}, 0, [0], result,
+            self._opts('/nonexistent-dir-recovery-test/s.db'))  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# 13. mkrecovery scoped index scan (utils/mkrecovery.py)
+# ---------------------------------------------------------------------------
+
+class TestBuildFileMapsScoped(unittest.TestCase):
+    def test_scoped_scan_matches_windowed_scan(self):
+        from utils.jobquery import Mu2eJobPars
+        from utils.mkrecovery import build_file_maps
+        files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(6)]
+        tar = _make_tarball(_root_input_jobpars(files))
+        try:
+            jp = Mu2eJobPars(tar)
+            ds = 'sim.mu2e.TestDesc.TestConf.art'
+            full = build_file_maps(jp, [ds], njobs=6)[ds]
+            self.assertEqual(len(full), 6)
+            scoped = build_file_maps(jp, [ds], njobs=0, indices=[1, 4])[ds]
+            expect = {f: i for f, i in full.items() if i in (1, 4)}
+            self.assertEqual(scoped, expect)
+            self.assertEqual(sorted(set(scoped.values())), [1, 4])
+        finally:
+            os.unlink(tar)
+
+
+class TestRecoverLoop(unittest.TestCase):
+    """utils/submissions.py — drain gate, verify, cap semantics."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.entry = {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 3}
+        self.rid = sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[0, 1, 2], jobsub_id='1.0@js.fnal.gov', cluster_id='1')
+        self.row = sl.open_rows(self.db)[0]
+
+    def _process(self, qstate='drained', missing=(), partial=(),
+                 resub_ok=True, max_attempts=3, dry_run=False,
+                 verify_exc=None, resub_writes_child=True):
+        from utils import submissions as recover
+        calls = {}
+
+        def fake_verify(row):
+            if verify_exc:
+                raise verify_exc
+            return list(missing), list(partial)
+
+        def fake_resubmit(row, miss, db_path):
+            calls['resubmit'] = (row['id'], list(miss), db_path)
+            if resub_ok and resub_writes_child:
+                self.sl.record_submission(
+                    db_path, tarball=row['tarball'], entry=row['entry'],
+                    indices=list(miss), jobsub_id='2.0@js.fnal.gov',
+                    cluster_id='2', parent_id=row['id'])
+            return resub_ok
+
+        action = recover.process_row(
+            self.row, self.db, max_attempts, clusters={}, dry_run=dry_run,
+            queue_state_fn=lambda cid, clusters: qstate,
+            verify_fn=fake_verify, resubmit_fn=fake_resubmit)
+        return action, calls
+
+    def test_running_skips(self):
+        action, calls = self._process(qstate='running')
+        self.assertEqual(action, 'running')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_held_reports_and_skips(self):
+        action, calls = self._process(qstate='held')
+        self.assertEqual(action, 'held')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_queue_error_skips(self):
+        action, _ = self._process(qstate='error')
+        self.assertEqual(action, 'queue-error')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_complete_closes_row(self):
+        action, _ = self._process(missing=())
+        self.assertEqual(action, 'complete')
+        self.assertEqual(self.sl.all_rows(self.db)[0]['state'], 'complete')
+
+    def test_missing_resubmits_and_marks_recovered(self):
+        action, calls = self._process(missing=(1,))
+        self.assertEqual(action, 'resubmitted')
+        self.assertEqual(calls['resubmit'], (self.rid, [1], self.db))
+        rows = self.sl.all_rows(self.db)
+        self.assertEqual(rows[0]['state'], 'recovered')
+        self.assertEqual(rows[1]['state'], 'active')
+        self.assertEqual(rows[1]['attempt'], 2)
+        self.assertEqual(rows[1]['indices'], [1])
+
+    def test_cap_exhausts_without_resubmit(self):
+        action, calls = self._process(missing=(1,), max_attempts=1)
+        self.assertEqual(action, 'exhausted')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.all_rows(self.db)[0]['state'], 'exhausted')
+
+    def test_dry_run_never_submits(self):
+        action, calls = self._process(missing=(1,), dry_run=True)
+        self.assertEqual(action, 'would-resubmit')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_dry_run_complete_keeps_row_active(self):
+        action, calls = self._process(missing=(), dry_run=True)
+        self.assertEqual(action, 'would-complete')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_dry_run_at_cap_keeps_row_active(self):
+        action, calls = self._process(missing=(1,), max_attempts=1,
+                                      dry_run=True)
+        self.assertEqual(action, 'would-exhaust')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_verify_error_keeps_row_active(self):
+        action, _ = self._process(verify_exc=RuntimeError('no tarball'))
+        self.assertEqual(action, 'verify-error')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_resubmit_failure_keeps_row_active(self):
+        action, _ = self._process(missing=(1,), resub_ok=False)
+        self.assertEqual(action, 'resubmit-error')
+        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
+
+    def test_crash_window_child_already_active_repairs(self):
+        child = self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], jobsub_id='2.0@js', cluster_id='2',
+            parent_id=self.rid)
+        action, calls = self._process(missing=(1,))
+        self.assertEqual(action, 'child-active')
+        self.assertNotIn('resubmit', calls)
+        rows = {r['id']: r for r in self.sl.all_rows(self.db)}
+        self.assertEqual(rows[self.rid]['state'], 'recovered')
+        self.assertEqual(rows[child]['state'], 'active')
+
+    def test_crash_window_dry_run_previews_repair(self):
+        child = self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], jobsub_id='2.0@js', cluster_id='2',
+            parent_id=self.rid)
+        action, calls = self._process(missing=(1,), dry_run=True)
+        self.assertEqual(action, 'would-recover')
+        self.assertNotIn('resubmit', calls)
+        self.assertEqual(sorted(r['id'] for r in self.sl.open_rows(self.db)),
+                         [self.rid, child])
+
+    def test_child_active_wins_over_cap(self):
+        self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], jobsub_id='2.0@js', cluster_id='2',
+            parent_id=self.rid)
+        action, _ = self._process(missing=(1,), max_attempts=1)
+        self.assertEqual(action, 'child-active')
+
+    def test_resubmit_without_child_row_flags_unwatched(self):
+        action, calls = self._process(missing=(1,), resub_writes_child=False)
+        self.assertEqual(action, 'child-missing')
+        rows = self.sl.all_rows(self.db)
+        self.assertEqual(rows[0]['state'], 'recovered')
+        self.assertIn('unwatched', rows[0]['note'])
+
+    def test_missing_cluster_id_reported(self):
+        rid2 = self.sl.record_submission(
+            self.db, tarball='t2', entry={}, indices=[0],
+            jobsub_id=None, cluster_id=None)
+        row2 = [r for r in self.sl.open_rows(self.db) if r['id'] == rid2][0]
+        from utils import submissions as recover
+        action = recover.process_row(
+            row2, self.db, 3, clusters={'9': ['R']},
+            queue_state_fn=lambda cid, cl: self.fail('must not be called'),
+            verify_fn=lambda r: ([], []),
+            resubmit_fn=lambda r, m, d: self.fail('must not be called'))
+        self.assertEqual(action, 'queue-error')
+
+    def test_cluster_queue_state_logic(self):
+        from utils.submissions import cluster_queue_state as cqs
+        # None snapshot (query untrusted) → error, never drained (fail-closed)
+        self.assertEqual(cqs('9', None), 'error')
+        # cluster absent from a good snapshot → drained
+        self.assertEqual(cqs('9', {}), 'drained')
+        self.assertEqual(cqs('9', {'8': ['R']}), 'drained')
+        # any idle/running job → running
+        self.assertEqual(cqs('9', {'9': ['R']}), 'running')
+        self.assertEqual(cqs('9', {'9': ['I']}), 'running')
+        # running wins over a stray held job (don't halt a working cluster)
+        self.assertEqual(cqs('9', {'9': ['R', 'H']}), 'running')
+        # every non-terminal job held → held (all preempted, human decides)
+        self.assertEqual(cqs('9', {'9': ['H', 'H']}), 'held')
+        # only terminal rows lingering (completed/removed) → drained
+        self.assertEqual(cqs('9', {'9': ['C', 'X']}), 'drained')
+        self.assertEqual(cqs('9', {'9': ['H', 'C']}), 'held')
+        # cluster_id coerced to str (ledger may hand an int)
+        self.assertEqual(cqs(9, {'9': ['R']}), 'running')
+
+    def test_live_clusters_parsing(self):
+        from utils import submissions as recover
+        # Same module — a `from test.test_unit import ...` package-path import
+        # resolves only when the suite is run as `python -m unittest
+        # test.test_unit`, and blows up under `unittest discover -s test`.
+        T = TestRecoverCap
+        def r(stdout, rc=0):
+            return MagicMock(returncode=rc, stdout=stdout, stderr='')
+        hdr, summ, row = T._HDR, T._SUM, T._row
+        # a good table → {cluster: [states]}, procs of one cluster aggregate,
+        # and the probe queries the --user table (not per-jobid)
+        cmd = {}
+        def run(c, capture_output=True, text=True):
+            cmd['argv'] = c
+            return r('\n'.join([
+                hdr, summ,
+                row('9.0@jobsub01.fnal.gov', 'mu2epro', 'R'),
+                row('9.1@jobsub01.fnal.gov', 'mu2epro', 'I'),
+                row('12.0@jobsub02.fnal.gov', '|-WORKER_3', 'H'),
+            ]) + '\n')
+        self.assertEqual(recover.live_clusters(runner=run),
+                         {'9': ['R', 'I'], '12': ['H']})
+        self.assertEqual(cmd['argv'], ['jobsub_q', '--user', 'mu2epro'])
+        # empty-but-valid table → {} (a real drained account), NOT None
+        self.assertEqual(
+            recover.live_clusters(runner=lambda *a, **k: r(hdr + '\n' + summ)),
+            {})
+        # command failure / headerless / garbage row → None (fail-closed)
+        self.assertIsNone(recover.live_clusters(
+            runner=lambda *a, **k: r('', rc=1)))
+        self.assertIsNone(recover.live_clusters(
+            runner=lambda *a, **k: r('No jobs found\n')))
+        self.assertIsNone(recover.live_clusters(runner=lambda *a, **k: r(
+            '\n'.join([hdr, row('9.0@jobsub01.fnal.gov', 'mu2epro', 'Z')]))))
+
+    def test_verify_row_missing_and_partial(self):
+        from utils import submissions as recover
+        files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(3)]
+        jpars = _root_input_jobpars(files)
+        jpars['tbs']['outfiles']['outputs.SecondOutput.fileName'] = \
+            "dig.mu2e.TestDesc.TestConf.sequencer.art"
+        tar = _make_tarball(jpars)
+        try:
+            row = {'id': 1, 'tarball': 'cnf.mu2e.T.C.0.tar',
+                   'indices': [0, 1, 2], 'entry': {}, 'attempt': 1,
+                   'jobsub_id': 'x'}
+            dig_ds = 'dig.mu2e.TestDesc.TestConf.art'
+            from utils.jobquery import Mu2eJobPars
+            jp = Mu2eJobPars(tar)
+
+            def fake_lister(ds):
+                out = []
+                for i in (0, 1, 2):
+                    for f in jp.job_outputs(i).values():
+                        if str(Mu2eName.parse(f).dataset) != ds:
+                            continue
+                        if i == 2:
+                            continue          # idx 2: nothing landed
+                        if i == 1 and ds == dig_ds:
+                            continue          # idx 1: dig stream missing
+                        out.append(f)
+                return out
+
+            with patch.object(recover, 'locate_tarball', return_value=tar):
+                missing, partial = recover.verify_row(
+                    row, sam_lister=fake_lister)
+            self.assertEqual(missing, [1, 2])
+            self.assertEqual(partial, [1])
+        finally:
+            os.unlink(tar)
+
+    def test_verify_row_unlocatable_tarball_raises(self):
+        from utils import submissions as recover
+        row = {'id': 1, 'tarball': 'cnf.mu2e.gone.C.0.tar',
+               'indices': [0], 'entry': {}, 'attempt': 1, 'jobsub_id': 'x'}
+        with patch.object(recover, 'locate_tarball', return_value=None):
+            with self.assertRaises(RuntimeError):
+                recover.verify_row(row, sam_lister=lambda ds: [])
+
+    def test_verify_row_nonart_outputs_raise_not_complete(self):
+        from utils import submissions as recover
+        files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(2)]
+        jpars = _root_input_jobpars(files)
+        jpars['tbs']['outfiles']['outputs.PrimaryOutput.fileName'] = \
+            "nts.mu2e.TestDesc.TestConf.sequencer.root"
+        tar = _make_tarball(jpars)
+        try:
+            row = {'id': 1, 'tarball': 'cnf.mu2e.T.C.0.tar',
+                   'indices': [0, 1], 'entry': {}, 'attempt': 1,
+                   'jobsub_id': 'x'}
+            with patch.object(recover, 'locate_tarball', return_value=tar):
+                with self.assertRaises(RuntimeError):
+                    recover.verify_row(row, sam_lister=lambda ds: [])
+        finally:
+            os.unlink(tar)
+
+    def test_resubmit_drops_firstjob_and_writes_indices(self):
+        from utils import submissions as recover
+        row = {'id': 7, 'tarball': 'cnf.mu2e.T.C.0.tar',
+               'entry': {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 5,
+                         'firstjob': 100, 'inloc': 'tape'},
+               'indices': [100, 102], 'attempt': 1, 'jobsub_id': '1.0@js'}
+        captured = {}
+
+        def fake_runner(cmd, **kwargs):
+            captured['cmd'] = cmd
+            # Read file contents during the runner call (before cleanup)
+            map_path = cmd[cmd.index('--map') + 1]
+            captured['map_entry'] = json.loads(Path(map_path).read_text())[0]
+            idx_path = cmd[cmd.index('--indices-file') + 1]
+            captured['idx_lines'] = Path(idx_path).read_text().splitlines()
+            return MagicMock(returncode=0)
+
+        ok = recover.resubmit(row, [100, 102], '/tmp/led.db',
+                              runner=fake_runner)
+        self.assertTrue(ok)
+        cmd = captured['cmd']
+        self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
+        self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
+        entry = captured['map_entry']
+        self.assertNotIn('firstjob', entry)
+        self.assertEqual(entry['njobs'], 5)
+        lines = captured['idx_lines']
+        self.assertEqual(lines[0], '# cnf.mu2e.T.C.0.tar')
+        self.assertEqual(lines[1:], ['100', '102'])
+        recover.resubmit(row, [100], '/tmp/led.db', dry_run=True,
+                         runner=fake_runner)
+        self.assertIn('--dry-run', captured['cmd'])
+
+class TestRecoverCLI(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+
+    def test_print_status_empty(self):
+        from utils import submissions as recover
+        import io as _io
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf):
+            recover.print_status(self.db)
+        self.assertIn('empty', buf.getvalue().lower())
+
+    def test_print_status_lists_rows(self):
+        from utils import submissions as recover
+        import io as _io
+        rid = self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry={}, indices=[0, 1],
+            jobsub_id='1.0@js', cluster_id='1')
+        self.sl.close_row(self.db, rid, 'complete')
+        self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.T2.C.0.tar', entry={}, indices=[3],
+            jobsub_id='2.0@js', cluster_id='2')
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf):
+            recover.print_status(self.db)
+        out = buf.getvalue()
+        self.assertIn('complete', out)
+        self.assertIn('active', out)
+        self.assertIn('cnf.mu2e.T2.C.0.tar', out)
+
+    def test_main_exit_2_on_attention(self):
+        from utils import submissions as recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(recover, 'process_row', return_value='held'), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            with self.assertRaises(SystemExit) as cm:
+                recover.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_main_exit_2_on_dry_run_would_exhaust(self):
+        from utils import submissions as recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(recover, 'process_row',
+                          return_value='would-exhaust'), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run', '--dry-run']):
+            with self.assertRaises(SystemExit) as cm:
+                recover.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_main_exit_0_when_clean(self):
+        from utils import submissions as recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        with patch.object(recover, 'process_row', return_value='complete'), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            recover.main()  # returns without SystemExit
+
+    def test_main_lock_contention_exits(self):
+        import fcntl
+        from utils import submissions as recover
+        self.sl.record_submission(
+            self.db, tarball='t', entry={}, indices=[0],
+            jobsub_id='1.0@js', cluster_id='1')
+        lock_path = os.path.join(os.path.dirname(self.db), 'submissions.lock')
+        fh = open(lock_path, 'w')
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                            'run']):
+                with self.assertRaises(SystemExit) as cm:
+                    recover.main()
+            self.assertIn('submissions.lock', str(cm.exception.code))
+        finally:
+            fh.close()
+
+
+class TestSubmissionsExitHonesty(unittest.TestCase):
+    """A stalled loop must not impersonate a healthy one: queue-count
+    failure and lingering paused campaigns exit 2 every tick."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+
+    def test_count_error_exits_2(self):
+        from utils import submissions
+        with patch.object(submissions, 'top_up',
+                          return_value={'count-error': 1}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_lingering_paused_campaign_exits_2(self):
+        from utils import submissions
+        cid = self.sl.create_campaign(
+            self.db, tarball='cnf.mu2e.P.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.P.C.0.tar', 'njobs': 4},
+            slice_size=2)
+        self.sl.set_campaign_state(self.db, cid, 'paused',
+                                   note='paused on a PREVIOUS tick')
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_lingering_paused_exits_2_under_dry_run(self):
+        from utils import submissions
+        cid = self.sl.create_campaign(
+            self.db, tarball='cnf.mu2e.P2.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.P2.C.0.tar', 'njobs': 4},
+            slice_size=2)
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run', '--dry-run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_clean_run_still_exits_0(self):
+        from utils import submissions
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            submissions.main()  # no SystemExit
+
+    def test_drain_error_exits_2(self):
+        # A permanently stuck draining campaign (state_fn/gate_fn keeps
+        # raising) must not go silent — drain-error is a summary key
+        # exactly like count-error and must trigger the same exit-2.
+        from utils import submissions
+        with patch.object(submissions, 'top_up', return_value={}), \
+             patch.object(submissions, 'drain_tick',
+                          return_value={'drain-error': 1}), \
+             patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'run']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertEqual(cm.exception.code, 2)
+
+
+class TestPauseNotePreservation(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.cid = sl.create_campaign(
+            self.db, tarball='cnf.mu2e.N.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.N.C.0.tar', 'njobs': 4},
+            slice_size=2)
+
+    def _note(self):
+        return self.sl.all_campaigns(self.db)[0]['note']
+
+    def test_resume_preserves_pause_note(self):
+        self.sl.set_campaign_state(self.db, self.cid, 'paused',
+                                   note='crash-window suspected')
+        self.sl.set_campaign_state(self.db, self.cid, 'active')
+        self.assertEqual(self._note(), 'crash-window suspected')
+
+    def test_resume_clears_closed_utc(self):
+        self.sl.set_campaign_state(self.db, self.cid, 'paused', note='x')
+        self.sl.set_campaign_state(self.db, self.cid, 'active')
+        self.assertIsNone(self.sl.all_campaigns(self.db)[0]['closed_utc'])
+
+    def test_pause_verb_custom_note(self):
+        from utils import submissions
+        with patch.object(sys, 'argv',
+                          ['submissions', '--db', self.db, 'pause',
+                           str(self.cid), '--note', 'draining for O2']):
+            submissions.main()
+        self.assertEqual(self._note(), 'draining for O2')
+
+    def test_pause_verb_default_note(self):
+        from utils import submissions
+        with patch.object(sys, 'argv',
+                          ['submissions', '--db', self.db, 'pause',
+                           str(self.cid)]):
+            submissions.main()
+        self.assertEqual(self._note(), 'operator pause')
+
+
+class TestSplitInputs(unittest.TestCase):
+    """split_inputs reads the frozen input file lists from a cnf tarball,
+    splitting primary (tbs.inputs) from pileup (tbs.auxin), grouped by
+    dataset and deduplicated — no per-index reconstruction."""
+
+    def _tar(self, inputs=None, auxin=None, samplinginput=None):
+        jp = {
+            "code": "", "setup": "/cvmfs/x/setup.sh",
+            "tbs": {"seed": "services.SeedService.baseSeed"},
+            "jobname": "cnf.mu2e.TestDesc.TestConf.0.tar",
+            "owner": "mu2e", "dsconf": "TestConf",
+        }
+        if inputs is not None:
+            jp["tbs"]["inputs"] = inputs
+        if auxin is not None:
+            jp["tbs"]["auxin"] = auxin
+        if samplinginput is not None:
+            jp["tbs"]["samplinginput"] = samplinginput
+        return _make_tarball(jp)
+
+    def test_splits_primary_and_pileup_by_dataset(self):
+        from utils.check_inputs import split_inputs
+        tar = self._tar(
+            inputs={"source.fileNames": [1, [
+                "dts.mu2e.Prim.CampA.001430_00000000.art",
+                "dts.mu2e.Prim.CampA.001430_00000001.art"]]},
+            auxin={"physics.filters.M.fileNames": [1, [
+                "dts.mu2e.Pile.CampB.001430_00000005.art"]]},
+        )
+        primary, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(set(primary), {"dts.mu2e.Prim.CampA.art"})
+        self.assertEqual(len(primary["dts.mu2e.Prim.CampA.art"]), 2)
+        self.assertEqual(set(auxin), {"dts.mu2e.Pile.CampB.art"})
+
+    def test_dedups_repeated_files(self):
+        from utils.check_inputs import split_inputs
+        f = "dts.mu2e.Pile.CampB.001430_00000005.art"
+        tar = self._tar(auxin={
+            "physics.filters.A.fileNames": [1, [f]],
+            "physics.filters.B.fileNames": [1, [f]],
+        })
+        _, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(auxin["dts.mu2e.Pile.CampB.art"], [f])
+
+    def test_missing_sections_yield_empty(self):
+        from utils.check_inputs import split_inputs
+        tar = self._tar()
+        primary, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(primary, {})
+        self.assertEqual(auxin, {})
+
+    def test_problem_is_frozen(self):
+        from utils.check_inputs import Problem
+        p = Problem("ds", "f.art", "truncated", "detail")
+        self.assertEqual(p.kind, "truncated")
+        with self.assertRaises(Exception):
+            p.kind = "missing"
+
+    def test_samplinginput_folded_into_primary(self):
+        from utils.check_inputs import split_inputs
+        tar = self._tar(
+            samplinginput={"physics.filters.resampler.fileNames": [1, [
+                "dts.mu2e.NeutralsCat.MDC2025ab.001430_00000007.art"]]})
+        primary, auxin = split_inputs(tar)
+        os.unlink(tar)
+        self.assertEqual(set(primary), {"dts.mu2e.NeutralsCat.MDC2025ab.art"})
+        self.assertEqual(auxin, {})
+
+
+class TestCheckResilient(unittest.TestCase):
+    """Resilient pileup: present AND size matches SAM. Catches the
+    2026-07-21 truncation (1 MiB stub) and a purge (missing entirely).
+    mdh cannot see resilient, so this is a direct os.path.getsize vs the
+    SAM-recorded size."""
+
+    DS = "dts.mu2e.Pile.CampB.art"
+    F1 = "dts.mu2e.Pile.CampB.001430_00000000.art"
+    F2 = "dts.mu2e.Pile.CampB.001430_00000001.art"
+
+    def test_all_present_and_sized_ok(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1, self.F2],
+            sam_sizes=lambda ds: {self.F1: 100, self.F2: 200},
+            disk_size=lambda p: 100 if self.F1 in p else 200)
+        self.assertEqual(probs, [])
+
+    def test_truncated_file_flagged(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1],
+            sam_sizes=lambda ds: {self.F1: 113643009},
+            disk_size=lambda p: 1048576)
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "truncated")
+        self.assertEqual(probs[0].filename, self.F1)
+
+    def test_missing_file_flagged(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1],
+            sam_sizes=lambda ds: {self.F1: 100},
+            disk_size=lambda p: None)
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "missing")
+
+    def test_no_sam_size_is_query_error(self):
+        from utils.check_inputs import check_resilient
+        probs = check_resilient(
+            self.DS, [self.F1],
+            sam_sizes=lambda ds: {},
+            disk_size=lambda p: 100)
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "query_error")
+
+    def test_sam_lookup_raises_is_query_error(self):
+        from utils.check_inputs import check_resilient
+        def boom(ds):
+            raise RuntimeError("SAM down")
+        probs = check_resilient(
+            self.DS, [self.F1, self.F2],
+            sam_sizes=boom,
+            disk_size=lambda p: 100)
+        self.assertEqual([p.kind for p in probs], ["query_error", "query_error"])
+        self.assertEqual(len(probs), 2)
+
+    def test_default_disk_size_absent_is_none(self):
+        from utils.check_inputs import _default_disk_size
+        self.assertIsNone(_default_disk_size("/pnfs/mu2e/resilient/nope/x.art"))
+
+
+class TestFileSizesInDataset(unittest.TestCase):
+    """file_sizes_in_dataset returns {filename: size} from one
+    list-files --fileinfo call."""
+
+    def test_maps_name_to_size(self):
+        import collections
+        from utils import samweb_wrapper
+        FI = collections.namedtuple("fileinfo",
+                                    "file_name file_id file_size event_count")
+        fake_client = MagicMock()
+        fake_client.listFiles.return_value = [
+            FI("dts.mu2e.Pile.CampB.001430_00000000.art", 1, 111, 9),
+            FI("dts.mu2e.Pile.CampB.001430_00000001.art", 2, 222, 9),
+        ]
+        wrapper = object.__new__(samweb_wrapper.SAMWebWrapper)
+        wrapper.client = fake_client
+        with patch.object(samweb_wrapper, "get_samweb_wrapper",
+                          return_value=wrapper):
+            out = samweb_wrapper.file_sizes_in_dataset("dts.mu2e.Pile.CampB.art")
+        self.assertEqual(out, {
+            "dts.mu2e.Pile.CampB.001430_00000000.art": 111,
+            "dts.mu2e.Pile.CampB.001430_00000001.art": 222})
+        # one query, fileinfo requested
+        _, kwargs = fake_client.listFiles.call_args
+        self.assertTrue(kwargs.get("fileinfo"))
+
+
+class TestCheckTape(unittest.TestCase):
+    """Primary / tape inputs: NEARLINE (evicted) must block with a
+    /prestage hint; ONLINE passes; unknown storage or query failure fails
+    closed."""
+
+    DS = "dts.mu2e.Prim.CampA.art"
+    F1 = "dts.mu2e.Prim.CampA.001430_00000000.art"
+    F2 = "dts.mu2e.Prim.CampA.001430_00000001.art"
+
+    def test_online_passes(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1, self.F2],
+            locality=lambda loc, fs: {self.F1: "ONLINE",
+                                      self.F2: "ONLINE_AND_NEARLINE"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(probs, [])
+
+    def test_nearline_blocks_with_prestage_hint(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "NEARLINE"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "nearline")
+        self.assertIn("/prestage", probs[0].detail)
+
+    def test_disk_dataset_queries_disk_location(self):
+        from utils.check_inputs import check_tape
+        seen = {}
+        def loc(mdh_loc, fs):
+            seen["loc"] = mdh_loc
+            return {self.F1: "ONLINE"}
+        probs = check_tape(self.DS, [self.F1], locality=loc,
+                           dataset_location=lambda ds: "dcache")
+        self.assertEqual(probs, [])
+        self.assertEqual(seen["loc"], "disk")
+
+    def test_enstore_dataset_queries_tape_location(self):
+        from utils.check_inputs import check_tape
+        seen = {}
+        def loc(mdh_loc, fs):
+            seen["loc"] = mdh_loc
+            return {self.F1: "ONLINE"}
+        check_tape(self.DS, [self.F1], locality=loc,
+                   dataset_location=lambda ds: "enstore")
+        self.assertEqual(seen["loc"], "tape")
+
+    def test_missing_reported(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "MISSING"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(probs[0].kind, "missing")
+
+    def test_unknown_storage_location_fails_closed(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "ONLINE"},
+            dataset_location=lambda ds: "N/A")
+        self.assertEqual(len(probs), 1)
+        self.assertEqual(probs[0].kind, "query_error")
+
+    def test_locality_error_fails_closed(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            self.DS, [self.F1],
+            locality=lambda loc, fs: {self.F1: "ERROR"},
+            dataset_location=lambda ds: "enstore")
+        self.assertEqual(probs[0].kind, "query_error")
+
+
+class TestDefaultLocalityParsing(unittest.TestCase):
+    """_default_locality queries mdh per file via the Python API.
+
+    The `mdh query-dcache` CLI aborts at the FIRST file absent from the
+    queried area, so one persistent-resident file in a tape dataset
+    truncated stdout and forced a fail-closed ERROR for all 5000 files of
+    dts.mu2e.RPCInternalPhysical.MDC2025ap — 4997 of which were in fact
+    ONLINE_AND_NEARLINE. Per-file lookups cannot have that failure mode.
+    """
+
+    F1 = "dts.mu2e.Prim.CampA.001430_00000000.art"
+    F2 = "dts.mu2e.Prim.CampA.001430_00000001.art"
+
+    @staticmethod
+    def _client(by_loc, fail_times=0):
+        """Fake MdhClient. `by_loc` maps location -> {filename: locality};
+        a 404 raises RuntimeError as the real client does."""
+        state = {'left': fail_times}
+
+        class FakeClient:
+            def query_dcache(self, filename, location="tape"):
+                if state['left'] > 0:
+                    state['left'] -= 1
+                    raise ConnectionError("transient")
+                loc = by_loc.get(location, {})
+                if filename not in loc:
+                    raise RuntimeError(f"File not found in dCache: /pnfs/{location}/{filename}")
+                return {'fileLocality': loc[filename]}
+        return FakeClient
+
+    def _run(self, by_loc, files=None, fail_times=0):
+        from utils import check_inputs
+        fake = types.ModuleType("mdh")
+        fake.MdhClient = self._client(by_loc, fail_times)
+        with patch.dict(sys.modules, {"mdh": fake}):
+            return check_inputs._default_locality("tape", files or [self.F1, self.F2])
+
+    def test_all_found_on_tape(self):
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE", self.F2: "NEARLINE"}})
+        self.assertEqual(out, {self.F1: "ONLINE_AND_NEARLINE", self.F2: "NEARLINE"})
+
+    def test_disk_resident_file_is_online_not_missing(self):
+        """A file on persistent/disk has no tape copy — nothing to stage."""
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE"},
+                         "disk": {self.F2: "ONLINE"}})
+        self.assertEqual(out, {self.F1: "ONLINE_AND_NEARLINE", self.F2: "ONLINE"})
+
+    def test_absent_everywhere_is_missing(self):
+        out = self._run({"tape": {self.F1: "ONLINE"}})
+        self.assertEqual(out, {self.F1: "ONLINE", self.F2: "MISSING"})
+
+    def test_one_offlocation_file_does_not_poison_the_rest(self):
+        """The regression: a split dataset must not fail every file."""
+        files = [f"dts.mu2e.Prim.CampA.001430_{i:08d}.art" for i in range(50)]
+        tape = {f: "ONLINE_AND_NEARLINE" for f in files if f != files[7]}
+        out = self._run({"tape": tape, "disk": {files[7]: "ONLINE"}}, files=files)
+        self.assertEqual(out[files[7]], "ONLINE")
+        self.assertTrue(all(out[f] == "ONLINE_AND_NEARLINE"
+                            for f in files if f != files[7]))
+
+    def test_transient_transport_error_is_retried(self):
+        """A concurrency blip must not block a campaign."""
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE"}},
+                        files=[self.F1], fail_times=2)
+        self.assertEqual(out, {self.F1: "ONLINE_AND_NEARLINE"})
+
+    def test_persistent_transport_error_fails_closed(self):
+        out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE"}},
+                        files=[self.F1], fail_times=99)
+        self.assertEqual(out, {self.F1: "ERROR"})
+
+    def test_unimportable_mdh_fails_closed(self):
+        from utils import check_inputs
+        with patch.dict(sys.modules, {"mdh": None}):
+            out = check_inputs._default_locality("tape", [self.F1])
+        self.assertEqual(out, {self.F1: "ERROR"})
+
+
+class TestCheckInputs(unittest.TestCase):
+    """check_inputs assembles split_inputs + the two checks with the
+    inloc routing, returning (ok, problems)."""
+
+    def _tar(self, inputs=None, auxin=None, samplinginput=None):
+        jp = {"code": "", "setup": "/cvmfs/x/setup.sh",
+              "tbs": {"seed": "s"}, "jobname": "cnf.mu2e.T.C.0.tar",
+              "owner": "mu2e", "dsconf": "C"}
+        if inputs is not None:
+            jp["tbs"]["inputs"] = inputs
+        if auxin is not None:
+            jp["tbs"]["auxin"] = auxin
+        if samplinginput is not None:
+            jp["tbs"]["samplinginput"] = samplinginput
+        return _make_tarball(jp)
+
+    PRIM = "dts.mu2e.Prim.CampA.001430_00000000.art"
+    PILE = "dts.mu2e.Pile.CampB.001430_00000005.art"
+
+    def _tar_both(self):
+        return self._tar(
+            inputs={"source.fileNames": [1, [self.PRIM]]},
+            auxin={"physics.filters.M.fileNames": [1, [self.PILE]]})
+
+    def test_all_clean(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar_both()
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: 100,
+            locality=lambda loc, fs: {f: "ONLINE" for f in fs},
+            dataset_location=lambda ds: "dcache")
+        os.unlink(tar)
+        self.assertTrue(ok)
+        self.assertEqual(probs, [])
+
+    def test_resilient_pileup_checked_by_size_not_mdh(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar_both()
+        called = {"mdh": []}
+        def loc(mdh_loc, fs):
+            called["mdh"].extend(fs)
+            return {f: "ONLINE" for f in fs}
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: 1048576,      # truncated pileup
+            locality=loc, dataset_location=lambda ds: "dcache")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["truncated"])
+        # pileup went through the resilient size path, never mdh
+        self.assertNotIn(self.PILE, called["mdh"])
+
+    def test_nearline_primary_blocks(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar_both()
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: 100,
+            locality=lambda loc, fs: {f: "NEARLINE" for f in fs},
+            dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["nearline"])
+
+    def test_missing_resilient_not_reclassified_as_tape(self):
+        # The flagged subtlety: a pileup file absent from resilient must
+        # be reported 'missing', NOT quietly checked as a tape input.
+        from utils.check_inputs import check_inputs
+        tar = self._tar(auxin={"physics.filters.M.fileNames":
+                               [1, [self.PILE]]})
+        def loc(mdh_loc, fs):
+            raise AssertionError("pileup must not reach the tape path")
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {self.PILE: 100},
+            disk_size=lambda p: None,          # purged from resilient
+            locality=loc, dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["missing"])
+
+    def test_non_resilient_inloc_routes_pileup_to_tape(self):
+        from utils.check_inputs import check_inputs
+        tar = self._tar(auxin={"physics.filters.M.fileNames":
+                               [1, [self.PILE]]})
+        ok, probs = check_inputs(
+            tar, "tape",
+            sam_sizes=lambda ds: {},
+            disk_size=lambda p: None,
+            locality=lambda loc, fs: {f: "ONLINE" for f in fs},
+            dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertTrue(ok)
+
+    def test_samplinginput_nearline_blocks(self):
+        from utils.check_inputs import check_inputs
+        SAMP = "dts.mu2e.NeutralsCat.MDC2025ab.001430_00000007.art"
+        tar = self._tar(samplinginput={"physics.filters.r.fileNames": [1, [SAMP]]})
+        ok, probs = check_inputs(
+            tar, "resilient",
+            sam_sizes=lambda ds: {},
+            disk_size=lambda p: None,
+            locality=lambda loc, fs: {f: "NEARLINE" for f in fs},
+            dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["nearline"])
+
+
+class TestCheckInputsCLI(unittest.TestCase):
+    """format_report + main: grouped report, exit 0 clean / 2 on problems."""
+
+    def test_script_mode_help_runs_standalone(self):
+        """bin/check_inputs execs `python3 utils/check_inputs.py`; running
+        as a script (not `-m`) must resolve `import utils.*`, and the module
+        must load without the Mu2e environment so `--help` works. A fresh
+        subprocess has neither the repo root on sys.path nor the test's
+        samweb_client stub, so it reproduces the real invocation. Regression:
+        the module shipped without the sys.path insert AND with a top-level
+        samweb_wrapper import, so `bin/check_inputs` died on ModuleNotFound."""
+        import subprocess
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        script = os.path.join(repo_root, 'utils', 'check_inputs.py')
+        env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+        r = subprocess.run([sys.executable, script, '--help'],
+                           capture_output=True, text=True, cwd=repo_root,
+                           env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('usage', r.stdout)
+        self.assertIn('--inloc', r.stdout)
+
+    def test_format_report_ok(self):
+        from utils.check_inputs import format_report
+        text = format_report("cnf.mu2e.T.C.0.tar", [])
+        self.assertIn("cnf.mu2e.T.C.0.tar", text)
+        self.assertIn("OK", text)
+
+    def test_format_report_groups_problems(self):
+        from utils.check_inputs import format_report, Problem
+        probs = [
+            Problem("dts.mu2e.Pile.CampB.art", "f1.art", "truncated", "1 != 2"),
+            Problem("dts.mu2e.Prim.CampA.art", "f2.art", "nearline",
+                    "run /prestage dts.mu2e.Prim.CampA.art"),
+        ]
+        text = format_report("cnf.mu2e.T.C.0.tar", probs)
+        self.assertIn("truncated", text)
+        self.assertIn("/prestage", text)
+        self.assertIn("dts.mu2e.Pile.CampB.art", text)
+
+    def test_main_returns_2_on_problem(self):
+        from utils import check_inputs as ci
+        with patch.object(ci, "check_inputs",
+                          return_value=(False, [ci.Problem(
+                              "ds", "f.art", "truncated", "d")])):
+            rc = ci.main(["--inloc", "resilient", "cnf.mu2e.T.C.0.tar"])
+        self.assertEqual(rc, 2)
+
+    def test_main_returns_0_when_clean(self):
+        from utils import check_inputs as ci
+        with patch.object(ci, "check_inputs", return_value=(True, [])):
+            rc = ci.main(["cnf.mu2e.T.C.0.tar"])
+        self.assertEqual(rc, 0)
+
+    def test_main_default_inloc_is_resilient(self):
+        from utils import check_inputs as ci
+        seen = {}
+        def fake(tar, inloc, **kw):
+            seen["inloc"] = inloc
+            return (True, [])
+        with patch.object(ci, "check_inputs", side_effect=fake):
+            ci.main(["cnf.mu2e.T.C.0.tar"])
+        self.assertEqual(seen["inloc"], "resilient")
+
+
+class TestEnqueueInputGate(unittest.TestCase):
+    """submit_map --enqueue refuses to create a campaign when an entry's
+    inputs fail the pre-flight check (exit 2, no ledger row)."""
+
+    def test_failing_check_blocks_and_creates_no_campaign(self):
+        from utils import submit
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+                 "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
+                                            "location": "tape"}]}
+        opts = MagicMock(dry_run=False, slice_size=500,
+                         ledger_db="/tmp/never.db")
+        created = []
+        with patch.object(submit, "_ensure_local_tarball",
+                          return_value=Path("cnf.mu2e.T.C.0.tar")), \
+             patch.object(submit, "check_inputs",
+                          return_value=(False, [submit.Problem(
+                              "dts.mu2e.Pile.CampB.art", "f.art",
+                              "truncated", "1 != 2")])), \
+             patch.object(submit.submission_ledger, "create_campaign",
+                          side_effect=lambda *a, **k: created.append(1)):
+            with self.assertRaises(SystemExit) as cm:
+                submit._enqueue_entries([(0, entry)], "map.json", opts)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(created, [])   # no campaign row
+
+    def test_passing_check_creates_campaign(self):
+        from utils import submit
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+                 "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
+                                            "location": "tape"}]}
+        opts = MagicMock(dry_run=False, slice_size=500,
+                         ledger_db="/tmp/never.db")
+        with patch.object(submit, "_ensure_local_tarball",
+                          return_value=Path("cnf.mu2e.T.C.0.tar")), \
+             patch.object(submit, "check_inputs", return_value=(True, [])), \
+             patch.object(submit.submission_ledger, "create_campaign",
+                          return_value=7):
+            ids = submit._enqueue_entries([(0, entry)], "map.json", opts)
+        self.assertEqual(ids, [7])
+
+
+# ---------------------------------------------------------------------------
+# MCP adapters
+# ---------------------------------------------------------------------------
+
+class TestMcpAdapters(unittest.TestCase):
+    def test_error_shape(self):
+        from prodtools_mcp.adapters import error
+        e = error('not_found', 'no such dataset', 'check the name')
+        self.assertEqual(e, {'error': {'kind': 'not_found',
+                                       'message': 'no such dataset',
+                                       'remedy': 'check the name'}})
+
+    def test_error_rejects_unknown_kind(self):
+        from prodtools_mcp.adapters import error
+        with self.assertRaises(ValueError):
+            error('banana', 'nope')
+
+    def test_safe_tool_passes_success_through(self):
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def ok():
+            return {'value': 1}
+        self.assertEqual(ok(), {'value': 1})
+
+    def test_safe_tool_converts_toolerror(self):
+        from prodtools_mcp.adapters import safe_tool, ToolError
+
+        @safe_tool
+        def boom():
+            raise ToolError('catalog_unavailable', 'SAM down', 'retry later')
+        self.assertEqual(boom()['error']['kind'], 'catalog_unavailable')
+        self.assertEqual(boom()['error']['remedy'], 'retry later')
+
+    def test_safe_tool_traps_systemexit(self):
+        """SystemExit derives from BaseException; an uncaught one would
+        terminate the server rather than fail one call."""
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def exits():
+            sys.exit('MU2E_MAX_QUEUED is not an integer')
+        result = exits()
+        self.assertEqual(result['error']['kind'], 'internal')
+        self.assertIn('MU2E_MAX_QUEUED', result['error']['message'])
+
+    def test_safe_tool_converts_unexpected_exception(self):
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def raises():
+            raise RuntimeError('kaboom')
+        result = raises()
+        self.assertEqual(result['error']['kind'], 'internal')
+        self.assertIn('kaboom', result['error']['message'])
+
+    def test_safe_tool_keeps_stdout_clean(self):
+        """stdout IS the JSON-RPC channel. A print() inside a util must
+        not reach it (utils/famtree.py:71 does exactly this)."""
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def chatty():
+            print("No files found for dataset: dts.mu2e.X.Y.art")
+            return {'ok': True}
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'stdout', out), patch.object(sys, 'stderr', err):
+            result = chatty()
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(out.getvalue(), '')
+        self.assertIn('No files found', err.getvalue())
+
+    def test_classify_import_error_is_env_missing(self):
+        """env_missing was declared in ERROR_KINDS and produced nowhere."""
+        from prodtools_mcp.adapters import classify_catalog_error
+        err = classify_catalog_error(
+            ImportError("No module named 'samweb_client'"), 'boom')
+        self.assertEqual(err.kind, 'env_missing')
+        self.assertIn('muse setup ops', err.remedy)
+
+    def test_classify_auth_markers_are_auth_expired(self):
+        """An expired token used to arrive as catalog_unavailable with
+        'Check SAM availability' — advice about a service that is fine.
+        These are word-only markers on exception types with no `.code`
+        (see test_classify_code_takes_priority_over_text for the
+        SAMWebHTTPError path). Bare digits ('401'/'403') are deliberately
+        NOT markers here: see
+        test_classify_5xx_with_digits_in_url_is_not_auth_expired."""
+        from prodtools_mcp.adapters import classify_catalog_error
+        for msg in ('HTTPError: 403 Forbidden', 'Unauthorized',
+                    'bearer token has expired',
+                    'Authentication failed: credential expired'):
+            err = classify_catalog_error(RuntimeError(msg), 'boom')
+            self.assertEqual(err.kind, 'auth_expired', msg)
+            self.assertIn('own shell', err.remedy)
+
+    def test_classify_falls_back_to_catalog_unavailable(self):
+        from prodtools_mcp.adapters import classify_catalog_error
+        err = classify_catalog_error(
+            RuntimeError('Connection refused'), 'boom')
+        self.assertEqual(err.kind, 'catalog_unavailable')
+
+    def test_classify_code_401_and_403_are_auth_expired(self):
+        """SAMWebHTTPError.code is a plain int (verified against the
+        installed ops env 2026-07-26); classification must key on it."""
+        from prodtools_mcp.adapters import classify_catalog_error
+
+        class FakeHTTPError(Exception):
+            def __init__(self, code, msg):
+                super().__init__(msg)
+                self.code = code
+
+        for code in (401, 403):
+            err = classify_catalog_error(
+                FakeHTTPError(code, 'Forbidden'), 'boom')
+            self.assertEqual(err.kind, 'auth_expired', code)
+
+    def test_classify_5xx_with_digits_in_url_is_not_auth_expired(self):
+        """Regression pin. Mu2e filenames routinely contain digit runs
+        that collide with '401'/'403' — e.g. a sequencer number in
+        dig.mu2e.FlatGamma.MDC2025au_best_v1_3.001430_00004031.art — and
+        SAMWebHTTPError.__str__ embeds the URL (and therefore the
+        filename) for every 5xx. A plain SAM outage on such a file must
+        stay catalog_unavailable, not send the operator to renew a fine
+        token."""
+        from prodtools_mcp.adapters import classify_catalog_error
+
+        class FakeHTTPError(Exception):
+            def __init__(self, code, msg):
+                super().__init__(msg)
+                self.code = code
+
+        msg = ('HTTP error: 503 Service Unavailable\n'
+               'URL: https://samweb.fnal.gov/sam/mu2e/api/files/name/'
+               'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.'
+               '001430_00004031.art/metadata')
+        err = classify_catalog_error(FakeHTTPError(503, msg), 'boom')
+        self.assertEqual(err.kind, 'catalog_unavailable')
+
+    def test_classify_no_code_text_fallback_still_catches_auth(self):
+        """A 4xx-style failure that arrives as some other exception type
+        (no `.code`) with an unambiguous word marker must still classify
+        as auth_expired."""
+        from prodtools_mcp.adapters import classify_catalog_error
+        err = classify_catalog_error(
+            RuntimeError('Authentication failed: credential expired'),
+            'boom')
+        self.assertEqual(err.kind, 'auth_expired')
+
+    def test_safe_tool_preserves_name(self):
+        from prodtools_mcp.adapters import safe_tool
+
+        @safe_tool
+        def my_tool():
+            """Docstring survives."""
+            return {}
+        self.assertEqual(my_tool.__name__, 'my_tool')
+        self.assertEqual(my_tool.__doc__, 'Docstring survives.')
+
+
+# ---------------------------------------------------------------------------
+# MCP read-only ledger
+# ---------------------------------------------------------------------------
+
+class TestMcpLedgerRo(unittest.TestCase):
+    def _make_db(self, tmpdir):
+        """Build a real ledger via the writer, so the read path is tested
+        against the actual schema rather than a hand-rolled copy."""
+        from utils import submission_ledger
+        db = os.path.join(tmpdir, 'ledger.db')
+        entry = {'njobs': 4000, 'outputs': [
+            {'dataset': 'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+             'location': 'tape'}]}
+        cid = submission_ledger.create_campaign(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, slice_size=500, map_path='/tmp/map_au.json')
+        submission_ledger.record_submission(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, indices=[0, 1, 2], jobsub_id='29308498.0@sched',
+            cluster_id='29308498', map_path='/tmp/map_au.json')
+        return db, cid
+
+    def test_campaigns_returns_parsed_entry(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, cid = self._make_db(td)
+            camps = ledger_ro.campaigns(db)
+        self.assertEqual(len(camps), 1)
+        self.assertEqual(camps[0]['id'], cid)
+        self.assertEqual(camps[0]['slice_size'], 500)
+        self.assertIsInstance(camps[0]['entry'], dict)
+        self.assertEqual(camps[0]['entry']['njobs'], 4000)
+
+    def test_campaigns_filters_by_state(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            self.assertEqual(len(ledger_ro.campaigns(db, state='active')), 1)
+            self.assertEqual(len(ledger_ro.campaigns(db, state='complete')), 0)
+
+    def test_rows_returns_parsed_indices_and_cluster(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            rows = ledger_ro.rows(db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['indices'], [0, 1, 2])
+        self.assertEqual(rows[0]['cluster_id'], '29308498')
+
+    def test_issues_no_ddl(self):
+        """The writer's _connect runs CREATE statements on every connect;
+        the read path must not, or a read-only DB raises OperationalError."""
+        from prodtools_mcp import ledger_ro
+        seen = []
+        real_connect = sqlite3.connect
+
+        class ConnectionSpy:
+            def __init__(self, con):
+                object.__setattr__(self, '_con', con)
+            def execute(self, sql, *rest):
+                seen.append(sql)
+                return self._con.execute(sql, *rest)
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+            def __setattr__(self, name, value):
+                if name == '_con':
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._con, name, value)
+
+        def spy_connect(*a, **kw):
+            con = real_connect(*a, **kw)
+            return ConnectionSpy(con)
+
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            with patch.object(sqlite3, 'connect', spy_connect):
+                ledger_ro.campaigns(db)
+        self.assertTrue(seen, "expected at least one statement")
+        for sql in seen:
+            self.assertNotIn('CREATE', sql.upper())
+
+    def test_snapshot_returns_both_tables(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db, cid = self._make_db(td)
+            camps, subs = ledger_ro.snapshot(db)
+        self.assertEqual([c['id'] for c in camps], [cid])
+        self.assertEqual(camps[0]['entry']['njobs'], 4000)
+        self.assertEqual(subs[0]['indices'], [0, 1, 2])
+
+    def test_snapshot_uses_one_connection_and_one_transaction(self):
+        """campaigns() + rows() are two snapshots on two connections. The
+        cron commits record_submission and advance_campaign separately, so
+        a read between them shows a cursor that disagrees with the rows."""
+        from prodtools_mcp import ledger_ro
+        opened, sql_seen = [], []
+        real_connect = sqlite3.connect
+
+        class ConnectionSpy:
+            def __init__(self, con):
+                object.__setattr__(self, '_con', con)
+            def execute(self, sql, *rest):
+                sql_seen.append(sql)
+                return self._con.execute(sql, *rest)
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+            def __setattr__(self, name, value):
+                if name == '_con':
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._con, name, value)
+
+        def spy_connect(*a, **kw):
+            opened.append(a[0])
+            return ConnectionSpy(real_connect(*a, **kw))
+
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._make_db(td)
+            with patch.object(sqlite3, 'connect', spy_connect):
+                ledger_ro.snapshot(db)
+        self.assertEqual(len(opened), 1, f'expected one connection: {opened}')
+        self.assertIn('BEGIN', sql_seen)
+        self.assertLess(sql_seen.index('BEGIN'),
+                        min(i for i, s in enumerate(sql_seen)
+                            if s.startswith('SELECT')))
+        for sql in sql_seen:
+            self.assertNotIn('CREATE', sql.upper())
+
+    def test_missing_db_is_catalog_unavailable(self):
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            ledger_ro.campaigns('/nonexistent/path/ledger.db')
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_snapshot_on_broken_db_is_catalog_unavailable(self):
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            sqlite3.connect(db).close()      # exists, but has no tables
+            with self.assertRaises(ToolError) as ctx:
+                ledger_ro.snapshot(db)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_operational_error_becomes_catalog_unavailable(self):
+        """A DB missing an expected object must surface as a typed error,
+        not an OperationalError traceback."""
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            sqlite3.connect(db).close()      # exists, but has no tables
+            with self.assertRaises(ToolError) as ctx:
+                ledger_ro.campaigns(db)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_corrupt_db_becomes_catalog_unavailable(self):
+        """A truncated/corrupt ledger raises sqlite3.DatabaseError, which
+        is NOT an OperationalError — it must still surface as a typed
+        error rather than a raw traceback."""
+        from prodtools_mcp import ledger_ro
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'corrupt.db')
+            with open(db, 'wb') as fh:
+                fh.write(b'this is not a sqlite database at all')
+            with self.assertRaises(ToolError) as ctx:
+                ledger_ro.campaigns(db)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+
+# ---------------------------------------------------------------------------
+# MCP status tools
+# ---------------------------------------------------------------------------
+
+def _job(status, code=None, reason=None):
+    """One fake HTCondor ClassAd projection, in the {ClusterId,
+    JobStatus, HoldReasonCode, HoldReason} shape condor.query_owner_jobs
+    returns."""
+    return {'JobStatus': status, 'HoldReasonCode': code, 'HoldReason': reason}
+
+
+class TestMcpQueueBlock(unittest.TestCase):
+    def test_unknown_omits_counts_entirely(self):
+        """A failed/untrustworthy HTCondor query must NOT serialize as
+        running:0 — that reads as 'drained' and could trigger recovery
+        against live jobs. This is the single most important behavior
+        in the server — keep it passing across any change to the
+        underlying queue source."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['29308498'], None)
+        self.assertEqual(block['state'], 'unknown')
+        self.assertIn('reason', block)
+        for key in ('running', 'idle', 'held'):
+            self.assertNotIn(key, block)
+
+    def test_counts_by_job_status(self):
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['29308498'], {'29308498': [
+            _job(2), _job(2), _job(1), _job(5, code=34, reason='held one'),
+        ]})
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['running'], 2)
+        self.assertEqual(block['idle'], 1)
+        self.assertEqual(block['held'], 1)
+
+    def test_absent_cluster_is_zero_not_unknown(self):
+        """A genuinely drained cluster is a real zero, distinct from
+        an unknown snapshot."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['29308498'], {'99999999': [_job(2)]})
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['running'], 0)
+        self.assertEqual(block['idle'], 0)
+        self.assertEqual(block['held'], 0)
+        self.assertEqual(block['clusters'], [])
+        self.assertNotIn('hold_reasons', block)
+
+    def test_drained_cluster_is_known_with_real_zeros(self):
+        """An empty snapshot (no cluster has any job left) is a genuine
+        drain, not 'unknown' — 'unknown' and 'drained' must stay
+        distinguishable."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['29308498'], {})
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['running'], 0)
+        self.assertEqual(block['idle'], 0)
+        self.assertEqual(block['held'], 0)
+        self.assertEqual(block['clusters'], [])
+        self.assertNotIn('hold_reasons', block)
+
+    def test_held_zero_omits_hold_reasons_key(self):
+        """No empty list sitting around to be misread as data."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['1'], {'1': [_job(2), _job(1)]})
+        self.assertEqual(block['held'], 0)
+        self.assertNotIn('hold_reasons', block)
+
+    def test_hold_reasons_present_and_sorted_by_count(self):
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['1'], {'1': [
+            _job(5, code=34, reason='Error from slot1_1@fnpc1.fnal.gov: '
+                                     'Docker job has gone over memory '
+                                     'limit of 2000 Mb'),
+            _job(5, code=34, reason='Error from slot1_2@fnpc2.fnal.gov: '
+                                     'Docker job has gone over memory '
+                                     'limit of 2000 Mb'),
+            _job(5, code=12, reason='via condor_rm (by user oksuzian)'),
+            _job(5, code=34, reason='Error from slot1_3@fnpc3.fnal.gov: '
+                                     'Docker job has gone over memory '
+                                     'limit of 2000 Mb'),
+        ]})
+        self.assertEqual(block['held'], 4)
+        reasons = block['hold_reasons']
+        self.assertEqual([r['code'] for r in reasons], [34, 12])
+        self.assertEqual(reasons[0]['count'], 3)
+        self.assertEqual(reasons[1]['count'], 1)
+        self.assertIn('memory limit', reasons[0]['example'])
+
+    def test_hold_reason_aggregation_trap_by_code_not_text(self):
+        """THE lesson: several held jobs sharing one HoldReasonCode but
+        each with a DIFFERENT reason string (real data embeds the slot
+        and host, so every string is unique) must collapse to ONE
+        entry with the right count — not N entries of 1. Aggregating by
+        the HoldReason text instead of the code returns garbage."""
+        from prodtools_mcp.tools.status import queue_block
+        jobs = [
+            _job(5, code=34,
+                reason=f'Error from slot1_{i}@fnpc191{i}.fnal.gov: Docker '
+                       f'job has gone over memory limit of 2000 Mb')
+            for i in range(6)
+        ]
+        block = queue_block(['1'], {'1': jobs})
+        self.assertEqual(block['held'], 6)
+        self.assertEqual(len(block['hold_reasons']), 1)
+        self.assertEqual(block['hold_reasons'][0]['code'], 34)
+        self.assertEqual(block['hold_reasons'][0]['count'], 6)
+
+    def test_default_clusters_fn_delegates_to_condor_module(self):
+        """The wiring point queue_block callers use — must call the new
+        independent condor.py path, not utils.submissions."""
+        from prodtools_mcp.tools import status
+        from prodtools_mcp import condor
+        with patch.object(condor, 'query_owner_jobs',
+                          return_value={'1': [_job(2)]}) as mock:
+            result = status._default_clusters_fn()
+        mock.assert_called_once_with()
+        self.assertEqual(result, {'1': [_job(2)]})
+
+
+class TestMcpCondor(unittest.TestCase):
+    """condor.py: the MCP server's own in-process HTCondor ClassAd
+    query path, independent of utils.submissions.live_clusters (which
+    backs the live production cron and is not touched here)."""
+
+    def test_only_jobsub_schedds_are_kept(self):
+        """The pool advertises 8 daemons; only the ~5 whose Name starts
+        with 'jobsub' are the schedds that carry mu2epro's jobs."""
+        from prodtools_mcp import condor
+        ads = [{'Name': 'jobsub01.fnal.gov'}, {'Name': 'jobsub04.fnal.gov'},
+              {'Name': 'collector01.fnal.gov'},
+              {'Name': 'negotiator.fnal.gov'}]
+        kept = [a['Name'] for a in ads if condor._is_jobsub_schedd(a)]
+        self.assertEqual(kept, ['jobsub01.fnal.gov', 'jobsub04.fnal.gov'])
+
+    def test_query_schedd_filters_server_side_with_projection(self):
+        """Owner and JobStatus belong in the CONSTRAINT (server-side),
+        not fetched wholesale and filtered in Python; and only the
+        four needed attributes are projected — never a whole ClassAd."""
+        from prodtools_mcp import condor
+        calls = []
+
+        class FakeSchedd:
+            def __init__(self, ad):
+                calls.append(('Schedd', ad))
+
+            def query(self, constraint, projection=None):
+                calls.append(('query', constraint, projection))
+                return []
+
+        fake_htcondor = types.SimpleNamespace(Schedd=FakeSchedd)
+        with patch.dict(sys.modules, {'htcondor': fake_htcondor}):
+            result = condor._query_schedd('sched-a.fnal.gov', 'mu2epro')
+
+        self.assertEqual(result, [])
+        self.assertEqual(calls[0], ('Schedd', 'sched-a.fnal.gov'))
+        _, constraint, projection = calls[1]
+        self.assertIn('Owner=="mu2epro"', constraint)
+        self.assertIn(f'JobStatus=={condor.IDLE}', constraint)
+        self.assertIn(f'JobStatus=={condor.RUNNING}', constraint)
+        self.assertIn(f'JobStatus=={condor.HELD}', constraint)
+        self.assertEqual(set(projection),
+                         {'ClusterId', 'JobStatus', 'HoldReasonCode',
+                          'HoldReason'})
+
+    def test_hold_reasons_groups_by_code_not_text(self):
+        from prodtools_mcp import condor
+        jobs = [
+            {'HoldReasonCode': 34,
+             'HoldReason': 'Error from slot1_1@a.fnal.gov: Docker job has '
+                           'gone over memory limit of 2000 Mb'},
+            {'HoldReasonCode': 34,
+             'HoldReason': 'Error from slot1_2@b.fnal.gov: Docker job has '
+                           'gone over memory limit of 2000 Mb'},
+            {'HoldReasonCode': 12, 'HoldReason': 'via condor_rm'},
+        ]
+        result = condor.hold_reasons(jobs)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {'code': 34, 'count': 2,
+                                     'example': jobs[0]['HoldReason']})
+        self.assertEqual(result[1]['code'], 12)
+        self.assertEqual(result[1]['count'], 1)
+
+    def test_query_owner_jobs_aggregates_across_schedds(self):
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a', 'sched-b']
+
+        def query(sd, owner):
+            self.assertEqual(owner, 'mu2epro')
+            if sd == 'sched-a':
+                return [{'ClusterId': 1, 'JobStatus': 2,
+                        'HoldReasonCode': None, 'HoldReason': None}]
+            return [{'ClusterId': 1, 'JobStatus': 5,
+                    'HoldReasonCode': 34, 'HoldReason': 'oom'}]
+
+        result = condor.query_owner_jobs(schedds_fn=schedds, query_fn=query)
+        self.assertEqual(len(result['1']), 2)
+
+    def test_schedd_discovery_failure_is_unknown(self):
+        from prodtools_mcp import condor
+
+        def boom():
+            raise RuntimeError('collector unreachable')
+
+        result = condor.query_owner_jobs(schedds_fn=boom, query_fn=None)
+        self.assertIsNone(result)
+
+    def test_one_unreachable_schedd_makes_the_whole_result_unknown(self):
+        """A per-schedd failure must not silently drop that schedd's
+        jobs — an undercount reads as 'drained' and could trigger
+        recovery against jobs that are still live there. Skip that
+        schedd's data, but the OVERALL result must come back untrusted,
+        not a partial count from the schedds that did answer."""
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a', 'sched-b']
+
+        def query(sd, owner):
+            if sd == 'sched-a':
+                raise RuntimeError('timed out talking to sched-a')
+            return [{'ClusterId': 1, 'JobStatus': 2,
+                    'HoldReasonCode': None, 'HoldReason': None}]
+
+        result = condor.query_owner_jobs(schedds_fn=schedds, query_fn=query)
+        self.assertIsNone(result)
+
+    def test_query_owner_jobs_bounds_wall_clock(self):
+        """FastMCP runs sync tools inline on the event loop — a hung
+        schedd must not wedge the whole server. Bounded by `timeout`;
+        a timeout is 'unknown' (None), never zero, and the call must
+        actually return close to the bound, not the full hang."""
+        import time
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a']
+
+        def hang(sd, owner):
+            time.sleep(5)
+            return []
+
+        start = time.monotonic()
+        result = condor.query_owner_jobs(timeout=0.2, schedds_fn=schedds,
+                                         query_fn=hang)
+        elapsed = time.monotonic() - start
+        self.assertIsNone(result)
+        self.assertLess(elapsed, 2.0)
+
+
+class TestMcpCampaignStatus(unittest.TestCase):
+    DRAIN_TARBALL = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+    # A draining entry: input_pattern, NO njobs, and an outputs glob that
+    # is a worker cwd filename pattern rather than a dataset name.
+    DRAIN_ENTRY = {'tarball': DRAIN_TARBALL, 'inloc': 'tape',
+                   'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                   'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
+
+    def _make_draining_db(self, tmpdir):
+        """Draining campaign with 3 input files dispatched: 2 of desc
+        AAA, 1 of desc BBB — so per-dataset dispatched counts differ."""
+        from utils import submission_ledger
+        db = os.path.join(tmpdir, 'ledger.db')
+        submission_ledger.create_campaign(
+            db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
+            slice_size=500, map_path='/tmp/map_drain.json')
+        submission_ledger.record_submission(
+            db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
+            indices=[_mk_file('AAA', 1), _mk_file('AAA', 2),
+                     _mk_file('BBB', 1)],
+            jobsub_id='29448530.0@sched', cluster_id='29448530',
+            map_path='/tmp/map_drain.json')
+        return db
+
+    def _make_db(self, tmpdir):
+        from utils import submission_ledger
+        db = os.path.join(tmpdir, 'ledger.db')
+        entry = {'njobs': 4000, 'outputs': [
+            {'dataset': 'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+             'location': 'tape'}]}
+        submission_ledger.create_campaign(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, slice_size=500, map_path='/tmp/map_au.json')
+        submission_ledger.record_submission(
+            db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+            entry=entry, indices=[0, 1], jobsub_id='29308498.0@sched',
+            cluster_id='29308498', map_path='/tmp/map_au.json')
+        return db
+
+    def test_ledger_only_when_no_campaign_named(self):
+        """The bare call must not touch the network — otherwise a 23-row
+        ledger fans out to one SAM count per output dataset."""
+        from prodtools_mcp.tools import status
+
+        def boom(*a, **kw):
+            raise AssertionError("network call in ledger-only mode")
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                db_path=db, clusters_fn=boom, count_fn=boom)
+        self.assertEqual(len(result['campaigns']), 1)
+        camp = result['campaigns'][0]
+        self.assertNotIn('queue', camp)
+        self.assertNotIn('outputs', camp)
+        self.assertEqual(camp['njobs'], 4000)
+        self.assertEqual(camp['slice_size'], 500)
+
+    def test_no_integer_entry_field(self):
+        """The ledger stores the whole entry dict as entry_json; an index
+        into the map is not recoverable, so we must not invent one."""
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            camp = status.campaign_status(db_path=db)['campaigns'][0]
+        self.assertNotIn('entry', camp)
+
+    def test_named_campaign_includes_queue_and_outputs(self):
+        from prodtools_mcp.tools import status
+        running_job = {'JobStatus': 2, 'HoldReasonCode': None,
+                      'HoldReason': None}
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db,
+                clusters_fn=lambda: {'29308498': [running_job, running_job]},
+                count_fn=lambda ds: 412)
+        camp = result['campaigns'][0]
+        self.assertEqual(camp['queue']['running'], 2)
+        out = camp['outputs']['datasets'][0]
+        self.assertEqual(out['produced'], 412)
+        self.assertEqual(out['expected_at_completion'], 4000)
+
+    def test_outputs_report_submitted_alongside_njobs(self):
+        """Every direct campaign is sliced. njobs alone under-reports a
+        live one: cursor 500 of 4000 with all 500 landed is 100% of what
+        is in flight, not 12.5%."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            camps = submission_ledger.all_campaigns(db)
+            submission_ledger.advance_campaign(db, camps[0]['id'], 500)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_queue=False,
+                count_fn=lambda ds: 500)
+        out = result['campaigns'][0]['outputs']['datasets'][0]
+        self.assertEqual(out['submitted'], 500)
+        self.assertEqual(out['expected_at_completion'], 4000)
+        self.assertEqual(out['produced'], 500)
+
+    def test_draining_outputs_name_real_datasets_not_the_worker_glob(self):
+        """REGRESSION: a draining entry's outputs[].dataset is the
+        worker's cwd filename glob ('mcs.*.art'), not a dataset. Feeding
+        it to a SAM dimension raised 'Parse error ... dh.dataset
+        mcs.*.art', so EVERY draining campaign reported outputs
+        state='unknown' and was invisible to campaign_status (observed
+        live on production campaign 48, 2026-08-02)."""
+        from prodtools_mcp.tools import status
+        asked = []
+
+        def count_fn(ds):
+            asked.append(ds)
+            return 7
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=count_fn, job_pars_fn=lambda tb: _DrainPars(tb))
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'known')
+        self.assertNotIn('mcs.*.art', asked)
+        self.assertEqual(
+            sorted(d['dataset'] for d in block['datasets']),
+            ['mcs.mu2e.AAA.MDC2025au_best_v1_5.art',
+             'mcs.mu2e.BBB.MDC2025au_best_v1_5.art'])
+
+    def test_draining_outputs_count_dispatched_per_dataset(self):
+        """Two inputs of desc AAA and one of BBB were dispatched; the
+        per-dataset denominator must follow the input desc, not the
+        campaign total."""
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 0,
+                job_pars_fn=lambda tb: _DrainPars(tb))
+        got = {d['dataset']: d['dispatched']
+               for d in result['campaigns'][0]['outputs']['datasets']}
+        self.assertEqual(got['mcs.mu2e.AAA.MDC2025au_best_v1_5.art'], 2)
+        self.assertEqual(got['mcs.mu2e.BBB.MDC2025au_best_v1_5.art'], 1)
+
+    def test_draining_outputs_omit_expected_at_completion(self):
+        """The input dataset is still growing, so no completion
+        denominator exists. Emitting njobs (None) as a denominator would
+        invite a division and a bogus percentage."""
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 3,
+                job_pars_fn=lambda tb: _DrainPars(tb))
+        for d in result['campaigns'][0]['outputs']['datasets']:
+            self.assertNotIn('expected_at_completion', d)
+
+    def test_draining_outputs_unreadable_cnf_is_unknown_not_zero(self):
+        """Fail-closed, like the queue block: an unlocatable tarball must
+        not render as produced=0, which reads as 'nothing landed' and
+        could trigger a recovery pass against good data."""
+        from prodtools_mcp.tools import status
+
+        def boom(tarball):
+            raise RuntimeError('tarball not locatable in SAM')
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_draining_db(td)
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 0, job_pars_fn=boom)
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'unknown')
+        self.assertNotIn('datasets', block)
+        self.assertIn('not locatable', block['reason'])
+
+    def test_draining_outputs_before_first_dispatch(self):
+        """Day 1: the campaign exists but nothing has been handed to the
+        grid, so no output dataset is nameable yet. That is 'known and
+        empty', not 'unknown' — nothing failed."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'ledger.db')
+            submission_ledger.create_campaign(
+                db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
+                slice_size=500, map_path='/tmp/map_drain.json')
+            result = status.campaign_status(
+                campaign_id=1, db_path=db, include_queue=False,
+                count_fn=lambda ds: 0,
+                job_pars_fn=lambda tb: _DrainPars(tb))
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'known')
+        self.assertEqual(block['datasets'], [])
+
+    def test_row_counts_are_per_state_not_open_closed(self):
+        """`exhausted` is where a human must take over. Bucketed as
+        'closed' beside complete/recovered it was invisible."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        tarball = 'cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar'
+        entry = {'njobs': 4000, 'outputs': []}
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            for state in ('complete', 'exhausted', 'exhausted'):
+                rid = submission_ledger.record_submission(
+                    db, tarball=tarball, entry=entry, indices=[9],
+                    jobsub_id='1.0@s', cluster_id='1', map_path='/tmp/m')
+                submission_ledger.close_row(db, rid, state)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=lambda: None)
+        rows = result['campaigns'][0]['rows']
+        self.assertEqual(rows['exhausted'], 2)
+        self.assertEqual(rows['complete'], 1)
+        self.assertEqual(rows['active'], 1)      # the one from _make_db
+        self.assertEqual(rows['recovered'], 0)
+        self.assertNotIn('closed', rows)
+
+    def test_empty_ledger_is_empty_list_not_not_found(self):
+        """A bare call and list_campaigns() must agree about 'nothing
+        here': list_campaigns returns [], so this must not raise."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            submission_ledger.all_campaigns(db)      # creates the schema
+            result = status.campaign_status(db_path=db)
+            listed = status.list_campaigns(db_path=db)
+        self.assertEqual(result['campaigns'], [])
+        self.assertEqual(listed['count'], 0)
+
+    def test_named_campaign_on_empty_ledger_still_not_found(self):
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'empty.db')
+            submission_ledger.all_campaigns(db)
+            with self.assertRaises(ToolError) as ctx:
+                status.campaign_status(campaign='MDC2025au', db_path=db)
+        self.assertEqual(ctx.exception.kind, 'not_found')
+
+    def test_output_count_failure_is_unknown_not_zero(self):
+        from prodtools_mcp.tools import status
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db,
+                clusters_fn=lambda: None, count_fn=boom)
+        camp = result['campaigns'][0]
+        self.assertEqual(camp['outputs']['state'], 'unknown')
+        self.assertNotIn('datasets', camp['outputs'])
+
+    def test_unknown_campaign_is_not_found(self):
+        from prodtools_mcp.tools import status
+        from prodtools_mcp.adapters import ToolError
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            with self.assertRaises(ToolError) as ctx:
+                status.campaign_status(campaign='MDC9999zz', db_path=db)
+        self.assertEqual(ctx.exception.kind, 'not_found')
+
+    def test_shared_tarball_adds_conflation_note(self):
+        """Rows correlate to a campaign by tarball only — no FK — so a
+        reused tarball must be flagged, not silently merged."""
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            camps = submission_ledger.all_campaigns(db)
+            submission_ledger.set_campaign_state(db, camps[0]['id'],
+                                                 'complete')
+            submission_ledger.create_campaign(
+                db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
+                entry={'njobs': 4000, 'outputs': []}, slice_size=500)
+            result = status.campaign_status(db_path=db)
+        self.assertTrue(any('note' in c for c in result['campaigns']))
+
+
+class TestMcpListCampaigns(unittest.TestCase):
+    def test_filters_by_state(self):
+        from utils import submission_ledger
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'ledger.db')
+            submission_ledger.create_campaign(
+                db, tarball='cnf.a.0.tar', entry={'njobs': 10},
+                slice_size=5)
+            active = status.list_campaigns(state='active', db_path=db)
+            done = status.list_campaigns(state='complete', db_path=db)
+        self.assertEqual(active['count'], 1)
+        self.assertEqual(done['count'], 0)
+
+    def test_rejects_bad_state(self):
+        from prodtools_mcp.tools import status
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            status.list_campaigns(state='banana', db_path='/x')
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+
+# ---------------------------------------------------------------------------
+# MCP discovery tools
+# ---------------------------------------------------------------------------
+
+class TestMcpFindDatasets(unittest.TestCase):
+    NAMES = [
+        'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+        'dig.mu2e.FlatGamma.MDC2025ar_best_v1_1.art',
+        'dts.mu2e.CeMLeadingLog.MDC2025au.art',
+    ]
+
+    def _spy(self, names=None):
+        """Record the defname string handed to samweb. The filter is a SQL
+        LIKE; asserting only the RETURN value cannot tell `*` from `%`,
+        and `*` silently matches nothing against the live catalog."""
+        seen = []
+
+        def fetch(pattern, user):
+            seen.append(pattern)
+            return self.NAMES if names is None else names
+        return seen, fetch
+
+    def test_query_uses_sql_like_wildcard_not_glob(self):
+        """SAM's defname filter is a SQL LIKE: the wildcard is `%`. A `*`
+        returns zero rows against the live catalog, which would render as
+        'no datasets' — the empty result the spec forbids."""
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(campaign='MDC2025au', tier='cnf',
+                                fetch_fn=fetch)
+        self.assertEqual(seen, ['cnf.%.%.MDC2025au%.%'])
+        self.assertNotIn('*', seen[0])
+
+    def test_caller_glob_is_translated_to_like(self):
+        """Callers will type `*`; translate rather than return nothing."""
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(pattern='cnf.mu2e.*.MDC2025au_best_v1_3.tar',
+                                fetch_fn=fetch)
+        self.assertEqual(seen, ['cnf.mu2e.%.MDC2025au_best_v1_3.tar'])
+
+    def test_query_pushes_desc_into_defname(self):
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(desc='FlatGamma', fetch_fn=fetch)
+        self.assertEqual(seen, ['%.%.FlatGamma.%.%'])
+
+    def test_query_is_all_wildcards_with_no_filters(self):
+        from prodtools_mcp.tools import discovery
+        seen, fetch = self._spy()
+        discovery.find_datasets(fetch_fn=fetch)
+        self.assertEqual(seen, ['%.%.%.%.%'])
+
+    def test_parses_name_fields(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(pattern='*', fetch_fn=lambda p, u: self.NAMES)
+        first = [d for d in res['datasets']
+                 if d['name'].startswith('dig.mu2e.FlatGamma.MDC2025au')][0]
+        self.assertEqual(first['tier'], 'dig')
+        self.assertEqual(first['owner'], 'mu2e')
+        self.assertEqual(first['desc'], 'FlatGamma')
+        self.assertEqual(first['dsconf'], 'MDC2025au_best_v1_3')
+        self.assertEqual(first['file_format'], 'art')
+
+    def test_filters_by_campaign_and_tier(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(campaign='MDC2025au', tier='dig',
+                                      fetch_fn=lambda p, u: self.NAMES)
+        self.assertEqual(res['count'], 1)
+        self.assertEqual(res['datasets'][0]['dsconf'], 'MDC2025au_best_v1_3')
+
+    def test_always_reports_basis(self):
+        """A definition listing must never be mistaken for existence."""
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(pattern='*', fetch_fn=lambda p, u: self.NAMES)
+        self.assertIn('basis', res)
+        self.assertIn('list-definitions', res['basis'])
+
+    def test_require_files_drops_empty_definitions(self):
+        from prodtools_mcp.tools import discovery
+        counts = {n: (0 if 'ar_best' in n else 5) for n in self.NAMES}
+        res = discovery.find_datasets(pattern='*', require_files=True,
+                                      fetch_fn=lambda p, u: self.NAMES,
+                                      count_fn=lambda ds: counts[ds])
+        self.assertTrue(all('ar_best' not in d['name'] for d in res['datasets']))
+        self.assertEqual(res['count'], 2)
+
+    def test_catalog_failure_is_not_empty_list(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(pattern, user):
+            raise RuntimeError('SAM unreachable')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(pattern='*', fetch_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_latest_only_keeps_newest_dsconf_per_description(self):
+        """latest_per_description returns (rows, skipped) with rows as
+        4-tuples, not a flat name list — regression guard."""
+        from prodtools_mcp.tools import discovery
+        res = discovery.find_datasets(pattern='*', latest_only=True,
+                                      fetch_fn=lambda p, u: self.NAMES)
+        names = [d['name'] for d in res['datasets']]
+        self.assertIn('dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art', names)
+        self.assertNotIn('dig.mu2e.FlatGamma.MDC2025ar_best_v1_1.art', names)
+
+    def test_require_files_count_failure_is_catalog_unavailable(self):
+        """A raising count_fn under require_files must fail loudly, not
+        silently drop the dataset."""
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(pattern='*', require_files=True,
+                                    fetch_fn=lambda p, u: self.NAMES,
+                                    count_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_expired_token_is_auth_expired_not_catalog_unavailable(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(pattern, user):
+            raise RuntimeError('HTTP 401: token has expired')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(fetch_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'auth_expired')
+
+    def test_missing_ops_env_is_env_missing(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(pattern, user):
+            raise ImportError("No module named 'samweb_client'")
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(fetch_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'env_missing')
+
+    def test_result_is_capped_and_truncated_is_honest(self):
+        """~20,000 definitions exist; truncated was hardcoded False."""
+        from prodtools_mcp.tools import discovery
+        many = [f'dig.mu2e.D{i:04d}.MDC2025au_best_v1_3.art'
+                for i in range(1200)]
+        res = discovery.find_datasets(limit=10, fetch_fn=lambda p, u: many)
+        self.assertEqual(res['count'], 10)
+        self.assertEqual(res['limit'], 10)
+        self.assertTrue(res['truncated'])
+        untruncated = discovery.find_datasets(
+            limit=10, fetch_fn=lambda p, u: many[:3])
+        self.assertFalse(untruncated['truncated'])
+
+    def test_default_limit_is_applied(self):
+        from prodtools_mcp.tools import discovery
+        many = [f'dig.mu2e.D{i:05d}.MDC2025au_best_v1_3.art'
+                for i in range(discovery.DEFAULT_LIMIT + 7)]
+        res = discovery.find_datasets(fetch_fn=lambda p, u: many)
+        self.assertEqual(res['count'], discovery.DEFAULT_LIMIT)
+        self.assertTrue(res['truncated'])
+
+    def test_require_files_over_limit_is_refused_not_fanned_out(self):
+        """require_files costs one serial HTTP round-trip per record and
+        FastMCP runs sync tools inline on the event loop."""
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        many = [f'dig.mu2e.D{i:04d}.MDC2025au_best_v1_3.art'
+                for i in range(300)]
+        calls = []
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(require_files=True, limit=10,
+                                    fetch_fn=lambda p, u: many,
+                                    count_fn=lambda ds: calls.append(ds) or 1)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        self.assertEqual(calls, [], 'must refuse before querying SAM')
+
+    def test_rejects_bad_limit(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        for bad in (0, -1, 'many', 2.5, discovery.MAX_LIMIT + 1):
+            with self.assertRaises(ToolError) as ctx:
+                discovery.find_datasets(limit=bad,
+                                        fetch_fn=lambda p, u: self.NAMES)
+            self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_limit_has_a_hard_ceiling(self):
+        """The require_files refusal's own remedy says 'raise limit
+        deliberately' — without a ceiling that invites
+        require_files=True, limit=100000 and exactly the serial-query
+        fan-out the refusal exists to prevent."""
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            discovery.find_datasets(limit=discovery.MAX_LIMIT + 1,
+                                    fetch_fn=lambda p, u: self.NAMES)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        # And the ceiling itself is usable, not off-by-one.
+        ok = discovery.find_datasets(limit=discovery.MAX_LIMIT,
+                                     fetch_fn=lambda p, u: self.NAMES)
+        self.assertEqual(ok['limit'], discovery.MAX_LIMIT)
+
+
+class TestMcpDatasetDetails(unittest.TestCase):
+    SUMMARY = {'file_count': 800, 'total_event_count': 4000000,
+               'total_file_size': 4294967296}
+
+    def test_composes_summary_and_creation_date(self):
+        from prodtools_mcp.tools import discovery
+        import datetime as _dt
+        res = discovery.dataset_details(
+            'dig.mu2e.FlatGamma.MDC2025au_best_v1_3.art',
+            summary_fn=lambda ds: self.SUMMARY,
+            created_fn=lambda ds: _dt.datetime(2026, 7, 25, 2, 11,
+                                               tzinfo=_dt.timezone.utc))
+        self.assertTrue(res['exists'])
+        self.assertEqual(res['file_count'], 800)
+        self.assertEqual(res['event_count'], 4000000)
+        self.assertEqual(res['total_size_bytes'], 4294967296)
+        self.assertEqual(res['created_utc'], '2026-07-25T02:11:00+00:00')
+
+    def test_created_utc_is_nullable(self):
+        """definition_creation_date returns None for metadata-only
+        -LH/-CH datasets; that is data, not an error."""
+        from prodtools_mcp.tools import discovery
+        res = discovery.dataset_details(
+            'dig.mu2e.X.Y-LH.art',
+            summary_fn=lambda ds: self.SUMMARY,
+            created_fn=lambda ds: None)
+        self.assertIsNone(res['created_utc'])
+        self.assertTrue(res['exists'])
+
+    def test_zero_files_means_not_exists(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.dataset_details(
+            'dig.mu2e.Nope.Z.art',
+            summary_fn=lambda ds: {'file_count': 0, 'total_event_count': 0,
+                                   'total_file_size': 0},
+            created_fn=lambda ds: None)
+        self.assertFalse(res['exists'])
+
+    def test_summary_failure_is_catalog_unavailable(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.dataset_details('x.y.z.w.art', summary_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_created_fn_failure_is_tolerated(self):
+        """The creation date is decoration, not the answer: a raising
+        created_fn yields created_utc=None and does NOT propagate — and
+        that tolerance must not extend to summary_fn."""
+        from prodtools_mcp.tools import discovery
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        res = discovery.dataset_details('dig.mu2e.X.Y.art',
+                                        summary_fn=lambda ds: self.SUMMARY,
+                                        created_fn=boom)
+        self.assertIsNone(res['created_utc'])
+        self.assertTrue(res['exists'])
+
+
+# ---------------------------------------------------------------------------
+# samweb_wrapper.parents_of_file — the fail-loud lineage edge function
+# ---------------------------------------------------------------------------
+
+class TestSamwebParentsOfFile(unittest.TestCase):
+    def _wrapper(self, listfiles):
+        """A wrapper with a stub client. __init__ builds a real samweb
+        client and needs the Mu2e environment; __new__ does not."""
+        from utils.samweb_wrapper import SAMWebWrapper
+        w = SAMWebWrapper.__new__(SAMWebWrapper)
+
+        class Client:
+            listFiles = staticmethod(listfiles)
+        w.client = Client()
+        return w
+
+    def test_query_is_isparentof_on_file_name(self):
+        from utils.samweb_wrapper import _q_parents_of_file
+        self.assertEqual(_q_parents_of_file('a.art'),
+                         'isparentof: (file_name a.art)')
+
+    def test_filters_etc_txt_like_famtree(self):
+        w = self._wrapper(
+            lambda q: ['sim.mu2e.A.B.art', 'etc.mu2e.index.C.txt'])
+        self.assertEqual(w.parents_of_file('x.art'), ['sim.mu2e.A.B.art'])
+
+    def test_raises_instead_of_returning_empty(self):
+        """The whole point: file_lineage returns [] on any error, which a
+        lineage caller cannot distinguish from a genuine primary."""
+        def boom(q):
+            raise RuntimeError('403 Forbidden')
+        with self.assertRaises(RuntimeError):
+            self._wrapper(boom).parents_of_file('x.art')
+
+    def test_file_lineage_still_swallows(self):
+        """This is additive: file_lineage's callers depend on its current
+        fail-soft behaviour and must not change."""
+        import inspect
+        from utils.samweb_wrapper import SAMWebWrapper
+        src = inspect.getsource(SAMWebWrapper.file_lineage)
+        self.assertIn('return []', src)
+
+
+# ---------------------------------------------------------------------------
+# MCP lineage
+# ---------------------------------------------------------------------------
+
+class TestMcpLineage(unittest.TestCase):
+    #  a -> b -> d
+    #    -> c
+    GRAPH = {'a': ['b', 'c'], 'b': ['d'], 'c': [], 'd': []}
+
+    def test_walks_to_depth(self):
+        from prodtools_mcp.tools.lineage import walk
+        nodes, edges, truncated = walk(
+            'a', 'up', 3, lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(set(nodes), {'a', 'b', 'c', 'd'})
+        self.assertIn({'child': 'a', 'parent': 'b'}, edges)
+        self.assertIn({'child': 'b', 'parent': 'd'}, edges)
+        self.assertFalse(truncated)
+
+    def test_depth_limit_sets_truncated(self):
+        from prodtools_mcp.tools.lineage import walk
+        nodes, edges, truncated = walk(
+            'a', 'up', 1, lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(set(nodes), {'a', 'b', 'c'})
+        self.assertTrue(truncated)
+
+    def test_direction_down_reverses_edge_sense(self):
+        from prodtools_mcp.tools.lineage import walk
+        _, edges, _ = walk('a', 'down', 1, lambda n: self.GRAPH.get(n, []))
+        self.assertIn({'child': 'b', 'parent': 'a'}, edges)
+
+    def test_cycle_terminates(self):
+        """Without the `seen` set the walk revisits nodes and `nodes` grows
+        past the graph's size — assert the list, not the set, so this
+        isolates the cycle guard rather than the depth bound."""
+        from prodtools_mcp.tools.lineage import walk
+        cyclic = {'a': ['b'], 'b': ['a']}
+        nodes, _, _ = walk('a', 'up', 10, lambda n: cyclic.get(n, []))
+        self.assertEqual(nodes, ['a', 'b'])
+
+    def test_rejects_bad_direction(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('x', direction='sideways')
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_rejects_bad_depth(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('x', depth=0)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_trace_provenance_shape(self):
+        from prodtools_mcp.tools import lineage
+        res = lineage.trace_provenance(
+            'a', direction='up', depth=2,
+            parents_fn=lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(res['root'], 'a')
+        self.assertEqual(res['direction'], 'up')
+        self.assertEqual(res['depth'], 2)
+        self.assertIn('nodes', res)
+        self.assertIn('edges', res)
+        self.assertNotIn('mermaid', res)
+
+    def test_parents_cache_is_module_level_and_actually_hits(self):
+        """A cache rebuilt per call is inert: walk()'s own `seen` set means
+        it can never hit within one call, so it must persist across them."""
+        from prodtools_mcp.tools import lineage
+        self.assertIs(lineage._default_parents_fn(),
+                      lineage._default_parents_fn())
+        lineage._cached_parents.cache_clear()
+        try:
+            with patch('utils.samweb_wrapper.parents_of_file',
+                       lambda n: ['p1.art']):
+                lineage._cached_parents('f.art')
+                lineage._cached_parents('f.art')
+            self.assertEqual(lineage._cached_parents.cache_info().hits, 1)
+        finally:
+            lineage._cached_parents.cache_clear()
+
+    def test_parents_edge_fn_raises_instead_of_returning_empty(self):
+        """famtree.get_parents -> file_lineage swallows every exception and
+        returns [] (samweb_wrapper.py:260-265). For lineage that reads as
+        'no parents' == 'this is a primary'. The edge function must raise."""
+        from prodtools_mcp.tools import lineage
+        lineage._cached_parents.cache_clear()
+        try:
+            def boom(name):
+                raise RuntimeError('401 Unauthorized')
+            with patch('utils.samweb_wrapper.parents_of_file', boom):
+                with self.assertRaises(RuntimeError):
+                    lineage._cached_parents('f.art')
+            # lru_cache does not memoize exceptions: the wrong empty answer
+            # cannot outlive the outage.
+            self.assertEqual(lineage._cached_parents.cache_info().currsize, 0)
+        finally:
+            lineage._cached_parents.cache_clear()
+
+    def test_expired_token_on_lineage_is_auth_expired(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(name):
+            raise RuntimeError('403 Forbidden: bearer token rejected')
+
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('f.art', parents_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'auth_expired')
+
+    def test_missing_ops_env_on_lineage_is_env_missing(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(name):
+            raise ImportError("No module named 'samweb_client'")
+
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('f.art', parents_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'env_missing')
+
+    def test_up_direction_sam_failure_is_error_not_lone_root(self):
+        """The symmetric case to the children path: a SAM failure walking
+        UP must be catalog_unavailable, NOT nodes=[root] — which a caller
+        would read as 'this file is a primary'."""
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(name):
+            raise RuntimeError('SAM unreachable')
+
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('f.art', direction='up',
+                                     parents_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_default_parents_fn_is_the_fail_loud_wrapper(self):
+        """Regression guard: pointing this back at famtree.get_parents
+        reintroduces the swallow."""
+        import inspect
+        from prodtools_mcp.tools import lineage
+        src = inspect.getsource(lineage._cached_parents.__wrapped__)
+        code = '\n'.join(l for l in src.splitlines()
+                         if not l.lstrip().startswith('#'))
+        self.assertIn('from utils.samweb_wrapper import parents_of_file',
+                      code)
+        self.assertNotIn('famtree', code)
+
+    def test_depth_bounds_inclusive_at_max(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        res = lineage.trace_provenance('a', depth=lineage.MAX_DEPTH,
+                                       parents_fn=lambda n: [])
+        self.assertEqual(res['depth'], lineage.MAX_DEPTH)
+        with self.assertRaises(ToolError) as ctx:
+            lineage.trace_provenance('a', depth=lineage.MAX_DEPTH + 1,
+                                     parents_fn=lambda n: [])
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_stdout_stays_clean_through_safe_tool(self):
+        """Defence in depth: trace_provenance's edge functions are
+        samweb_wrapper.parents_of_file/children_of_file, not famtree, so
+        famtree.py:71 is no longer on this route. But samweb_wrapper
+        itself prints on error at several sites (e.g.
+        describe_definition:182, reached from dataset_details via
+        definition_creation_date's text fallback), so any edge function
+        that prints must still be neutralized here. `chatty_parents`
+        stands in for that class of print."""
+        from prodtools_mcp.adapters import safe_tool
+        from prodtools_mcp.tools import lineage
+
+        def chatty_parents(node):
+            print(f"No files found for dataset: {node}")
+            return []
+
+        wrapped = safe_tool(lineage.trace_provenance)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'stdout', out), patch.object(sys, 'stderr', err):
+            res = wrapped('a', parents_fn=chatty_parents)
+        self.assertEqual(out.getvalue(), '')
+        self.assertIn('No files found', err.getvalue())
+        self.assertEqual(res['root'], 'a')
+
+    def test_max_nodes_caps_wide_walk(self):
+        from prodtools_mcp.tools.lineage import walk
+
+        def wide(node):
+            return [f'{node}.{i}' for i in range(10)]
+
+        nodes, edges, truncated = walk('root', 'up', 3, wide, max_nodes=25)
+        self.assertLessEqual(len(nodes), 25)
+        self.assertTrue(truncated)
+
+    def test_max_nodes_stops_queries_before_issuing_them(self):
+        """The budget must stop work BEFORE issuing more queries, not
+        merely trim the result at the end — that is the entire point,
+        since one parents_of_file call costs ~0.5s. An unbudgeted 10-way,
+        depth-3 walk would call edge_fn once per discovered node: 1 (root)
+        + 10 + 100 = 111 calls. A max_nodes=25 budget must cut that off
+        after a handful, well before the fan-out reaches depth 2."""
+        from prodtools_mcp.tools.lineage import walk
+        calls = []
+
+        def wide(node):
+            calls.append(node)
+            return [f'{node}.{i}' for i in range(10)]
+
+        walk('root', 'up', 3, wide, max_nodes=25)
+        self.assertLess(len(calls), 15,
+                        'edge_fn was called too many times — the budget '
+                        'trimmed the result instead of stopping queries')
+
+    def test_max_nodes_not_hit_is_not_truncated(self):
+        from prodtools_mcp.tools.lineage import walk
+        nodes, edges, truncated = walk(
+            'a', 'up', 3, lambda n: self.GRAPH.get(n, []), max_nodes=100)
+        self.assertFalse(truncated)
+
+    def test_rejects_bad_max_nodes(self):
+        from prodtools_mcp.tools import lineage
+        from prodtools_mcp.adapters import ToolError
+        for bad in (0, -1, lineage.MAX_NODES + 1, True, 'many'):
+            with self.assertRaises(ToolError) as ctx:
+                lineage.trace_provenance('x', max_nodes=bad,
+                                         parents_fn=lambda n: [])
+            self.assertEqual(ctx.exception.kind, 'invalid_argument', bad)
+
+    def test_max_nodes_echoed_in_response(self):
+        from prodtools_mcp.tools import lineage
+        res = lineage.trace_provenance(
+            'a', max_nodes=42, parents_fn=lambda n: self.GRAPH.get(n, []))
+        self.assertEqual(res['max_nodes'], 42)
+
+
+# ---------------------------------------------------------------------------
+# MCP server wiring
+# ---------------------------------------------------------------------------
+
+class TestMcpServerInfo(unittest.TestCase):
+    def test_declares_read_only(self):
+        from prodtools_mcp.server import get_server_info
+        info = get_server_info()
+        self.assertFalse(info['writes'])
+        self.assertIn('read-only', info['description'].lower())
+
+    def test_lists_every_tool(self):
+        from prodtools_mcp.server import get_server_info, TOOL_NAMES
+        info = get_server_info()
+        self.assertEqual(sorted(info['tools']), sorted(TOOL_NAMES))
+        self.assertEqual(len(TOOL_NAMES), 6)
+
+
+class TestMcpToolRegistration(unittest.TestCase):
+    def test_every_tool_is_wrapped_in_safe_tool(self):
+        """An unwrapped tool could kill the server via SystemExit or
+        corrupt the JSON-RPC stream via print()."""
+        from prodtools_mcp import server
+        for name, fn in server.TOOL_FUNCTIONS.items():
+            self.assertTrue(getattr(fn, '__wrapped__', None) is not None,
+                            f'{name} is not wrapped in safe_tool')
+
+    def test_tool_names_covers_functions_plus_server_info(self):
+        from prodtools_mcp import server
+        self.assertEqual(
+            sorted(server.TOOL_NAMES),
+            sorted(list(server.TOOL_FUNCTIONS) + ['get_server_info']))
+
+    def test_optional_params_are_annotated_optional(self):
+        """`str = None` emits {"default": null, "type": "string"}. null is
+        not a string; strict validators and other providers'
+        function-calling layers reject the schema outright, which defeats
+        the spec's 'reach other clients' goal. AST rather than the live
+        schema because the suite runs on an interpreter without mcp."""
+        import ast
+        import pathlib
+        path = (pathlib.Path(__file__).resolve().parent.parent /
+                'mcp' / 'src' / 'prodtools_mcp' / 'server.py')
+        tree = ast.parse(path.read_text())
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            a = node.args
+            positional = list(a.posonlyargs) + list(a.args)
+            defaults = ([None] * (len(positional) - len(a.defaults))
+                        + list(a.defaults))
+            pairs = list(zip(positional, defaults))
+            pairs += list(zip(a.kwonlyargs, a.kw_defaults))
+            for arg, default in pairs:
+                if not isinstance(default, ast.Constant):
+                    continue
+                if default.value is not None or arg.annotation is None:
+                    continue
+                ann = ast.unparse(arg.annotation)
+                if 'Optional' not in ann and 'None' not in ann:
+                    offenders.append(f'{node.name}({arg.arg}: {ann} = None)')
+        self.assertEqual(offenders, [])
+
+    def test_no_tool_can_reach_definition_writers(self):
+        """create_definition/delete_definition must never be referenced
+        from the server package."""
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent / 'mcp' / 'src'
+        offenders = []
+        for path in root.rglob('*.py'):
+            text = path.read_text()
+            for bad in ('create_definition', 'delete_definition'):
+                if bad in text:
+                    offenders.append(f'{path}: {bad}')
+        self.assertEqual(offenders, [])
+
+
+# ---------------------------------------------------------------------------
+# Recovery resource headroom
+# ---------------------------------------------------------------------------
+
+class TestRecoveryResourceArgv(unittest.TestCase):
+    """Recoveries get more memory/lifetime by default: they are the tail of
+    a population that already succeeded at the default, so the prior that
+    they need headroom is high and only a handful of jobs are affected."""
+
+    def test_bare_entry_gets_both_floors(self):
+        from utils.submissions import (recovery_resource_argv,
+                                       RECOVERY_MEMORY, RECOVERY_LIFETIME)
+        self.assertEqual(recovery_resource_argv({}),
+                         ['--memory', RECOVERY_MEMORY,
+                          '--expected-lifetime', RECOVERY_LIFETIME])
+
+    def test_floor_never_downgrades_a_larger_request(self):
+        """submit_map precedence is CLI > entry, so passing --memory
+        unconditionally would SILENTLY DOWNGRADE an entry asking for more.
+        That is the hazard _snapshot_entry exists to prevent."""
+        from utils.submissions import recovery_resource_argv
+        argv = recovery_resource_argv({'memory': '8000MB'})
+        self.assertNotIn('--memory', argv)
+        self.assertIn('--expected-lifetime', argv)
+
+    def test_entry_choice_respected_even_when_smaller(self):
+        from utils.submissions import recovery_resource_argv
+        self.assertNotIn('--memory', recovery_resource_argv({'memory': '1000MB'}))
+
+    def test_entry_naming_both_gets_no_flags(self):
+        from utils.submissions import recovery_resource_argv
+        self.assertEqual(
+            recovery_resource_argv({'memory': '8000MB',
+                                    'expected_lifetime': '72h'}), [])
+
+    def test_resubmit_passes_the_floors_to_submit_map(self):
+        """End-to-end: the flags actually reach the submit_map argv."""
+        from utils import submissions
+        seen = {}
+
+        def fake_runner(cmd, *a, **kw):
+            seen['cmd'] = cmd
+            return types.SimpleNamespace(returncode=0)
+
+        row = {'id': 7, 'tarball': 'cnf.mu2e.X.Y.0.tar',
+               'entry': {'njobs': 10, 'outputs': []}}
+        with patch.object(submissions.submission_ledger, 'record_submission',
+                          return_value=1):
+            submissions.resubmit(row, [3], '/tmp/none.db', dry_run=True,
+                                 runner=fake_runner)
+        cmd = seen['cmd']
+        self.assertIn('--memory', cmd)
+        self.assertIn('--expected-lifetime', cmd)
+
+
+# ---------------------------------------------------------------------------
+# 41. ledger_expected (utils/submissions.py)
+# ---------------------------------------------------------------------------
+
+class TestLedgerExpected(unittest.TestCase):
+    """Expected job counts per output dataset, sourced from the submission
+    ledger. The dataset NAME comes from the cnf tarball; the COUNT comes from
+    the ledger entry's njobs (the submitted window)."""
+
+    CRY = 'cnf.mu2e.CosmicCRYAll.MDC2025au_best_v1_5.0.tar'
+    MDS = 'cnf.mu2e.ensembleMDS3c.MDC2025au_best_v1_5.0.tar'
+    OTHER = 'cnf.mu2e.NoPrimary.MDC2025ar_best_v1_3.0.tar'
+    OUT = {
+        CRY: ['dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'],
+        MDS: ['dig.mu2e.ensembleMDS3cOnSpill.MDC2025au_best_v1_5.art'],
+        OTHER: ['dig.mu2e.NoPrimaryOnSpill.MDC2025ar_best_v1_3.art'],
+    }
+    CRY_DS = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'
+    MDS_DS = 'dig.mu2e.ensembleMDS3cOnSpill.MDC2025au_best_v1_5.art'
+
+    def _call(self, camps, dsconfs=None, unlocatable=()):
+        """Run ledger_expected with the tarball layer faked out.
+
+        locate is injected; Mu2eJobPars is reduced to identity so the 'path'
+        is just the tarball name, which extract_ then maps to datasets."""
+        from utils import submissions
+        asked = []
+
+        def fake_locate(tarball):
+            asked.append(tarball)
+            return None if tarball in unlocatable else tarball
+
+        with patch.object(submissions, 'Mu2eJobPars', lambda p: p), \
+             patch.object(submissions, 'extract_datasets_from_tarball',
+                          lambda job, njobs: self.OUT[job]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=camps):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', dsconfs=dsconfs, locate=fake_locate)
+        return expected, failures, asked
+
+    def test_maps_output_dataset_to_njobs(self):
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}},
+                 {'tarball': self.MDS, 'entry': {'njobs': 496}}]
+        expected, failures, _ = self._call(camps)
+        self.assertEqual(expected, {self.CRY_DS: 2500, self.MDS_DS: 496})
+        self.assertEqual(failures, {})
+
+    def test_uses_submitted_window_not_cnf_capacity(self):
+        """CosmicCRYAll's cnf carries 12500 capacity; the ledger entry says the
+        2500 that were actually submitted. The ledger value must win."""
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}}]
+        expected, _, _ = self._call(camps)
+        self.assertEqual(expected[self.CRY_DS], 2500)
+
+    def test_overlapping_campaigns_take_the_max_not_the_sum(self):
+        """A tarball can be enqueued as several index windows, and njobs is
+        an ABSOLUTE target index count, not an increment: a later campaign
+        resumes via its cursor from where the earlier one stopped, so the
+        windows overlap rather than partition. Measured from
+        RPCInternalPhysicalMix1BB's real submission rows: campaign 1 covered
+        indices 0..249 (njobs=250), campaign 2 covered 0..1666 (njobs=1667,
+        already a superset of the first). Expected is max(250, 1667) = 1667,
+        not their sum 1917 -- summing double-counted the first window and
+        made two actually-complete datasets (this one and
+        RPCExternalPhysicalMix1BB) report INCOMPLETE. The tarball is
+        resolved only once regardless."""
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 250}},
+                 {'tarball': self.CRY, 'entry': {'njobs': 1667}}]
+        expected, _, asked = self._call(camps)
+        self.assertEqual(expected[self.CRY_DS], 1667)
+        self.assertEqual(asked, [self.CRY])
+
+    def test_unresolvable_tarball_yields_failure_not_a_number(self):
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}},
+                 {'tarball': self.MDS, 'entry': {'njobs': 496}}]
+        expected, failures, _ = self._call(camps, unlocatable={self.CRY})
+        self.assertNotIn(self.CRY_DS, expected)
+        self.assertIn(self.CRY, failures)
+        self.assertEqual(expected[self.MDS_DS], 496)   # others unaffected
+
+    def test_dsconf_filter_skips_other_campaigns_without_resolving(self):
+        camps = [{'tarball': self.CRY, 'entry': {'njobs': 2500}},
+                 {'tarball': self.OTHER, 'entry': {'njobs': 100}}]
+        expected, _, asked = self._call(
+            camps, dsconfs={'MDC2025au_best_v1_5'})
+        self.assertEqual(asked, [self.CRY])
+        self.assertEqual(list(expected), [self.CRY_DS])
+
+
+class TestLedgerExpectedDraining(unittest.TestCase):
+    """Denominators for a DRAINING campaign, which has no njobs.
+
+    The honest denominator for a 1:1 direct-input stage is the INPUT
+    dataset's current file count: 80 digis in means 80 mcs out. Before
+    this, every draining output rendered '—' because ledger_expected
+    skipped any campaign without njobs (observed live on campaign 48:
+    `80 mcs.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art ... —`)."""
+
+    TB = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+    CAMP = {'tarball': TB, 'entry': {
+        'tarball': TB, 'inloc': 'tape',
+        'input_pattern': 'dig.mu2e.%OnSpill.MDC2025au_best_v1_5.art',
+        'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}}
+    OUT_DS = 'mcs.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art'
+    IN_DS = 'dig.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art'
+
+    def _call(self, datasets, counts=None, pars=None):
+        from utils import submissions
+        counted = []
+
+        def fake_count(ds):
+            counted.append(ds)
+            return (counts or {}).get(ds, 0)
+
+        with patch.object(submissions, 'Mu2eJobPars',
+                          lambda p: pars if pars is not None else _DrainPars(p)), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[self.CAMP]):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', datasets=datasets,
+                locate=lambda tb: tb, count_fn=fake_count)
+        return expected, failures, counted
+
+    def test_denominator_is_the_input_dataset_file_count(self):
+        expected, failures, counted = self._call(
+            {self.OUT_DS}, counts={self.IN_DS: 80})
+        self.assertEqual(expected, {self.OUT_DS: 80})
+        self.assertEqual(counted, [self.IN_DS])
+        self.assertEqual(failures, {})
+
+    def test_without_datasets_a_draining_campaign_contributes_nothing(self):
+        """Each denominator costs a SAM count, and a draining campaign's desc
+        space is large (21 datasets for au reco). A caller that did not name
+        what it wants must not pay for them."""
+        expected, _, counted = self._call(None, counts={self.IN_DS: 80})
+        self.assertEqual(expected, {})
+        self.assertEqual(counted, [])
+
+    def test_dataset_outside_the_input_pattern_is_skipped(self):
+        """A dataset from some other campaign must not be handed this
+        campaign's denominator."""
+        other = 'mcs.mu2e.NoPrimaryOnSpill.MDC2025ar_best_v1_3.art'
+        expected, _, counted = self._call({other}, counts={other: 999})
+        self.assertEqual(expected, {})
+        self.assertEqual(counted, [])
+
+    def test_suffixed_output_is_not_guessed_from_the_desc(self):
+        """A cnf whose outputs carry a suffix ({desc}-KL) breaks the
+        desc==desc assumption. expected_outputs_for is the arbiter: when the
+        cnf does not actually produce this dataset, it keeps '—' rather than
+        being handed the input count. Guards the trap the contract already
+        names -- FlatGamma is a prefix of FlatGammaCalo."""
+        class SuffixPars:
+            def __init__(self, path): pass
+            def job_outputs(self, i, override_desc=None, override_seq=None):
+                return {'Output': f'mcs.mu2e.{override_desc}-KL.'
+                                  f'MDC2025au_best_v1_5.{override_seq}.art'}
+        expected, _, counted = self._call(
+            {self.OUT_DS}, counts={self.IN_DS: 80}, pars=SuffixPars(None))
+        self.assertEqual(expected, {})
+        self.assertEqual(counted, [])
+
+    def test_unlocatable_cnf_is_a_failure_not_a_denominator(self):
+        from utils import submissions
+        with patch.object(submissions, 'Mu2eJobPars', lambda p: _DrainPars(p)), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[self.CAMP]):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', datasets={self.OUT_DS},
+                locate=lambda tb: None, count_fn=lambda ds: 80)
+        self.assertEqual(expected, {})
+        self.assertIn(self.TB, failures)
+
+    def test_index_mode_campaigns_still_use_njobs(self):
+        """The draining branch must not disturb the njobs path."""
+        from utils import submissions
+        cry = 'cnf.mu2e.CosmicCRYAll.MDC2025au_best_v1_5.0.tar'
+        cry_ds = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'
+        with patch.object(submissions, 'Mu2eJobPars', lambda p: p), \
+             patch.object(submissions, 'extract_datasets_from_tarball',
+                          lambda job, njobs: [cry_ds]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[{'tarball': cry,
+                                         'entry': {'njobs': 2500}}]):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', datasets={cry_ds}, locate=lambda tb: tb,
+                count_fn=lambda ds: 7)
+        self.assertEqual(expected, {cry_ds: 2500})
+
+
+# ---------------------------------------------------------------------------
+# 42. listNewDatasets completeness column (ledger-backed)
+# ---------------------------------------------------------------------------
+
+class TestListerCompleteness(unittest.TestCase):
+    """The COMPLETENESS column formats <landed>/<expected> from the ledger map.
+    listNewDatasets uses bare imports, so utils/ must be on sys.path."""
+
+    @classmethod
+    def setUpClass(cls):
+        d = os.path.join(os.path.dirname(__file__), '..', 'utils')
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        import listNewDatasets
+        cls.lnd = listNewDatasets
+
+    DS = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'
+
+    def _lister(self, expected, counts, color='auto'):
+        lister = self.lnd.DatasetLister(completeness=True, color=color)
+        lister._expected = expected
+        lister._total_files = lambda ds: counts.get(ds, 0)
+        return lister
+
+    # The tty check gates plain-text vs coloured rendering (see
+    # _get_completeness). Patch it explicitly in every test rather than
+    # relying on how the test runner happens to be invoked (tty vs piped) —
+    # that ambient-state dependency is exactly the flakiness the tty gate
+    # is designed to avoid downstream, so the tests must not reintroduce it.
+
+    def test_reports_landed_over_expected_with_incomplete_marker_non_tty(self):
+        """Piped/redirected output: today's plain-text marker, no escape
+        codes, so grep/awk consumers aren't corrupted."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432})
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "1432/2500 INCOMPLETE")
+
+    def test_reports_landed_over_expected_in_red_on_tty(self):
+        """Interactive output: red ANSI text, ' INCOMPLETE' suffix dropped."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432})
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "\033[31m1432/2500\033[0m")
+
+    def test_no_marker_once_landed_reaches_expected_non_tty(self):
+        lister = self._lister({self.DS: 2500}, {self.DS: 2500})
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS), "2500/2500")
+
+    def test_no_marker_or_colour_once_landed_reaches_expected_tty(self):
+        """Complete rows are never coloured, even interactively."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 2500})
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS), "2500/2500")
+
+    def test_dataset_from_no_campaign_reports_dash(self):
+        """The em dash ('no known campaign') is never coloured or marked,
+        in either mode."""
+        lister = self._lister({}, {self.DS: 17})
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS), "—")
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS), "—")
+
+    # --color {auto,always,never}, the ls/grep convention (round 3). 'auto'
+    # is exercised by the tty/non-tty pair above (it's _lister's default).
+    # 'always' and 'never' must override the tty check in both directions —
+    # that's the whole point, since 'auto' alone left colour unreachable
+    # for anyone piping through grep.
+
+    def test_color_always_emits_escapes_even_off_a_tty(self):
+        """--color always is what makes `| grep` usable with colour: red,
+        no INCOMPLETE suffix, regardless of stdout.isatty()."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432}, color='always')
+        with patch('sys.stdout.isatty', return_value=False):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "\033[31m1432/2500\033[0m")
+
+    def test_color_never_emits_plain_marker_even_on_a_tty(self):
+        """--color never is for reproducible captures: plain text with the
+        INCOMPLETE suffix, regardless of stdout.isatty()."""
+        lister = self._lister({self.DS: 2500}, {self.DS: 1432}, color='never')
+        with patch('sys.stdout.isatty', return_value=True):
+            self.assertEqual(lister._get_completeness(self.DS),
+                             "1432/2500 INCOMPLETE")
+
+
+# ---------------------------------------------------------------------------
+# 43. Draining campaigns: foundations (is_draining, expected_outputs_for)
+# ---------------------------------------------------------------------------
+
+class TestIsDraining(unittest.TestCase):
+    """Campaign/row kind is discriminated ONLY by input_pattern presence."""
+
+    def test_pattern_entry_is_draining(self):
+        from utils.poms_entry import is_draining
+        self.assertTrue(is_draining(
+            {'tarball': 't', 'input_pattern': 'dig.mu2e.%.X.art'}))
+
+    def test_index_entry_is_not(self):
+        from utils.poms_entry import is_draining
+        self.assertFalse(is_draining({'tarball': 't', 'njobs': 100}))
+
+
+class TestExpectedOutputsFor(unittest.TestCase):
+    """The single input->output name mapping, delegating to job_outputs
+    (the exact worker-side substitution) so verifier and worker cannot
+    drift."""
+
+    IN = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.001202_00000042.art'
+
+    class FakePars:
+        def __init__(self, out):
+            self.out = out
+            self.calls = []
+
+        def job_outputs(self, index, override_desc=None, override_seq=None):
+            self.calls.append((index, override_desc, override_seq))
+            return self.out
+
+    def test_delegates_desc_and_sequencer_from_input_name(self):
+        from utils.job_common import expected_outputs_for
+        jp = self.FakePars({'Output':
+            'mcs.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.001202_00000042.art'})
+        outs = expected_outputs_for(self.IN, jp)
+        self.assertEqual(jp.calls, [(0, 'CosmicCRYAllOnSpill',
+                                     '001202_00000042')])
+        self.assertEqual(outs, ['mcs.mu2e.CosmicCRYAllOnSpill.'
+                                'MDC2025au_best_v1_5.001202_00000042.art'])
+
+    def test_filters_non_mu2e_streams_and_sorts(self):
+        from utils.job_common import expected_outputs_for
+        jp = self.FakePars({'b': 'nts.mu2e.X.C.000_000.root',
+                            'null': '/dev/null',
+                            'a': 'mcs.mu2e.X.C.000_000.art'})
+        self.assertEqual(expected_outputs_for(self.IN, jp),
+                         ['mcs.mu2e.X.C.000_000.art',
+                          'nts.mu2e.X.C.000_000.root'])
+
+    def test_dataset_name_rejected(self):
+        from utils.job_common import expected_outputs_for
+        with self.assertRaises(ValueError):
+            expected_outputs_for('dig.mu2e.X.C.art', self.FakePars({}))
+
+    def test_junk_name_rejected(self):
+        from utils.job_common import expected_outputs_for
+        with self.assertRaises(ValueError):
+            expected_outputs_for('not-a-mu2e-name', self.FakePars({}))
+
+    def test_no_outputs_is_a_hard_error(self):
+        from utils.job_common import expected_outputs_for
+        with self.assertRaises(RuntimeError):
+            expected_outputs_for(self.IN, self.FakePars({'n': '/dev/null'}))
+
+
+# ---------------------------------------------------------------------------
+# 44. Draining campaigns: enqueue validation
+# ---------------------------------------------------------------------------
+
+class TestValidateDrainingEntry(unittest.TestCase):
+    BASE = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+            'inloc': 'tape',
+            'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+            'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
+
+    def _err(self, **over):
+        from utils.submit import _validate_draining_entry
+        return _validate_draining_entry({**self.BASE, **over})
+
+    def test_valid_entry_passes(self):
+        self.assertIsNone(self._err())
+
+    def test_njobs_and_pattern_conflict(self):
+        self.assertIn('njobs', self._err(njobs=100))
+
+    def test_firstjob_rejected(self):
+        self.assertIn('firstjob', self._err(firstjob=500))
+
+    def test_pattern_must_be_five_fields(self):
+        self.assertIn('5-field', self._err(input_pattern='dig.mu2e.%.art'))
+
+    def test_missing_required_key(self):
+        entry = {k: v for k, v in self.BASE.items() if k != 'outputs'}
+        from utils.submit import _validate_draining_entry
+        self.assertIn('outputs', _validate_draining_entry(entry))
+
+    def test_exclude_desc_must_be_string_list(self):
+        self.assertIn('exclude_desc', self._err(exclude_desc='NoPrimary'))
+
+    def test_min_age_must_be_nonnegative_int(self):
+        self.assertIn('min_age', self._err(min_age_minutes=-5))
+
+    def test_prestage_must_be_bool(self):
+        self.assertIn('prestage', self._err(prestage='yes'))
+
+    def test_outputs_glob_matching_pattern_rejected(self):
+        """A '*.art' outputs glob matches the input pattern — the worker
+        would declare the fetched input for push and pushOutput's orphan
+        recovery would try to delete the production input (smoke cluster
+        29444911)."""
+        err = self._err(outputs=[{'dataset': '*.art', 'location': 'tape'}])
+        self.assertIn('input_pattern', err)
+        self.assertIn('*.art', err)
+
+
+class TestEnqueueDraining(unittest.TestCase):
+    """--enqueue on a draining entry creates a campaign with the
+    snapshotted entry; check_inputs is skipped (a generic cnf bakes no
+    inputs — the tick gates each batch instead)."""
+
+    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+             'inloc': 'tape',
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+             'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
+
+    def _opts(self, **over):
+        from argparse import Namespace
+        base = dict(dry_run=False, slice_size=500, ledger_db='/x.db',
+                    memory=None, disk=None, expected_lifetime=None)
+        base.update(over)
+        return Namespace(**base)
+
+    def test_creates_campaign_without_check_inputs(self):
+        from utils import submit
+        created = {}
+
+        def fake_create(db, *, tarball, entry, slice_size, map_path):
+            created.update(tarball=tarball, entry=entry,
+                           slice_size=slice_size)
+            return 48
+
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submit, 'check_inputs') as ci, \
+             patch.object(submit.submission_ledger, 'create_campaign',
+                          fake_create):
+            ids = submit._enqueue_entries([(0, dict(self.ENTRY))],
+                                          '/m.json', self._opts())
+        self.assertEqual(ids, [48])
+        ci.assert_not_called()
+        self.assertEqual(created['slice_size'], 500)
+        self.assertEqual(created['entry']['input_pattern'],
+                         self.ENTRY['input_pattern'])
+
+    def test_invalid_draining_entry_exits(self):
+        from utils import submit
+        bad = dict(self.ENTRY, njobs=100)
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'):
+            with self.assertRaises(SystemExit):
+                submit._enqueue_entries([(0, bad)], '/m.json', self._opts())
+
+    def test_dry_run_creates_nothing(self):
+        from utils import submit
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submit.submission_ledger,
+                          'create_campaign') as cc:
+            ids = submit._enqueue_entries([(0, dict(self.ENTRY))],
+                                          '/m.json',
+                                          self._opts(dry_run=True))
+        self.assertEqual(ids, [])
+        cc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 45. Draining campaigns: --files dispatch
+# ---------------------------------------------------------------------------
+
+class TestParseFiles(unittest.TestCase):
+    F1 = 'dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art'
+    F2 = 'dig.mu2e.B.MDC2025au_best_v1_5.001202_00000002.art'
+
+    def _parse(self, text):
+        from utils.submit import _parse_files
+        with tempfile.NamedTemporaryFile('w', suffix='.txt',
+                                         delete=False) as fh:
+            fh.write(text)
+        try:
+            return _parse_files(fh.name)
+        finally:
+            os.unlink(fh.name)
+
+    def test_none_passthrough(self):
+        from utils.submit import _parse_files
+        self.assertIsNone(_parse_files(None))
+
+    def test_sorted_unique_with_comments(self):
+        got = self._parse(f"# header\n{self.F2}\n{self.F1}\n{self.F2}\n")
+        self.assertEqual(got, [self.F1, self.F2])
+
+    def test_junk_name_raises(self):
+        with self.assertRaises(ValueError):
+            self._parse("not-a-name\n")
+
+    def test_dataset_name_raises(self):
+        with self.assertRaises(ValueError):
+            self._parse("dig.mu2e.A.MDC2025au_best_v1_5.art\n")
+
+    def test_empty_raises(self):
+        with self.assertRaises(ValueError):
+            self._parse("# only a comment\n")
+
+
+class TestBuildOpsJsonFiles(unittest.TestCase):
+    def test_files_key_present_only_when_given(self):
+        from utils.jobsub_argv import build_ops_json
+        entry = {'tarball': 't', 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+        ops = build_ops_json(entry=entry, jobset=[0, 1],
+                             input_datasets=['dig.mu2e.A.C.art'],
+                             files=['f1.art', 'f2.art'])
+        self.assertEqual(ops['files'], ['f1.art', 'f2.art'])
+        ops2 = build_ops_json(entry=entry, jobset=[0, 1],
+                              input_datasets=['dig.mu2e.A.C.art'])
+        self.assertNotIn('files', ops2)
+
+
+class TestSubmitEntryDirectFiles(unittest.TestCase):
+    """Files mode: jobset = positions, ledger row stores filenames,
+    scopes derive from the mapped outputs of the batch."""
+
+    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+             'inloc': 'tape',
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+             'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+    FILES = ['dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art',
+             'dig.mu2e.B.MDC2025au_best_v1_5.001202_00000002.art']
+
+    class FakePars:
+        def __init__(self, path):
+            pass
+
+        def job_outputs(self, index, override_desc=None, override_seq=None):
+            return {'Output': f'mcs.mu2e.{override_desc}.'
+                              f'MDC2025au_best_v1_5.{override_seq}.art'}
+
+    def _opts(self, **over):
+        from argparse import Namespace
+        base = dict(dry_run=False, files=list(self.FILES), indices=None,
+                    first=None, num=None, memory=None, disk=None,
+                    expected_lifetime=None, role=None, wftop=None,
+                    wfproject=None, prodtools_tar=None, no_ledger=False,
+                    ledger_db='/x.db', ledger_parent=None, map='/m.json')
+        base.update(over)
+        return Namespace(**base)
+
+    def test_files_submission_records_filenames_in_ledger(self):
+        from utils import submit
+        recorded = {}
+
+        def fake_record(db, *, tarball, entry, indices, jobsub_id,
+                        cluster_id, map_path=None, parent_id=None):
+            recorded['indices'] = indices
+            return 99
+
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_bundle_prodtools',
+                          return_value=Path('/tmp/pt.tar')), \
+             patch.object(submit, '_run_submit',
+                          return_value={'tarball': self.ENTRY['tarball'],
+                                        'cluster_id': '123',
+                                        'jobsub_id': '123.0@s',
+                                        'njobs': 2, 'status': 'submitted',
+                                        'raw_output': ''}) as rs, \
+             patch.object(submit, '_log_submission'), \
+             patch.object(submit.submission_ledger, 'record_submission',
+                          fake_record):
+            result = submit.submit_entry_direct(dict(self.ENTRY), 0,
+                                                self._opts())
+        self.assertEqual(result['status'], 'submitted')
+        self.assertEqual(recorded['indices'], self.FILES)
+        # the jobsub argv references an ops JSON (shipped via dropbox)
+        cmd = rs.call_args[0][0]
+        self.assertEqual(cmd[0], 'jobsub_submit')
+        self.assertTrue(any('ops-' in c for c in cmd))
+
+    def test_files_dry_run_submits_nothing(self):
+        from utils import submit
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_run_submit') as rs:
+            result = submit.submit_entry_direct(dict(self.ENTRY), 0,
+                                                self._opts(dry_run=True))
+        self.assertEqual(result['status'], 'dry_run')
+        self.assertEqual(result['njobs'], 2)
+        rs.assert_not_called()
+
+    def test_files_dry_run_still_resolves_real_tarball(self):
+        """Regression: files mode needs the REAL cnf even on a dry run
+        (the output-name mapping comes from parsing it via
+        Mu2eJobPars/expected_outputs_for). The nonexistent-stand-in
+        shortcut is for index mode only. ENTRY['tarball'] does not
+        exist relative to cwd, so the old buggy guard (gated on
+        `opts.dry_run` alone) would have taken the stand-in branch
+        and never called `_ensure_local_tarball` at all."""
+        from utils import submit
+        self.assertFalse(Path(self.ENTRY['tarball']).resolve().is_file())
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')) as elt, \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_run_submit') as rs:
+            submit.submit_entry_direct(dict(self.ENTRY), 0,
+                                       self._opts(dry_run=True))
+        elt.assert_called_once_with(self.ENTRY['tarball'])
+        rs.assert_not_called()
+
+    def test_two_descs_scopes_cover_both_outputs(self):
+        """I2: with a desc-discriminating outputs glob (one desc's
+        mapped output goes to tape, the other's to disk), token scopes
+        must be derived from EVERY distinct desc in the batch, not just
+        files[0]'s. self.FILES carries desc A then desc B."""
+        from utils import submit
+        entry = {**self.ENTRY, 'outputs': [
+            {'dataset': 'mcs.mu2e.A.*', 'location': 'tape'},
+            {'dataset': 'mcs.mu2e.B.*', 'location': 'disk'},
+        ]}
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, '_bundle_prodtools',
+                          return_value=Path('/tmp/pt.tar')), \
+             patch.object(submit, '_run_submit',
+                          return_value={'tarball': entry['tarball'],
+                                        'cluster_id': '123',
+                                        'jobsub_id': '123.0@s',
+                                        'njobs': 2, 'status': 'submitted',
+                                        'raw_output': ''}) as rs, \
+             patch.object(submit, '_log_submission'), \
+             patch.object(submit.submission_ledger, 'record_submission',
+                          lambda *a, **k: 99):
+            submit.submit_entry_direct(entry, 0, self._opts())
+        cmd = rs.call_args[0][0]
+        scopes = [cmd[i + 1] for i, c in enumerate(cmd)
+                 if c == '--need-storage-modify']
+        self.assertTrue(any('/tape/' in s for s in scopes),
+                        f"missing desc-A (tape) scope in {scopes}")
+        self.assertTrue(any('/persistent/datasets/' in s for s in scopes),
+                        f"missing desc-B (disk) scope in {scopes}")
+
+
+class TestSliceOverlapSkipsFileRows(unittest.TestCase):
+    def test_file_keyed_row_never_matches_an_index_window(self):
+        from utils import submissions
+        row = {'tarball': 'cnf.mu2e.reco.X.0.tar',
+               'entry': {'input_pattern': 'dig.mu2e.%.X.art'},
+               'indices': ['dig.mu2e.A.X.001202_00000001.art']}
+        with patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[row]):
+            self.assertFalse(submissions._slice_overlaps_ledger(
+                '/x.db', 'cnf.mu2e.reco.X.0.tar', 0, 0, 100))
+
+
+# ---------------------------------------------------------------------------
+# 46. Draining campaigns: worker files branch
+# ---------------------------------------------------------------------------
+
+class TestDirectDispatchFiles(unittest.TestCase):
+    DRAIN = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+             'inloc': 'tape',
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+             'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+    FILES = ['dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art',
+             'dig.mu2e.B.MDC2025au_best_v1_5.001202_00000002.art']
+
+    def _args(self):
+        from argparse import Namespace
+        return Namespace(dry_run=False, copy_input=True)
+
+    def _dispatch(self, ops, index):
+        from utils import runmu2e
+        calls = {}
+
+        def fake_pdi(jobdesc, fname, args):
+            calls['fname'] = fname
+            # Mirror real process_direct_input: fcl = <fname stem>.fcl, a
+            # valid 6-field dot-name (the untouched tail feeds it through
+            # replace_file_extensions -> Mu2eName.parse).
+            fcl = Path(fname).stem + '.fcl'
+            return (fcl, '/cvmfs/setup.sh', fname,
+                    ops['jobdesc'][0]['outputs'])
+
+        with patch.object(runmu2e, 'process_direct_input', fake_pdi), \
+             patch.object(runmu2e, 'locate_file_strict',
+                          return_value=[{'location_type': 'tape'}]) as lfs, \
+             patch.object(runmu2e, '_fetch_file_local') as ffl, \
+             patch.object(runmu2e, '_execute_mu2e',
+                          return_value=False), \
+             patch.object(runmu2e, '_push_all'):
+            failed = runmu2e._direct_dispatch(self._args(), ops, index)
+        return failed, calls, ffl, lfs
+
+    def test_index_selects_the_file(self):
+        ops = {'jobs': [0, 1], 'files': list(self.FILES),
+               'jobdesc': [dict(self.DRAIN)]}
+        failed, calls, ffl, lfs = self._dispatch(ops, 1)
+        self.assertFalse(failed)
+        self.assertEqual(calls['fname'], self.FILES[1])
+        # The fetch must use the file's RESOLVED SAM location, not
+        # _fetch_file_local's 'disk' default — every draining entry
+        # example ships inloc='tape', and a wrong-tier `mdh copy-file`
+        # fails outright (regression: bare _fetch_file_local(fname)).
+        lfs.assert_any_call(self.FILES[1])
+        ffl.assert_any_call(self.FILES[1], src_location='tape')
+
+    def test_index_out_of_range_exits(self):
+        from utils import runmu2e
+        ops = {'jobs': [0, 1, 2], 'files': list(self.FILES),
+               'jobdesc': [dict(self.DRAIN)]}
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(self._args(), ops, 2)
+
+    def test_files_with_normal_jobdesc_exits(self):
+        from utils import runmu2e
+        normal = dict(self.DRAIN, njobs=10)
+        normal.pop('input_pattern')
+        ops = {'jobs': [0], 'files': list(self.FILES),
+               'jobdesc': [normal]}
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(self._args(), ops, 0)
+
+    def test_direct_input_jobdesc_without_files_still_exits(self):
+        from utils import runmu2e
+        ops = {'jobs': [0], 'jobdesc': [dict(self.DRAIN)]}
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(self._args(), ops, 0)
+
+
+# ---------------------------------------------------------------------------
+# 47. Draining campaigns: pending predicate + batch gates
+# ---------------------------------------------------------------------------
+
+def _mk_file(desc, i):
+    return f'dig.mu2e.{desc}.MDC2025au_best_v1_5.001202_{i:08d}.art'
+
+
+def _mk_out(desc, i):
+    return f'mcs.mu2e.{desc}.MDC2025au_best_v1_5.001202_{i:08d}.art'
+
+
+class _DrainPars:
+    """Fake Mu2eJobPars: identity dig->mcs mapping (desc preserved)."""
+
+    def __init__(self, path):
+        pass
+
+    def job_outputs(self, index, override_desc=None, override_seq=None):
+        return {'Output': f'mcs.mu2e.{override_desc}.'
+                          f'MDC2025au_best_v1_5.{override_seq}.art'}
+
+
+class TestDrainingState(unittest.TestCase):
+    CAMP = {'id': 48, 'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+            'entry': {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+                      'inloc': 'tape',
+                      'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                      'outputs': [{'dataset': '*.art', 'location': 'tape'}]},
+            'cursor': 0, 'slice_size': 500}
+
+    def _state(self, *, in_files, out_files, rows=(), exclude=None,
+               defs=None):
+        from utils import submissions
+        camp = {**self.CAMP,
+                'entry': {**self.CAMP['entry'],
+                          **({'exclude_desc': exclude} if exclude else {})}}
+        in_ds = 'dig.mu2e.A.MDC2025au_best_v1_5.art'
+        out_ds = 'mcs.mu2e.A.MDC2025au_best_v1_5.art'
+        listing = {in_ds: list(in_files), out_ds: list(out_files)}
+        if defs is None:
+            defs = [in_ds]
+
+        def lister(ds):
+            return listing.get(ds, [])
+
+        with patch.object(submissions, 'Mu2eJobPars', _DrainPars), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=list(rows)):
+            return submissions.draining_state(
+                camp, '/x.db', defs_fn=lambda p: list(defs),
+                sam_lister=lister, locate=lambda t: '/tmp/' + t)
+
+    def test_growth_pending_is_inputs_minus_landed(self):
+        ins = [_mk_file('A', i) for i in range(4)]
+        outs = [_mk_out('A', 0), _mk_out('A', 1)]
+        st = self._state(in_files=ins, out_files=outs)
+        self.assertEqual(st['pending'], sorted(ins[2:]))
+        self.assertEqual(len(st['landed']), 2)
+
+    def test_in_flight_and_parked_excluded(self):
+        ins = [_mk_file('A', i) for i in range(4)]
+        rows = [{'tarball': self.CAMP['tarball'], 'state': 'active',
+                 'entry': self.CAMP['entry'], 'indices': [ins[0]]},
+                {'tarball': self.CAMP['tarball'], 'state': 'exhausted',
+                 'entry': self.CAMP['entry'], 'indices': [ins[1]]}]
+        st = self._state(in_files=ins, out_files=[], rows=rows)
+        self.assertEqual(st['pending'], sorted(ins[2:]))
+        self.assertEqual(st['in_flight'], {ins[0]})
+        self.assertEqual(st['parked'], {ins[1]})
+
+    def test_landed_exhausted_file_is_not_parked(self):
+        ins = [_mk_file('A', 0)]
+        rows = [{'tarball': self.CAMP['tarball'], 'state': 'exhausted',
+                 'entry': self.CAMP['entry'], 'indices': [ins[0]]}]
+        st = self._state(in_files=ins, out_files=[_mk_out('A', 0)],
+                         rows=rows)
+        self.assertEqual(st['parked'], set())
+        self.assertEqual(st['pending'], [])
+
+    def test_exclude_desc_drops_whole_dataset_exact_match(self):
+        from utils import submissions
+        # FlatGamma excluded must NOT drop FlatGammaCalo
+        defs = ['dig.mu2e.FlatGamma.MDC2025au_best_v1_5.art',
+                'dig.mu2e.FlatGammaCalo.MDC2025au_best_v1_5.art']
+        fg = [_mk_file('FlatGamma', 0)]
+        fgc = [_mk_file('FlatGammaCalo', 0)]
+        listing = {defs[0]: fg, defs[1]: fgc,
+                   'mcs.mu2e.FlatGammaCalo.MDC2025au_best_v1_5.art': []}
+        with patch.object(submissions, 'Mu2eJobPars', _DrainPars), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[]):
+            st = submissions.draining_state(
+                {**self.CAMP,
+                 'entry': {**self.CAMP['entry'],
+                           'exclude_desc': ['FlatGamma']}},
+                '/x.db', defs_fn=lambda p: defs,
+                sam_lister=lambda ds: listing.get(ds, []),
+                locate=lambda t: '/tmp/' + t)
+        self.assertEqual(st['pending'], fgc)
+
+    def test_non_dataset_definition_names_are_ignored(self):
+        # drainingn-era junk (`..._slice_0_stage_2`) still parses as a
+        # legal 5-field dataset name -- it is caught by the input_pattern
+        # field match, not by the is_dataset guard. The fake lister DOES
+        # return a file for the junk name, so this fails without the
+        # fix (the junk file would leak into inputs/pending).
+        from utils import submissions
+        ins = [_mk_file('A', 0)]
+        in_ds = 'dig.mu2e.A.MDC2025au_best_v1_5.art'
+        out_ds = 'mcs.mu2e.A.MDC2025au_best_v1_5.art'
+        junk_ds = 'dig.mu2e.A.MDC2025au_best_v1_5.art_slice_0_stage_2'
+        junk_file = ('dig.mu2e.A.MDC2025au_best_v1_5.'
+                     '001202_00000099.art_slice_0_stage_2')
+        listing = {in_ds: list(ins), out_ds: [], junk_ds: [junk_file]}
+        with patch.object(submissions, 'Mu2eJobPars', _DrainPars), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[]):
+            st = submissions.draining_state(
+                self.CAMP, '/x.db',
+                defs_fn=lambda p: [in_ds, junk_ds],
+                sam_lister=lambda ds: listing.get(ds, []),
+                locate=lambda t: '/tmp/' + t)
+        self.assertEqual(st['pending'], ins)
+        self.assertNotIn(junk_file, st['inputs'])
+
+    def test_unlocatable_tarball_raises(self):
+        from utils import submissions
+        with self.assertRaises(RuntimeError):
+            with patch.object(submissions.submission_ledger, 'all_rows',
+                              return_value=[]):
+                submissions.draining_state(
+                    self.CAMP, '/x.db', defs_fn=lambda p: [],
+                    sam_lister=lambda ds: [], locate=lambda t: None)
+
+
+class TestGateBatch(unittest.TestCase):
+    ENTRY = {'inloc': 'tape', 'min_age_minutes': 60,
+             'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art'}
+    OLD = '2026-08-01T00:00:00+00:00'
+    NOW = None  # set in setUp
+
+    def setUp(self):
+        from datetime import datetime, timezone
+        self.NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _md(self, files, stamp=OLD):
+        # key verified against live SAM metadata 2026-08-02: files carry
+        # create_date, not create_datetime.
+        return lambda fl: [{'file_name': f, 'create_date': stamp}
+                           for f in fl]
+
+    def _md_legacy(self, files, stamp=OLD):
+        # Legacy-tolerance fixture: ONLY the old key, no create_date.
+        return lambda fl: [{'file_name': f, 'create_datetime': stamp}
+                           for f in fl]
+
+    def _gate(self, files, *, states, md=None, loc='enstore'):
+        from utils import submissions
+        return submissions._gate_batch(
+            dict(self.ENTRY), files,
+            locality=lambda loc, fl: {f: states.get(f, 'ERROR')
+                                      for f in fl},
+            metadata_fn=md or self._md(files),
+            dataset_location=lambda ds: loc,
+            now=self.NOW)
+
+    def test_online_files_dispatch_nearline_withheld(self):
+        f1, f2 = _mk_file('A', 1), _mk_file('A', 2)
+        dispatch, young, tape = self._gate(
+            [f1, f2], states={f1: 'ONLINE_AND_NEARLINE', f2: 'NEARLINE'})
+        self.assertEqual(dispatch, [f1])
+        self.assertEqual(tape, [f2])
+        self.assertEqual(young, [])
+
+    def test_too_young_withheld(self):
+        f1 = _mk_file('A', 1)
+        fresh = '2026-08-01T11:30:00+00:00'   # 30 min old, min_age 60
+        dispatch, young, tape = self._gate(
+            [f1], states={f1: 'ONLINE'}, md=self._md([f1], fresh))
+        self.assertEqual(dispatch, [])
+        self.assertEqual(young, [f1])
+
+    def test_unknown_age_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'ONLINE'},
+                       md=lambda fl: [])   # no metadata returned
+
+    def test_locality_error_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'ERROR'})
+
+    def test_missing_file_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'MISSING'})
+
+    def test_unknown_storage_location_fails_closed(self):
+        f1 = _mk_file('A', 1)
+        with self.assertRaises(RuntimeError):
+            self._gate([f1], states={f1: 'ONLINE'}, loc='N/A')
+
+    def test_legacy_create_datetime_key_still_works(self):
+        # Tolerance for metadata carrying ONLY the old key name.
+        f1 = _mk_file('A', 1)
+        dispatch, young, tape = self._gate(
+            [f1], states={f1: 'ONLINE'}, md=self._md_legacy([f1]))
+        self.assertEqual(dispatch, [f1])
+        self.assertEqual(young, [])
+        self.assertEqual(tape, [])
+
+
+# ---------------------------------------------------------------------------
+# 48. _request_prestage: never-raises contract + tmpfile hygiene
+# ---------------------------------------------------------------------------
+
+class TestRequestPrestage(unittest.TestCase):
+    def test_runner_exception_does_not_raise(self):
+        from utils import submissions
+
+        def boom(*a, **k):
+            raise OSError('mdh not found')
+
+        submissions._request_prestage(['f1'], runner=boom)  # must not raise
+
+    def test_nonzero_returncode_does_not_raise_and_prints(self):
+        from utils import submissions
+
+        def fail(*a, **k):
+            return types.SimpleNamespace(returncode=1, stderr='boom')
+
+        old_stdout, sys.stdout = sys.stdout, io.StringIO()
+        try:
+            submissions._request_prestage(['f1'], runner=fail)
+            printed = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+        self.assertIn('prestage request failed', printed)
+
+    def test_success_command_and_file_contents_then_unlinked(self):
+        from utils import submissions
+        calls = {}
+
+        def runner(cmd, **kw):
+            calls['cmd'] = cmd
+            with open(cmd[2]) as fh:
+                calls['content'] = fh.read()
+            return types.SimpleNamespace(returncode=0, stderr='')
+
+        submissions._request_prestage(['b', 'a'], runner=runner)
+        self.assertEqual(calls['cmd'][:2], ['mdh', 'prestage-files'])
+        self.assertEqual(calls['content'], 'a\nb\n')
+        self.assertFalse(os.path.exists(calls['cmd'][2]))
+
+    def test_empty_files_returns_early(self):
+        from utils import submissions
+        calls = []
+
+        def runner(cmd, **kw):
+            calls.append(cmd)
+            return types.SimpleNamespace(returncode=0)
+
+        submissions._request_prestage([], runner=runner)
+        self.assertEqual(calls, [])
+
+
+# ---------------------------------------------------------------------------
+# 49. Draining campaigns: file-keyed verify + recovery
+# ---------------------------------------------------------------------------
+
+class _DrainParsTwoStream:
+    """Fake Mu2eJobPars with TWO output streams per job (mcs + nts).
+
+    verify_files_row's partial branch (some but not all of an input's
+    expected outputs landed) can never fire against the shared
+    single-stream _DrainPars fake — every file has exactly one expected
+    output, so it is either wholly present or wholly missing. This fake
+    gives each input two independently-landable streams.
+    """
+
+    def __init__(self, path):
+        pass
+
+    def job_outputs(self, index, override_desc=None, override_seq=None):
+        return {
+            'Output': f'mcs.mu2e.{override_desc}.MDC2025au_best_v1_5.'
+                      f'{override_seq}.art',
+            'ntuple': f'nts.mu2e.{override_desc}.MDC2025au_best_v1_5.'
+                      f'{override_seq}.root',
+        }
+
+
+class TestVerifyFilesRow(unittest.TestCase):
+    ROW = {'id': 7, 'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+           'entry': {'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                     'inloc': 'tape',
+                     'outputs': [{'dataset': '*.art', 'location': 'tape'}]},
+           'indices': [_mk_file('A', 1), _mk_file('B', 2)],
+           'attempt': 1, 'cluster_id': '123', 'parent_id': None}
+
+    def _verify(self, existing_outputs):
+        from utils import submissions
+        with patch.object(submissions, 'locate_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions, 'Mu2eJobPars', _DrainPars):
+            return submissions.verify_files_row(
+                dict(self.ROW), sam_lister=lambda ds: existing_outputs)
+
+    def test_all_outputs_present_is_complete(self):
+        missing, partial = self._verify([_mk_out('A', 1), _mk_out('B', 2)])
+        self.assertEqual(missing, [])
+        self.assertEqual(partial, [])
+
+    def test_missing_output_names_the_input_file(self):
+        missing, partial = self._verify([_mk_out('A', 1)])
+        self.assertEqual(missing, [_mk_file('B', 2)])
+        self.assertEqual(partial, [])
+
+    def test_unlocatable_tarball_raises(self):
+        from utils import submissions
+        with patch.object(submissions, 'locate_tarball',
+                          return_value=None):
+            with self.assertRaises(RuntimeError):
+                submissions.verify_files_row(dict(self.ROW))
+
+    def test_one_stream_missing_flags_partial_both_missing_does_not(self):
+        # A: mcs landed, nts didn't -> missing AND partial.
+        # B: neither stream landed -> missing only (not partial: ALL
+        # expected outputs are absent, not just some).
+        from utils import submissions
+
+        def mcs(desc, i):
+            return (f'mcs.mu2e.{desc}.MDC2025au_best_v1_5.'
+                    f'001202_{i:08d}.art')
+
+        def nts(desc, i):
+            return (f'nts.mu2e.{desc}.MDC2025au_best_v1_5.'
+                    f'001202_{i:08d}.root')
+
+        listing = {
+            'mcs.mu2e.A.MDC2025au_best_v1_5.art': [mcs('A', 1)],
+            'nts.mu2e.A.MDC2025au_best_v1_5.root': [],
+            'mcs.mu2e.B.MDC2025au_best_v1_5.art': [],
+            'nts.mu2e.B.MDC2025au_best_v1_5.root': [],
+        }
+        with patch.object(submissions, 'locate_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submissions.os.path, 'exists',
+                          return_value=True), \
+             patch.object(submissions, 'Mu2eJobPars', _DrainParsTwoStream):
+            missing, partial = submissions.verify_files_row(
+                dict(self.ROW), sam_lister=lambda ds: listing.get(ds, []))
+        a_file, b_file = _mk_file('A', 1), _mk_file('B', 2)
+        self.assertEqual(missing, [a_file, b_file])
+        self.assertEqual(partial, [a_file])
+
+
+class TestResubmitFiles(unittest.TestCase):
+    def test_child_submission_uses_files_flag_and_parent(self):
+        from utils import submissions
+        row = dict(TestVerifyFilesRow.ROW)
+        missing = [_mk_file('B', 2)]
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen['cmd'] = list(cmd)
+            seen['files_text'] = Path(
+                cmd[cmd.index('--files') + 1]).read_text()
+            return SimpleNamespace(returncode=0)
+
+        ok = submissions.resubmit_files(row, missing, '/x.db',
+                                        runner=fake_run)
+        self.assertTrue(ok)
+        cmd = seen['cmd']
+        self.assertIn('--files', cmd)
+        self.assertIn('--ledger-parent', cmd)
+        self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
+        self.assertIn(missing[0], seen['files_text'])
+        # recovery resource floor applies (entry names no resources)
+        self.assertIn('--memory', cmd)
+
+
+class TestProcessRowKindDispatch(unittest.TestCase):
+    def test_draining_row_uses_file_verify_and_file_resubmit(self):
+        from utils import submissions
+        row = dict(TestVerifyFilesRow.ROW)
+        called = {}
+
+        def fake_verify(r):
+            called['verify'] = True
+            return [], []
+
+        with patch.object(submissions, 'verify_files_row', fake_verify), \
+             patch.object(submissions.submission_ledger, 'close_row'):
+            action = submissions.process_row(
+                row, '/x.db', 3,
+                clusters={},   # cluster absent from snapshot -> drained
+                dry_run=False)
+        self.assertEqual(action, 'complete')
+        self.assertTrue(called.get('verify'))
+
+    def test_draining_row_dispatches_resubmit_files_not_resubmit(self):
+        # Missing-outputs path: confirms the resubmit_fn half of the
+        # per-kind dispatch (untested until now) resolves to
+        # resubmit_files, not resubmit, for a draining row.
+        from utils import submissions
+        row = dict(TestVerifyFilesRow.ROW)
+        missing = [_mk_file('B', 2)]
+        calls = {}
+
+        def fake_verify(r):
+            return list(missing), []
+
+        def fake_resubmit_files(r, miss, db_path):
+            calls['resubmit_files'] = (r, list(miss), db_path)
+            return True
+
+        def fake_resubmit(r, miss, db_path):
+            calls['resubmit'] = True
+            return True
+
+        # open_rows is consulted twice on the resubmit path: once for the
+        # crash-window "child already active" pre-check (no children yet),
+        # once after resubmit_fn succeeds to find the new child row (see
+        # TestRecoverLoop, which fakes this via a real ledger; here it's
+        # patched directly since this test uses a fake db_path).
+        child_row = {'id': 8, 'parent_id': row['id'], 'state': 'active'}
+
+        with patch.object(submissions, 'verify_files_row', fake_verify), \
+             patch.object(submissions, 'resubmit_files', fake_resubmit_files), \
+             patch.object(submissions, 'resubmit', fake_resubmit), \
+             patch.object(submissions.submission_ledger, 'close_row'), \
+             patch.object(submissions.submission_ledger, 'open_rows',
+                          side_effect=[[], [child_row]]):
+            action = submissions.process_row(
+                row, '/x.db', 3, clusters={}, dry_run=False)
+        self.assertEqual(action, 'resubmitted')
+        self.assertIn('resubmit_files', calls)
+        self.assertEqual(calls['resubmit_files'], (row, missing, '/x.db'))
+        self.assertNotIn('resubmit', calls)
+
+
+# ---------------------------------------------------------------------------
+# 49. Draining campaigns: the drain tick
+# ---------------------------------------------------------------------------
+
+class TestDrainTick(unittest.TestCase):
+    CAMP = {'id': 48, 'state': 'active',
+            'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+            'entry': {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+                      'inloc': 'tape',
+                      'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                      'outputs': [{'dataset': '*.art', 'location': 'tape'}]},
+            'cursor': 0, 'slice_size': 2}
+
+    RAISE = object()   # state_map sentinel: this campaign's state_fn raises
+
+    def _tick(self, *, pending=None, cap=100, count=10, dry_run=False,
+              gate=None, submit_ok=True, camps=None, prestage_camp=False,
+              state_map=None):
+        """state_map: optional {camp_id: pending_list | TestDrainTick.RAISE}
+        for multi-campaign scenarios — RAISE makes that campaign's
+        state_fn raise (pins the fail-closed `continue`). Without it,
+        every campaign in `camps` (or the single default CAMP) gets
+        `pending` (default []) — the original single-campaign shape.
+        Records self.state_calls / self.submit_calls — the campaign ids
+        state_fn/submit_fn were actually invoked for, in call order —
+        so a campaign after a cap-wait `break` can be asserted as never
+        reached, not just inferred from an empty submitted list."""
+        from utils import submissions
+        if camps is None:
+            camp = dict(self.CAMP)
+            if prestage_camp:
+                camp = {**camp, 'entry': {**camp['entry'], 'prestage': True}}
+            camps = [camp]
+        if state_map is None:
+            state_map = {c['id']: (pending if pending is not None else [])
+                         for c in camps}
+        self.state_calls = []
+        self.submit_calls = []
+        submitted = []
+
+        def fake_state(c, db):
+            self.state_calls.append(c['id'])
+            val = state_map[c['id']]
+            if val is self.RAISE:
+                raise RuntimeError('state boom')
+            return {'inputs': set(val), 'landed': set(),
+                    'in_flight': set(), 'parked': set(),
+                    'pending': sorted(val)}
+
+        def fake_submit(c, batch, db):
+            self.submit_calls.append(c['id'])
+            submitted.append(list(batch))
+            return submit_ok
+
+        prestaged = []
+        with patch.object(submissions.submission_ledger,
+                          'active_campaigns', return_value=camps), \
+             patch.object(submissions.submission_ledger,
+                          'set_campaign_state') as scs:
+            summary = submissions.drain_tick(
+                '/x.db', cap, dry_run=dry_run,
+                count_fn=lambda: count,
+                submit_fn=fake_submit,
+                state_fn=fake_state,
+                gate_fn=gate or (lambda e, cand: (list(cand), [], [])),
+                prestage_fn=lambda fl: prestaged.append(list(fl)))
+        return summary, submitted, prestaged, scs
+
+    def test_one_gated_batch_per_campaign(self):
+        pend = [_mk_file('A', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(pending=pend)
+        self.assertEqual(summary.get('drain-batch'), 1)
+        self.assertEqual(submitted, [sorted(pend)[:2]])   # slice_size=2
+
+    def test_idle_campaign_reports_and_submits_nothing(self):
+        summary, submitted, _, _ = self._tick(pending=[])
+        self.assertEqual(summary.get('drain-idle'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_cap_stops_the_phase(self):
+        pend = [_mk_file('A', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(pending=pend, cap=11,
+                                              count=10)
+        self.assertEqual(summary.get('drain-cap-wait'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_gate_failure_is_fail_closed(self):
+        def bad_gate(entry, cand):
+            raise RuntimeError('mdh down')
+        pend = [_mk_file('A', 1)]
+        summary, submitted, _, _ = self._tick(pending=pend, gate=bad_gate)
+        self.assertEqual(summary.get('drain-error'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_submit_failure_pauses_campaign(self):
+        pend = [_mk_file('A', 1)]
+        summary, _, _, scs = self._tick(pending=pend, submit_ok=False)
+        self.assertEqual(summary.get('campaign-paused'), 1)
+        scs.assert_called_once()
+        self.assertEqual(scs.call_args[0][2], 'paused')
+
+    def test_dry_run_submits_nothing_but_counts(self):
+        pend = [_mk_file('A', 1)]
+        summary, submitted, _, _ = self._tick(pending=pend, dry_run=True)
+        self.assertEqual(summary.get('would-drain-batch'), 1)
+        self.assertEqual(submitted, [])
+
+    def test_prestage_requested_for_tape_only(self):
+        pend = [_mk_file('A', 1), _mk_file('A', 2)]
+
+        def gate(entry, cand):
+            return [cand[0]], [], [cand[1]]
+        summary, submitted, prestaged, _ = self._tick(
+            pending=pend, gate=gate, prestage_camp=True)
+        self.assertEqual(prestaged, [[sorted(pend)[1]]])
+        self.assertEqual(submitted, [[sorted(pend)[0]]])
+
+    def test_index_campaigns_are_ignored(self):
+        camps = [{'id': 1, 'state': 'active', 'tarball': 't',
+                  'entry': {'njobs': 100}, 'cursor': 0, 'slice_size': 10}]
+        summary, submitted, _, _ = self._tick(pending=[], camps=camps)
+        self.assertEqual(summary, {})
+        self.assertEqual(submitted, [])
+
+    # -- multi-campaign control-flow contracts -----------------------
+
+    def test_cap_wait_breaks_before_next_campaign(self):
+        # camp_a's batch alone exceeds the cap -> drain-cap-wait AND
+        # the loop breaks: camp_b (oldest-first, second in line) must
+        # never be evaluated this tick, not merely "not submitted".
+        camp_a = {**self.CAMP, 'id': 101}
+        camp_b = {**self.CAMP, 'id': 102}
+        pend_a = [_mk_file('A', i) for i in range(5)]
+        pend_b = [_mk_file('B', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(
+            camps=[camp_a, camp_b], cap=11, count=10,
+            state_map={101: pend_a, 102: pend_b})
+        self.assertEqual(summary.get('drain-cap-wait'), 1)
+        self.assertEqual(submitted, [])
+        self.assertEqual(self.state_calls, [101])
+        self.assertEqual(self.submit_calls, [])
+
+    def test_state_error_continues_to_next_campaign(self):
+        # camp_a's state_fn raises (fail-closed, drain-error) but the
+        # tick must continue: camp_b still gets evaluated and submits
+        # its normal batch.
+        camp_a = {**self.CAMP, 'id': 201}
+        camp_b = {**self.CAMP, 'id': 202}
+        pend_b = [_mk_file('B', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(
+            camps=[camp_a, camp_b], cap=100, count=10,
+            state_map={201: self.RAISE, 202: pend_b})
+        self.assertEqual(summary.get('drain-error'), 1)
+        self.assertEqual(summary.get('drain-batch'), 1)
+        self.assertEqual(submitted, [sorted(pend_b)[:2]])
+        self.assertEqual(self.state_calls, [201, 202])
+        self.assertEqual(self.submit_calls, [202])
+
+    def test_dry_run_cap_accumulates_across_campaigns(self):
+        # cap=3, count=0, batch=2 each: camp_a's dry-run batch must be
+        # ADDED to the running count before camp_b is checked, or
+        # camp_b would also read as within cap (would-drain-batch=2,
+        # drain-cap-wait=0) instead of hitting cap-wait.
+        camp_a = {**self.CAMP, 'id': 301}
+        camp_b = {**self.CAMP, 'id': 302}
+        pend_a = [_mk_file('A', i) for i in range(5)]
+        pend_b = [_mk_file('B', i) for i in range(5)]
+        summary, submitted, _, _ = self._tick(
+            camps=[camp_a, camp_b], cap=3, count=0, dry_run=True,
+            state_map={301: pend_a, 302: pend_b})
+        self.assertEqual(summary.get('would-drain-batch'), 1)
+        self.assertEqual(summary.get('drain-cap-wait'), 1)
+        self.assertEqual(submitted, [])
+        self.assertEqual(self.state_calls, [301, 302])
+
+    def test_tape_only_without_prestage_opt_in_skips_request(self):
+        # Negative case: tape-only candidates exist but the entry did
+        # not opt in with prestage: true -> prestage_fn must not fire.
+        pend = [_mk_file('A', 1), _mk_file('A', 2)]
+
+        def gate(entry, cand):
+            return [cand[0]], [], [cand[1]]
+        summary, submitted, prestaged, _ = self._tick(
+            pending=pend, gate=gate)   # prestage_camp defaults False
+        self.assertEqual(prestaged, [])
+        self.assertEqual(submitted, [[sorted(pend)[0]]])
+
+    def test_dry_run_prestage_does_not_call_but_prints(self):
+        # dry-run + prestage: true + tape-only -> prints the "would
+        # request" line but never calls prestage_fn (no side effect
+        # under --dry-run).
+        import contextlib
+        pend = [_mk_file('A', 1), _mk_file('A', 2)]
+
+        def gate(entry, cand):
+            return [cand[0]], [], [cand[1]]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            summary, submitted, prestaged, _ = self._tick(
+                pending=pend, gate=gate, prestage_camp=True, dry_run=True)
+        self.assertEqual(prestaged, [])
+        self.assertEqual(submitted, [])
+        self.assertIn('would request prestage', buf.getvalue())
+
+
+class TestTopUpSkipsDraining(unittest.TestCase):
+    def test_draining_campaign_never_reaches_index_arithmetic(self):
+        from utils import submissions
+        camp = dict(TestDrainTick.CAMP)   # no njobs -> would TypeError
+        with patch.object(submissions.submission_ledger,
+                          'active_campaigns', return_value=[camp]):
+            summary = submissions.top_up('/x.db', 100,
+                                         count_fn=lambda: 0,
+                                         submit_fn=lambda *a: True)
+        self.assertEqual(summary, {})
+
+
+# ---------------------------------------------------------------------------
+# 50. Draining campaigns: status + complete verb
+# ---------------------------------------------------------------------------
+
+class TestCompleteVerb(unittest.TestCase):
+    def test_complete_closes_an_active_campaign(self):
+        from utils import submissions
+        with patch.object(submissions.submission_ledger,
+                          'set_campaign_state') as scs:
+            submissions.manage_campaign('/x.db', 48, 'complete')
+        scs.assert_called_once()
+        self.assertEqual(scs.call_args[0][2], 'complete')
+
+    def test_parser_accepts_complete(self):
+        from utils import submissions
+        args = submissions.build_parser().parse_args(['complete', '48'])
+        self.assertEqual(args.verb, 'complete')
+        self.assertEqual(args.camp_id, 48)
+
+
+class TestStatusDrainingLine(unittest.TestCase):
+    def test_draining_campaign_prints_pattern_and_ledger_counts(self):
+        from utils import submissions
+        import io, contextlib as _ctx
+        camp = {**TestDrainTick.CAMP,
+                'created_utc': '2026-08-01T00:00:00+00:00'}
+        row = {'id': 1, 'state': 'active', 'attempt': 1, 'parent_id': None,
+               'tarball': camp['tarball'], 'entry': camp['entry'],
+               'indices': [_mk_file('A', 1), _mk_file('A', 2)],
+               'created_utc': '2026-08-01T00:00:00+00:00',
+               'cluster_id': '123', 'jobsub_id': '1.0@s',
+               'map_path': None, 'closed_utc': None, 'note': None}
+        buf = io.StringIO()
+        with patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[row]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[camp]), \
+             _ctx.redirect_stdout(buf):
+            submissions.print_status('/x.db')
+        out = buf.getvalue()
+        self.assertIn('dig.mu2e.%.MDC2025au_best_v1_5.art', out)
+        self.assertIn('in-flight 2', out)
+        self.assertIn('draining', out)
+
+    def test_empty_rows_still_shows_draining_campaign(self):
+        # Freshly-enqueued campaign, day 1: no ledger rows yet (nothing
+        # dispatched this tick), but the campaign itself must not be
+        # hidden behind the "Ledger is empty" early return.
+        from utils import submissions
+        import io, contextlib as _ctx
+        camp = {**TestDrainTick.CAMP,
+                'created_utc': '2026-08-01T00:00:00+00:00'}
+        buf = io.StringIO()
+        with patch.object(submissions.submission_ledger, 'all_rows',
+                          return_value=[]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[camp]), \
+             _ctx.redirect_stdout(buf):
+            submissions.print_status('/x.db')
+        out = buf.getvalue()
+        self.assertIn('empty', out.lower())
+        self.assertIn('dig.mu2e.%.MDC2025au_best_v1_5.art', out)
+        self.assertIn('draining', out)
 
 
 # ---------------------------------------------------------------------------

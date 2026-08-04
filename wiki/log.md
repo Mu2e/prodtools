@@ -642,3 +642,578 @@ Production/CampaignConfig/mdc2025_*.cfg; one static stage_main_runjobdef
 serves every MDC2025-NNN.json via %(map)s; MDC2025 recovery config lives
 ONLY in the POMS DB (web-UI check = new open question #5). Page:
 [[poms-reference]] updated; stale prodtools/poms/ pointer corrected.
+
+## [2026-07-11] run | NoPrimary.Run1Ban-001 remake (100× stats, 10B events)
+Pages written: 2026-07-11-noprimary-run1ban-001-remake
+Pages updated: none
+Push: json2jobdef --prod RC=0 → cnf.mu2e.NoPrimary.Run1Ban-001.0.tar in SAM,
+new POMS map MDC2025-033.json (njobs 50000), idx iMDC2025-033. New dataset
+name (option B, non-destructive) forced by name collision + 200k-vs-5k
+ev/file granularity change; mix.json NoPrimary entries repointed to -001,
+merge 10→1 (200k ev/file makes merge-10 = 2M ev/mixing-job). PENDING: POMS
+campaign stage for the new map number to dispatch the 50k jobs.
+
+## [2026-07-12] decision | hygiene tiers 1+2 applied; kept-duplication list recorded
+Pages written: 2026-07-12-hygiene-tiers-and-kept-duplication
+Commits: 3a6b961 (tier 1: dead symbols, locate/definitions dedup, q_* privatized,
+fail()/_reorder helpers), af681e1 (tier 2: write_direct_input_fcl unifies the
+DRIFTED worker/fcldump direct-input writers; config_utils.cnf_name single-homes
+the cnf-name contract, byte-verified vs pushed NoPrimary.Run1Ban-001 cnf;
+runmu2e._execute_mu2e). Net −150 lines, 322/322 tests. Tier 3 deferred
+(prod_utils runner-family relocation, validation-ladder tabling, campaign-regex
+unification-after-parity-check, bin stubs).
+
+## [2026-07-17] update | tier-3 runner-family relocation executed
+Pages updated: 2026-07-12-hygiene-tiers-and-kept-duplication
+Commit: bff51a4 — the 7 runner functions + private helpers + validate_jobdesc
+moved prod_utils→runmu2e (byte-identical bodies; prod_utils 921→345,
+runmu2e 359→933; _fetch_file_local/resolve_map_index stayed — submit.py
+consumes them). 342/342 tests before and after. Re-evaluated the rest of
+tier 3: validation-ladder tabling and bin-stub symlinks have stale premises
+(rules already tabled + coverage exists; stubs not byte-identical) — marked
+skip. Campaign-regex co-location and json_data typed accessors remain open.
+
+## [2026-07-18] update | /simplify pass applied across utils+bin+web
+Pages added: 2026-07-18-simplify-pass-consolidations
+Four-agent reuse/simplification/efficiency/altitude sweep; ~26 findings
+applied, 342/342 green. New single homes: poms_entry map-dir/pattern +
+default_db_path (POMS_DB_PATH honored in-function, WSGI monkey-patch gone),
+config_utils.mixing_desc, file_resolver location classifier +
+path_from_sam_locations, famtree.output_stem, Mu2eJobBase.setup. New
+samweb_wrapper batch surface: metadata_for_files, first_file_in_definition,
+definition_creation_date. Batch SAM adoption in copy_to_stash, /api/jobs,
+mkrecovery (single scan per entry), build_lineage (known-set walk).
+render_static now fails loudly on template drift. Dead json_output mode and
+~10 unused imports removed. Skipped as behavior decisions: ntd tier-prefix
+whitelist in job_outputs, Job.indef dual grammar, runmu2e normal-mode
+double parse.
+
+## [2026-07-18] decision | tool-retirement pass — verdicts applied, ops decommission recorded
+Pages written: 2026-07-18-tool-retirement
+Evidence-first 11-task pass (`docs/superpowers/plans/2026-07-18-tool-retirement-verdicts.md`)
+retired `bin/mkidxdef`+`utils/mkidxdef.py` (`950106c`), `bin/setup_run1b.sh`
+(`f5a84ab`), `latestDatasets --names-only` (`a911300`), and — after the user's
+"decommission + retire" ruling on a live cgi-bin deployment the design spec
+had assumed was unused — the Flask app + JSON-editor UI (`cd955de`). Kept:
+all `pomsMonitor` flags, `latestDatasets`/`listNewDatasets` (distinct
+charters, no fold), `datasetFileList` (real code callers). Byte-diff gate
+(Task 8) surfaced a real `setup_script`-emptying bug in the old WSGI stub;
+user accepted the corrected (slower, working) behavior. cgi-bin
+deregistration is a human, out-of-repo step, not yet done — runbook in
+`web/pomsMonitor/README.md` and quoted on the new page. 344/344 tests green.
+
+## [2026-07-18] update | 2026-07-18-tool-retirement (ops decommission gap: cron also reads the stale checkout)
+Pages updated: 2026-07-18-tool-retirement
+Reason: final whole-branch review caught that `cron_run_inspect_datasets.sh`
+runs `db_builder.py`/`build_lineage.py`/`render_static.py` from the same
+synced `cgi-bin/prodtools/` checkout (pinned `3ad4069`) the WSGI shim used —
+not just the retired Flask app. The prior runbook wording ("checkout can
+stay") was wrong: until synced past this branch, the nightly cron keeps
+running the old Flask-test-client render path with the `setup_script` bug.
+Runbook in `web/pomsMonitor/README.md` and this page's Ops-decommission
+section both gained an explicit sync-checkout step (before/with the
+`wsgi.py` deregistration) plus a post-sync `setup_script` verification.
+
+## [2026-07-18] ingest | direct-backend recovery loop implemented (ledger + recover + cron)
+Pages written: 2026-07-18-direct-recovery-loop
+Pages updated: (none — index.md left for a future lint pass)
+Sources: `docs/superpowers/specs/2026-07-18-direct-recovery-design.md`,
+`docs/superpowers/plans/2026-07-18-direct-recovery.md`
+Reason: `submit_map --backend direct` had no automated recovery. Six-task
+TDD plan built `utils/submission_ledger.py` (stdlib-sqlite3 row store,
+states active|complete|recovered|exhausted, entry snapshot + absolute
+cnf indices + full jobsub id, attempt chains via parent_id), a ledger
+hook in `utils/submit.py` (new `--ledger-db`/`--ledger-parent`/
+`--no-ledger` flags, full `cluster.proc@schedd` parsing), a scoped-index
+extension to `utils/mkrecovery.build_file_maps`, `utils/recover.py` +
+`bin/recover` (drain-gate via jobsub_q, SAM-only verification, capped
+resubmit through the `submit_map` CLI, `--status`/`--dry-run`/`--row`/
+`--max-attempts`, exit 2 on held/exhausted rows), and `bin/recover_cron`
+(flock + quiet env + report-only token gate, dated log beside the DB —
+not installed in any crontab by this work). 380/380 unit tests green,
+all new tests injecting fakes for jobsub_q/SAM/subprocess (no network).
+Docs regenerated: `docs/EXAMPLES_schema.md` tool list + tribal-knowledge
+bullet, full `EXAMPLES.md` regen (submit_map ledger flags + new
+`recover` subsection + updated ops-scripts line), this wiki page.
+**Pre-activation checklist pending** (blocks the mu2epro crontab
+install): duplicate-declare behavior needs a live verify against a
+partially-landed index, one real `recover --dry-run` pass on a drained
+cluster, and `jobsub_q --jobid <id> -af JobStatus` passthrough needs
+confirming against the GPVM's actual jobsub_lite install. See the wiki
+page's "Pre-activation checklist" section.
+
+## [2026-07-19] ingest | sliced-campaign submission (top-up phase on the direct-recovery loop)
+Pages updated: 2026-07-18-direct-recovery-loop
+Sources: `docs/superpowers/specs/2026-07-18-sliced-submission-design.md`,
+`docs/superpowers/plans/2026-07-18-sliced-submission.md`
+Reason: POMS launches campaign stages via a server-side `drainingn`/
+`nfiles` split-type cron; the direct backend had the slice mechanism
+(`submit_map --first N --num M`) but no automation — a human advanced
+the cursor by hand. Built on top of the direct-recovery loop merged
+2026-07-18 (same ledger DB, same hourly cron, same lock): a new
+`campaigns` table in `utils/submission_ledger.py` (entry snapshot,
+cursor, slice_size, states active|complete|paused|cancelled,
+duplicate-active-tarball refusal), `submit_map --enqueue`/`--slice-size`
+(registers, submits nothing), a top-up phase inside `utils/recover.py`
+that runs after the existing recovery pass under the same lock
+(fast-path skip when no campaigns are active; round-robins whole
+slices to active campaigns while `jobsub_q --user mu2epro -af
+JobStatus` idle+running stays under a cap resolved `--max-queued` flag
+`>` `MU2E_MAX_QUEUED` env `>` `DEFAULT_MAX_QUEUED = 10000`; submit
+failure pauses the campaign rather than blind-retrying),
+`--pause-campaign`/`--resume-campaign`/`--cancel-campaign` operator
+switches, and a dated `submit-YYYYMMDD.log` beside the ledger DB
+recording every direct-backend submission attempt (manual, slice, or
+recovery resubmit) uniformly. A second, independent fix rode along:
+resource requests (`memory`/`disk`/`expected_lifetime`) move into
+optional map-entry keys (`utils/poms_entry.resources_of`,
+`json2jobdef` passthrough via `append_jobdef`) with precedence CLI
+flag > entry key > built-in default, frozen into the ledger/campaign
+snapshot at submission time — recoveries no longer silently downgrade
+a CLI `--memory 4000MB` to the 2000MB built-in default on resubmit.
+434/434 unit tests green (fake queue-count function and fake subprocess
+runner, no network). Docs: `docs/EXAMPLES_schema.md` coverage
+requirements + three tribal-knowledge bullets, full `submit_map`/
+`recover` section regen in `EXAMPLES.md` plus a resource-keys note in
+section 3, and a new "Sliced campaigns (top-up phase)" section on the
+existing wiki page (enqueue workflow, top-up semantics, pause/resume/
+cancel, the three-log-layer debugging story, the resource-key
+inheritance fix).
+**NOT activated** — gated behind the same pre-activation checklist as
+the underlying recovery loop (now four items: the original three plus
+confirming `jobsub_q --user mu2epro -af JobStatus` passthrough, since
+the top-up queue count is a new call site of that same assumption).
+Nothing installed in mu2epro's crontab by this work.
+
+## [2026-07-19] update | workflow hardening — submissions CLI, single-backend submit_map
+Pages updated: 2026-07-18-direct-recovery-loop
+Sources: `docs/superpowers/specs/2026-07-19-workflow-hardening-design.md`,
+`docs/superpowers/plans/2026-07-19-workflow-hardening.md`
+Reason: pre-activation review of the direct-recovery/sliced-campaign
+subsystem (merged 2026-07-18/19, still not in any crontab) surfaced
+multi-operator footguns — the target operators include production
+people without this repo's tribal context, so the CLI had to become
+safe by default before go-live. Seven-task TDD plan, all landed on
+`field-off-option`:
+1. **Rename `recover` → `submissions`, verb structure.** The bare
+   command is now read-only `status` (explicit `argparse
+   set_defaults`, not a hidden fallthrough); mutating actions require
+   an explicit verb: `run [--dry-run|--row|--max-attempts|--max-queued]`,
+   `pause CAMP_ID [--note TEXT]`, `resume CAMP_ID`, `cancel CAMP_ID`,
+   plus a global `--db`. `bin/recover` deleted outright (no alias — no
+   muscle memory existed yet); `bin/recover_cron` → `bin/submissions_cron`
+   (now just `submissions run` under flock/token-gate/quiet-env,
+   unchanged behavior otherwise); cron log renamed
+   `submissions-YYYYMMDD.log`; lock file `submissions.lock`.
+   `utils/recover.py` → `utils/submissions.py`.
+2. **Exit-code honesty in `run`.** Two additions to the needs-attention
+   (exit 2) set: a queue-count failure (`jobsub_q` itself unreadable —
+   previously skipped top-up silently and exited 0, starving every
+   campaign invisibly to cron monitoring) and a *lingering* paused
+   campaign (any campaign still `paused` when `run` executes, not just
+   the tick that paused it — the signal now repeats every tick until a
+   human runs `resume`/`cancel`). Both apply under `--dry-run` too.
+   `status` never exits 2 — display, not monitor.
+3. **Clean errors and flag hygiene.** Enqueue failures (duplicate live
+   campaign, invalid/missing njobs, DB errors) now print a one-line
+   `submit_map: <reason>` and exit 1 — no tracebacks for
+   operator-reachable errors. `--enqueue --no-ledger` is refused at
+   argument validation (a campaign has nowhere to track its cursor
+   without the ledger). The old "`--status` + a management flag
+   silently ignores the management flag" footgun is resolved
+   structurally by the verb split in (1).
+4. **Pause-note preservation.** `resume` no longer clobbers the note
+   explaining *why* a campaign was paused; `pause` gained an optional
+   `--note TEXT` (default unchanged). `cancel` behavior unchanged.
+5. **Scratch-dir cleanup.** One shared helper (used by both the
+   sliced-campaign `submit_slice` and the recovery resubmit path)
+   creates the child `submit_map`'s scratch map dir and removes it in
+   `finally` after the child completes, success or failure — hourly
+   cron was accumulating `mkdtemp` dirs in `/tmp` indefinitely.
+   Cleanup failure warns, never raises.
+6. **`submit_map` single-backend (direct-only) — `mu2ejobsub` backend
+   retired.** Deleted: the `--backend` flag, `_submit_entry_mu2ejobsub`,
+   `build_mu2ejobsub_argv`, and the backend dispatch in `submit_entry`;
+   passing `--backend` anything is now an argparse error. `submit_slice`
+   and the recovery resubmit path drop `--backend direct` from their
+   child `submit_map` argv. **Boundary — untouched by this change:** the
+   upstream `mu2ejobsub` tool, the POMS launch path that drives it,
+   `runmu2e`'s worker-side Perl-shim compatibility for POMS-launched
+   workers, and the Perl parity tests — all fully supported, unchanged.
+   Only prodtools' own Phase-1 CLI *driver* of `mu2ejobsub` is gone.
+   Policy going forward: `template`/`direct_input`/`g4bl` entry modes
+   and HPC submission are not submittable via `submit_map` (the direct
+   worker doesn't support them) — they run via POMS campaigns or the
+   upstream `mu2ejobsub`/`mu2eg4bl` CLIs directly.
+7. **Docs** (this update): wiki runbook
+   `2026-07-18-direct-recovery-loop` respelled throughout (every
+   `recover` invocation, `recover_cron`, the cron log/lock names, the
+   5-item pre-activation checklist — items unchanged, spellings
+   updated) plus a new **Operator quickstart** section (POMS-vs-direct
+   decision tree including where template/direct_input/g4bl/HPC
+   submissions live and the never-submit-both-paths warning; the human
+   ksu environment for running `submit_map` as mu2epro; how to read
+   `submissions` output; a one-line-per-cause exit-2 playbook covering
+   all seven causes). `docs/EXAMPLES_schema.md` + full regen of the
+   affected `EXAMPLES.md` sections (tools list, `submit_map`, the new
+   `submissions` subsection replacing `recover`, troubleshooting
+   entries matching the current `submit_map:`/lock/enqueue error text).
+   460/460 unit tests green.
+
+**Decided against — cross-path ownership key.** An earlier draft of
+this hardening pass would have answered "nothing stops
+double-submitting an entry POMS already runs" with a `"backend":
+"direct"` map-entry key that `submit_map` would refuse to submit
+without. Dropped by user decision 2026-07-19: the longer-term plan is
+to move away from POMS entirely, so the key would be scaffolding for a
+coexistence period that's meant to end, and its per-entry friction
+would outlive its usefulness. During the transition the risk is
+carried by the operator decision tree (this update's Operator
+quickstart section) and the standing "ask how an entry was submitted
+before recovering/resubmitting" rule. See "Decided against" in
+`docs/superpowers/specs/2026-07-19-workflow-hardening-design.md` for
+the full ruling; revisit only if a real cross-path near-miss occurs
+before POMS is retired.
+
+Still **NOT activated** — same pre-activation checklist as before
+(now read with the new spellings), nothing installed in mu2epro's
+crontab by this work.
+
+## [2026-07-21] incident+update | first live direct campaign — jobsub_q -af unreliable, caught by count-error
+
+First production use of the sliced-campaign workflow (supervised
+manual mode, no cron): RMCPhaseSpace External mixes pushed to the
+DEDICATED map `MDC2025ar-rmcextmix.json` (2 entries, 14,000 jobs —
+deliberately NOT MDC2025-033: map separation is the cross-path
+double-submit guard now that the ownership key was decided against).
+Campaign 1 enqueued (`0NExternal`, slice 500). **First tick submitted
+ZERO jobs and exited 2 with count-error**: `jobsub_q --user mu2epro
+-af JobStatus` on this jobsub_lite returns blank attribute values,
+and some flag orders silently DROP the --user filter and dump every
+experiment's queue (13MB). Exactly the failure class the exit-code
+honesty change (spec Change 2) and checklist items 3+4 existed for —
+the loop refused to submit blind. Fix (commit 4467a7a): both queue
+probes (`total_queued`, `queue_state`) now parse the DEFAULT jobsub_q
+table, fail-closed (`_jobsub_table_states`: header required, skip
+token noise + `N total;` summaries, jobid-regex rows with one-letter
+ST at field 6, anything else → None). Empirical shapes captured
+2026-07-21: drained = header + zero summary, no rows; DAG children
+keep row geometry with the node name in OWNER. Second tick: 500 jobs submitted (cluster 92625184,
+indices 0-499, ledger row 1), second slice correctly cap-waited
+(690+500 > 1000). Campaign at cursor 500/7000; cap 1000 self-holds
+until the queue drains. Checklist status: items 3+4 resolved by fix,
+item 2 (real dry-run on drained row) pending the drain; kill-test
+still pending; duplicate-declare opportunistic.
+
+## 2026-07-21 — htcondor bindings: available, deferred
+
+Followed up "is there a jobsub_q python library?" with a real search.
+Correcting yesterday's entry: the bindings are NOT missing from this
+node — RPM `python3-condor-23.0.28-1.el9`,
+`/usr/lib64/python3.9/site-packages/htcondor`, imports fine from
+`/usr/bin/python3`. `import htcondor` fails under `muse setup ops`
+only because that env swaps python 3.9 → spack cvmfs 3.10.14; the 3.9
+C-extensions cannot load into 3.10, so PYTHONPATH additions do not
+help. jobsub_lite solves this by pinning every `/opt/jobsub_lite/bin/`
+script to `#!/usr/bin/python3 -I` (isolated mode, ignores our
+PYTHONPATH) — the same escape hatch is open to us.
+
+Verified from inside the ops env: `/usr/bin/python3 -I` +
+`htcondor.Collector()` auto-resolves gpcollector04/03.fnal.gov, all 8
+schedds queryable, `Owner=="mu2epro"` → `{1:174, 2:19, 4:34}`
+(idle/running/completed). No auth setup, no token handling, no text
+parsing — structured ClassAds. `pip install htcondor` into the ops
+3.10 would also work (manylinux wheel, bundled libcondor) but adds a
+non-stdlib dep to the mu2epro path.
+
+Also inspected `/opt/jobsub_lite/lib/jobsub_api.py`, which exposes
+`q()`, `submit()`, `SubmittedJob`. Not an upgrade: `q()` shells out to
+`jobsub_q` and regex-parses the same default table with a looser
+pattern (`\S+` for status, no header requirement, no fail-closed), so
+on Monday's malformed output it would have matched garbage rows and
+returned a wrong count — precisely the failure the exit-2 honesty
+change exists to catch.
+
+Decision: keep `_jobsub_table_states` as-is. Not changing the counting
+logic of a loop whose first live campaign has 500 jobs on the grid.
+When adopted, the shape is a ~15-line helper invoked as
+`/usr/bin/python3 -I` returning JSON, with the table parser as
+fallback. See [[reference_jobsub_q_af_unreliable]].
+
+## 2026-07-21 — logs went to tape on the first direct campaign (fixed)
+
+Caught by inspection, not by a test: the first 500-job slice put its log
+dataset on `enstore:/pnfs/mu2e/tape/phy-etc/log/...` (nearline). Every
+POMS-submitted sibling of the same mix round — NoPrimaryMix1BB,
+RPCInternalPhysicalMix1BB — has logs on
+`dcache:/pnfs/mu2e/persistent/datasets/phy-etc/log/...`.
+
+Root cause: `job_common.log_storage_location()` returned the FIRST data
+output's location, and this entry declares `dig.mu2e.*.art -> tape`, so
+logs inherited tape. The POMS path never hit it — `runmu2e.py:900`
+calls `push_logs(fcl, ...)` with no location and takes the 'disk'
+default. Only the direct path (`runmu2e.py:805`) passes a location.
+
+The function was not gratuitous: a non-mu2epro account whose data goes
+to `scratch` has no `storage.modify` on `/mu2e/persistent/datasets`, so
+the 'disk' default 403s. Real problem, wrong key — it keyed on the data
+location instead of on whether the account can write to persistent, so
+it over-applied to tape production.
+
+Fix (2eb8b87): logs -> 'disk' unless the data location is 'scratch'.
+Token scoping in `submit.py` already computed the log scope separately,
+so a tape campaign now requests BOTH
+`/mu2e/tape/datasets/phy-sim/dig/mu2e` and
+`/mu2e/persistent/datasets/phy-etc/log/mu2e` — verified. Added
+`TestLogStorageLocation` (6 tests); the function previously had none,
+which is how this reached production. 469 tests OK.
+
+Deployment: `_bundle_prodtools` is mtime-gated, so the stale
+`/tmp/prodtools-mu2epro.tar` (00:16) rebuilds on the next submission.
+No manual step.
+
+DECISION: the 500 tape logs stay put. Relocating means a tape->disk
+read (against standing policy) to fix small, rarely-read files. The
+dataset stays split — 500 nearline, 6500 on persistent — and that is
+accepted. Do not "fix" it later without re-litigating.
+
+Lesson: a helper that silently changes a storage class needs a test at
+birth. Grep for other places the direct path diverges from the POMS
+path by passing an explicit value where POMS takes a default.
+
+## 2026-07-21 — second slice: first full reconcile + top-up tick
+
+Ran `submissions run --dry-run --max-queued 1000` on the drained row
+(pre-activation checklist item 2) — the first real dry-run against a
+completed submission. It predicted exactly what the live tick did:
+`row 1: would close complete (500 indices verified)`, one slice of 500,
+then cap-wait.
+
+Live tick: row 1 closed complete, cluster **70966619** (jobsub03), 500
+jobs = indices 500-999, ledger row 2 active, campaign cursor
+1000/7000, `cap-wait=1`. RC=0.
+
+Cap arithmetic reads oddly at first glance and is CORRECT: the top-up
+loop submits then does `count += n` and re-loops, so `193 idle+running`
+becomes `693+500 > 1000` on the second pass. One slice out, then self-
+hold. Not a double-count — do not "fix" it.
+
+Log-location fix shipped: `_bundle_prodtools` is mtime-gated and
+rebuilt `/tmp/prodtools-mu2epro.tar` at 10:06 (verified the fixed
+marker is inside the shipped tarball). This slice's logs should land on
+persistent disk.
+
+OPEN CHECK ON DRAIN: `samweb locate-file` a log from cluster 70966619 —
+expect `dcache:/pnfs/mu2e/persistent/datasets/phy-etc/log/`, NOT
+`enstore:`. Token storage.modify scopes are not exposed on the condor
+job ad, so placement is the only real proof. If it is tape again, stop
+before slice 3.
+
+## 2026-07-21 — first real recovery: index 519, scoped with --row
+
+Slice 2 drained 499/500. `verify_row` (run read-only as oksuzian, no
+ksu) named the gap: **index 519**, position 19 of the 500-index window,
+`partial=[]`. Not a boundary index and no streams landed at all —
+combined with dig count == log count, the job never reached the push
+stage. Single-job grid attrition (eviction / node failure), not
+systematic. 1 in 1000 across both slices.
+
+Cause is UNPROVEN and will stay that way: `Schedd.history()` times out
+on every schedd tried (`HTCondorIOError: Timeout when waiting for
+remote host`), three attempts across jobsub02/03. Live-queue `query()`
+works fine — it is history specifically that is unreachable. Exit codes
+and hold reasons for finished jobs are therefore unobtainable here,
+which independently validates verifying OUTPUT EXISTENCE rather than
+exit codes.
+
+Recovery run scoped with `submissions run --row 2` — `--row` skips
+top-up, so the campaign did not advance past the agreed 1000-job stop.
+Dry-run confirmed the scoping first (no top-up line emitted at all).
+Result: row 2 -> `recovered`, row 3 active (attempt 2, parent 2, 1
+index), cluster **29255796** on jobsub05, campaign cursor still
+1000/7000.
+
+`--row` is the right tool whenever recovery is wanted without campaign
+advancement — do not reach for pause/resume, which trips the exit-2
+lingering-paused-campaign check for no reason.
+
+## 2026-07-21 — truncated resilient pileup file: root cause and fix
+
+Index 519 failed twice, identically, with no output AND no log. The
+reproducibility is what cracked it: attrition does not repeat.
+
+`jobsub_fetchlog -G mu2e --jobid 29255796.0@jobsub05.fnal.gov` returned
+the sandbox (this WORKS even though `Schedd.history()` times out on
+every schedd, and even for a mu2epro job run as oksuzian — reach for it
+before concluding "cause unknown"). The .out held the answer:
+
+```
+Fatal Root Error: TNetXNGFile::Init
+  .../resilient/.../NeutralsFlashCat/MDC2025ad/art/
+  dts.mu2e.NeutralsFlashCat.MDC2025ad.001430_00000637.art
+  is truncated at 1048576 bytes: should be 113643009
+```
+
+Exactly 1 MiB — an interrupted dCache copy from the 2026-07-09
+staging. The file EXISTS, so every existence-based check passed; only
+art found out, at open time.
+
+Scan of all 1470 staged pileup files by PER-DATASET median size found
+exactly one bad file. (An absolute 10 MB threshold gives ~200 false
+positives — EleBeamFlashCat files are legitimately ~3 MB while
+NeutralsFlashCat are ~112 MB. Use `size < median/10`.)
+
+Blast radius computed offline from the cnf tarball (pileup assignment
+per index is deterministic): 9 of 7000 indices — 519, 1234, 1481, 1686,
+1934, 2376, 2513, 3686, 6915. Only 519 was in the submitted range.
+
+FIX: re-staged tape -> resilient as mu2epro. Source was
+ONLINE_AND_NEARLINE so no recall. Copied to a `.restage.$$` temp,
+verified size, `mv -f` over the bad file — no window with no file.
+Verified size 113643009, ADLER32 cebd4339 matching tape (via dCache
+`.(get)(<file>)(checksums)`, no 113 MB re-read), and a ROOT open
+showing 90489 Events.
+
+ROOT GAP (not yet fixed): `stash_utils._copy_dataset` runs `cp` with no
+post-copy size or checksum check, so a partial copy is silently
+accepted at staging time. That is why this sat undetected for 12 days.
+A verify step there is the real remedy — see also the pushOutput log
+bug below, which is why the failure left no SAM log to diagnose from.
+
+SECOND BUG (not yet fixed): when the data push is skipped because mu2e
+failed, pushOutput's log push errors `parents file parents_list.txt not
+found` and STILL exits RC=0, so the log never reaches SAM. Failed jobs
+are not debuggable in SAM — defeating runmu2e's always-push-logs
+design. Corollary: `log count == dig count` when both are short does
+NOT prove "died before push"; it can equally mean the log push
+no-oped. Do not infer failure stage from that equality.
+
+## 2026-07-21 — input pre-flight check shipped (check_inputs)
+
+New `utils/check_inputs.py` + `bin/check_inputs` + a gate in
+`submit_map --enqueue`. Motivated by today's index-519 incident: a
+1 MiB truncated pileup replica on resilient that passed every existence
+check and killed 9 of 7000 jobs deterministically. The check verifies a
+campaign's inputs are readable BEFORE jobs launch — resilient pileup
+present and byte-size-matching SAM (direct stat; mdh is blind to
+resilient), tape inputs staged (mdh query-dcache, not NEARLINE).
+Read-only, block-only (exit 2), fails closed. Detects and defers
+prestaging to /prestage; the enqueue gate refuses to create a campaign
+with unreadable inputs. Built via subagent-driven-development (7 tasks,
+TDD); suite 474 → 507. Full rationale on
+[[2026-07-21-input-preflight-check]].
+
+Still open from the incident (NOT addressed by this feature): staging
+(`stash_utils._copy_dataset`) accepts a partial `cp` with no size/
+checksum verify — the actual root cause of the truncated file — and
+pushOutput's log push silently no-ops on the failure path (fixed the
+specific parents_list.txt trigger in 81962f7, but pushOutput still exits
+0 after an internal ERROR).
+
+## 2026-07-22 — RMCPhaseSpace0NExternalMix1BB: production resumed (1000→1500)
+
+Index-519 recovery closed: the re-staged NeutralsFlashCat file let attempt 3
+(cluster 92640949) produce output; outputs for indices 0-999 now 1000/1000
+(dig+log). Ledger row 4 reconciled `complete` on this tick — chain 2→3→4
+fully resolved.
+
+Resumed production at the agreed conservative pace (--max-queued 1000, "one
+more slice"): cluster **29263198** (jobsub05), 500 jobs, indices 1000-1499,
+ledger row 5. Cursor 1000→1500/7000. Self-holds at cap (794 in flight).
+Dry-run predicted it exactly (row 4 would-complete + 1 would-slice). Cron
+still not installed — advancing via supervised manual ticks.
+
+## 2026-07-22 — INCIDENT+FIX: submissions drain-check fail-opened (premature recovery)
+
+Raised slice_size 500→2000 (manual `UPDATE campaigns` — no CLI verb for it;
+cap is the per-tick lever, slice_size is frozen at enqueue). The 2000-job
+slice fed cleanly (cluster 29281091, indices 4000-5999, row 13; cursor
+4000→6000/7000). But the same tick's verify pass marked rows 9/10
+`recovered` and resubmitted 142+158 indices **while ~126 of their jobs were
+still state R** — a premature double-submit.
+
+Root cause: `queue_state()` probed `jobsub_q --jobid <cluster>.0@schedd`
+(the representative proc-form id stored per row). On this jobsub_lite the
+proc-qualified form matches NOTHING — `jobsub_q --jobid 29281091.0@jobsub05`
+returned `0 total` while `jobsub_q --group mu2e | grep '^29281091\.'` showed
+1976 running (row 13's own slice, proc .0 among them). queue_state fail-
+OPENED that empty-but-valid table to `drained`, so the skip-gate never
+fired. Cluster-form `<cluster>@schedd` was ALSO unreliable (undercounts /
+zeros during churn) — jobsub_q is eventually-consistent across query paths,
+so the fix can't be a smarter count.
+
+Fix (commit e090116): fail-closed cluster-membership check. `live_clusters()`
+takes ONE `jobsub_q --user mu2epro` snapshot per tick (the complete
+collector view `total_queued` already trusts) → `{cluster:[states]}` or None
+(untrusted/unlaunchable). `cluster_queue_state(cluster_id, snapshot)`:
+None→error (never drained), absent/terminal-only→drained, any idle/running→
+running, all-held→held. `process_row` keys on `row['cluster_id']`;
+`_run_pass` fetches the snapshot once and threads it in. Validated live
+(dry-run): rows 11/12/13 (running) now correctly "jobs still in queue —
+skip". Suite 511→512.
+
+The already-fired recovery of rows 9/10 is self-healing — duplicate outputs
+dedupe via pushOutput/completeness — so no cleanup. **Large slice_size
+amplifies this exact hazard** (a 2000-job slice would resubmit up to ~2000
+duplicates on a fail-open tick); the fix removes the amplifier. See
+[[2026-07-18-direct-recovery-loop]].
+
+## 2026-07-22 — RMCPhaseSpace0NExternalMix1BB: fully submitted 7000/7000 (fix validated in prod)
+
+Closing tick (fixed code, cap 3500) fed the final slice: cluster **92690597**
+(jobsub02), indices 6000-6999, 1000 jobs, ledger row 14. Cursor 6000→7000;
+`campaign 1: fully submitted — complete`.
+
+The same tick proved the drain-check fix (e090116) in production: **row 13
+(the 2000-slice's 3 still-running tail) correctly `jobs still in queue —
+skip`** instead of being mass-recovered. Rows 11/12 (the rows 9/10 recovery
+children) verified `complete` (142+158 indices) — outputs landed, chain
+closed. Jobs succeed and register promptly: `dig` dataset held 5997/6000
+files for indices 0-5999 with exactly the 3 in-flight jobs outstanding; no
+duplicate inflation despite the earlier premature recovery (self-healing
+dedup confirmed).
+
+Review verdict (brainstorming pass): fix accepted as-is. `--user mu2epro`
+empirically matches the independent `--group mu2e` view cluster-for-cluster,
+so the membership drain signal is complete and trustworthy; residual SAM-
+registration-lag window is narrow and self-healing — a debounce would be
+over-engineering. Remaining: rows 13 (3 jobs) + 14 (1000 jobs) verify as
+they drain. See [[2026-07-18-direct-recovery-loop]].
+
+## [2026-07-25] update | Mix merge factors sized to ~5 GB with exact, round job counts
+
+Re-derived all 19 per-desc `merge` values in `templates/MDC2025/mix.json`
+against the au round's resolved input campaigns. Ten changed; all 19 now
+divide their input file count exactly, and 18 land on a round job count
+(total 7,721 jobs, 3.86–6.49 GB/file).
+
+Key enabler: the entire MDC2025ar mix round ran at **merge 1** (every
+output file count equals its input file count), so output-size ÷ file-count
+is bytes-per-input-file directly — measured, not inferred from previously
+rounded merge factors.
+
+Two impossibilities recorded rather than papered over: `ensembleMDS3c`
+(4960 = 2^5·5·31 admits no round job count) and `IPAMuminusMichel` (ideal
+merge 3.08, and 3 does not divide 5000). Open concern: `RPCExternalPhysical`
+at merge 100 runs 50 jobs, sampling ~50 of 1000 NeutralsFlashCat pileup
+files. See [[mix-merge-factor-sizing]].
+
+## [2026-07-25] update | MDC2025au mix round — wave 1 submitted (500 jobs)
+
+Wave 1 of the au mix reprocessing submitted: FlatGamma (125),
+RMCPhaseSpace0NInternal (125), RMCPhaseSpace1NInternal (50),
+MuCap1809keVCalo (200) = 500 jobs / 2.8 TB, clusters 29308498/29308499/
+92753604/29308501, ledger campaigns 6-9 rows 22-25. 0 held. Two local
+`mu2e -c -n 2` smokes exit 0 before the push.
+
+Split into waves deliberately to validate au mixing before committing
+wave 2's 6,821 jobs / 36.4 TB, which is blocked on an mdh residency
+check for four tape-backed inputs (IPAMuminusMichel, PbarResampling,
+RPCInternalPhysical, ensembleMDS3c).
+
+Two corrections recorded: direct campaigns use a throwaway /tmp map (NOT
+a new file under poms_map/, and never an append to a POMS-active
+MDC2025-NNN.json), and `json2jobdef --prod` is idempotent so re-running
+it is the correct way to add an already-pushed cnf to a map — hand-
+editing skips the index-definition rebuild. Both /mu2epro-run and
+/mu2epro-submit amended accordingly. See [[2026-07-25-mdc2025au-mix-round]].

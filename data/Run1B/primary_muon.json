@@ -317,15 +317,15 @@
     },
     {
         "desc": "NoPrimary",
-        "dsconf": "Run1Ban",
+        "dsconf": "Run1Ban-001",
         "fcl": "Production/JobConfig/primary/NoPrimary.fcl",
         "fcl_overrides": {
             "physics.producers.compressDetStepMCs.surfaceStepTag" : "FindMCPrimary",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt"
         },
-        "events": 5000,
-        "njobs": 20000,
+        "events": 200000,
+        "njobs": 50000,
         "run": 1470,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
         "owner": "mu2e",
@@ -399,6 +399,30 @@
         "inloc": "tape",
         "outloc": {
             "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "PolyFlatGamma",
+        "dsconf": "Run1Bap",
+        "fcl": "Production/JobConfig/primary/PolyFlatGamma.fcl",
+        "fcl_overrides": {
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE": 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusPolyStopsCat.Run1Bap.art": 1},
+        "events": 1000000,
+        "njobs": 1000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
         },
         "sequential_aux": true
     }

@@ -59,6 +59,19 @@
 		"owner": "mu2e"
 	},
     {
+		"desc": "ExtractedCRY",
+		"dsconf": "MDC2025as",
+		"fcl": "Production/JobConfig/cosmic/ExtractedCRY.fcl",
+		"njobs": 20000,
+		"events": 500000,
+		"run": 1400,
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025as/setup.sh",
+		"owner": "mu2e"
+	},
+    {
 	"desc": "PiBeam",
 		"dsconf": "MDC2025ac",
 		"fcl": "Production/JobConfig/beam/POT_infinitepion.fcl",

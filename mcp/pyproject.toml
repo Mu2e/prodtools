@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prodtools-mcp"
+version = "0.1.0"
+description = "Read-only MCP stdio server for Mu2e prodtools status and discovery"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.2.0",
+  # Pinned to the pool's major.minor (23.0.x), not a loose range: a pool
+  # upgrade needs a matching bump here, deliberately, rather than a
+  # silent ClassAd/wire-protocol mismatch. The system RPM htcondor is
+  # py3.9-only; PyPI ships a cp310 manylinux wheel, which is why this
+  # dependency lives in the venv, not on the ops PYTHONPATH.
+  "htcondor==23.0.*"
+]
+
+[project.scripts]
+prodtools-mcp = "prodtools_mcp.server:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

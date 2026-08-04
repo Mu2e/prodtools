@@ -1,0 +1,100 @@
+# Tool retirement verdicts (2026-07-18) — Phase A output
+
+Evidence gathered per `.superpowers/sdd/task-2-brief.md` Steps 1–4, run
+against the `tool-retirement` branch (based on `4cfa1a8`, the 2026-07-18
+simplify pass). Classification key for Step 1 hits: **code caller**
+(a `utils/`/`bin/`/`web/` importer or invocation), **docs-only**
+(wiki/EXAMPLES.md/`.claude` prose), **self-reference** (hits inside
+`docs/superpowers/` — the spec/plan for this very pass, ignored per
+audit instructions).
+
+## Headline surprise (read before the table)
+
+**A deployed public WSGI instance of the Flask app exists and is live**,
+contradicting the design spec's working hypothesis ("the live Flask app
+is not [used]", `docs/superpowers/specs/2026-07-18-tool-retirement-design.md:20`).
+`/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/pomsMonitor.wsgi`
+imports a full synced copy of this repo at
+`cgi-bin/prodtools` (pinned to commit `3ad4069`, 2026-04-29 — stale but
+readable and real), and its `web/pomsMonitor/__init__.py` shim only
+403s four *mutating* routes (`api_reload`, `api_json2jobdef`,
+`api_save_json_file`, `api_dataset_info`). The GET routes for
+`/monitor`, `/json2jobdef`, `/json-editor`, `/api/jobs`, and
+`/api/json-file/<path>` are **not** disabled — both the dashboard and
+the JSON-editor pages are reachable read-only in production today. This
+was directly readable from this host (not "unverifiable"), so per the
+audit's decision rule the external-consumer leg of RETIRE fails for
+both the Flask app and the JSON-editor feature. Both carry the
+mandatory ops-decommission note.
+
+## Verdict table
+
+| # | Item | Verdict | Evidence (callers / external / history / unique capability) | Notes for Phase B |
+|---|------|---------|-------------------------------------------------------------|-------------------|
+| 1 | `bin/mkidxdef` + `utils/mkidxdef.py` | **RETIRE** | Callers: zero code callers of `utils/mkidxdef.py` (`grep -rn "utils.mkidxdef\|import mkidxdef"` → no hits); `bin/mkidxdef` is only ever invoked by itself/docs. Confirmed known fact: `json2jobdef.py:582` calls `summarize_and_index(jobdefs_file, prod=True)` directly (imported `from utils.prod_utils import *` at `json2jobdef.py:17`), bypassing `utils/mkidxdef.py` entirely; `prod_utils.py:193-197` docstring says the function backs both, but the CLI wrapper is a pure redundant entry point. All remaining hits are docs-only (`EXAMPLES.md:60,519,525`) or self-reference (`.claude/commands/mu2epro-run.md:26,38` — a doc example, not a caller). External: zero hits in `production_manager` sweep (dir readable). History: last two touches are hygiene-only — `5c71802` (2026-07-07, "cleanup: remove usage-dead code") and `e8edf11` (2026-07-06, "simplify: 4-angle cleanup review", only renamed 2 lines in `mkidxdef.py`); no non-hygiene commit in tracked history. Unique capability: none — `summarize_and_index` in `prod_utils.py` (kept) is the real logic; `json2jobdef --prod` is the standing documented entry point. | Delete `bin/mkidxdef` + `utils/mkidxdef.py` only; keep `prod_utils.summarize_and_index`. Reword `prod_utils.py:196` docstring (drops "and the standalone `mkidxdef` CLI"); strip the `mkidxdef` example from `.claude/commands/mu2epro-run.md:26,38`. |
+| 2 | Flask app: `bin/pomsMonitorWeb` + `web/pomsMonitor/__init__.py` + `web/static/monitor.html` | **KEEP-REVISIT** | Callers: `web/pomsMonitor/__init__.py:9,54,60-61` loads `bin/pomsMonitorWeb` via `SourceFileLoader`; the cron script `bin/update_pomsmonitor_web` deliberately bypasses Flask — it calls `python3 "$REPO/bin/pomsMonitor" --build-db` then `web/pomsMonitor/render_static.py` directly (no `app.run`/Flask import), matching the design doc's premise that the *cron path* doesn't need Flask. External: **confirmed live** — see headline. `/web/sites/m/mu2e-exp.fnal.gov/cgi-bin/pomsMonitor/pomsMonitor.wsgi` exists, is readable, and imports `pomsMonitor.app` from a synced repo copy at `cgi-bin/prodtools/` (git HEAD `3ad4069`, 2026-04-29); `README.md` there documents it as an intentional "read-only Flask deployment... alongside `dqmTimeline`" with a specific Apache/WSGI install procedure, not a stale accident. History: `bin/pomsMonitorWeb` has genuine functional commits — `39a1932` "fix: pomsMonitorWeb locate_file import broken by SAM single-homing", `616105c` "introduce static publish + UX improvements", `b6c5ae7` "Add setup script display" — actively maintained, most recent touch today (`4cfa1a8`, hygiene). Unique capability: the static render (`render_static.py`) is the documented cron product and does not need Flask to run, so the *cron/ops* use case is already Flask-free — but the *public interactive dashboard URL* (`https://mu2e.fnal.gov/pomsMonitor/` per that README) has no non-Flask equivalent today. | External-consumer evidence found and readable → RETIRE is disqualified by the decision rule as written. This is an **ops decision**, not a code decision: the user must explicitly choose to decommission the cgi-bin deployment (remove the wsgi.py import + `rm -r cgi-bin/pomsMonitor/`, per that README's own "Reverting" section) before or as part of any Flask-app deletion. Until that ops call is made, Tasks 7–9 (Flask deletion) must not proceed. |
+| 3 | JSON-editor feature: `web/static/json2jobdef.html` + `web/static/json-editor.html` + editor/API routes | **KEEP-REVISIT** | Callers: routes defined in `bin/pomsMonitorWeb:97-98` (`/json2jobdef` → `json2jobdef_interface`) and `:102-103` (`/json-editor` → `json_editor`); cross-linked from `web/static/monitor.html:252,511`. `web/pomsMonitor/render_static.py:168,181` explicitly neuters the editor link when rendering the static page — confirming the static (cron) product intentionally drops this feature, consistent with "reachable only via Flask." External: same deployed instance as item 2 serves this — `cgi-bin/prodtools/web/static/json2jobdef.html` and `json-editor.html` are present in the synced copy, and neither `json2jobdef_interface` nor `json_editor` is in `_DISABLED_ENDPOINTS` (`web/pomsMonitor/__init__.py:80-84`); only the *mutating* companions (`POST /api/json2jobdef`, `POST /api/json-file/<path>`) are 403'd. So the editor UI pages are live and browsable (not editable) in production today. History: `web/static/json2jobdef.html` and `json-editor.html` last touched `26a4412`/`7946e88`, 2025-10-29 — genuine feature-add commits (not hygiene), but ~8.5 months old with no further iteration since. Unique capability: browsing/generating jobdefs via a web form has no other implementation; CLI (`json2jobdef`) fully covers the same ground for anyone with shell access. | Tied to item 2's ops decision — same deployment, same external-consumer evidence. Per the brief: if the user keeps this feature (or the Flask app), Tasks 7–9 are skipped entirely regardless of this row's own merits, since the feature is unreachable without the Flask app it's embedded in. Framing this as a **feature decision**: is a web-form jobdef editor still wanted, independent of whether it's currently used? |
+| 4 | `pomsMonitor` CLI flags | see sub-rows | `--build-db`/`--pattern`/`--db` are cron-load-bearing (`bin/update_pomsmonitor_web`: `python3 "$REPO/bin/pomsMonitor" --build-db --pattern "$PATTERN" --db "$DB"`) — automatic KEEP, no further evidence needed. | |
+| 4a | `--list` | KEEP | `EXAMPLES.md:397`: `pomsMonitor --build-db --list` (worked example). | |
+| 4b | `--outputs` | KEEP | `.claude/settings.local.json:40-41`: allowlisted `Bash(pomsMonitor --outputs --complete)` — real recorded interactive use, not just docs; `EXAMPLES.md:396`. | |
+| 4c | `--complete` | KEEP | Same `.claude/settings.local.json:40-41` allowlist hit; requires `--outputs` per its own help text, used together. | |
+| 4d | `--incomplete` | KEEP | `EXAMPLES.md:396`: `pomsMonitor --campaign MDC2025ap --outputs --incomplete`. | |
+| 4e | `--datasets-only` | KEEP | Zero hits from the literal Step-3 grep (`pomsMonitor.*--datasets-only`) in wiki/.claude/EXAMPLES.md/docs/cron/bash_history. However `EXAMPLES.md:394-397` "Key flags:" prose line *does* list it (`--outputs, --complete, --incomplete, --datasets-only, --sort...`) without an inline `pomsMonitor` token, so the literal grep pattern misses it — documented, just not grep-matched. Code (`utils/pomsMonitor.py:92,143-144`) is a real, non-trivial branch (`args.datasets_only` implies `args.outputs` and threads through to `list_jobs(datasets_only=...)`), not a dead stub. No evidence of redundancy the way `--names-only` had. | Unverified real-world usage but not provably dead; do not conflate with item 8's `--names-only`, which has explicit no-op evidence. |
+| 4f | `--since` | KEEP | `.claude/settings.local.json:42`: `Bash(pomsMonitor --outputs --since 1w)` — recorded interactive use. | |
+| 4g | `--needs-processing` | KEEP | `EXAMPLES.md:398`: `pomsMonitor --needs-processing` (worked example). | |
+| 4h | `--ignore` / `--ignore-reason` | KEEP | Zero literal grep hits, but `utils/poms_db.py:58-59` schema comment: `ignored = Column(Boolean...)  # True if dataset should be excluded from needs-processing` — `--ignore`/`--unignore`/`--list-ignored` are the *only* management interface for a real feature backing the actively-used `--needs-processing` flag (item 4g). Documented in `EXAMPLES.md:394-397` Key-flags prose (not grep-matched, same reason as 4e). Retiring this would silently break `--needs-processing`'s ability to exclude known-exempt datasets — unique capability, not covered elsewhere. | |
+| 4i | `--unignore` | KEEP | Same subsystem/evidence as 4h. | |
+| 4j | `--list-ignored` | KEEP | Same subsystem/evidence as 4h. | |
+| 4k | `--uniformity` / `--target` / `--round` | KEEP | Zero literal grep hits (wiki/.claude/EXAMPLES.md-inline/cron/bash_history), but documented in `EXAMPLES.md:394-397` Key-flags prose (`--uniformity (--target, --round)`, not grep-matched). `utils/pomsMonitor.py:40,140-141` implements a real events-per-job heuristic (`uniformity_report`, needs `--build-db` + `--campaign`) with no equivalent elsewhere in the toolset — unique capability. | Genuinely unverified usage (no recorded invocation anywhere), but the decision rule's "unique capability" leg blocks RETIRE regardless; flag for a future usage check if it resurfaces. |
+| 5 | `latestDatasets` vs `listNewDatasets` charter overlap | **KEEP (both, distinct charters — no fold)** | Docstrings diverge sharply: `latestDatasets.py:2-13` — "For each unique description... pick the dataset with the latest dsconf" (group-by-description + emit chain configs); `listNewDatasets.py:2` — "List recently created datasets from SAM database" (time-window `--days` + POMS-DB `--completeness` join). Zero shared functions (`grep "^def "` on both → no name overlap) and zero cross-import between the two modules. Independent heavy real usage in `~/.bash_history`: `latestDatasets --emit {digi,reco,mix} --campaign ... --skip-produced` (7+ recorded invocations across MDC2025ap/ar/Run1Ban) vs. `listNewDatasets [--filetype/--days/--size/...]` (40+ recorded invocations) — these are two different day-to-day workflows, not duplicate call sites. `.claude/commands/recent-datasets.md` is a dedicated wrapper specifically over `listNewDatasets --completeness`, with no analogous latestDatasets wrapper. `EXAMPLES.md:69-71` documents them as separate tools with separate one-line charters. | Does **not** trigger the Task 6 STOP — no fold proposed. If Task 6 still wants a second opinion, the evidence to re-examine is purely the shared "list SAM datasets" surface (both call into `samweb_wrapper`), which is incidental infrastructure reuse, not charter overlap. |
+| 6 | `bin/datasetFileList` CLI | **KEEP** | Confirmed known fact: `utils/logparser.py:12` (`from utils.datasetFileList import get_dataset_files`) and `utils/jobdef_lookup.py:23,228` (`from utils.datasetFileList import get_dataset_files, get_definition_files`; `_log(f"Using datasetFileList to locate: {jobdef}")`) both import the module — load-bearing regardless of the CLI's own fate. CLI itself: `.claude/commands/mu2ejobsub-submit.md:44,106` documents `datasetFileList --defname <basename>` as a real fallback path in that skill. `bin/datasetFileList` is a thin 9-line exec wrapper (unchanged since `2025-09-24`) over `utils/datasetFileList.py`, which has active test coverage (`test/test_unit.py:980,985,990,1027,1033`, 5 hits). | Item is stable; no Phase B action expected beyond leaving it alone. |
+| 7 | `bin/setup_run1b.sh` | **RETIRE** | Callers: only hit anywhere is docs-only — `EXAMPLES.md:33`: `source bin/setup_run1b.sh  # same, plus a Run1B SimJob musing`. No code caller. External: `production_manager` sweep for `setup_run1b` → zero hits (dir was readable). Content is 14 lines, trivial: sources `bin/setup.sh` then `export MU2E_SEARCH_PATH=".:$MU2E_SEARCH_PATH"` plus an echo — fully inlineable in one line at any call site. History: single commit `55ffb67` (2026-04-28, "Add g4bl runner + accumulate session work (pre-refactor checkpoint)") — a large batch checkpoint commit, not dedicated functional work on this file; zero commits since. Unique capability: none — `bin/setup.sh` (kept) plus one `export` line reproduces it exactly; the design doc's own hypothesis ("Retire if the Run1B musing setup is covered elsewhere") is confirmed — it's just `setup.sh` + one line, already documented inline in `EXAMPLES.md:33`'s comment. | Delete `bin/setup_run1b.sh`; replace the `EXAMPLES.md:33` example line with the two inline commands it expands to. |
+| 8 | `latestDatasets --names-only` (+ other vestigial flags found) | **RETIRE** (`--names-only` only) | `utils/latestDatasets.py:231-233` defines `--names-only` as `action="store_true"`; `:298-299` comment: "Bare name output unless `--show-count` adds the count column (`--names-only` is accepted as an explicit alias of the default)." This is not my inference — it's a **same-day** finding: `wiki/pages/2026-07-18-simplify-pass-consolidations.md:86` already lists "`latestDatasets --names-only` duplicate branch (flag kept as no-op alias)" under "Removed dead surface" from the just-committed simplify pass (`4cfa1a8`) — the branch logic was already deleted; only the flag itself (accepted, silently ignored) remains. `EXAMPLES.md:483` documents the flag exists but zero worked example ever invokes it. Broader vestigial-flag sweep (`grep -rn "no-op\|deprecated\|vestigial\|kept as.*alias" utils/*.py bin/*`) found no other candidates beyond this one. `--show-count` by contrast is real and used: `EXAMPLES.md:479`: `latestDatasets --defname 'dig.mu2e.%.MDC2025%.art' --show-count` — KEEP. | Delete the `--names-only` `add_argument` call (`utils/latestDatasets.py:231-232`) and its now-pointless alias comment (`:298-300`); confirm with `python3 bin/latestDatasets --help 2>&1 | grep -c names-only` → 0 and `grep -cn names_only utils/latestDatasets.py` → 0 post-edit, matching Task 5's own verification recipe. |
+
+## Decision rule (restated, as applied)
+
+RETIRE requires all three of (no code callers) AND (no external-consumer
+evidence, and the external checks were actually readable) AND (unique
+capability covered elsewhere or explicitly retired by the user).
+Applying this mechanically:
+
+- Item 1: passes all three → RETIRE.
+- Item 2: fails leg 2 (external-consumer evidence found, and it was
+  readable, not unverifiable) → cannot be RETIRE. → KEEP-REVISIT.
+- Item 3: fails leg 2 for the same reason (same deployment) → KEEP-REVISIT.
+- Item 4 sub-rows: none show the "no-op/redundant" signature that would
+  let "unique capability covered elsewhere" pass; several (`--ignore`
+  family, `--uniformity` family) have *no* elsewhere at all → KEEP.
+- Item 5: not a retirement candidate at all — both tools have distinct,
+  actively-used charters and zero code-level duplication → KEEP, no fold.
+- Item 6: fails leg 1 (real code callers: `logparser`, `jobdef_lookup`) →
+  KEEP.
+- Item 7: passes all three → RETIRE.
+- Item 8 (`--names-only`): passes all three, with same-day corroborating
+  evidence that the underlying logic is already a no-op → RETIRE.
+  `--show-count` fails leg 3 (real, used capability) → KEEP.
+
+## Gate outcome (2026-07-18, user ruling)
+
+| # | Item | Approved? |
+|---|------|-----------|
+| 1 | mkidxdef CLI + module | **RETIRE approved** |
+| 2 | Flask app | **RETIRE approved** — user chose "decommission + retire"; wiki page must record the cgi-bin removal steps (ops action on the web host, done by the user) |
+| 3 | JSON-editor feature | **RETIRE approved** (same ruling as item 2) |
+| 4 | pomsMonitor flags (all sub-rows) | KEEP confirmed |
+| 5 | latestDatasets / listNewDatasets | KEEP both confirmed, no fold (Task 6 = no-op) |
+| 6 | datasetFileList CLI | KEEP confirmed (Task 4 step 3 does not apply) |
+| 7 | setup_run1b.sh | **RETIRE approved** |
+| 8 | latestDatasets --names-only | **RETIRE approved** (--show-count stays) |
+
+## Task 8 gate amendment (2026-07-18, user ruling)
+
+The byte-diff gate surfaced a pre-existing production bug: the old render
+path imports the Flask app through the WSGI shim, whose unconditional
+`samweb_client` stub silently emptied every `setup_script` in the published
+jobs.json. User ruling: **accept the corrected behavior**. Gate criterion
+amended to: index.html timestamp-normalized identical; jobs.json identical
+except `setup_script` transitions '' → real value (rigorous field-level
+comparison, zero other diffs). Operational note: cron renders now do real
+SAM+tarball resolution (~minutes slower); the published dashboard gains a
+working setup-script column.

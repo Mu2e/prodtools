@@ -25,7 +25,7 @@ from pathlib import Path
 import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
-from utils.config_utils import get_tarball_desc
+from utils.config_utils import cnf_name
 from utils.job_common import Mu2eName, default_owner, tbs_capacity
 
 # Constants matching Perl mu2ejobdef exactly
@@ -202,37 +202,25 @@ def _validate_fcl_template(template_path: str) -> None:
         raise ValueError(f"FCL template missing required physics sections: {missing_keys}")
 
 
+def _reorder(d: Dict, order: List[str]) -> Dict:
+    """Copy keys in the given preferred order, then append the rest
+    (Perl mu2ejobdef key-order parity)."""
+    ordered = {k: d[k] for k in order if k in d}
+    for key, value in d.items():
+        if key not in ordered:
+            ordered[key] = value
+    return ordered
+
+
 def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "") -> Dict:
     """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
-    owner = config.get('owner') or default_owner()
-    desc = get_tarball_desc(config) or config['desc']
-    dsconf = config['dsconf']
-    
-    # Build proper jobname like Perl version (cnf.owner.desc.dsconf.VERSION.tar)
-    version = config.get('version', 0)
-    jobname = str(Mu2eName.build(tier='cnf', owner=owner, description=desc,
-                                 dsconf=dsconf, sequencer=str(version), extension='tar'))
-
-    # Reorder TBS fields to match Perl exactly: seed, subrunkey, event_id, outfiles
-    ordered_tbs = {}
-    perl_tbs_order = ['seed', 'subrunkey', 'event_id', 'outfiles']
-    
-    for key in perl_tbs_order:
-        if key in tbs:
-            ordered_tbs[key] = tbs[key]
-    
-    # Add any remaining keys not in the standard order
-    for key, value in tbs.items():
-        if key not in ordered_tbs:
-            ordered_tbs[key] = value
-
     # Base structure - use Perl field ordering exactly: code, setup, tbs, jobname
     # This matches the actual observed Perl output order
     return {
         "code": code,
         "setup": config['simjob_setup'],
-        "tbs": ordered_tbs,
-        "jobname": jobname
+        "tbs": _reorder(tbs, ['seed', 'subrunkey', 'event_id', 'outfiles']),
+        "jobname": cnf_name(config, 'tar')
     }
 
 
@@ -482,29 +470,23 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
                 samplingintable[inputkey] = [nreq, filelist]
             tbs['samplinginput'] = samplingintable
 
-    # Handle output files using the resolved template path (like Perl's $templateresolved)
-    output_modules = _get_output_modules(template_path)
-    if output_modules:
-        outfiles = {}
-        
-        for mod in output_modules:
-            if mod and mod != '':  # skip empty entries
-                output_key = f'outputs.{mod}.fileName'
-                
-                # Get template from FCL file (like Perl does)
-                filename_pattern = _get_fcl_value(template_path, output_key)
-                
-                if filename_pattern and filename_pattern.strip():
-                    # Use shared helper to add to local outfiles dict
-                    defer_keys = config.get('_defer_keys', set()) if config else set()
-                    tmp_container = {'outfiles': outfiles}
-                    _add_outfile(tmp_container, output_key, filename_pattern, config, defer_keys=defer_keys)
-                else:
-                    # No template pattern found - this shouldn't happen in a properly resolved template
-                    # Fail like Perl does when output filename is not defined
-                    raise ValueError(f"Error: {output_key} is not defined")
-        if outfiles:
-            tbs['outfiles'] = outfiles
+    # Handle output files using the resolved template path (like Perl's
+    # $templateresolved). _get_output_modules returns only active,
+    # non-empty module names; _add_outfile creates tbs['outfiles'] on
+    # first add.
+    for mod in _get_output_modules(template_path):
+        output_key = f'outputs.{mod}.fileName'
+
+        # Get template from FCL file (like Perl does)
+        filename_pattern = _get_fcl_value(template_path, output_key)
+
+        if filename_pattern and filename_pattern.strip():
+            defer_keys = config.get('_defer_keys', set()) if config else set()
+            _add_outfile(tbs, output_key, filename_pattern, config, defer_keys=defer_keys)
+        else:
+            # No template pattern found - this shouldn't happen in a properly resolved template
+            # Fail like Perl does when output filename is not defined
+            raise ValueError(f"Error: {output_key} is not defined")
 
     # Handle TFileService (like Perl's separate TFileService handling)
     try:
@@ -555,19 +537,8 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         tbs['chunk_mode'] = config['chunk_mode']
 
     # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
-    ordered_tbs = {}
-    perl_order = ['outfiles', 'subrunkey', 'auxin', 'inputs', 'event_id', 'seed', 'samplinginput']
-    
-    for key in perl_order:
-        if key in tbs:
-            ordered_tbs[key] = tbs[key]
-    
-    # Add any remaining keys not in the standard order
-    for key, value in tbs.items():
-        if key not in ordered_tbs:
-            ordered_tbs[key] = value
-
-    return ordered_tbs
+    return _reorder(tbs, ['outfiles', 'subrunkey', 'auxin', 'inputs',
+                          'event_id', 'seed', 'samplinginput'])
 
 
 def get_output_dataset_names(config: Dict) -> List[str]:
@@ -699,12 +670,9 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
         tbs['njobs'] = embedded_njobs
     
     # Use provided outdir (simple logic matching Perl version)
-    # Use tarball_append if specified, otherwise use original desc
-    final_desc = get_tarball_desc(config) or desc
-    version = config.get('version', 0)
+    # desc carries the auto_description resolution; tarball_append wins inside cnf_name
     final_outdir = Path(outdir) if outdir else None
-    out_name = str(Mu2eName.build(tier='cnf', owner=owner, description=final_desc,
-                                  dsconf=dsconf, sequencer=str(version), extension='tar'))
+    out_name = cnf_name(config, 'tar', desc=desc)
     out = final_outdir / out_name if final_outdir else Path(out_name)
 
     if out.exists():

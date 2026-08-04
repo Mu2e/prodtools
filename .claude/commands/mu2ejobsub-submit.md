@@ -24,13 +24,13 @@ outputs to outstage but does **not** run `pushOutput` — the resulting
 art files are NOT SAM-registered. They sit in
 `$WFTOP/<user>/workflow/<wfproject>/outstage/<cluster>/…/<index>/` and
 no `samweb get-metadata` query will find them. This is exactly the gap
-the prodtools Phase 2 direct backend (`submit_map --backend direct` →
+the prodtools Phase 2 direct backend (`submit_map` →
 `runmu2e.py` direct mode) was built to close. See ADR
 `2026-04-30-phase2-direct-jobsub-implementation.md` for the full
 "what mu2ejobsub does vs what we need" comparison.
 
 If you need SAM-registered outputs, use `/stage-entry <stage> …` (via
-the prodtools chain) or `submit_map --backend direct`, not this skill.
+the prodtools chain) or `submit_map`, not this skill.
 
 ## Usage
 
@@ -159,7 +159,7 @@ You are given `$ARGUMENTS`. Follow these steps:
      return misleading "0 total").
    - **Reminder that outputs will NOT be SAM-registered.** Suggest
      `samweb declare-file` / `pushOutput` post-hoc if the user actually
-     needs SAM presence, or point them at `submit_map --backend direct`
+     needs SAM presence, or point them at `submit_map`
      for the right path.
 
    Don't auto-monitor or auto-fetch logs.

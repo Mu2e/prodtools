@@ -108,5 +108,27 @@
         "inloc": "tape",
         "outloc": {"*.root": "tape"},
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
+    },
+    {
+        "dsconf": "MDC2025as_best_v1_5",
+        "desc": "CosmicCRYExtracted",
+        "fcl": "EventNtuple/fcl/from_mcs-extracted.fcl",
+        "input_data": {"mcs.mu2e.CosmicCRYExtracted.MDC2025as_best_v1_5.art": 10},
+        "fcl_overrides": {"services.TFileService.fileName": "nts.mu2e.{desc}.version.sequencer.root"},
+        "inloc": "tape",
+        "outloc": {"*.root": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
+    },
+    {
+        "dsconf": "MDC2025au_best_v1_5",
+        "desc": "evnt",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025au_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "fcl_overrides": {"services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"},
+        "inloc": "tape",
+        "outloc": {"nts.*.root": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
     }
 ]

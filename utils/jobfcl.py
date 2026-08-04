@@ -7,7 +7,7 @@ Generates FCL configuration files for Mu2e jobs.
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional, Union
+from typing import Dict, Optional
 import re
 
 # Allow running this file directly: make package root importable
@@ -79,12 +79,6 @@ class Mu2eJobFCL(Mu2eJobBase):
     def _extract_fcl(self) -> str:
         """Extract mu2e.fcl from the tarball."""
         return self._extract_member('mu2e.fcl').decode('utf-8')
-    
-
-    
-    def _locate_file(self, filename: str) -> str:
-        """Locate a file and return its physical path (see FileResolver)."""
-        return self._resolver.locate(filename)
 
     def _format_filename(self, filename: str) -> str:
         """Format filename according to protocol (see FileResolver)."""

@@ -113,6 +113,20 @@
             "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
         },
         {
+            "dsconf": "MDC2025au_best_v1_5",
+            "desc": "reco",
+            "generic_tarball": true,
+            "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+            "fcl_overrides": {
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5"
+            },
+            "inloc": "tape",
+            "outloc": {"*.art": "tape"},
+            "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh"
+        },
+        {
             "dsconf": ["MDC2025ai_best_v1_3"],
             "tarball_append": "-reco",
             "fcl": ["Production/JobConfig/recoMC/OnSpill.fcl"],
@@ -239,6 +253,22 @@
             "inloc": "tape",
             "outloc": {"*.art": "tape"},
             "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025an/setup.sh"
+        },
+        {
+            "dsconf": "MDC2025as_best_v1_5",
+            "desc": "CosmicCRYExtracted",
+            "tarball_append": "-reco",
+            "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
+            "input_data":
+                {"dig.mu2e.CosmicCRYExtracted.MDC2025as_best_v1_5.art": 1},
+            "fcl_overrides": {
+                "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5"
+            },
+            "inloc": "tape",
+            "outloc": {"*.art": "tape"},
+            "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025as/setup.sh"
         },
         {
             "dsconf": ["MDC2025an_best_v1_3"],

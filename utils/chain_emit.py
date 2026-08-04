@@ -15,6 +15,7 @@ import json
 import os
 import re
 
+from utils.config_utils import _get_first_if_list, mixing_desc
 from utils.job_common import Mu2eName
 
 _FAMILY_RE = re.compile(r"^(MDC\d{4}|Run\d+[A-Z]?)")
@@ -66,7 +67,12 @@ def load_template(campaign, stage, templates_dir):
 
 
 def _input_pattern(template):
-    """The single input_data key pattern declared by a stage template."""
+    """The single input_data key pattern declared by a stage template.
+
+    `input_data` is either a bare pattern string (the merge factor then
+    lives per-description in `desc`) or the legacy `{pattern: merge}`
+    mapping.
+    """
     indata = template.get('input_data')
     if not indata:
         raise ValueError("template has no 'input_data'")
@@ -74,18 +80,126 @@ def _input_pattern(template):
         if len(indata) != 1:
             raise ValueError("emit template input_data must declare exactly one pattern")
         indata = indata[0]
+    if isinstance(indata, str):
+        return indata
     keys = list(indata.keys())
     if len(keys) != 1:
         raise ValueError("emit template input_data must declare exactly one pattern")
     return keys[0]
 
 
-def _input_merge(template):
-    """The merge factor paired with the single input_data pattern."""
+def _desc_name(item):
+    """The description named by one `desc` list item.
+
+    An item is either a plain string, or the legacy per-description dict
+    ``{"desc": "<name>", "merge": <n>}``. Prefer the `desc` mapping form
+    (``{"<name>": <merge>}``) for new templates — see `_desc_map`.
+    """
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        name = item.get('desc')
+        if not isinstance(name, str):
+            raise ValueError(
+                f"template desc entry {item!r} has no 'desc' name — a malformed "
+                f"item would silently drop that description from the roster")
+        return name
+    raise ValueError(f"template desc entry must be a string or dict, got {item!r}")
+
+
+def _desc_map(entry):
+    """The entry's `desc` as an ordered {name: settings} mapping, or None
+    if it does not use the mapping form.
+
+    Mapping form pairs each description with its own settings, mirroring
+    `input_data`'s scalar-or-dict grammar: a bare int is the merge factor,
+    a dict carries `merge` plus anything else (e.g. `fcl_overrides`)::
+
+        "desc": {"CeMLeadingLog": 4,
+                 "NoPrimary": {"merge": 5, "fcl_overrides": {...}}}
+
+    This is the preferred shape — it keeps the merge factor in exactly one
+    place and avoids repeating the key name ("desc") inside each item.
+    """
+    d = entry.get('desc')
+    if not isinstance(d, dict):
+        return None
+    out = {}
+    for name, spec in d.items():
+        if isinstance(spec, int) and not isinstance(spec, bool):
+            out[name] = {'merge': spec}
+        elif isinstance(spec, dict):
+            out[name] = spec
+        else:
+            raise ValueError(
+                f"desc mapping for {name!r}: value must be an int merge factor "
+                f"or a settings dict, got {spec!r}")
+    return out
+
+
+def _desc_settings(entry, description):
+    """The per-description settings dict for `description`, or {}."""
+    mapping = _desc_map(entry)
+    if mapping is not None:
+        return mapping.get(description, {})
+    d = entry.get('desc')
+    for item in (d if isinstance(d, list) else [d]):
+        if isinstance(item, dict) and _desc_name(item) == description:
+            return item
+    return {}
+
+
+def _input_merge(template, description=None):
+    """The merge factor for `description` under this entry.
+
+    Precedence: the description's own `merge` (from the `desc` mapping or a
+    legacy per-desc dict) wins; otherwise the factor paired with the
+    input_data pattern, when the template still uses `{pattern: merge}`.
+
+    Fails loud when neither supplies one — a silently-defaulted merge would
+    produce an undersized round with several times the intended job count
+    and nothing to flag it.
+    """
     indata = template['input_data']
     if isinstance(indata, list):
         indata = indata[0]
-    return indata[_input_pattern(template)]
+    default = None if isinstance(indata, str) else indata[_input_pattern(template)]
+
+    if description is not None:
+        merge = _desc_settings(template, description).get('merge', default)
+    else:
+        merge = default
+
+    if merge is None:
+        where = f" for description {description!r}" if description else ""
+        raise ValueError(
+            f"no merge factor{where}: give it one in the template's `desc` "
+            f"mapping, or pair a factor with the input_data pattern")
+    return merge
+
+
+def _apply_desc_overrides(entry, description):
+    """Patch the entry's `fcl_overrides` with this description's own, in
+    place, preserving the template's container shape (list vs dict).
+
+    A PATCH, not a replacement: one description needing a single extra
+    override (e.g. the NoPrimary.fcl trigger include) would otherwise force a
+    duplicate of the entry's whole pileup/dsconf/fcl block. Per-desc keys win
+    over the entry's base keys. `entry` is already a deep copy, so the shared
+    template is never mutated.
+    """
+    extra = _desc_settings(entry, description).get('fcl_overrides')
+    if not extra:
+        return
+    base = entry.get('fcl_overrides')
+    if isinstance(base, list):
+        merged = dict(base[0]) if base else {}
+        merged.update(extra)
+        entry['fcl_overrides'] = [merged]
+    else:
+        merged = dict(base or {})
+        merged.update(extra)
+        entry['fcl_overrides'] = merged
 
 
 def _entries(template):
@@ -95,10 +209,15 @@ def _entries(template):
 
 def _explicit_descs(entry):
     """Concrete descriptions an entry names (excludes the `{desc}` wildcard).
-    `desc` may be a scalar or a list."""
+    `desc` may be a scalar, a list of strings / per-desc dicts, or the
+    preferred {name: settings} mapping."""
+    mapping = _desc_map(entry)
+    if mapping is not None:
+        return [x for x in mapping if '{desc}' not in x]
     d = entry.get('desc')
     if isinstance(d, list):
-        return [x for x in d if '{desc}' not in x]
+        names = [_desc_name(x) for x in d]
+        return [x for x in names if '{desc}' not in x]
     if isinstance(d, str) and '{desc}' not in d:
         return [d]
     return []
@@ -200,7 +319,8 @@ def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=Fals
     """
     n = Mu2eName.parse(input_dataset)
     entry = copy.deepcopy(match_entry(template, n.description))
-    merge = _input_merge(entry)
+    merge = _input_merge(entry, n.description)
+    _apply_desc_overrides(entry, n.description)
     # Pin the concrete input, preserving the template's container shape:
     # list-form [{name: merge}] (mixing) vs dict {name: merge}
     # (digi/reco/ntuple). pileup_datasets and other fields are left untouched.
@@ -254,7 +374,7 @@ def _deferred_descs(entry):
         return []
     pbeam = entry.get('pbeam')
     pbeams = pbeam if isinstance(pbeam, list) else ([pbeam] if isinstance(pbeam, str) else [])
-    return [input_desc + pb for pb in pbeams]
+    return [mixing_desc(input_desc, pb) for pb in pbeams]
 
 
 def output_datasets(entry, owner='mu2e'):
@@ -270,10 +390,9 @@ def output_datasets(entry, owner='mu2e'):
     When that token survives, expand it to the concrete ``input_desc + pbeam``
     name(s) so the produced-output check matches real SAM datasets instead of a
     literal ``dig.mu2e.{desc}...`` that can never exist."""
-    unwrap = lambda v: v[0] if isinstance(v, list) and v else v
-    dsconf = unwrap(entry.get('dsconf', '')) or ''
+    dsconf = _get_first_if_list(entry.get('dsconf', '')) or ''
     out = []
-    for key, val in (unwrap(entry.get('fcl_overrides', {})) or {}).items():
+    for key, val in (_get_first_if_list(entry.get('fcl_overrides', {})) or {}).items():
         if not key.endswith('fileName') or not isinstance(val, str) or '/' in val:
             continue
         # Templates carry literal placeholder tokens (owner/version/sequencer);

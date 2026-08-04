@@ -73,10 +73,10 @@ canvas { display: block; }
     <div class="legend-item" data-group="ps"><div class="legend-swatch" style="background:#e09030;"></div><div><div class="legend-title">Production Solenoid (PS)</div><div class="legend-desc">8 kW, 8 GeV protons &rarr; pions &rarr; muons<br>4.6T peak field</div></div></div>
     <div class="legend-item" data-group="ts"><div class="legend-swatch" style="background:#40a040;"></div><div><div class="legend-title">Transport Solenoid (TS)</div><div class="legend-desc">S-shaped, selects &mu;<sup>&minus;</sup> to stopping target<br>2.5T &rarr; 2.0T gradient</div></div></div>
     <div class="legend-item" data-group="ds"><div class="legend-swatch" style="background:#50b850;"></div><div><div class="legend-title">Detector Solenoid (DS)</div><div class="legend-desc">Tracker + calorimeter + CRV<br>2.0T &rarr; 1.0T graded field</div></div></div>
-    <div class="legend-item" data-group="target"><div class="legend-swatch" style="background:#c0c0c0;"></div><div><div class="legend-title">Stopping Target</div><div class="legend-desc">17 Al foils, &mu;<sup>&minus;</sup> capture &rarr; e<sup>&minus;</sup> conversion</div></div></div>
-    <div class="legend-item" data-group="tracker"><div class="legend-swatch" style="background:#d4b830;"></div><div><div class="legend-title">Straw Tube Tracker</div><div class="legend-desc">Resolution: 180 keV<br>18 stations, ~3.2m long</div></div></div>
-    <div class="legend-item" data-group="calorimeter"><div class="legend-swatch" style="background:#e050a0;"></div><div><div class="legend-title">Calorimeter</div><div class="legend-desc">CsI crystals, 2 annular disks</div></div></div>
-    <div class="legend-item" data-group="crv"><div class="legend-swatch" style="background:#607080;"></div><div><div class="legend-title">Cosmic Ray Veto (CRV)</div><div class="legend-desc">4 layers scintillator<br>Efficiency: &gt; 99.99%</div></div></div>
+    <div class="legend-item" data-group="target"><div class="legend-swatch" style="background:#c0c0c0;"></div><div><div class="legend-title">Stopping Target</div><div class="legend-desc">37 Al foils (105 &micro;m), &mu;<sup>&minus;</sup> capture &rarr; e<sup>&minus;</sup> conversion</div></div></div>
+    <div class="legend-item" data-group="tracker"><div class="legend-swatch" style="background:#d4b830;"></div><div><div class="legend-title">Straw Tube Tracker</div><div class="legend-desc">20,736 straws, 18 stations, 3.3m<br>&sigma;<sub>p</sub> ~ 180 keV/c</div></div></div>
+    <div class="legend-item" data-group="calorimeter"><div class="legend-swatch" style="background:#e050a0;"></div><div><div class="legend-title">Calorimeter</div><div class="legend-desc">1,348 CsI crystals<br>2 annular disks, 674 each</div></div></div>
+    <div class="legend-item" data-group="crv"><div class="legend-swatch" style="background:#607080;"></div><div><div class="legend-title">Cosmic Ray Veto (CRV)</div><div class="legend-desc">5,344 scintillator counters, 4 layers<br>Efficiency: &gt; 99.99%</div></div></div>
     <div class="legend-sep"></div>
     <div class="legend-item" style="cursor:default;"><div class="legend-swatch" style="background:#ffff00;"></div><div><div class="legend-title">8 GeV Proton Beam</div><div class="legend-desc">Total POT (design): 3.6 &times; 10<sup>20</sup></div></div></div>
     <div class="legend-item" style="cursor:default;"><div class="legend-swatch" style="background:#00ccff;"></div><div><div class="legend-title">Muon Rate</div><div class="legend-desc">3 &times; 10<sup>10</sup> &mu;/sec at stopping target</div></div></div>
@@ -213,7 +213,9 @@ const PS_INNER_R = 0.9;
 const PS_CENTER_X = -10.0;
 const PS_CENTER_Y = 0.0;
 
-const DS_LENGTH = 10.9;
+// Drawn as the full DS vacuum envelope (cryostat 10.9m + downstream
+// extension housing the MBS), so everything incl. the beam stop is enclosed
+const DS_LENGTH = 14.3;
 const DS_OUTER_R = 1.35;
 const DS_INNER_R = 0.95;
 
@@ -269,12 +271,12 @@ for (const side of [-1, 1]) {
 
 // Production target (tungsten rod)
 const prodTarget = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.08, 0.08, 0.8, 16), matTarget);
+  new THREE.CylinderGeometry(0.03, 0.03, 0.25, 16), matTarget);
 prodTarget.rotation.z = Math.PI / 2; // align along X
 prodTarget.position.set(PS_CENTER_X, PS_CENTER_Y, 0);
 groups.target.add(prodTarget);
 registerComponent(prodTarget, 'target', 'Production Target',
-  'Tungsten target where 8 GeV protons produce pions that decay to muons.');
+  'Segmented tungsten "Hayman" target (6.3 mm diameter core, ~22 cm long, radiatively cooled fins). 8 GeV protons produce pions that decay to the muons Mu2e transports.');
 
 // ============== BUILD TRANSPORT SOLENOID (5-section S-curve from GDML) ==============
 // Path: TS1(+X) → TS2(bend X→Z) → TS3(+Z) → TS4(bend Z→X) → TS5(+X)
@@ -357,14 +359,15 @@ const dsShell = makeHollowCylinderX(DS_OUTER_R, DS_INNER_R, DS_LENGTH, matDSshel
 dsShell.position.set(DS_CENTER_X, DS_CENTER_Y, DS_CENTER_Z);
 groups.ds.add(dsShell);
 registerComponent(dsShell, 'ds', 'Detector Solenoid (2.0→1.0T)',
-  'Two-section solenoid (10.9m long, 1.9m bore). Gradient section (2→1T over 4m) + uniform spectrometer (1T, ~6m). Houses the stopping target, tracker, and calorimeter.');
+  'Two-section solenoid (10.9m cryostat, 1.9m bore; drawn with its downstream vacuum extension). Gradient section (2→1T over 4m) + uniform spectrometer (1T, ~6m). Houses the stopping target, tracker, calorimeter, and muon beam stop.');
 
 // DS end caps
-for (const side of [-1, 1]) {
-  const cap = makeDiskX(0.2, DS_OUTER_R, makeMat(0x408040, 0.3));
-  cap.position.set(DS_CENTER_X + side * DS_LENGTH / 2, DS_CENTER_Y, DS_CENTER_Z);
-  groups.ds.add(cap);
-}
+const dsCapUp = makeDiskX(0.2, DS_OUTER_R, makeMat(0x408040, 0.3));
+dsCapUp.position.set(DS_CENTER_X - DS_LENGTH / 2, DS_CENTER_Y, DS_CENTER_Z);
+groups.ds.add(dsCapUp);
+const dsCapDown = makeDiskX(0.2, DS_OUTER_R, makeMat(0x408040, 0.3));
+dsCapDown.position.set(DS_CENTER_X + DS_LENGTH / 2, DS_CENTER_Y, DS_CENTER_Z);
+groups.ds.add(dsCapDown);
 
 // Gradient section marker (subtle inner ring)
 const gradientMarker = makeDiskX(DS_INNER_R * 0.3, DS_INNER_R * 0.95, makeMat(0x206020, 0.15));
@@ -372,17 +375,27 @@ gradientMarker.position.set(DS_ENTER_X + 4.0, DS_CENTER_Y, DS_CENTER_Z);
 groups.ds.add(gradientMarker);
 
 // ============== STOPPING TARGET ==============
-// 17 thin aluminum foils in the gradient section, disks perpendicular to X
+// 37 annular aluminum foils (GDML MDC2020: r 21.5-75mm, 105.6um thick,
+// 22.2mm pitch, spanning 0.8m centered 2.80m downstream of the DS entrance)
 const DZ = DS_CENTER_Z; // shorthand for DS Z-offset
+const ST_X = DS_ENTER_X + 2.60;      // stopping-target center (GDML, from cryostat front)
+const ST_NFOILS = 37;
+const ST_PITCH = 0.0222;             // 22.2 mm foil spacing
+const ST_RIN = 0.0215, ST_ROUT = 0.075;
 const stopTargetGroup = new THREE.Group();
-for (let i = 0; i < 17; i++) {
-  const foil = makeDiskX(0.0, 0.35, makeMat(0xd0d0e0, 0.6, 0.15));
-  foil.position.set(DS_ENTER_X + 1.0 + i * 0.12, DS_CENTER_Y, DZ);
+const stFoilMat = makeMat(0xd0d0e0, 0.85, 0.35);
+for (let i = 0; i < ST_NFOILS; i++) {
+  const foil = makeDiskX(ST_RIN, ST_ROUT, stFoilMat);
+  foil.position.set(ST_X + (i - (ST_NFOILS - 1) / 2) * ST_PITCH, DS_CENTER_Y, DZ);
   stopTargetGroup.add(foil);
 }
+// Transparent envelope so the (true-scale, small) foils remain easy to click
+const stEnvelope = makeOpenCylinderX(0.095, ST_NFOILS * ST_PITCH + 0.05, makeMat(0xd0d0e0, 0.10, 0.1));
+stEnvelope.position.set(ST_X, DS_CENTER_Y, DZ);
+stopTargetGroup.add(stEnvelope);
 groups.target.add(stopTargetGroup);
 registerComponent(stopTargetGroup, 'target', 'Stopping Target',
-  '17 thin aluminum foils where muons stop and may convert to electrons with characteristic energy 104.97 MeV.');
+  '37 annular aluminum foils (105 µm thick, r = 2.2–7.5 cm, 22.2 mm apart). Muons stop and form muonic atoms; a conversion would emit a 104.97 MeV electron.');
 
 
 //
@@ -402,37 +415,39 @@ tsEndFoilGroup.visible = false;
 groups.target.add(tsEndFoilGroup);
 // no registerComponent() here to avoid any selection/raycast edge cases
 // ============== STRAW TUBE TRACKER ==============
-const TRACKER_START = DS_ENTER_X + 4.5;
-const TRACKER_LENGTH = 3.2;
+// GDML: mother r 0.38-0.85m, 3.27m long, centered 6.90m into the DS
+const TRACKER_START = DS_ENTER_X + 5.27;
+const TRACKER_LENGTH = 3.27;
 const TRACKER_CENTER = TRACKER_START + TRACKER_LENGTH / 2;
 
-const trackerShell = makeOpenCylinderX(0.7, TRACKER_LENGTH, matTracker);
+const trackerShell = makeOpenCylinderX(0.80, TRACKER_LENGTH, matTracker);
 trackerShell.position.set(TRACKER_CENTER, DS_CENTER_Y, DZ);
 groups.tracker.add(trackerShell);
 registerComponent(trackerShell, 'tracker', 'Straw Tube Tracker',
-  'Annular straw tube tracker (~3.2m long). 18 measurement stations track conversion electrons in the 1T field.');
+  'Annular tracker: 20,736 low-mass straw drift tubes in 36 planes / 18 stations, r = 0.38–0.81 m, 3.27 m long. Measures the conversion-electron momentum to ~180 keV/c in the 1 T field.');
 
 for (let i = 0; i < 18; i++) {
   const station = new THREE.Mesh(
-    new THREE.TorusGeometry(0.55, 0.015, 8, 48), matTracker);
+    new THREE.TorusGeometry(0.60, 0.015, 8, 48), matTracker);
   station.rotation.y = Math.PI / 2;
-  station.position.set(TRACKER_START + i * (TRACKER_LENGTH / 17), DS_CENTER_Y, DZ);
+  station.position.set(TRACKER_START + 0.15 + i * ((TRACKER_LENGTH - 0.3) / 17), DS_CENTER_Y, DZ);
   groups.tracker.add(station);
 }
 
 // ============== ELECTROMAGNETIC CALORIMETER ==============
-const CALO_START = TRACKER_CENTER + TRACKER_LENGTH / 2 + 0.6;
+// GDML: two disks (annulus r 0.36-0.672m, 20cm deep CsI) centered
+// 8.91m and 9.61m into the DS (0.7m apart)
+const CALO_START = DS_ENTER_X + 8.91;
+const CALO_RIN = 0.36, CALO_ROUT = 0.672;
 
 function isCaloHit(x, y, z) {
   // Geometric acceptance for the two calorimeter disks
-  // Disk centers: x = CALO_START and CALO_START + 0.7
-  // Annulus radii: inner 0.25, outer 0.70 (from makeDiskX calls)
   const diskXs = [CALO_START, CALO_START + 0.7];
   const halfThick = 0.25; // loose thickness window in x
   const dy = y - DS_CENTER_Y;
   const dz = z - DZ;
   const r = Math.sqrt(dy*dy + dz*dz);
-  if (r < 0.25 || r > 0.70) return false;
+  if (r < CALO_RIN || r > CALO_ROUT) return false;
   for (const xd of diskXs) {
     if (Math.abs(x - xd) <= halfThick) return true;
   }
@@ -442,34 +457,127 @@ function isCaloHit(x, y, z) {
 for (let i = 0; i < 2; i++) {
   const xPos = CALO_START + i * 0.7;
 
-  const disk = makeDiskX(0.25, 0.7, matCalo);
+  const disk = makeDiskX(CALO_RIN, CALO_ROUT, matCalo);
   disk.position.set(xPos, DS_CENTER_Y, DZ);
   groups.calorimeter.add(disk);
 
-  const diskBody = makeOpenCylinderX(0.7, 0.2, makeMat(0xe050a0, 0.45));
+  const diskBody = makeOpenCylinderX(CALO_ROUT, 0.2, makeMat(0xe050a0, 0.45));
   diskBody.position.set(xPos, DS_CENTER_Y, DZ);
   groups.calorimeter.add(diskBody);
   registerComponent(diskBody, 'calorimeter', 'Calorimeter Disk ' + (i + 1),
-    'CsI crystal electromagnetic calorimeter. Two annular disks measure electron energy and provide particle ID.');
+    'Undoped CsI electromagnetic calorimeter: 674 crystals (34×34×200 mm, SiPM readout) per disk, annulus r = 0.36–0.67 m. Measures electron energy (~5%), time (~0.5 ns), and seeds the trigger.');
 
-  const innerRing = makeDiskX(0.0, 0.25, makeMat(0x301030, 0.3));
+  const innerRing = makeDiskX(0.0, CALO_RIN, makeMat(0x301030, 0.3));
   innerRing.position.set(xPos, DS_CENTER_Y, DZ);
   groups.calorimeter.add(innerRing);
 }
 
 // ============== COSMIC RAY VETO ==============
-const CRV_LENGTH = DS_LENGTH + 2;
+// GDML coverage: upstream sector ~1m before the DS front through the
+// downstream veto wall ~15.6m after it — the MBS region is fully enclosed
+const CRV_LENGTH = 16.6;
+const CRV_CENTER_X = DS_ENTER_X + 6.8;
 const CRV_W = 4.0, CRV_H = 3.5;
 const crvGeo = new THREE.BoxGeometry(CRV_LENGTH, CRV_H, CRV_W);
 const crvEdges = new THREE.EdgesGeometry(crvGeo);
 const crvWire = new THREE.LineSegments(crvEdges, new THREE.LineBasicMaterial({ color: 0x607080 }));
-crvWire.position.set(DS_CENTER_X, DS_CENTER_Y, DZ);
+crvWire.position.set(CRV_CENTER_X, DS_CENTER_Y, DZ);
 groups.crv.add(crvWire);
 const crvMesh = new THREE.Mesh(crvGeo, matCRV);
-crvMesh.position.set(DS_CENTER_X, DS_CENTER_Y, DZ);
+crvMesh.position.set(CRV_CENTER_X, DS_CENTER_Y, DZ);
 groups.crv.add(crvMesh);
 registerComponent(crvMesh, 'crv', 'Cosmic Ray Veto',
-  'Scintillator-based veto surrounding the DS. 4 layers of extruded scintillator with >99.99% efficiency.');
+  '5,344 extruded polystyrene scintillator counters with WLS-fiber/SiPM readout, in 4 staggered layers covering the top and sides of the DS. Vetoes cosmic-ray muons with >99.99% efficiency.');
+
+// ============== TS COLLIMATORS, PBAR WINDOW, ABSORBERS, BEAM STOP ==============
+// Dimensions and positions from the MDC2020 GDML dump.
+
+// Hollow cylinder along Z (for elements in the TS3 straight, which runs along +Z)
+function makeHollowCylinderZ(rOuter, rInner, length, mat, segments) {
+  segments = segments || 48;
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, rOuter, 0, Math.PI * 2, false);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, rInner, 0, Math.PI * 2, true);
+  shape.holes.push(hole);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: length, bevelEnabled: false, curveSegments: segments });
+  geo.translate(0, 0, -length / 2);
+  return new THREE.Mesh(geo, mat);
+}
+
+// COL1 — entrance collimator in TS1 (r 0.15-0.24m, 1m long)
+const coll1 = makeHollowCylinderX(0.24, 0.15, 1.0, matTSinner);
+coll1.position.set(PS_EXIT_X + TS1_LEN / 2, PS_CENTER_Y, 0);
+groups.ts.add(coll1);
+registerComponent(coll1, 'ts', 'Collimator COL1',
+  'Copper/stainless entrance collimator in TS1 (15 cm bore, 1 m long). Passes low-momentum charged particles from the PS into the transport line.');
+
+// COL3 — rotatable half-aperture collimator pair flanking the TS3 center.
+// The vertical B×∇B drift in the curved sections separates charge/momentum;
+// COL3's off-center apertures select negative muons.
+const TS3_MID_Z = (TS3_START_Z + TS3_END_Z) / 2;
+for (const [dz, name] of [[-0.452, 'COL3u'], [0.452, 'COL3d']]) {
+  const c3 = makeHollowCylinderZ(0.243, 0.10, 0.8, matTSinner);
+  c3.position.set(TS3_START_X, PS_CENTER_Y, TS3_MID_Z + dz);
+  groups.ts.add(c3);
+  // half-aperture septum: blocks the upper half (positives drift up)
+  const sept = new THREE.Mesh(new THREE.CircleGeometry(0.10, 24, 0, Math.PI), matTSinner);
+  sept.position.set(TS3_START_X, PS_CENTER_Y, TS3_MID_Z + dz);
+  groups.ts.add(sept);
+  registerComponent(c3, 'ts', 'Collimator ' + name + ' (rotatable)',
+    'Rotatable half-aperture collimator in TS3. Sign-dependent vertical drift in the toroid bends separates charges; the offset aperture passes μ⁻ and absorbs μ⁺ and high-momentum particles. Can be rotated 180° for μ⁺ calibration running.');
+  registerComponent(sept, 'ts', 'Collimator ' + name + ' (rotatable)',
+    'Rotatable half-aperture collimator in TS3. Sign-dependent vertical drift in the toroid bends separates charges; the offset aperture passes μ⁻ and absorbs μ⁺ and high-momentum particles. Can be rotated 180° for μ⁺ calibration running.');
+}
+
+// Antiproton stopping window — thin Kapton foil at the TS3 center
+const pbarWindow = new THREE.Mesh(new THREE.CircleGeometry(0.24, 32), makeMat(0xffe0a0, 0.75, 0.25));
+pbarWindow.position.set(TS3_START_X, PS_CENTER_Y, TS3_MID_Z);
+groups.ts.add(pbarWindow);
+registerComponent(pbarWindow, 'ts', 'Antiproton Stopping Window',
+  'Thin Kapton window at the TS3 center. Slow antiprotons produced at the target annihilate here instead of reaching the stopping target — a key background suppression.');
+
+// COL5 — exit collimator in TS5 (r 0.128-0.235m, 1m long, polyethylene)
+const coll5 = makeHollowCylinderX(0.235, 0.128, 1.0, matTSinner);
+coll5.position.set(TS5_START_X + TS5_LEN / 2, PS_CENTER_Y, TS5_START_Z);
+groups.ts.add(coll5);
+registerComponent(coll5, 'ts', 'Collimator COL5',
+  'Polyethylene exit collimator in TS5 (12.8 cm bore, 1 m long). Final momentum selection before the muon beam enters the DS.');
+
+// IPA — inner proton absorber (thin conical shell between target and tracker)
+const ipa = makeOpenCylinderX(0.30, 1.0, makeMat(0xcfd8dc, 0.35, 0.1));
+ipa.position.set(DS_ENTER_X + 4.13, DS_CENTER_Y, DZ);
+groups.ds.add(ipa);
+registerComponent(ipa, 'ds', 'Proton Absorber (IPA)',
+  'Thin polyethylene conical shell between the stopping target and tracker. Absorbs low-energy protons from nuclear muon capture that would otherwise load the tracker, while conversion electrons pass with minimal scattering.');
+
+// MBS — muon beam stop, downstream of the calorimeter (GDML: 4.09m-long
+// polycone centered 12.0m from the DS front; enclosed by the drawn DS
+// vacuum envelope)
+const MBS_C = DS_ENTER_X + 12.0;
+const mbsMat = makeMat(0x8090a0, 0.55, 0.08);
+const mbsGroup = new THREE.Group();
+for (const [z0, z1, r] of [[-2.043, -1.043, 0.450], [-1.043, 1.227, 0.543], [1.227, 2.043, 0.476]]) {
+  const seg = makeOpenCylinderX(r, z1 - z0, mbsMat);
+  seg.position.set(MBS_C + (z0 + z1) / 2, DS_CENTER_Y, DZ);
+  mbsGroup.add(seg);
+}
+// CLV2 end plug — recessed just inside the downstream end of the tube
+const mbsPlug = makeDiskX(0.0, 0.43, mbsMat);
+mbsPlug.position.set(MBS_C + 1.96, DS_CENTER_Y, DZ);
+mbsGroup.add(mbsPlug);
+groups.ds.add(mbsGroup);
+registerComponent(mbsGroup, 'ds', 'Muon Beam Stop (MBS)',
+  'Steel + borated-polyethylene absorber just downstream of the calorimeter. Stops the unspent muon beam and shields the detectors from albedo particles produced by beam captures and decays.');
+
+// Brief glow when a beam muon is absorbed in the MBS
+function flashMBS() {
+  mbsMat.emissiveIntensity = 0.6;
+  mbsMat.needsUpdate = true;
+  clearTimeout(flashMBS._t);
+  flashMBS._t = setTimeout(() => { mbsMat.emissiveIntensity = 0.08; mbsMat.needsUpdate = true; }, 250);
+}
+
 
 // ============== FIX TRANSPARENCY RENDER ORDER ==============
 // Outermost → innermost: CRV(0) → DS shell(1) → tracker(2) → calorimeter(3) → targets(4)
@@ -553,11 +661,22 @@ function updateCamera() {
   camera.lookAt(camTarget);
 }
 
-renderer.domElement.addEventListener('mousedown', e => { isDragging = true; prevMouse = { x: e.clientX, y: e.clientY }; });
+// Rotation inertia: drags set a velocity that decays after release
+let dragVel = { theta: 0, phi: 0 };
+
+function applyDrag(dx, dy) {
+  const dTheta = -dx * 0.005;
+  const dPhi = -dy * 0.005;
+  spherical.theta += dTheta;
+  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + dPhi));
+  dragVel.theta = dTheta;
+  dragVel.phi = dPhi;
+}
+
+renderer.domElement.addEventListener('mousedown', e => { isDragging = true; dragVel.theta = dragVel.phi = 0; prevMouse = { x: e.clientX, y: e.clientY }; });
 renderer.domElement.addEventListener('mousemove', e => {
   if (!isDragging) return;
-  spherical.theta -= (e.clientX - prevMouse.x) * 0.005;
-  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi - (e.clientY - prevMouse.y) * 0.005));
+  applyDrag(e.clientX - prevMouse.x, e.clientY - prevMouse.y);
   prevMouse = { x: e.clientX, y: e.clientY };
 });
 window.addEventListener('mouseup', () => isDragging = false);
@@ -565,17 +684,32 @@ renderer.domElement.addEventListener('wheel', e => {
   spherical.radius = Math.max(5, Math.min(60, spherical.radius + e.deltaY * 0.02));
 });
 
-// Touch
+// Touch: 1 finger rotates, 2 fingers pinch-zoom
+let prevPinchDist = 0;
+function pinchDist(e) {
+  const dx = e.touches[0].clientX - e.touches[1].clientX;
+  const dy = e.touches[0].clientY - e.touches[1].clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 renderer.domElement.addEventListener('touchstart', e => {
-  if (e.touches.length === 1) { isDragging = true; prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }
+  if (e.touches.length === 1) { isDragging = true; dragVel.theta = dragVel.phi = 0; prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }
+  else if (e.touches.length === 2) { isDragging = false; prevPinchDist = pinchDist(e); }
 });
 renderer.domElement.addEventListener('touchmove', e => {
+  if (e.touches.length === 2) {
+    e.preventDefault();
+    const d = pinchDist(e);
+    if (prevPinchDist > 0) {
+      spherical.radius = Math.max(5, Math.min(60, spherical.radius * prevPinchDist / d));
+    }
+    prevPinchDist = d;
+    return;
+  }
   if (!isDragging || e.touches.length !== 1) return;
-  spherical.theta -= (e.touches[0].clientX - prevMouse.x) * 0.005;
-  spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi - (e.touches[0].clientY - prevMouse.y) * 0.005));
+  applyDrag(e.touches[0].clientX - prevMouse.x, e.touches[0].clientY - prevMouse.y);
   prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-});
-renderer.domElement.addEventListener('touchend', () => isDragging = false);
+}, { passive: false });
+renderer.domElement.addEventListener('touchend', e => { isDragging = false; if (e.touches.length < 2) prevPinchDist = 0; });
 
 // ============== RAYCASTING ==============
 const raycaster = new THREE.Raycaster();
@@ -862,16 +996,15 @@ const PTYPES = {
   dio:      { color: 0x4488ff, size: 0.04, speed: 0.006, trail: true },
 };
 
-// Create reusable particle meshes — always render on top of detector geometry
-function createParticleMesh(ptype) {
+// Create reusable particle meshes — always render on top of detector geometry.
+// Geometry and glow texture are built ONCE per particle type and shared by the
+// whole pool (200 particles × 5 types would otherwise mean ~1000 canvas
+// textures). Materials stay per-mesh: the animation mutates their opacity.
+const _ptypeAssets = new Map();
+function getPtypeAssets(ptype) {
+  let a = _ptypeAssets.get(ptype);
+  if (a) return a;
   const geo = new THREE.SphereGeometry(ptype.size, 6, 6);
-  const mat = new THREE.MeshBasicMaterial({ color: ptype.color, transparent: true, opacity: 1.0, depthTest: false });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.renderOrder = 10; // always on top
-  mesh.visible = false;
-  scene.add(mesh);
-
-  // Glow sprite
   const glowCanvas = document.createElement('canvas');
   glowCanvas.width = 32; glowCanvas.height = 32;
   const gctx = glowCanvas.getContext('2d');
@@ -882,8 +1015,20 @@ function createParticleMesh(ptype) {
   gradient.addColorStop(1, 'rgba(' + Math.floor(c.r*255) + ',' + Math.floor(c.g*255) + ',' + Math.floor(c.b*255) + ',0)');
   gctx.fillStyle = gradient;
   gctx.fillRect(0, 0, 32, 32);
-  const glowTex = new THREE.CanvasTexture(glowCanvas);
-  const glowSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, depthTest: false }));
+  a = { geo, glowTex: new THREE.CanvasTexture(glowCanvas) };
+  _ptypeAssets.set(ptype, a);
+  return a;
+}
+
+function createParticleMesh(ptype) {
+  const assets = getPtypeAssets(ptype);
+  const mat = new THREE.MeshBasicMaterial({ color: ptype.color, transparent: true, opacity: 1.0, depthTest: false });
+  const mesh = new THREE.Mesh(assets.geo, mat);
+  mesh.renderOrder = 10; // always on top
+  mesh.visible = false;
+  scene.add(mesh);
+
+  const glowSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: assets.glowTex, transparent: true, depthTest: false }));
   glowSprite.renderOrder = 11;
   glowSprite.scale.set(ptype.size * 10, ptype.size * 10, 1);
   mesh.add(glowSprite);
@@ -1097,6 +1242,7 @@ class Particle {
     this._isoStartY = undefined; this._isoStartZ = undefined;
     this._caloDisk = undefined;
     this._fieldOffEmitX = undefined;
+    this._passedST = false;
     resetTrail(this.trail);
 
     if (phase === 0) {
@@ -1139,7 +1285,7 @@ class Particle {
       this.trail.line.material.opacity = 0.6;
 
       // Stopping target position in DS (TS-end foil when field is off)
-      const ST_X = FIELD_OFF ? (DS_ENTER_X - 0.02) : (DS_ENTER_X + 2.0);
+      const AIM_X = FIELD_OFF ? (DS_ENTER_X - 0.02) : ST_X;
       const ST_Y = DS_CENTER_Y;
       const ST_Z = DZ;
 
@@ -1148,7 +1294,7 @@ class Particle {
       // Add slight random offset so not every cosmic hits exactly the same spot
       const aimOffsetX = (Math.random() - 0.5) * 2.0;
       const aimOffsetZ = (Math.random() - 0.5) * 2.0;
-      const aimX = ST_X + aimOffsetX;
+      const aimX = AIM_X + aimOffsetX;
       const aimZ = ST_Z + aimOffsetZ;
       // Start position spread around above the target
       this.cosmicStartX = aimX + (Math.random() - 0.5) * 4;
@@ -1291,6 +1437,7 @@ class Particle {
         }
       } else {
         // Entered DS — spiral towards stopping target
+        if (this._passedST) this.progress += this.speed * 1.5; // unstopped beam keeps its pace
         const dsFrac = (this.progress * 0.35 - 1) * 2;
         const stX = DS_ENTER_X + dsFrac * 3;
         const spiralR = 0.12 * Math.max(0, 1 - dsFrac * 0.5); // spiral decays as muon slows
@@ -1304,10 +1451,27 @@ class Particle {
           addTrailPoint(this.trail, stX, sy, sz);
         }
 
+        // Un-stopped muon: flies on through the tracker/calo bores and is
+        // absorbed in the muon beam stop
+        if (this._passedST) {
+          if (stX >= MBS_C - 2.043) {
+            flashMBS();
+            this.mesh.material.opacity = 0;
+            this.active = false;
+            this.mesh.visible = false;
+          }
+          return;
+        }
+
         // Reached target → stop and maybe spawn electron after a pause
         // Field Off: muons stop at TS-end foil; Field On: at stopping target
-        const stopX = FIELD_OFF ? (DS_ENTER_X - 0.02) : (DS_ENTER_X + 2.0);
+        const stopX = FIELD_OFF ? (DS_ENTER_X - 0.02) : ST_X;
         if (stX >= stopX) {
+          // ~half the muons miss the thin foils and continue downstream
+          if (!FIELD_OFF && Math.random() < 0.5) {
+            this._passedST = true;
+            return;
+          }
           this.mesh.material.opacity = 0;
           this.active = false;
           this.mesh.visible = false;
@@ -1347,7 +1511,7 @@ class Particle {
 
       // Start point: Field Off = TS-end foil, Field On = stopping target
       const startX = (FIELD_OFF && this._fieldOffEmitX !== undefined)
-        ? this._fieldOffEmitX : (DS_ENTER_X + 2.0);
+        ? this._fieldOffEmitX : ST_X;
 
       let x, y, z;
 
@@ -1362,7 +1526,7 @@ class Particle {
             const diskIdx = Math.random() < 0.5 ? 0 : 1;
             this._caloDisk = diskIdx;
             const targetX = CALO_START + diskIdx * 0.7;
-            const rr = 0.25 + Math.random() * 0.45;
+            const rr = CALO_RIN + 0.02 + Math.random() * (CALO_ROUT - CALO_RIN - 0.04);
             const aa = Math.random() * Math.PI * 2;
             const targetY = DS_CENTER_Y + rr * Math.sin(aa);
             const targetZ = DZ + rr * Math.cos(aa);
@@ -1398,7 +1562,7 @@ class Particle {
       } else {
         // Field ON: spiral (magnetic field)
         x = startX + t * 8;
-        const spiralR = 0.45 + Math.sin(t * 2) * 0.12; // radius 0.33–0.57, well inside calo annulus (0.25–0.70)
+        const spiralR = 0.51 + Math.sin(t * 2) * 0.12; // radius 0.39–0.63, inside calo annulus (0.36–0.672)
         const spiralAngle = t * 25;
         y = PS_CENTER_Y + spiralR * Math.sin(spiralAngle);
         z = DZ + spiralR * Math.cos(spiralAngle);
@@ -1439,7 +1603,7 @@ if (x >= CALO_START) {
       // DIO electron: decay-in-orbit, variable momentum → variable spiral radius
       const t = this.progress;
       const startX = (FIELD_OFF && this._fieldOffEmitX !== undefined)
-        ? this._fieldOffEmitX : (DS_ENTER_X + 2.0);
+        ? this._fieldOffEmitX : ST_X;
       let x, y, z;
 
       if (FIELD_OFF) {
@@ -1462,7 +1626,7 @@ if (x >= CALO_START) {
         // Spiral radius scales with momentum: r ~ p/qB
         const pFrac = this._dioMomentum / 104.97;
         x = startX + t * 8;
-        const spiralR = (0.45 * pFrac) + Math.sin(t * 2) * (0.12 * pFrac);
+        const spiralR = (0.51 * pFrac) + Math.sin(t * 2) * (0.12 * pFrac);
         const spiralAngle = t * 25;
         y = PS_CENTER_Y + spiralR * Math.sin(spiralAngle);
         z = DZ + spiralR * Math.cos(spiralAngle);
@@ -1474,22 +1638,33 @@ if (x >= CALO_START) {
       if (this.trailTimer % 1 === 0) {
         addTrailPoint(this.trail, x, y, z);
       }
-// DIO calorimeter hit
+// DIO calorimeter hit — low-momentum spirals can curl through the
+// central hole and escape (the reason the calo disks are annular)
 if (x >= CALO_START) {
   if (this._caloDisk === undefined) {
     this._caloDisk = Math.random() < 0.5 ? 0 : 1;
   }
   const diskX = CALO_START + this._caloDisk * 0.7;
   if (x >= diskX) {
-    addCaloHit(diskX, y, z, 0x4488ff);
-    if (!FIELD_OFF) {
-      fillHist(this._dioMomentum, 'dio');
-      drawHistogram();
+    const rHit = Math.sqrt(Math.pow(y - DS_CENTER_Y, 2) + Math.pow(z - DZ, 2));
+    if (rHit >= CALO_RIN) {
+      addCaloHit(diskX, y, z, 0x4488ff);
+      if (!FIELD_OFF) {
+        fillHist(this._dioMomentum, 'dio');
+        drawHistogram();
+      }
+      revealTrail(this.trail);
+      savePersistentTrail(this.trail, PTYPES.dio.color);
+      this.mesh.visible = false;
+      this.active = false;
+    } else if (this._caloDisk === 0) {
+      this._caloDisk = 1;  // through disk 1's hole — may still hit disk 2
+    } else {
+      // through both holes — escapes downstream, no energy measurement
+      this.mesh.visible = false;
+      this.trail.line.visible = false;
+      this.active = false;
     }
-    revealTrail(this.trail);
-    savePersistentTrail(this.trail, PTYPES.dio.color);
-    this.mesh.visible = false;
-    this.active = false;
   }
 } else if (this.lifetime > this.maxLife) {
   this.mesh.visible = false;
@@ -1533,7 +1708,7 @@ if (x >= CALO_START) {
 
       // When cosmic muon reaches the stopping target region, spawn a fake signal electron
       if (!this._cosmicHitST) {
-        const stTargetX = FIELD_OFF ? (DS_ENTER_X - 0.02) : (DS_ENTER_X + 2.0);
+        const stTargetX = FIELD_OFF ? (DS_ENTER_X - 0.02) : ST_X;
         const distToST = Math.sqrt(Math.pow(x - stTargetX, 2) + Math.pow(y - DS_CENTER_Y, 2) + Math.pow(z - DZ, 2));
         if (distToST < 0.6) {
           this._cosmicHitST = true;
@@ -1556,7 +1731,7 @@ if (x >= CALO_START) {
     } else if (this.phase === 6) {
       // Fake signal electron from cosmic muon interaction — mimics conversion electron
       const t = this.progress;
-      const startX = this._fakeStartX || (DS_ENTER_X + 3.0);
+      const startX = this._fakeStartX || ST_X;
       const baseY = this._fakeStartY || PS_CENTER_Y;
       const baseZ = this._fakeStartZ || DZ;
       let x, y, z;
@@ -1583,7 +1758,7 @@ if (x >= CALO_START) {
       } else {
         // Field ON: spiral (magnetic field)
         x = startX + t * 8;
-        const spiralR = 0.45 + Math.sin(t * 1.8) * 0.12;
+        const spiralR = 0.51 + Math.sin(t * 1.8) * 0.12;
         const spiralAngle = t * 22;
         y = baseY + spiralR * Math.sin(spiralAngle);
         z = baseZ + spiralR * Math.cos(spiralAngle);
@@ -1745,6 +1920,13 @@ document.getElementById('btn-cosmic').addEventListener('click', function() {
 function animate() {
   requestAnimationFrame(animate);
   if (autoRotate && !isDragging) spherical.theta += 0.003;
+  // rotation inertia after drag release
+  if (!isDragging && (Math.abs(dragVel.theta) > 1e-4 || Math.abs(dragVel.phi) > 1e-4)) {
+    spherical.theta += dragVel.theta;
+    spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + dragVel.phi));
+    dragVel.theta *= 0.92;
+    dragVel.phi *= 0.92;
+  }
   updateParticles();
   updatePersistentTrails();
   updateCaloHits();

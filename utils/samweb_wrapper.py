@@ -19,6 +19,8 @@ Error-mode policy:
 
 import functools
 import os
+import re
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from samweb_client import SAMWebClient #type: ignore
@@ -39,12 +41,43 @@ def q_dataset(dataset: str, with_events: bool = False,
     return q
 
 
-def q_definition(defname: str, with_events: bool = False) -> str:
+def _q_definition(defname: str, with_events: bool = False) -> str:
     """Dimension string selecting the files of a SAM definition."""
     q = f"defname: {defname}"
     if with_events:
         q += " and event_count>0"
     return q
+
+
+def _q_definition_files(defname: str, availability: Optional[str]) -> str:
+    """Dimension string for a definition's files with an availability
+    constraint (shared by the full-list and first-file readers)."""
+    q = f"defname: {defname}"
+    if availability:
+        q += f" with availability {availability}"
+    return q
+
+
+def _parse_sam_datetime(date_str) -> Optional[datetime]:
+    """Parse a SAM-rendered timestamp to a naive datetime (timezone
+    dropped — SQLite consumers store naive UTC). Returns None on
+    unparseable input."""
+    if not date_str:
+        return None
+    date_str = str(date_str).strip()
+    if '+' in date_str:
+        date_str = date_str.split('+')[0]
+    elif date_str.endswith('Z'):
+        date_str = date_str[:-1]
+    try:
+        return datetime.fromisoformat(date_str)
+    except ValueError:
+        for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+    return None
 
 
 def q_dataset_below_sequencer(dataset: str, sequencer_upper: str) -> str:
@@ -59,7 +92,7 @@ def q_dataset_files_named(dataset: str, filenames: List[str]) -> str:
     return f"dh.dataset {dataset} and file_name in ({', '.join(filenames)})"
 
 
-def q_dataset_like(pattern: str, sequencer: Optional[str] = None) -> str:
+def _q_dataset_like(pattern: str, sequencer: Optional[str] = None) -> str:
     """Files whose dataset matches a SAM `like` pattern (% wildcards),
     optionally pinned to one sequencer."""
     q = f"dh.dataset like '{pattern}'"
@@ -68,14 +101,19 @@ def q_dataset_like(pattern: str, sequencer: Optional[str] = None) -> str:
     return q
 
 
-def q_parents_of_dataset(dataset: str) -> str:
+def _q_parents_of_dataset(dataset: str) -> str:
     """Files that are parents of any file in `dataset`."""
     return f"isparentof: (dh.dataset {dataset})"
 
 
-def q_children_of_file(filename: str) -> str:
+def _q_children_of_file(filename: str) -> str:
     """Files that are children of `filename`."""
     return f"ischildof: (file_name {filename})"
+
+
+def _q_parents_of_file(filename: str) -> str:
+    """Files that are parents of `filename`."""
+    return f"isparentof: (file_name {filename})"
 
 
 def q_recent_files(filetype: str, user: str, since_date: str) -> str:
@@ -125,31 +163,6 @@ class SAMWebWrapper:
             print(f"Error locating file {filename}: {e}")
             return ""
     
-    def locate_file_full(self, filename: str) -> List[Dict]:
-        """Locate a file and return full location details.
-        
-        Returns:
-            List of location dictionaries with keys like 'location_type', 'full_path', etc.
-        """
-        try:
-            return self.client.locateFile(filename)
-        except Exception as e:
-            print(f"Error locating file {filename}: {e}")
-            return []
-    
-    def locate_files(self, filenames: List[str]) -> Dict[str, List[Dict]]:
-        """Locate multiple files in batch (equivalent to samweb locate-files).
-        
-        Returns:
-            Dict mapping filename to list of location dictionaries.
-            Each location dict has keys: 'location_type', 'full_path', 'location', 'date', 'label', 'system'.
-        """
-        try:
-            return self.client.locateFiles(filenames)
-        except Exception as e:
-            print(f"Error locating files: {e}")
-            return {}
-    
     def create_definition(self, definition_name: str, query: str) -> None:
         """Create a definition (equivalent to samweb create-definition).
         Raises samweb exceptions (e.g., DefinitionAlreadyExists, SAMWebHTTPError)
@@ -177,35 +190,39 @@ class SAMWebWrapper:
             availability: Availability constraint ('anylocation', 'physical', etc.)
         """
         try:
-            if availability:
-                query = f"defname: {definition_name} with availability {availability}"
-            else:
-                query = f"defname: {definition_name}"
-            return self.client.listFiles(query)
+            return self.client.listFiles(_q_definition_files(definition_name, availability))
         except Exception as e:
             print(f"Error listing definition files for {definition_name}: {e}")
             return []
-    
-    def list_definitions(self, defname: str = None) -> List[str]:
-        """List all definitions (equivalent to samweb list-definitions).
-        
-        Args:
-            defname: Optional pattern to filter definitions (supports % wildcard)
-        """
+
+    def first_file_in_definition(self, definition_name: str,
+                                 availability: str = "anylocation") -> Optional[str]:
+        """First file of a SAM definition without transferring the full
+        list (streamed listFiles, closed after one name — a dataset can
+        hold 100k files). Returns None on SAM errors or an empty
+        definition — same swallow semantics as list_definition_files,
+        whose query grammar it shares."""
         try:
-            if defname:
-                result = self.client.listDefinitions(defname=defname)
-            else:
-                result = self.client.listDefinitions()
-            
-            # Convert filter object to list if needed
-            if hasattr(result, '__iter__') and not isinstance(result, list):
-                return list(result)
-            return result
+            stream = self.client.listFiles(
+                _q_definition_files(definition_name, availability), stream=True)
+            try:
+                return next(iter(stream), None)
+            finally:
+                close = getattr(stream, 'close', None)
+                if close:
+                    close()
         except Exception as e:
-            print(f"Error listing definitions: {e}")
-            return []
-    
+            print(f"Error listing definition files for {definition_name}: {e}")
+            return None
+
+    def file_sizes_in_dataset(self, dataset: str) -> Dict[str, int]:
+        """{filename: file_size} for a dataset via one list-files
+        --fileinfo. Used by the input pre-flight check to get expected
+        sizes without one get-metadata call per file."""
+        q = q_dataset(dataset)
+        return {fi.file_name: fi.file_size
+                for fi in self.client.listFiles(dimensions=q, fileinfo=True)}
+
     def get_metadata(self, filename: str) -> Dict:
         """Get metadata for a file (equivalent to samweb get-metadata)."""
         try:
@@ -213,6 +230,25 @@ class SAMWebWrapper:
         except Exception as e:
             print(f"Error getting metadata for {filename}: {e}")
             return {}
+
+    def definition_creation_date(self, defname: str) -> Optional[datetime]:
+        """Creation time of a SAM definition as a naive datetime, or None
+        if unavailable. Prefers the structured JSON describe; falls back
+        to parsing the text rendering (older servers). Fail-soft: the
+        dashboard consumers treat an unknown date as absent, not fatal."""
+        info = None
+        try:
+            info = self.client.descDefinitionDict(defname)
+        except Exception:
+            pass
+        if isinstance(info, dict):
+            for key in ('create_time', 'creation_date'):
+                parsed = _parse_sam_datetime(info.get(key))
+                if parsed:
+                    return parsed
+        # Text fallback: "Creation Date: 2025-09-03T11:46:14+00:00"
+        match = re.search(r'Creation Date:\s+(.+)', self.describe_definition(defname))
+        return _parse_sam_datetime(match.group(1)) if match else None
     
     def file_lineage(self, filename: str, lineage_type: str = 'parents') -> List[str]:
         """Get file lineage using SAM client getFileLineage method.
@@ -252,19 +288,33 @@ class SAMWebWrapper:
 
     def definition_file_count(self, defname: str, with_events: bool = False) -> int:
         """Number of files in a SAM definition."""
-        return self.client.countFiles(q_definition(defname, with_events))
+        return self.client.countFiles(_q_definition(defname, with_events))
 
     def parents_of_dataset(self, dataset: str) -> List[str]:
         """Files that are parents of any file in `dataset`."""
-        return self.client.listFiles(q_parents_of_dataset(dataset))
+        return self.client.listFiles(_q_parents_of_dataset(dataset))
 
     def children_of_file(self, filename: str) -> List[str]:
         """Files that are children of `filename`."""
-        return self.client.listFiles(q_children_of_file(filename))
+        return self.client.listFiles(_q_children_of_file(filename))
+
+    def parents_of_file(self, filename: str) -> List[str]:
+        """Files that are parents of `filename`, excluding the etc.*.txt
+        bookkeeping entries (same filter famtree.get_parents applies).
+
+        Fail-loud twin of file_lineage(filename, 'parents'), which
+        swallows every exception and returns []. For a lineage caller
+        that empty list is indistinguishable from 'this file has no
+        parents' — i.e. 'it is a primary' — so an expired token or a SAM
+        outage renders as a confident, materially wrong answer. Callers
+        that must tell absence from failure use this one."""
+        parents = self.client.listFiles(_q_parents_of_file(filename))
+        return [p for p in parents
+                if not (p.startswith('etc.') and p.endswith('.txt'))]
 
     def files_like(self, pattern: str, sequencer: Optional[str] = None) -> List[str]:
         """Files whose dataset matches a SAM `like` pattern."""
-        return self.client.listFiles(q_dataset_like(pattern, sequencer))
+        return self.client.listFiles(_q_dataset_like(pattern, sequencer))
 
     def locate_file_strict(self, filename: str) -> List[Dict]:
         """locate_file_full without the error swallowing — for the worker
@@ -277,6 +327,14 @@ class SAMWebWrapper:
         the whole list instead of one per file. Same record shape as
         locate_file_strict, keyed by filename."""
         return self.client.locateFiles(filenames)
+
+    def metadata_for_files(self, filenames: List[str]) -> List[Dict]:
+        """Batch metadata: one HTTP round-trip for the whole list instead
+        of one per file. Files unknown to SAM are silently absent from
+        the result (samweb behavior). Raises on SAM errors — callers
+        wanting warn-and-continue chunk the list and fall back to
+        get_metadata per file."""
+        return self.client.getMultipleMetadata(filenames)
 
     def definitions_matching(self, defname: Optional[str] = None,
                              user: Optional[str] = None) -> List[str]:
@@ -315,10 +373,6 @@ def locate_file(filename: str) -> str:
     """Locate a file."""
     return get_samweb_wrapper().locate_file(filename)
 
-def locate_file_full(filename: str) -> List[Dict]:
-    """Locate a file and return full location details."""
-    return get_samweb_wrapper().locate_file_full(filename)
-
 def create_definition(definition_name: str, query: str) -> None:
     """Create a definition. Raises on failure."""
     get_samweb_wrapper().create_definition(definition_name, query)
@@ -335,16 +389,22 @@ def list_definition_files(definition_name: str) -> List[str]:
     """List files in a definition."""
     return get_samweb_wrapper().list_definition_files(definition_name)
 
-def list_definitions(defname: str = None) -> List[str]:
-    """List all definitions.
-    Args:
-        defname: Optional pattern to filter definitions (supports % wildcard)
-    """
-    return get_samweb_wrapper().list_definitions(defname)
+def first_file_in_definition(definition_name: str,
+                             availability: str = "anylocation") -> Optional[str]:
+    """First file of a definition without transferring the full list."""
+    return get_samweb_wrapper().first_file_in_definition(definition_name, availability)
 
 def get_metadata(filename: str) -> Dict:
     """Get metadata for a file."""
     return get_samweb_wrapper().get_metadata(filename)
+
+def file_sizes_in_dataset(dataset: str) -> Dict[str, int]:
+    """{filename: file_size} for a dataset (one list-files --fileinfo)."""
+    return get_samweb_wrapper().file_sizes_in_dataset(dataset)
+
+def definition_creation_date(defname: str) -> Optional[datetime]:
+    """Creation time of a SAM definition, or None if unavailable."""
+    return get_samweb_wrapper().definition_creation_date(defname)
 
 def file_lineage(filename: str, lineage_type: str = 'parents') -> List[str]:
     """Get file lineage using SAM client getFileLineage method."""
@@ -377,6 +437,10 @@ def children_of_file(filename: str) -> List[str]:
     """Files that are children of `filename`."""
     return get_samweb_wrapper().children_of_file(filename)
 
+def parents_of_file(filename: str) -> List[str]:
+    """Files that are parents of `filename`, raising on SAM errors."""
+    return get_samweb_wrapper().parents_of_file(filename)
+
 def files_like(pattern: str, sequencer: Optional[str] = None) -> List[str]:
     """Files whose dataset matches a SAM `like` pattern."""
     return get_samweb_wrapper().files_like(pattern, sequencer)
@@ -388,6 +452,10 @@ def locate_file_strict(filename: str) -> List[Dict]:
 def locate_files_strict(filenames: List[str]) -> Dict[str, List[Dict]]:
     """Batch locate, raising on SAM errors (no swallow)."""
     return get_samweb_wrapper().locate_files_strict(filenames)
+
+def metadata_for_files(filenames: List[str]) -> List[Dict]:
+    """Batch metadata, raising on SAM errors (no swallow)."""
+    return get_samweb_wrapper().metadata_for_files(filenames)
 
 def definitions_matching(defname: Optional[str] = None,
                          user: Optional[str] = None) -> List[str]:

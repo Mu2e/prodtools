@@ -1,0 +1,33 @@
+#!/bin/bash
+# Cron entry point for the direct-submission maintenance tick. Install
+# in mu2epro's crontab (hourly), e.g.:
+#   17 * * * * /path/to/prodtools/bin/submissions_cron
+#
+# Order matters:
+#   1. locking — handled inside `submissions run` itself (a per-DB
+#      lockfile beside the DB, held for the process lifetime); an
+#      overlapping run exits 1 with a "another submissions run holds
+#      ..." message rather than double-submitting (same nonzero class
+#      as the token gate — read the log line to tell them apart).
+#   2. Mu2e env (quiet; failures still surface via the python run)
+#   3. token gate — no valid bearer token -> report and exit non-zero.
+#      NEVER fetch or refresh a token here (standing rule: token
+#      problems are reported, not remediated).
+#   4. submissions run, appended to a dated log beside the DB
+set -e
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DB="${MU2E_SUBMISSION_DB:-/exp/mu2e/data/users/mu2epro/prodtools/submissions.db}"
+DBDIR="$(dirname "$DB")"
+LOG="$DBDIR/submissions-$(date +%Y%m%d).log"
+
+{
+    echo "=== submissions_cron $(date -u +%FT%TZ) ==="
+    source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh >/dev/null 2>&1 || true
+    muse setup ops >/dev/null 2>&1 || true
+    if ! httokendecode >/dev/null 2>&1; then
+        echo "ERROR: no valid bearer token — not submitting, not remediating."
+        exit 1
+    fi
+    python3 "$REPO/utils/submissions.py" --db "$DB" run
+} >>"$LOG" 2>&1

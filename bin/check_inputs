@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# check_inputs - pre-flight check that a campaign's input files are
+# readable before jobs launch (resilient pileup present + correctly
+# sized, tape inputs staged). Read-only. Wrapper for
+# utils/check_inputs.py
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/check_inputs.py"
+
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    exec python3 "$PYTHON_SCRIPT" "$@"
+fi
+
+# Set up Mu2e environment (needed for samweb + mdh)
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+
+exec python3 "$PYTHON_SCRIPT" "$@"

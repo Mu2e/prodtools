@@ -155,5 +155,19 @@
         "inloc": "tape",
         "outloc": {"*.art": "tape"},
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ap/setup.sh"
+    },
+    {
+        "desc": "CosmicCRYExtracted",
+        "dsconf": "MDC2025as_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/Extracted.fcl",
+        "input_data": {"dts.mu2e.CosmicCRYExtracted.MDC2025as.art": 10},
+        "fcl_overrides": {
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {"*.art": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025as/setup.sh"
     }
 ]

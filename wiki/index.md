@@ -9,6 +9,8 @@
 <!-- entries added by wiki-ingest -->
 
 ### Decisions
+- [[2026-07-21-input-preflight-check]] — `check_inputs` gate: verify a campaign's inputs are readable before jobs launch (resilient pileup present+sized vs SAM by direct stat; tape inputs staged via mdh — mdh is blind to resilient). Read-only, block-only (exit 2), fails closed; wired into `submit_map --enqueue`. Motivated by the index-519 truncated-pileup incident _(2026-07-21)_
+- [[2026-07-12-hygiene-tiers-and-kept-duplication]] — tiers 1+2 consolidations (drifted fcl writer, cnf-name contract) + the deliberate-duplication do-not-fix list _(2026-07-12)_
 - [[2026-04-21-extend-jobdef-per-index-overrides]] — add `event_id_per_index` to tbs; per-index linear overrides `offset + index × step` for any fcl key _(ingested 2026-04-21)_
 - [[2026-04-21-fold-pbi-into-json2jobdef]] — delete the `gen_pbi_sequence` utility; add a `split_lines` input_data shape to `json2jobdef` _(ingested 2026-04-21)_
 - [[2026-04-29-remove-poms-from-submit-loop]] — phased plan to drop POMS: Phase 1 keeps `mu2ejobsub` and adds Python `submit_map` + local SQLite state; Phase 2 replaces `mu2ejobsub` with direct `jobsub_submit` _(proposed 2026-04-29)_
@@ -26,6 +28,7 @@
 
 ### Runs
 <!-- entries added by wiki-ingest -->
+- [[2026-07-11-noprimary-run1ban-001-remake]] — remake NoPrimary.Run1Ban at 100× stats (10B empty frames) as new-name `Run1Ban-001`; new POMS map MDC2025-033; mix.json merge 10→1 for the 200k-ev/file granularity _(2026-07-11)_
 
 ### Sources
 - [[pbi-sequence-workflow]] — full PBI chain (stage 1 dts → stage 2 mix dig → stage 3 reco mcs) via `json2jobdef` + `runmu2e` _(2026-04-25)_
@@ -41,6 +44,7 @@
 - [[reference-rpc-primary-inherits-bfgeom]] — RPC*/Pbar*/TargetStop primary fcls inherit `bfgeom_no_tsu_ps_v01.txt` via `StopParticle.fcl:41`; don't restate it in `fcl_overrides` _(2026-05-23)_
 - [[digi-output-stream-by-fcl]] — output stream names depend on digi fcl: OnSpill/OffSpill = Triggered+Triggerable, Extracted/NoField = single Output; wrong override keys are silent no-ops; MDC2025af CosmicCRYExtracted entry has stale wrong-shape overrides _(2026-05-29)_
 - [[2026-05-19-run1bak-resampler-additions]] — appended 4 field-off Run1Bak entries (Neutrals/MuBeam/EleBeam/MuStop Flash + MuStopPileup) to `data/Run1B/resampler_beam.json`; originals preserved; pions excluded _(2026-05-19)_
+- [[prodtools-mcp-server]] — six status/discovery tools; `unknown` ≠ zero; two-part venv check _(2026-07-26)_
 
 ### Analyses
 <!-- entries added by wiki-query when answers are filed -->
