@@ -11,7 +11,7 @@ graph TD
     AC --> TOOLSGROUP
     AC --> CALGROUP
     AC --> TRIGGROUP
-    SPK --> OC[Operations Coordinators:<br/>Rackness&nbsp;]
+    SPK --> OC[Operations Coordinators:<br/>Rackness, Xia&nbsp;]
     OC --> TRIGGROUP
     AC -.-> ML[ML/AI:<br/>Corrodi, Campa&nbsp;]
     
@@ -39,9 +39,9 @@ graph TD
     end
     
     subgraph TOOLSGROUP[" "]
-        TOOLS[Tools:<br/>Edmonds, Middleton&nbsp;]
-        NTUP[Analysis Tuple:<br/>Edmonds]
-        IFACE[Analysis Interfaces:<br/>Grant]
+        TOOLS[Tools:<br/>TBD, Middleton&nbsp;]
+        NTUP[Analysis Tuple:<br/>TBD]
+        IFACE[Analysis Interfaces:<br/>Harrison]
         EVD[Event Display:<br/>Chithirasreemadam]
         REF[Reference Analyses:<br/>Middleton]
     end
