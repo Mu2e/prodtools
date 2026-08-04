@@ -1190,6 +1190,11 @@ def build_parser():
     comp.add_argument('--note', default=None,
                       help='Reason recorded on the campaign (default: '
                            '"operator complete")')
+    slice_p = sub.add_parser('set-slice',
+                             help='Retune a live campaign\'s batch size '
+                                  '(takes effect on the next tick)')
+    slice_p.add_argument('camp_id', type=int)
+    slice_p.add_argument('slice_size', type=int)
 
     # Bare invocation (no verb) IS status — an explicit default, not a
     # hidden fallthrough (spec Change 1). Must come AFTER
@@ -1280,6 +1285,17 @@ def main():
     if verb == 'status':
         print(f"queue cap in effect: {resolve_cap(None)}")
         print_status(args.db)
+        return
+
+    if verb == 'set-slice':
+        _acquire_lock(args.db)
+        try:
+            old = submission_ledger.set_campaign_slice(
+                args.db, args.camp_id, args.slice_size)
+        except ValueError as e:
+            sys.exit(f"submissions: {e}")
+        print(f"campaign {args.camp_id}: slice_size {old} -> "
+              f"{args.slice_size} (applies from the next tick)")
         return
 
     if verb in ('pause', 'resume', 'cancel', 'complete'):

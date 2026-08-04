@@ -252,6 +252,35 @@ def advance_campaign(db_path, camp_id, new_cursor):
         con.close()
 
 
+def set_campaign_slice(db_path, camp_id, slice_size):
+    """Retune a live campaign's batch size; return the previous value.
+
+    Only active/paused campaigns accept it — a closed campaign's slice
+    is never read again, so silently accepting one would report success
+    for a no-op. The value binds from the next tick: batches already
+    submitted keep the size they were dispatched with, since a ledger
+    row records the indices it actually sent."""
+    if slice_size < 1:
+        raise ValueError(f"slice_size must be >= 1, got {slice_size}")
+    con = _connect(db_path)
+    try:
+        row = con.execute(
+            'SELECT state, slice_size FROM campaigns WHERE id = ?',
+            (camp_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"no campaign {camp_id}")
+        if row['state'] not in ('active', 'paused'):
+            raise ValueError(
+                f"campaign {camp_id} is {row['state']} — slice_size only "
+                f"applies to an active or paused campaign")
+        con.execute('UPDATE campaigns SET slice_size = ? WHERE id = ?',
+                    (slice_size, camp_id))
+        con.commit()
+        return row['slice_size']
+    finally:
+        con.close()
+
+
 def set_campaign_state(db_path, camp_id, state, note=None):
     """Validated campaign transition (see _CAMPAIGN_TRANSITIONS).
     Reactivating a paused campaign clears closed_utc and PRESERVES the

@@ -5029,6 +5029,44 @@ class TestCampaignLedger(unittest.TestCase):
         self._create()  # must not raise
         self.assertEqual(len(self.sl.all_campaigns(self.db)), 2)
 
+    def test_set_slice_returns_old_and_stores_new(self):
+        cid = self._create(slice_size=500)
+        old = self.sl.set_campaign_slice(self.db, cid, 2000)
+        self.assertEqual(old, 500)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['slice_size'],
+                         2000)
+
+    def test_set_slice_allowed_while_paused(self):
+        """Retuning a paused campaign is legitimate: the new size binds
+        when it is resumed."""
+        cid = self._create(slice_size=500)
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        self.sl.set_campaign_slice(self.db, cid, 1500)
+        c = [x for x in self.sl.all_campaigns(self.db) if x['id'] == cid][0]
+        self.assertEqual(c['slice_size'], 1500)
+
+    def test_set_slice_refused_on_closed_campaign(self):
+        """Nothing reads slice_size after close — accepting it would
+        report success for a no-op."""
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_slice(self.db, cid, 2000)
+        self.assertIn('complete', str(cm.exception))
+
+    def test_set_slice_rejects_zero_and_negative(self):
+        cid = self._create(slice_size=500)
+        for bad in (0, -1):
+            with self.assertRaises(ValueError):
+                self.sl.set_campaign_slice(self.db, cid, bad)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['slice_size'],
+                         500)
+
+    def test_set_slice_unknown_campaign_raises(self):
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_slice(self.db, 999, 2000)
+        self.assertIn('999', str(cm.exception))
+
     def test_slice_size_validated(self):
         with self.assertRaises(ValueError):
             self._create(slice_size=0)
