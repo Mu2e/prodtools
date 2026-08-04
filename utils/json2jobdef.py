@@ -441,6 +441,24 @@ def append_jobdef(config, jobdefs_file=None):
         if key in config:
             jobdef_entry[key] = config[key]
 
+    # Draining configuration passes through too, so a draining map comes out
+    # of --jobdefs ready to enqueue instead of needing a hand-edit: the
+    # submit path reads `input_pattern` (poms_entry.is_draining, the kind
+    # discriminator) and `prestage` (submit._validate_draining_entry, and
+    # the tape-residency gate in submissions.drain_tick) off the MAP entry,
+    # so a value left behind in the JSON config would silently do nothing.
+    for key in ('input_pattern', 'prestage'):
+        if key in config:
+            jobdef_entry[key] = config[key]
+
+    # A draining entry is defined by having an input_pattern and NO index
+    # space. Emitting both would leave the map self-contradictory --
+    # is_draining() would say draining while njobs claimed a fixed window --
+    # so refuse rather than write it.
+    if 'input_pattern' in config and not is_generic:
+        fail("Error: input_pattern requires generic_tarball: true "
+             "(a draining entry has no fixed job count)")
+
     # Optional cnf-index window start (statistics expansion; semantics
     # in utils/poms_entry.py). firstjob_of/validate_window are the single
     # validation authority — shared with the submit path.

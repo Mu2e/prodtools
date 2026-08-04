@@ -5134,6 +5134,62 @@ class TestEntryResources(unittest.TestCase):
         self.assertEqual(entry['memory'], '4000MB')
         self.assertNotIn('disk', entry)           # absent key stays absent
 
+    def _drain_config(self, **over):
+        cfg = {'desc': 'evnt', 'dsconf': 'TestConf', 'owner': 'mu2e',
+               'inloc': 'tape', 'generic_tarball': True,
+               'input_pattern': 'mcs.mu2e.%OnSpill.TestConf.art',
+               'prestage': True,
+               'outloc': {'nts.*.root': 'tape'}}
+        cfg.update(over)
+        return cfg
+
+    def _append(self, config):
+        import tempfile
+        from utils import json2jobdef
+        out = os.path.join(tempfile.mkdtemp(), 'map.json')
+        json2jobdef.append_jobdef(config, jobdefs_file=out)
+        with open(out) as f:
+            return json.load(f)[0]
+
+    def test_append_jobdef_passes_draining_keys(self):
+        """A draining map must come out of --jobdefs ready to enqueue.
+        input_pattern and prestage are read off the MAP entry (is_draining,
+        _validate_draining_entry, drain_tick's residency gate), so leaving
+        them in the JSON config alone silently produced a non-draining map
+        and forced a hand-edit of the generated file."""
+        entry = self._append(self._drain_config())
+        self.assertEqual(entry['input_pattern'],
+                         'mcs.mu2e.%OnSpill.TestConf.art')
+        self.assertIs(entry['prestage'], True)
+        self.assertNotIn('njobs', entry)          # generic => no index space
+
+    def test_draining_outputs_glob_comes_from_outloc(self):
+        """The tier-specific glob is config, not a hand edit: '*.art' outputs
+        on a draining entry let the worker declare its own fetched INPUT for
+        push, which pushOutput's orphan recovery then tried to DELETE from
+        tape (2026-08-02 smoke). outloc is where that is fixed once."""
+        entry = self._append(self._drain_config())
+        self.assertEqual(entry['outputs'],
+                         [{'dataset': 'nts.*.root', 'location': 'tape'}])
+
+    def test_input_pattern_without_generic_tarball_is_refused(self):
+        """Emitting both input_pattern and njobs would leave the map
+        self-contradictory: is_draining() says draining while njobs claims a
+        fixed window. Refuse rather than write it."""
+        from utils import json2jobdef
+        cfg = self._drain_config(njobs=5)
+        del cfg['generic_tarball']
+        with self.assertRaises(SystemExit):
+            self._append(cfg)
+
+    def test_non_draining_entry_gains_no_draining_keys(self):
+        entry = self._append({
+            'desc': 'TestDesc', 'dsconf': 'TestConf', 'owner': 'mu2e',
+            'inloc': 'tape', 'njobs': 5,
+            'outloc': {'sim.mu2e.TestDesc.TestConf.art': 'tape'}})
+        self.assertNotIn('input_pattern', entry)
+        self.assertNotIn('prestage', entry)
+
 
 class TestSubmitEntryDirectResourceWiring(unittest.TestCase):
     """submit_entry_direct must actually pass the EFFECTIVE resources

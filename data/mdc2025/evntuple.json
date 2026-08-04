@@ -118,5 +118,17 @@
         "inloc": "tape",
         "outloc": {"*.root": "tape"},
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
+    },
+    {
+        "dsconf": "MDC2025au_best_v1_5",
+        "desc": "evnt",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025au_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "fcl_overrides": {"services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"},
+        "inloc": "tape",
+        "outloc": {"nts.*.root": "tape"},
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
     }
 ]
