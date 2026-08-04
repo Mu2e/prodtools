@@ -42,7 +42,8 @@ from utils.mkrecovery import (build_file_maps, extract_datasets_from_tarball,
                               locate_tarball)
 from utils.poms_entry import njobs_of, is_draining
 from utils.samweb_wrapper import (files_in_dataset, definitions_matching,
-                                  metadata_for_files, _parse_sam_datetime)
+                                  dataset_file_count, metadata_for_files,
+                                  _parse_sam_datetime)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUBMIT_MAP = REPO_ROOT / 'bin' / 'submit_map'
@@ -211,7 +212,58 @@ def verify_row(row, sam_lister=files_in_dataset):
     return missing, partial
 
 
-def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
+def _draining_expected(camp, datasets, job_pars, count_fn):
+    """Denominators for one DRAINING campaign's output datasets.
+
+    A draining campaign has no njobs — its input dataset is still growing,
+    so no fixed target exists. The honest denominator for a 1:1
+    direct-input stage is the INPUT dataset's current file count: 80 digis
+    in means 80 mcs out.
+
+    Only `datasets` (what the caller is actually displaying) are resolved,
+    one SAM count each — never the campaign's whole desc space, which for
+    au reco is 21 datasets nobody asked about.
+
+    The output->input desc mapping is CONFIRMED through expected_outputs_for
+    (the worker's own substitution), never assumed. That guard is the whole
+    point: this function's contract already warns that CosmicCRYAll produces
+    ...CosmicCRYAllOnSpill... while CosmicCRYExtracted takes no suffix and
+    FlatGamma is a prefix of FlatGammaCalo. A cnf that suffixes its outputs
+    (`{desc}-KL`) simply fails the check and the dataset keeps its "—",
+    which is the correct answer rather than a fabricated one.
+    """
+    pattern = camp['entry']['input_pattern']
+    out = {}
+    for ds in datasets:
+        try:
+            name = Mu2eName.parse(ds)
+        except ValueError:
+            continue
+        # Candidate input: the pattern's tier/owner/dsconf/format with this
+        # dataset's own desc. Must itself match the campaign's pattern, or
+        # it belongs to some other campaign entirely.
+        pat = Mu2eName.parse(pattern)
+        candidate = f"{pat.tier}.{pat.owner}.{name.description}.{pat.dsconf}.{pat.extension}"
+        if not _matches_pattern(candidate, pattern):
+            continue
+        probe = (f"{pat.tier}.{pat.owner}.{name.description}.{pat.dsconf}"
+                 f".000000_00000000.{pat.extension}")
+        try:
+            produced = {_dataset_of(o)
+                        for o in expected_outputs_for(probe, job_pars)}
+        except Exception:
+            continue
+        if ds not in produced:
+            continue
+        try:
+            out[ds] = count_fn(candidate)
+        except Exception:
+            continue
+    return out
+
+
+def ledger_expected(db_path, dsconfs=None, *, datasets=None,
+                    locate=locate_tarball, count_fn=dataset_file_count):
     """Map output dataset name -> expected job count, from the submission ledger.
 
     The ledger entry carries njobs -- the SUBMITTED window, not the cnf's baked
@@ -225,7 +277,18 @@ def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
     skipped without resolving their tarball, so a short listing does not pay for
     the whole ledger.
 
-    locate: injected for testing.
+    datasets: optional set of output dataset names the caller will display.
+    Required to get a denominator for a DRAINING campaign, which has no njobs
+    (its input dataset is still growing, so no fixed target exists): the
+    denominator is that dataset's INPUT file count, one SAM count each, and
+    resolving a campaign's whole desc space uninvited would be 21 queries for
+    au reco alone. Omit it and draining campaigns contribute nothing, exactly
+    as before. NOTE the denominator MOVES — "80/80" means complete against the
+    inputs that exist right now, not terminally complete; when the upstream
+    round gains files a dataset that read 100% drops below it. See
+    _draining_expected.
+
+    locate: injected for testing. count_fn: SAM file count, injected likewise.
 
     Returns (expected, failures). expected maps dataset -> max njobs over every
     campaign producing it. njobs is an ABSOLUTE target index count, not an
@@ -243,10 +306,16 @@ def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
     expected = {}
     failures = {}
     resolved = {}          # tarball -> [datasets], or None when unresolvable
+    pars = {}              # draining only: tarball -> Mu2eJobPars, or None
     for camp in submission_ledger.all_campaigns(db_path):
         tarball = camp['tarball']
-        njobs = (camp.get('entry') or {}).get('njobs')
-        if not njobs:
+        entry = camp.get('entry') or {}
+        njobs = entry.get('njobs')
+        draining = is_draining(entry)
+        # A draining campaign has no njobs by definition; it is skipped
+        # entirely unless the caller named the datasets it cares about,
+        # since its denominators cost one SAM count apiece.
+        if not njobs and not (draining and datasets):
             continue
         if dsconfs is not None:
             try:
@@ -254,22 +323,39 @@ def ledger_expected(db_path, dsconfs=None, *, locate=locate_tarball):
                     continue
             except ValueError:
                 continue
+        if draining:
+            if tarball not in pars:
+                try:
+                    path = locate(tarball)
+                    if not path:
+                        raise RuntimeError("tarball not locatable")
+                    pars[tarball] = Mu2eJobPars(path)
+                except Exception as e:
+                    failures[tarball] = str(e)
+                    pars[tarball] = None
+            if pars[tarball] is None:
+                continue
+            for ds, n in _draining_expected(camp, datasets, pars[tarball],
+                                            count_fn).items():
+                expected[ds] = max(expected.get(ds, 0), n)
+            continue
         if tarball not in resolved:
             try:
                 path = locate(tarball)
                 if not path:
                     raise RuntimeError("tarball not locatable")
-                datasets = extract_datasets_from_tarball(Mu2eJobPars(path), njobs)
-                if not datasets:
+                out_datasets = extract_datasets_from_tarball(Mu2eJobPars(path),
+                                                             njobs)
+                if not out_datasets:
                     raise RuntimeError("no output datasets in tarball")
-                resolved[tarball] = datasets
+                resolved[tarball] = out_datasets
             except Exception as e:
                 failures[tarball] = str(e)
                 resolved[tarball] = None
-        datasets = resolved[tarball]
-        if datasets is None:
+        out_datasets = resolved[tarball]
+        if out_datasets is None:
             continue
-        for ds in datasets:
+        for ds in out_datasets:
             expected[ds] = max(expected.get(ds, 0), njobs)
     return expected, failures
 

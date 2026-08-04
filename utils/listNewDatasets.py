@@ -150,8 +150,9 @@ class DatasetLister:
                 except ValueError:
                     continue
             try:
-                self._expected, failures = ledger_expected(self.ledger_db,
-                                                           dsconfs=dsconfs)
+                self._expected, failures = ledger_expected(
+                    self.ledger_db, dsconfs=dsconfs,
+                    datasets={ds for ds, _ in sorted_datasets})
             except Exception as e:
                 print(f"WARNING: could not read ledger {self.ledger_db} ({e}); "
                       "completeness column disabled.", file=sys.stderr)

@@ -8733,6 +8733,107 @@ class TestLedgerExpected(unittest.TestCase):
         self.assertEqual(list(expected), [self.CRY_DS])
 
 
+class TestLedgerExpectedDraining(unittest.TestCase):
+    """Denominators for a DRAINING campaign, which has no njobs.
+
+    The honest denominator for a 1:1 direct-input stage is the INPUT
+    dataset's current file count: 80 digis in means 80 mcs out. Before
+    this, every draining output rendered '—' because ledger_expected
+    skipped any campaign without njobs (observed live on campaign 48:
+    `80 mcs.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art ... —`)."""
+
+    TB = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+    CAMP = {'tarball': TB, 'entry': {
+        'tarball': TB, 'inloc': 'tape',
+        'input_pattern': 'dig.mu2e.%OnSpill.MDC2025au_best_v1_5.art',
+        'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}}
+    OUT_DS = 'mcs.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art'
+    IN_DS = 'dig.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art'
+
+    def _call(self, datasets, counts=None, pars=None):
+        from utils import submissions
+        counted = []
+
+        def fake_count(ds):
+            counted.append(ds)
+            return (counts or {}).get(ds, 0)
+
+        with patch.object(submissions, 'Mu2eJobPars',
+                          lambda p: pars if pars is not None else _DrainPars(p)), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[self.CAMP]):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', datasets=datasets,
+                locate=lambda tb: tb, count_fn=fake_count)
+        return expected, failures, counted
+
+    def test_denominator_is_the_input_dataset_file_count(self):
+        expected, failures, counted = self._call(
+            {self.OUT_DS}, counts={self.IN_DS: 80})
+        self.assertEqual(expected, {self.OUT_DS: 80})
+        self.assertEqual(counted, [self.IN_DS])
+        self.assertEqual(failures, {})
+
+    def test_without_datasets_a_draining_campaign_contributes_nothing(self):
+        """Each denominator costs a SAM count, and a draining campaign's desc
+        space is large (21 datasets for au reco). A caller that did not name
+        what it wants must not pay for them."""
+        expected, _, counted = self._call(None, counts={self.IN_DS: 80})
+        self.assertEqual(expected, {})
+        self.assertEqual(counted, [])
+
+    def test_dataset_outside_the_input_pattern_is_skipped(self):
+        """A dataset from some other campaign must not be handed this
+        campaign's denominator."""
+        other = 'mcs.mu2e.NoPrimaryOnSpill.MDC2025ar_best_v1_3.art'
+        expected, _, counted = self._call({other}, counts={other: 999})
+        self.assertEqual(expected, {})
+        self.assertEqual(counted, [])
+
+    def test_suffixed_output_is_not_guessed_from_the_desc(self):
+        """A cnf whose outputs carry a suffix ({desc}-KL) breaks the
+        desc==desc assumption. expected_outputs_for is the arbiter: when the
+        cnf does not actually produce this dataset, it keeps '—' rather than
+        being handed the input count. Guards the trap the contract already
+        names -- FlatGamma is a prefix of FlatGammaCalo."""
+        class SuffixPars:
+            def __init__(self, path): pass
+            def job_outputs(self, i, override_desc=None, override_seq=None):
+                return {'Output': f'mcs.mu2e.{override_desc}-KL.'
+                                  f'MDC2025au_best_v1_5.{override_seq}.art'}
+        expected, _, counted = self._call(
+            {self.OUT_DS}, counts={self.IN_DS: 80}, pars=SuffixPars(None))
+        self.assertEqual(expected, {})
+        self.assertEqual(counted, [])
+
+    def test_unlocatable_cnf_is_a_failure_not_a_denominator(self):
+        from utils import submissions
+        with patch.object(submissions, 'Mu2eJobPars', lambda p: _DrainPars(p)), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[self.CAMP]):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', datasets={self.OUT_DS},
+                locate=lambda tb: None, count_fn=lambda ds: 80)
+        self.assertEqual(expected, {})
+        self.assertIn(self.TB, failures)
+
+    def test_index_mode_campaigns_still_use_njobs(self):
+        """The draining branch must not disturb the njobs path."""
+        from utils import submissions
+        cry = 'cnf.mu2e.CosmicCRYAll.MDC2025au_best_v1_5.0.tar'
+        cry_ds = 'dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art'
+        with patch.object(submissions, 'Mu2eJobPars', lambda p: p), \
+             patch.object(submissions, 'extract_datasets_from_tarball',
+                          lambda job, njobs: [cry_ds]), \
+             patch.object(submissions.submission_ledger, 'all_campaigns',
+                          return_value=[{'tarball': cry,
+                                         'entry': {'njobs': 2500}}]):
+            expected, failures = submissions.ledger_expected(
+                '/nonexistent.db', datasets={cry_ds}, locate=lambda tb: tb,
+                count_fn=lambda ds: 7)
+        self.assertEqual(expected, {cry_ds: 2500})
+
+
 # ---------------------------------------------------------------------------
 # 42. listNewDatasets completeness column (ledger-backed)
 # ---------------------------------------------------------------------------
