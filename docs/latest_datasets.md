@@ -1,307 +1,185 @@
 # Latest MDC2025 datasets
 
-Latest dsconf per description across the three main tiers. Generated 2026-08-06.
+Latest dsconf per description. Generated 2026-08-06.
+Excludes `Triggered` variants and the superseded `MDC2025-NNN` series.
 
-| tier | descriptions | pattern |
-|---|---:|---|
-| dig | 51 | `dig.mu2e.%.MDC2025%best%.art` |
-| mcs | 63 | `mcs.mu2e.%.MDC2025%best%.art` |
-| nts | 46 | `nts.mu2e.%.MDC2025%best%.root` |
+## dig (51)
 
-## Scope and method
-
-Two exclusions, both deliberate:
-
-- **`Triggered` variants** — filtered with `grep -v Trig`.
-- **The `MDC2025-NNN` ntuple series** — superseded, excluded via the
-  `%best%` term, which no `MDC2025-NNN` dsconf contains. This drops 16
-  `nts` descriptions, all of them `*-reco-ntuple`, `ensembleMDS3c`, or
-  `ensembleMDS3cNtuple`. Verified it changes no winner: of the 46
-  descriptions present either way, every one keeps the same latest
-  dsconf.
-
-All three tiers use the default `--latest-by dsconf` (lexicographic).
-That is correct here **because** `MDC2025-NNN` is excluded — with both
-series in play, `MDC2025-002` sorts below `MDC2025au_best_v1_5` (`-` is
-0x2D, `a` is 0x61) and dsconf order returns stale rows. If you ever
-re-include that series, switch to `--latest-by time`.
-
-**versions** is the `--show-count` column: how many dsconf versions exist
-for the description, the listed one being newest. `1` = produced once and
-never revised. `--superseded` prints the older versions themselves.
-
----
-
-# dig
-
-```bash
-python3 bin/latestDatasets --defname 'dig.mu2e.%.MDC2025%best%.art' --show-count | grep -v Trig
+```
+dig.mu2e.CeEndpointOnSpill.MDC2025an_best_v1_1.art
+dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.CePLeadingLogMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.CePlusEndpointOnSpill.MDC2025an_best_v1_1.art
+dig.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art
+dig.mu2e.CosmicCalibOnSpill.MDC2025ap_best_v1_1.art
+dig.mu2e.CosmicSignalMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.CosmicSignalOffSpill.MDC2025an_best_v1_1.art
+dig.mu2e.CosmicSignalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.DIOtail95Mix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.DIOtail95OnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.FlatGammaCaloMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.FlatGammaCaloOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.FlatGammaMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.FlatGammaOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.FlatMuMinusOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.FlateMinusMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.FlateMinusOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.FlatePlusMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.FlatePlusOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.IPAMuminusMichelMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.IPAMuminusMichelOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.MuCap1809keVCaloMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.NoPrimaryMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.PBINormal_33344Mix1BB.MDC2025ai_best_v1_3.art
+dig.mu2e.PBIPathological_33344Mix1BB.MDC2025ai_best_v1_3.art
+dig.mu2e.PbarResamplingMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.PbarResamplingOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.RMCExternalOnSpill.MDC2025an_best_v1_1.art
+dig.mu2e.RMCInternalOnSpill.MDC2025an_best_v1_1.art
+dig.mu2e.RMCPhaseSpace0NExternalMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.RMCPhaseSpace0NExternalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.RMCPhaseSpace0NInternalMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.RMCPhaseSpace0NInternalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.RMCPhaseSpace1NExternalMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.RMCPhaseSpace1NExternalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.RMCPhaseSpace1NInternalMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.RMCPhaseSpace1NInternalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.RPCExternalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.RPCExternalPhysicalMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.RPCExternalPhysicalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.RPCInternalOnSpill.MDC2025ap_best_v1_1.art
+dig.mu2e.RPCInternalPhysicalMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.RPCInternalPhysicalOnSpill.MDC2025au_best_v1_5.art
+dig.mu2e.ensembleMDS3bOnSpill.MDC2025au_best_v1_1.art
+dig.mu2e.ensembleMDS3cMix1BB.MDC2025au_best_v1_3.art
+dig.mu2e.ensembleMDS3cOnSpill.MDC2025au_best_v1_5.art
 ```
 
-### Campaign spread
+<sub>refresh: <code>python3 bin/latestDatasets --defname 'dig.mu2e.%.MDC2025%best%.art' | grep -v Trig</code></sub>
 
-| dsconf | datasets |
-|---|---:|
-| `MDC2025au_best_v1_5` | 22 |
-| `MDC2025au_best_v1_3` | 19 |
-| `MDC2025an_best_v1_1` | 5 |
-| `MDC2025ai_best_v1_3` | 2 |
-| `MDC2025ap_best_v1_1` | 2 |
-| `MDC2025au_best_v1_1` | 1 |
+## mcs (63)
 
-### Datasets (51)
-
-| description | dsconf | versions |
-|---|---|---:|
-| CeEndpointOnSpill | `MDC2025an_best_v1_1` | 1 |
-| CeMLeadingLogMix1BB | `MDC2025au_best_v1_3` | 2 |
-| CeMLeadingLogOnSpill | `MDC2025au_best_v1_5` | 3 |
-| CePLeadingLogMix1BB | `MDC2025au_best_v1_3` | 2 |
-| CePLeadingLogOnSpill | `MDC2025au_best_v1_5` | 3 |
-| CePlusEndpointOnSpill | `MDC2025an_best_v1_1` | 1 |
-| CosmicCRYAllOnSpill | `MDC2025au_best_v1_5` | 2 |
-| CosmicCRYExtracted | `MDC2025au_best_v1_5` | 2 |
-| CosmicCalibOnSpill | `MDC2025ap_best_v1_1` | 1 |
-| CosmicSignalMix1BB | `MDC2025au_best_v1_3` | 2 |
-| CosmicSignalOffSpill | `MDC2025an_best_v1_1` | 1 |
-| CosmicSignalOnSpill | `MDC2025au_best_v1_5` | 3 |
-| DIOtail95Mix1BB | `MDC2025au_best_v1_3` | 2 |
-| DIOtail95OnSpill | `MDC2025au_best_v1_5` | 3 |
-| FlatGammaCaloMix1BB | `MDC2025au_best_v1_3` | 3 |
-| FlatGammaCaloOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlatGammaMix1BB | `MDC2025au_best_v1_3` | 3 |
-| FlatGammaOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlatMuMinusOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlateMinusMix1BB | `MDC2025au_best_v1_3` | 2 |
-| FlateMinusOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlatePlusMix1BB | `MDC2025au_best_v1_3` | 2 |
-| FlatePlusOnSpill | `MDC2025au_best_v1_5` | 2 |
-| IPAMuminusMichelMix1BB | `MDC2025au_best_v1_3` | 2 |
-| IPAMuminusMichelOnSpill | `MDC2025au_best_v1_5` | 3 |
-| MuCap1809keVCaloMix1BB | `MDC2025au_best_v1_3` | 2 |
-| MuCap1809keVCaloOnSpill | `MDC2025au_best_v1_5` | 2 |
-| NoPrimaryMix1BB | `MDC2025au_best_v1_3` | 2 |
-| PBINormal_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| PBIPathological_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| PbarResamplingMix1BB | `MDC2025au_best_v1_3` | 2 |
-| PbarResamplingOnSpill | `MDC2025au_best_v1_5` | 3 |
-| RMCExternalOnSpill | `MDC2025an_best_v1_1` | 1 |
-| RMCInternalOnSpill | `MDC2025an_best_v1_1` | 1 |
-| RMCPhaseSpace0NExternalMix1BB | `MDC2025au_best_v1_3` | 2 |
-| RMCPhaseSpace0NExternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace0NInternalMix1BB | `MDC2025au_best_v1_3` | 2 |
-| RMCPhaseSpace0NInternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace1NExternalMix1BB | `MDC2025au_best_v1_3` | 2 |
-| RMCPhaseSpace1NExternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace1NInternalMix1BB | `MDC2025au_best_v1_3` | 2 |
-| RMCPhaseSpace1NInternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RPCExternalOnSpill | `MDC2025au_best_v1_5` | 2 |
-| RPCExternalPhysicalMix1BB | `MDC2025au_best_v1_3` | 2 |
-| RPCExternalPhysicalOnSpill | `MDC2025au_best_v1_5` | 3 |
-| RPCInternalOnSpill | `MDC2025ap_best_v1_1` | 1 |
-| RPCInternalPhysicalMix1BB | `MDC2025au_best_v1_3` | 2 |
-| RPCInternalPhysicalOnSpill | `MDC2025au_best_v1_5` | 3 |
-| ensembleMDS3bOnSpill | `MDC2025au_best_v1_1` | 1 |
-| ensembleMDS3cMix1BB | `MDC2025au_best_v1_3` | 3 |
-| ensembleMDS3cOnSpill | `MDC2025au_best_v1_5` | 2 |
-
-### Not at MDC2025au (9)
-
-| description | latest dsconf | versions |
-|---|---|---:|
-| CeEndpointOnSpill | `MDC2025an_best_v1_1` | 1 |
-| CePlusEndpointOnSpill | `MDC2025an_best_v1_1` | 1 |
-| CosmicCalibOnSpill | `MDC2025ap_best_v1_1` | 1 |
-| CosmicSignalOffSpill | `MDC2025an_best_v1_1` | 1 |
-| PBINormal_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| PBIPathological_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| RMCExternalOnSpill | `MDC2025an_best_v1_1` | 1 |
-| RMCInternalOnSpill | `MDC2025an_best_v1_1` | 1 |
-| RPCInternalOnSpill | `MDC2025ap_best_v1_1` | 1 |
-
----
-
-# mcs
-
-```bash
-python3 bin/latestDatasets --defname 'mcs.mu2e.%.MDC2025%best%.art' --show-count | grep -v Trig
+```
+mcs.mu2e.CeEndpointOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.CeMLeadingLogOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.CePLeadingLogMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.CePLeadingLogOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.CePlusEndpointOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art
+mcs.mu2e.CosmicCalibOnSpill.MDC2025ar_best_v1_1.art
+mcs.mu2e.CosmicSignalMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.CosmicSignalOffSpill-CH-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.CosmicSignalOffSpill-CH.MDC2025ar_best_v1_1.art
+mcs.mu2e.CosmicSignalOffSpill-LH-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.CosmicSignalOffSpill-LH.MDC2025ar_best_v1_1.art
+mcs.mu2e.CosmicSignalOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.CosmicSignalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.DIOtail95Mix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.DIOtail95OnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.DIOtail95OnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.FlatGammaCaloMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.FlatGammaCaloOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.FlatGammaMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.FlatGammaOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.FlatMuMinusOnSpill-reco.MDC2025aq_best_v1_1.art
+mcs.mu2e.FlatMuMinusOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.FlateMinusMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.FlateMinusOnSpill-reco.MDC2025aq_best_v1_1.art
+mcs.mu2e.FlateMinusOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.FlatePlusMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.FlatePlusOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.IPAMuminusMichelMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.IPAMuminusMichelOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.IPAMuminusMichelOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.MuCap1809keVCaloMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.NoPrimaryMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.PBINormal_33344Mix1BB.MDC2025ai_best_v1_3.art
+mcs.mu2e.PBIPathological_33344Mix1BB.MDC2025ai_best_v1_3.art
+mcs.mu2e.PbarResamplingMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.PbarResamplingOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.RMCExternalOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.RMCExternalOnSpill.MDC2025ar_best_v1_1.art
+mcs.mu2e.RMCInternalOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.RMCInternalOnSpill.MDC2025ar_best_v1_1.art
+mcs.mu2e.RMCPhaseSpace0NExternalMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.RMCPhaseSpace0NExternalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.RMCPhaseSpace0NInternalMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.RMCPhaseSpace0NInternalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.RMCPhaseSpace1NExternalMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.RMCPhaseSpace1NExternalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.RMCPhaseSpace1NInternalMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.RMCPhaseSpace1NInternalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.RPCExternalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.RPCExternalPhysicalMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.RPCExternalPhysicalOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.RPCExternalPhysicalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.RPCInternalPhysicalMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.RPCInternalPhysicalOnSpill-reco.MDC2025an_best_v1_1.art
+mcs.mu2e.RPCInternalPhysicalOnSpill.MDC2025au_best_v1_5.art
+mcs.mu2e.ensembleMDS3cMix1BB.MDC2025au_best_v1_1.art
+mcs.mu2e.ensembleMDS3cOnSpill.MDC2025au_best_v1_5.art
 ```
 
-### Campaign spread
+<sub>refresh: <code>python3 bin/latestDatasets --defname 'mcs.mu2e.%.MDC2025%best%.art' | grep -v Trig</code></sub>
 
-| dsconf | datasets |
-|---|---:|
-| `MDC2025au_best_v1_5` | 22 |
-| `MDC2025au_best_v1_1` | 19 |
-| `MDC2025an_best_v1_1` | 13 |
-| `MDC2025ar_best_v1_1` | 5 |
-| `MDC2025ai_best_v1_3` | 2 |
-| `MDC2025aq_best_v1_1` | 2 |
+## nts (46)
 
-### Datasets (48)
-
-| description | dsconf | versions |
-|---|---|---:|
-| CeMLeadingLogMix1BB | `MDC2025au_best_v1_1` | 2 |
-| CeMLeadingLogOnSpill | `MDC2025au_best_v1_5` | 3 |
-| CePLeadingLogMix1BB | `MDC2025au_best_v1_1` | 2 |
-| CePLeadingLogOnSpill | `MDC2025au_best_v1_5` | 4 |
-| CosmicCRYAllOnSpill | `MDC2025au_best_v1_5` | 3 |
-| CosmicCRYExtracted | `MDC2025au_best_v1_5` | 3 |
-| CosmicCalibOnSpill | `MDC2025ar_best_v1_1` | 2 |
-| CosmicSignalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| CosmicSignalOffSpill-CH | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalOffSpill-LH | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalOnSpill | `MDC2025au_best_v1_5` | 3 |
-| DIOtail95Mix1BB | `MDC2025au_best_v1_1` | 2 |
-| DIOtail95OnSpill | `MDC2025au_best_v1_5` | 3 |
-| FlatGammaCaloMix1BB | `MDC2025au_best_v1_1` | 3 |
-| FlatGammaCaloOnSpill | `MDC2025au_best_v1_5` | 3 |
-| FlatGammaMix1BB | `MDC2025au_best_v1_1` | 3 |
-| FlatGammaOnSpill | `MDC2025au_best_v1_5` | 3 |
-| FlatMuMinusOnSpill | `MDC2025au_best_v1_5` | 3 |
-| FlateMinusMix1BB | `MDC2025au_best_v1_1` | 2 |
-| FlateMinusOnSpill | `MDC2025au_best_v1_5` | 3 |
-| FlatePlusMix1BB | `MDC2025au_best_v1_1` | 2 |
-| FlatePlusOnSpill | `MDC2025au_best_v1_5` | 3 |
-| IPAMuminusMichelMix1BB | `MDC2025au_best_v1_1` | 2 |
-| IPAMuminusMichelOnSpill | `MDC2025au_best_v1_5` | 3 |
-| MuCap1809keVCaloMix1BB | `MDC2025au_best_v1_1` | 2 |
-| MuCap1809keVCaloOnSpill | `MDC2025au_best_v1_5` | 2 |
-| NoPrimaryMix1BB | `MDC2025au_best_v1_1` | 2 |
-| PBINormal_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| PBIPathological_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| PbarResamplingMix1BB | `MDC2025au_best_v1_1` | 2 |
-| PbarResamplingOnSpill | `MDC2025au_best_v1_5` | 2 |
-| RMCExternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| RMCInternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| RMCPhaseSpace0NExternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace0NExternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace0NInternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace0NInternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace1NExternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace1NExternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace1NInternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace1NInternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RPCExternalOnSpill | `MDC2025au_best_v1_5` | 3 |
-| RPCExternalPhysicalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RPCExternalPhysicalOnSpill | `MDC2025au_best_v1_5` | 3 |
-| RPCInternalPhysicalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RPCInternalPhysicalOnSpill | `MDC2025au_best_v1_5` | 3 |
-| ensembleMDS3cMix1BB | `MDC2025au_best_v1_1` | 3 |
-| ensembleMDS3cOnSpill | `MDC2025au_best_v1_5` | 3 |
-
-### `-reco` suffixed descriptions (15)
-
-The `-reco` suffix is in the DESCRIPTION, not just the cnf name —
-output of the generic chained cnfs, a parallel naming line for the
-same physics. Separated so they do not read as the latest version
-of the unsuffixed dataset.
-
-| description | dsconf | versions |
-|---|---|---:|
-| CeEndpointOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| CeMLeadingLogOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| CePLeadingLogOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| CePlusEndpointOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| CosmicSignalOffSpill-CH-reco | `MDC2025an_best_v1_1` | 1 |
-| CosmicSignalOffSpill-LH-reco | `MDC2025an_best_v1_1` | 1 |
-| CosmicSignalOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| DIOtail95OnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| FlatMuMinusOnSpill-reco | `MDC2025aq_best_v1_1` | 1 |
-| FlateMinusOnSpill-reco | `MDC2025aq_best_v1_1` | 1 |
-| IPAMuminusMichelOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| RMCExternalOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| RMCInternalOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| RPCExternalPhysicalOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-| RPCInternalPhysicalOnSpill-reco | `MDC2025an_best_v1_1` | 1 |
-
-### Not at MDC2025au (7)
-
-| description | latest dsconf | versions |
-|---|---|---:|
-| CosmicCalibOnSpill | `MDC2025ar_best_v1_1` | 2 |
-| CosmicSignalOffSpill-CH | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalOffSpill-LH | `MDC2025ar_best_v1_1` | 1 |
-| PBINormal_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| PBIPathological_33344Mix1BB | `MDC2025ai_best_v1_3` | 1 |
-| RMCExternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| RMCInternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
-
----
-
-# nts
-
-```bash
-python3 bin/latestDatasets --defname 'nts.mu2e.%.MDC2025%best%.root' --show-count | grep -v Trig
+```
+nts.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.CeMLeadingLogOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.CePLeadingLogMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.CosmicCRYAllOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.CosmicCRYExtracted.MDC2025ar_best_v1_1.root
+nts.mu2e.CosmicCalibOnSpill.MDC2025ar_best_v1_1.root
+nts.mu2e.CosmicSignalMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.CosmicSignalOffSpill-CH.MDC2025ar_best_v1_1.root
+nts.mu2e.CosmicSignalOffSpill-LH.MDC2025ar_best_v1_1.root
+nts.mu2e.CosmicSignalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.DIOtail95Mix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.DIOtail95OnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.FlatGammaCaloMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.FlatGammaCaloOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.FlatGammaMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.FlatGammaOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.FlatMuMinusOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.FlateMinusMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.FlateMinusOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.FlatePlusMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.FlatePlusOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.IPAMuminusMichelMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.IPAMuminusMichelOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.MuCap1809keVCaloMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.NoPrimaryMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.PbarResamplingMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.PbarResamplingOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.RMCExternalOnSpill.MDC2025ar_best_v1_1.root
+nts.mu2e.RMCInternalOnSpill.MDC2025ar_best_v1_1.root
+nts.mu2e.RMCPhaseSpace0NExternalMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.RMCPhaseSpace0NExternalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.RMCPhaseSpace0NInternalMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.RMCPhaseSpace0NInternalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.RMCPhaseSpace1NExternalMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.RMCPhaseSpace1NExternalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.RMCPhaseSpace1NInternalMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.RMCPhaseSpace1NInternalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.RPCExternalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.RPCExternalPhysicalMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.RPCExternalPhysicalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.RPCInternalPhysicalMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.RPCInternalPhysicalOnSpill.MDC2025au_best_v1_5.root
+nts.mu2e.ensembleMDS3cMix1BB.MDC2025au_best_v1_1.root
+nts.mu2e.ensembleMDS3cOnSpill.MDC2025au_best_v1_5.root
 ```
 
-### Campaign spread
-
-| dsconf | datasets |
-|---|---:|
-| `MDC2025au_best_v1_5` | 21 |
-| `MDC2025au_best_v1_1` | 19 |
-| `MDC2025ar_best_v1_1` | 6 |
-
-### Datasets (46)
-
-| description | dsconf | versions |
-|---|---|---:|
-| CeMLeadingLogMix1BB | `MDC2025au_best_v1_1` | 2 |
-| CeMLeadingLogOnSpill | `MDC2025au_best_v1_5` | 2 |
-| CePLeadingLogMix1BB | `MDC2025au_best_v1_1` | 2 |
-| CePLeadingLogOnSpill | `MDC2025au_best_v1_5` | 2 |
-| CosmicCRYAllOnSpill | `MDC2025au_best_v1_5` | 2 |
-| CosmicCRYExtracted | `MDC2025ar_best_v1_1` | 1 |
-| CosmicCalibOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| CosmicSignalOffSpill-CH | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalOffSpill-LH | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalOnSpill | `MDC2025au_best_v1_5` | 2 |
-| DIOtail95Mix1BB | `MDC2025au_best_v1_1` | 2 |
-| DIOtail95OnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlatGammaCaloMix1BB | `MDC2025au_best_v1_1` | 2 |
-| FlatGammaCaloOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlatGammaMix1BB | `MDC2025au_best_v1_1` | 2 |
-| FlatGammaOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlatMuMinusOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlateMinusMix1BB | `MDC2025au_best_v1_1` | 2 |
-| FlateMinusOnSpill | `MDC2025au_best_v1_5` | 2 |
-| FlatePlusMix1BB | `MDC2025au_best_v1_1` | 2 |
-| FlatePlusOnSpill | `MDC2025au_best_v1_5` | 2 |
-| IPAMuminusMichelMix1BB | `MDC2025au_best_v1_1` | 2 |
-| IPAMuminusMichelOnSpill | `MDC2025au_best_v1_5` | 2 |
-| MuCap1809keVCaloMix1BB | `MDC2025au_best_v1_1` | 2 |
-| MuCap1809keVCaloOnSpill | `MDC2025au_best_v1_5` | 2 |
-| NoPrimaryMix1BB | `MDC2025au_best_v1_1` | 2 |
-| PbarResamplingMix1BB | `MDC2025au_best_v1_1` | 1 |
-| PbarResamplingOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCExternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| RMCInternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| RMCPhaseSpace0NExternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace0NExternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace0NInternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace0NInternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace1NExternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace1NExternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RMCPhaseSpace1NInternalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RMCPhaseSpace1NInternalOnSpill | `MDC2025au_best_v1_5` | 1 |
-| RPCExternalOnSpill | `MDC2025au_best_v1_5` | 2 |
-| RPCExternalPhysicalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RPCExternalPhysicalOnSpill | `MDC2025au_best_v1_5` | 2 |
-| RPCInternalPhysicalMix1BB | `MDC2025au_best_v1_1` | 2 |
-| RPCInternalPhysicalOnSpill | `MDC2025au_best_v1_5` | 2 |
-| ensembleMDS3cMix1BB | `MDC2025au_best_v1_1` | 2 |
-| ensembleMDS3cOnSpill | `MDC2025au_best_v1_5` | 2 |
-
-### Not at MDC2025au (6)
-
-| description | latest dsconf | versions |
-|---|---|---:|
-| CosmicCRYExtracted | `MDC2025ar_best_v1_1` | 1 |
-| CosmicCalibOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalOffSpill-CH | `MDC2025ar_best_v1_1` | 1 |
-| CosmicSignalOffSpill-LH | `MDC2025ar_best_v1_1` | 1 |
-| RMCExternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
-| RMCInternalOnSpill | `MDC2025ar_best_v1_1` | 1 |
+<sub>refresh: <code>python3 bin/latestDatasets --defname 'nts.mu2e.%.MDC2025%best%.root' | grep -v Trig</code></sub>
