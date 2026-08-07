@@ -5071,6 +5071,50 @@ class TestCampaignLedger(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._create(slice_size=0)
 
+    def test_set_memory_returns_old_and_stores_new(self):
+        cid = self._create()
+        self.assertIsNone(self.sl.set_campaign_memory(self.db, cid, '3000MB'))
+        self.assertEqual(
+            self.sl.active_campaigns(self.db)[0]['entry']['memory'], '3000MB')
+        # Second call reports what the first one set.
+        self.assertEqual(
+            self.sl.set_campaign_memory(self.db, cid, '4000MB'), '3000MB')
+
+    def test_set_memory_preserves_other_entry_keys(self):
+        cid = self._create()
+        self.sl.set_campaign_memory(self.db, cid, '3000MB')
+        entry = self.sl.active_campaigns(self.db)[0]['entry']
+        for k, v in self.entry.items():
+            self.assertEqual(entry[k], v)
+
+    def test_set_memory_allowed_while_paused(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        self.sl.set_campaign_memory(self.db, cid, '3000MB')
+        self.assertEqual(
+            self.sl.all_campaigns(self.db)[0]['entry']['memory'], '3000MB')
+
+    def test_set_memory_refused_on_closed_campaign(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_memory(self.db, cid, '3000MB')
+        self.assertIn('complete', str(cm.exception))
+
+    def test_set_memory_rejects_malformed_values(self):
+        cid = self._create()
+        for bad in ('3000', 'lots', '3000 MB', '', '-1MB', '3000mb'):
+            with self.assertRaises(ValueError, msg=bad):
+                self.sl.set_campaign_memory(self.db, cid, bad)
+        # ...and never wrote a partial value on the way out.
+        self.assertNotIn(
+            'memory', self.sl.active_campaigns(self.db)[0]['entry'])
+
+    def test_set_memory_unknown_campaign_raises(self):
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_memory(self.db, 999, '3000MB')
+        self.assertIn('999', str(cm.exception))
+
     def test_advance_cursor(self):
         cid = self._create()
         self.sl.advance_campaign(self.db, cid, 4)
