@@ -1,60 +1,63 @@
 [
   {
-    "desc": [
-      "CosmicCRYAll",
-      "RPCExternalPhysical",
-      "IPAMuminusMichel",
-      "FlatGammaCalo",
-      "DIOtail95",
-      "CeMLeadingLog",
-      "FlatMuMinus",
-      "CePLeadingLog",
-      "FlatGamma",
-      "RPCExternal",
-      "FlatePlus",
-      "FlateMinus",
-      "RPCInternalPhysical",
-      "PbarResampling",
-      "RPCInternal",
-      "CosmicCalib",
-      "CosmicSignal"
-    ],
-    "dsconf": "{out_campaign}_best_v1_1",
+    "desc": {
+      "CeMLeadingLog":           25,
+      "CePLeadingLog":           25,
+      "CosmicCRYAll":            4,
+      "CosmicSignal":            50,
+      "DIOtail95":               15,
+      "ensembleMDS3c":           10,
+      "RMCPhaseSpace0NInternal":  4,
+      "RMCPhaseSpace0NExternal": 14,
+      "RMCPhaseSpace1NInternal": 10,
+      "RMCPhaseSpace1NExternal": 20,
+      "FlatGamma":               25,
+      "FlatGammaCalo":          50,
+      "FlatMuMinus":             50,
+      "FlateMinus":              25,
+      "FlatePlus":               25,
+      "IPAMuminusMichel":        10,
+      "PbarResampling":          50,
+      "RPCExternal":            100,
+      "RPCExternalPhysical":    100,
+      "RPCInternalPhysical":    50
+    },
+    "dsconf": "{out_campaign}_best_v1_5",
     "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
-    "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
+    "input_data": "dts.mu2e.{desc}.{campaign}.art",
     "fcl_overrides": {
       "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
       "services.DbService.purpose": "Sim_best",
-      "services.DbService.version": "v1_1"
+      "services.DbService.version": "v1_5"
     },
     "inloc": "tape",
     "outloc": {"*.art": "tape"},
     "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
   },
   {
-    "desc": "CosmicCRYExtracted",
-    "dsconf": "{out_campaign}_best_v1_1",
+    "desc": {"CosmicCRYExtracted": 8},
+    "dsconf": "{out_campaign}_best_v1_5",
     "fcl": "Production/JobConfig/digitize/Extracted.fcl",
-    "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
+    "input_data": "dts.mu2e.{desc}.{campaign}.art",
     "fcl_overrides": {
       "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
       "services.DbService.purpose": "Sim_best",
-      "services.DbService.version": "v1_1"
+      "services.DbService.version": "v1_5"
     },
     "inloc": "tape",
     "outloc": {"*.art": "tape"},
     "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{out_campaign}/setup.sh"
   },
   {
-    "desc": "MuCap1809keVCalo",
-    "dsconf": "{out_campaign}_best_v1_1",
+    "desc": {"MuCap1809keVCalo": 100},
+    "dsconf": "{out_campaign}_best_v1_5",
     "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
-    "input_data": {"dts.mu2e.{desc}.{campaign}.art": 10},
+    "input_data": "dts.mu2e.{desc}.{campaign}.art",
     "fcl_overrides": {
       "#include": "Production/JobConfig/mixing/NoPrimary.fcl",
       "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
       "services.DbService.purpose": "Sim_best",
-      "services.DbService.version": "v1_1"
+      "services.DbService.version": "v1_5"
     },
     "inloc": "tape",
     "outloc": {"*.art": "tape"},
