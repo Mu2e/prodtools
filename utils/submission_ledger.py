@@ -16,8 +16,15 @@ is surfaced (sqlite3.OperationalError), never silently mkdir'd over.
 """
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
+
+# jobsub_submit's --memory grammar, as the house format uses it
+# ('2000MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
+# submissions.RECOVERY_MEMORY). Anchored: 'lots' and '3000 MB' are
+# rejected rather than passed through to fail at submit time.
+_MEMORY_RE = re.compile(r'^\d+(MB|GB)$')
 
 DEFAULT_DB = os.environ.get(
     'MU2E_SUBMISSION_DB',
@@ -248,6 +255,74 @@ def advance_campaign(db_path, camp_id, new_cursor):
             raise ValueError(
                 f"no active campaign {camp_id} with cursor <= {new_cursor}")
         con.commit()
+    finally:
+        con.close()
+
+
+def set_campaign_slice(db_path, camp_id, slice_size):
+    """Retune a live campaign's batch size; return the previous value.
+
+    Only active/paused campaigns accept it — a closed campaign's slice
+    is never read again, so silently accepting one would report success
+    for a no-op. The value binds from the next tick: batches already
+    submitted keep the size they were dispatched with, since a ledger
+    row records the indices it actually sent."""
+    if slice_size < 1:
+        raise ValueError(f"slice_size must be >= 1, got {slice_size}")
+    con = _connect(db_path)
+    try:
+        row = con.execute(
+            'SELECT state, slice_size FROM campaigns WHERE id = ?',
+            (camp_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"no campaign {camp_id}")
+        if row['state'] not in ('active', 'paused'):
+            raise ValueError(
+                f"campaign {camp_id} is {row['state']} — slice_size only "
+                f"applies to an active or paused campaign")
+        con.execute('UPDATE campaigns SET slice_size = ? WHERE id = ?',
+                    (slice_size, camp_id))
+        con.commit()
+        return row['slice_size']
+    finally:
+        con.close()
+
+
+def set_campaign_memory(db_path, camp_id, memory):
+    """Set the memory request on a live campaign's entry; return the
+    previous value (None if the entry never named one).
+
+    Same live-retune contract as set_campaign_slice: active/paused only,
+    binds from the next tick. It edits the CAMPAIGN's entry snapshot, so
+    it reaches future slices only — ledger rows already dispatched keep
+    the entry they were submitted with, and their recoveries therefore
+    keep the recovery floor (see submissions.recovery_resource_argv).
+
+    The format is validated here rather than at submit time: an
+    unparseable value would otherwise sit in the ledger looking applied
+    and only surface as a jobsub_submit rejection a tick later.
+    """
+    if not _MEMORY_RE.match(str(memory)):
+        raise ValueError(
+            f"memory must look like '3000MB' or '4GB', got {memory!r}")
+    con = _connect(db_path)
+    try:
+        row = con.execute(
+            'SELECT state, entry_json FROM campaigns WHERE id = ?',
+            (camp_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"no campaign {camp_id}")
+        if row['state'] not in ('active', 'paused'):
+            raise ValueError(
+                f"campaign {camp_id} is {row['state']} — memory only "
+                f"applies to an active or paused campaign")
+        entry = json.loads(row['entry_json'])
+        previous = entry.get('memory')
+        entry['memory'] = memory
+        con.execute('UPDATE campaigns SET entry_json = ? WHERE id = ?',
+                    (json.dumps(entry), camp_id))
+        con.commit()
+        return previous
     finally:
         con.close()
 

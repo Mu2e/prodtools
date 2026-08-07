@@ -949,5 +949,49 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "desc": "RMCPhaseSpace0NInternal",
+        "dsconf": "MDC2025au",
+        "fcl": "Production/JobConfig/primary/RMCPhaseSpace0NInternal.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 10000,
+        "njobs": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "RMCPhaseSpace1NInternal",
+        "dsconf": "MDC2025au",
+        "fcl": "Production/JobConfig/primary/RMCPhaseSpace1NInternal.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 10000,
+        "njobs": 5000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
 ]

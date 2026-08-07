@@ -5029,9 +5029,91 @@ class TestCampaignLedger(unittest.TestCase):
         self._create()  # must not raise
         self.assertEqual(len(self.sl.all_campaigns(self.db)), 2)
 
+    def test_set_slice_returns_old_and_stores_new(self):
+        cid = self._create(slice_size=500)
+        old = self.sl.set_campaign_slice(self.db, cid, 2000)
+        self.assertEqual(old, 500)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['slice_size'],
+                         2000)
+
+    def test_set_slice_allowed_while_paused(self):
+        """Retuning a paused campaign is legitimate: the new size binds
+        when it is resumed."""
+        cid = self._create(slice_size=500)
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        self.sl.set_campaign_slice(self.db, cid, 1500)
+        c = [x for x in self.sl.all_campaigns(self.db) if x['id'] == cid][0]
+        self.assertEqual(c['slice_size'], 1500)
+
+    def test_set_slice_refused_on_closed_campaign(self):
+        """Nothing reads slice_size after close — accepting it would
+        report success for a no-op."""
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_slice(self.db, cid, 2000)
+        self.assertIn('complete', str(cm.exception))
+
+    def test_set_slice_rejects_zero_and_negative(self):
+        cid = self._create(slice_size=500)
+        for bad in (0, -1):
+            with self.assertRaises(ValueError):
+                self.sl.set_campaign_slice(self.db, cid, bad)
+        self.assertEqual(self.sl.active_campaigns(self.db)[0]['slice_size'],
+                         500)
+
+    def test_set_slice_unknown_campaign_raises(self):
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_slice(self.db, 999, 2000)
+        self.assertIn('999', str(cm.exception))
+
     def test_slice_size_validated(self):
         with self.assertRaises(ValueError):
             self._create(slice_size=0)
+
+    def test_set_memory_returns_old_and_stores_new(self):
+        cid = self._create()
+        self.assertIsNone(self.sl.set_campaign_memory(self.db, cid, '3000MB'))
+        self.assertEqual(
+            self.sl.active_campaigns(self.db)[0]['entry']['memory'], '3000MB')
+        # Second call reports what the first one set.
+        self.assertEqual(
+            self.sl.set_campaign_memory(self.db, cid, '4000MB'), '3000MB')
+
+    def test_set_memory_preserves_other_entry_keys(self):
+        cid = self._create()
+        self.sl.set_campaign_memory(self.db, cid, '3000MB')
+        entry = self.sl.active_campaigns(self.db)[0]['entry']
+        for k, v in self.entry.items():
+            self.assertEqual(entry[k], v)
+
+    def test_set_memory_allowed_while_paused(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        self.sl.set_campaign_memory(self.db, cid, '3000MB')
+        self.assertEqual(
+            self.sl.all_campaigns(self.db)[0]['entry']['memory'], '3000MB')
+
+    def test_set_memory_refused_on_closed_campaign(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_memory(self.db, cid, '3000MB')
+        self.assertIn('complete', str(cm.exception))
+
+    def test_set_memory_rejects_malformed_values(self):
+        cid = self._create()
+        for bad in ('3000', 'lots', '3000 MB', '', '-1MB', '3000mb'):
+            with self.assertRaises(ValueError, msg=bad):
+                self.sl.set_campaign_memory(self.db, cid, bad)
+        # ...and never wrote a partial value on the way out.
+        self.assertNotIn(
+            'memory', self.sl.active_campaigns(self.db)[0]['entry'])
+
+    def test_set_memory_unknown_campaign_raises(self):
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_memory(self.db, 999, '3000MB')
+        self.assertIn('999', str(cm.exception))
 
     def test_advance_cursor(self):
         cid = self._create()
@@ -8292,6 +8374,49 @@ class TestMcpDatasetDetails(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # samweb_wrapper.parents_of_file — the fail-loud lineage edge function
 # ---------------------------------------------------------------------------
+
+class TestSamwebMetadataChunking(unittest.TestCase):
+    """SAM rejects getMultipleMetadata above MAX_METADATA_BATCH names
+    outright ('Too many files requested'), so the wrapper chunks. A
+    2000-file draining batch hit this as a hard gate failure."""
+
+    def _wrapper(self):
+        from utils.samweb_wrapper import SAMWebWrapper
+        w = SAMWebWrapper.__new__(SAMWebWrapper)
+        calls = []
+
+        class Client:
+            @staticmethod
+            def getMultipleMetadata(names):
+                calls.append(len(names))
+                return [{'file_name': n} for n in names]
+        w.client = Client()
+        return w, calls
+
+    def test_oversized_list_is_split_and_concatenated(self):
+        from utils.samweb_wrapper import MAX_METADATA_BATCH
+        w, calls = self._wrapper()
+        names = [f'f{i}.art' for i in range(2000)]
+        out = w.metadata_for_files(names)
+        self.assertEqual(calls, [MAX_METADATA_BATCH, MAX_METADATA_BATCH])
+        self.assertEqual([m['file_name'] for m in out], names)
+
+    def test_ragged_tail_chunk(self):
+        w, calls = self._wrapper()
+        out = w.metadata_for_files([f'f{i}.art' for i in range(2501)])
+        self.assertEqual(calls, [1000, 1000, 501])
+        self.assertEqual(len(out), 2501)
+
+    def test_small_list_is_one_round_trip(self):
+        w, calls = self._wrapper()
+        w.metadata_for_files(['a.art', 'b.art'])
+        self.assertEqual(calls, [2])
+
+    def test_empty_list_makes_no_call(self):
+        w, calls = self._wrapper()
+        self.assertEqual(w.metadata_for_files([]), [])
+        self.assertEqual(calls, [])
+
 
 class TestSamwebParentsOfFile(unittest.TestCase):
     def _wrapper(self, listfiles):
