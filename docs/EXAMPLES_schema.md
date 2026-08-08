@@ -178,11 +178,18 @@ reading the code:
   `48h`) live in the POMS-map entry itself, or in the jobdef JSON config
   that produces it — `json2jobdef` copies them into the entry verbatim.
   `submit_map` always honors these keys. Precedence is CLI flag > entry
-  key > built-in default (`2000MB` / `30GB` / `24h`). The *effective*
+  key > built-in default (`2500MB` / `30GB` / `24h`). The *effective*
   values are frozen into the ledger row / campaign row snapshot at
   submission time, so a later recovery or cron-fed slice reproduces
   exactly what the jobs originally ran with — a CLI `--memory` no longer
   silently downgrades to the built-in default on resubmit.
+  The memory default sits above mu2egrid's `2000MB` on purpose: Mu2e
+  primaries measure just over that line (VmHWM 2266 MB for
+  `PiTargetStops`, 2377 MB for the RPC primaries), so entries that named
+  no memory key were OOMing. Note the trade: naming the key at all
+  forfeits the `4000MB` recovery floor, which applies only when the key
+  is absent — so prefer leaving it unset unless the entry genuinely
+  needs more than the default.
 - Sliced campaigns: `submit_map --enqueue` snapshots map entries into
   the campaigns table and submits nothing; `submissions run`'s top-up
   phase (runs after its recovery pass, inside the same hourly cron tick)

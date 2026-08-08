@@ -301,5 +301,146 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "desc": "PiTargetStops",
+        "dsconf": "Run1Bap",
+        "fcl": "Production/JobConfig/pileup/PiBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {"sim.mu2e.PiBeamCat.Run1Bah.art": 1},
+        "njobs": 500,
+        "events": 500000,
+        "run": 1470,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "PhysicalPionStops",
+        "dsconf": "Run1Bap",
+        "fcl": "Production/JobConfig/beam/PhysicalPionStops.fcl",
+        "fcl_overrides": {
+            "physics.filters.StopSelection.cuts.tmin": 0,
+            "physics.filters.StopSelection.acceptRejectMax": 1.0,
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "outputs.PionOutput.fastCloning": false
+        },
+        "resampler_name": "StopResampler",
+        "input_data": {"sim.mu2e.PiTargetStops.Run1Bap.art": 1},
+        "njobs": 500,
+        "events": 5000000,
+        "run": 1470,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCInternal",
+        "dsconf": "Run1Bap",
+        "fcl": "Production/JobConfig/primary/RPCInternal.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0,
+            "physics.filters.StopSelector.cuts.tmin": 0
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {"sim.mu2e.PiTargetStops.Run1Bap.art": 1},
+        "njobs": 5000,
+        "events": 1000000,
+        "run": 1470,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCExternal",
+        "dsconf": "Run1Bap",
+        "fcl": "Production/JobConfig/primary/RPCExternal.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0,
+            "physics.filters.StopSelector.cuts.tmin": 0
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {"sim.mu2e.PiTargetStops.Run1Bap.art": 1},
+        "njobs": 5000,
+        "events": 1000000,
+        "run": 1470,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCInternalPhysical",
+        "dsconf": "Run1Bap",
+        "fcl": "Production/JobConfig/primary/RPCInternalPhysical.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0,
+            "physics.filters.StopSelector.cuts.tmin": 0
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {"sim.mu2e.PhysicalPionStops.Run1Bap.art": 1},
+        "njobs": 5000,
+        "events": 1000000,
+        "run": 1470,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "desc": "RPCExternalPhysical",
+        "dsconf": "Run1Bap",
+        "fcl": "Production/JobConfig/primary/RPCExternalPhysical.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0,
+            "physics.filters.StopSelector.cuts.tmin": 0
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {"sim.mu2e.PhysicalPionStops.Run1Bap.art": 1},
+        "njobs": 5000,
+        "events": 1000000,
+        "run": 1470,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
     }
 ]

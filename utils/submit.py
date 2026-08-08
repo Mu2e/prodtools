@@ -868,7 +868,7 @@ def main():
     parser.add_argument('--disk', default=None,
                         help='Disk request (default: 30GB)')
     parser.add_argument('--memory', default=None,
-                        help='Memory request (default: 2000MB)')
+                        help='Memory request (default: 2500MB)')
     parser.add_argument('--expected-lifetime', default=None,
                         help='Expected lifetime (default: 24h)')
     parser.add_argument('--prodtools-tar', default=None,

@@ -183,8 +183,15 @@ Optional per-entry resource requests — `"memory"`, `"disk"`,
 `json2jobdef` copies any of the three keys present in the config into
 the map entry verbatim (`append_jobdef`). `submit_map` (section 11)
 reads them back at submission time: a CLI flag always overrides the
-entry key, which overrides the built-in default (`2000MB` / `30GB` /
+entry key, which overrides the built-in default (`2500MB` / `30GB` /
 `24h`).
+
+The memory default sits above mu2egrid's `2000MB` deliberately: Mu2e
+primaries measure just over that line (VmHWM 2266 MB for
+`PiTargetStops`, 2377 MB for the RPC primaries, both base-10), so
+entries naming no memory key were being OOM-held. Prefer leaving the
+key unset — naming it forfeits the `4000MB` recovery floor, which
+`recovery_resource_argv` applies only when the key is absent.
 
 ### Direct `jobdef` invocation
 
@@ -616,7 +623,7 @@ Flags: `--map` (required), `--entry N`, `--first N` / `--num M`,
 (register a sliced campaign instead of submitting), `--slice-size N`
 (default 1000, only meaningful with `--enqueue`), `--wftop`,
 `--wfproject`, `--role`, `--disk` (default `30GB`), `--memory` (default
-`2000MB`), `--expected-lifetime` (default `24h`), `--prodtools-tar`,
+`2500MB`), `--expected-lifetime` (default `24h`), `--prodtools-tar`,
 `--dry-run`, `--verbose`.
 
 Entries `submit_map` cannot submit — `template`/`direct_input`/`g4bl`
@@ -654,7 +661,7 @@ CLI flag > entry key (section 3: `"memory"`/`"disk"`/
 gets recorded in the ledger/campaign snapshot, so a `submissions run`
 resubmit or a cron-fed slice reruns with the same resources the
 original jobs had — a CLI `--memory 4000MB` no longer downgrades to the
-2000MB built-in default on resubmit.
+2500MB built-in default on resubmit.
 
 Sliced campaigns (`--enqueue`): snapshots the selected entries (all, or
 `--entry N`) into the campaigns table at cursor 0 and submits nothing.

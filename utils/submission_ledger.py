@@ -21,7 +21,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 # jobsub_submit's --memory grammar, as the house format uses it
-# ('2000MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
+# ('2500MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
 # submissions.RECOVERY_MEMORY). Anchored: 'lots' and '3000 MB' are
 # rejected rather than passed through to fail at submit time.
 _MEMORY_RE = re.compile(r'^\d+(MB|GB)$')
