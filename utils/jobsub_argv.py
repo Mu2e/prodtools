@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import Mu2eName
-from utils.poms_entry import tarball_of, inloc_of
+from utils.map_entry import tarball_of, inloc_of
 from utils.file_resolver import storage_scope
 
 

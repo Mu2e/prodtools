@@ -358,11 +358,11 @@ class TestMu2eName(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 1c. POMS-map entry accessors (poms_entry.py)
+# 1c. POMS-map entry accessors (map_entry.py)
 # ---------------------------------------------------------------------------
 
 class TestPomsEntry(unittest.TestCase):
-    """Pin the fail-loud / sentinel-default contract of utils.poms_entry."""
+    """Pin the fail-loud / sentinel-default contract of utils.map_entry."""
 
     GOOD = {
         "tarball": "cnf.mu2e.RMCFlatGamma.MDC2025ag.0.tar",
@@ -373,49 +373,49 @@ class TestPomsEntry(unittest.TestCase):
     }
 
     def test_tarball_of_happy_path(self):
-        from utils.poms_entry import tarball_of
+        from utils.map_entry import tarball_of
         self.assertEqual(tarball_of(self.GOOD), self.GOOD["tarball"])
 
     def test_tarball_of_missing_raises(self):
-        from utils.poms_entry import tarball_of
+        from utils.map_entry import tarball_of
         with self.assertRaises(ValueError):
             tarball_of({})
 
     def test_tarball_of_rejects_non_cnf(self):
-        from utils.poms_entry import tarball_of
+        from utils.map_entry import tarball_of
         with self.assertRaises(ValueError):
             tarball_of({"tarball": "sim.mu2e.X.MDC2025ag.001430_00000000.art"})
 
     def test_tarball_of_rejects_unparseable(self):
-        from utils.poms_entry import tarball_of
+        from utils.map_entry import tarball_of
         with self.assertRaises(ValueError):
             tarball_of({"tarball": "not-a-mu2e-name.txt"})
 
     def test_outputs_of_happy_path(self):
-        from utils.poms_entry import outputs_of
+        from utils.map_entry import outputs_of
         self.assertEqual(outputs_of(self.GOOD), self.GOOD["outputs"])
 
     def test_outputs_of_missing_raises(self):
-        from utils.poms_entry import outputs_of
+        from utils.map_entry import outputs_of
         with self.assertRaises(ValueError):
             outputs_of({"tarball": self.GOOD["tarball"]})
 
     def test_njobs_of_present(self):
-        from utils.poms_entry import njobs_of
+        from utils.map_entry import njobs_of
         self.assertEqual(njobs_of(self.GOOD), 50)
 
     def test_njobs_of_absent_returns_default(self):
-        from utils.poms_entry import njobs_of
+        from utils.map_entry import njobs_of
         self.assertIsNone(njobs_of({}))
         self.assertEqual(njobs_of({}, default=0), 0)
         self.assertEqual(njobs_of({}, default="?"), "?")
 
     def test_inloc_of_present(self):
-        from utils.poms_entry import inloc_of
+        from utils.map_entry import inloc_of
         self.assertEqual(inloc_of(self.GOOD), "tape")
 
     def test_inloc_of_absent_returns_none_sentinel(self):
-        from utils.poms_entry import inloc_of
+        from utils.map_entry import inloc_of
         self.assertEqual(inloc_of({}), "none")
 
 
@@ -3928,17 +3928,17 @@ class TestFirstjobOf(unittest.TestCase):
     """firstjob_of: fail-loud accessor for the cnf-index window start."""
 
     def test_default_zero(self):
-        from utils.poms_entry import firstjob_of
+        from utils.map_entry import firstjob_of
         self.assertEqual(firstjob_of({'tarball': 'x'}), 0)
 
     def test_explicit_value(self):
-        from utils.poms_entry import firstjob_of
+        from utils.map_entry import firstjob_of
         self.assertEqual(firstjob_of({'firstjob': 5000}), 5000)
 
     def test_malformed_raises(self):
         """A silently-ignored firstjob would rerun indices [0, njobs) and
         duplicate physics (baseSeed = 1 + index) — must fail loud."""
-        from utils.poms_entry import firstjob_of
+        from utils.map_entry import firstjob_of
         for bad in (-1, '5000', 5000.0, True):
             with self.assertRaises(ValueError):
                 firstjob_of({'firstjob': bad})
@@ -4625,18 +4625,18 @@ class TestValidateWindow(unittest.TestCase):
     the map writer (append_jobdef) and the submit path (_compute_jobset)."""
 
     def test_open_ended_any_window(self):
-        from utils.poms_entry import validate_window
+        from utils.map_entry import validate_window
         validate_window(5000, 100, 0)      # capacity 0 = open-ended
         validate_window(5000, 100, None)
 
     def test_closed_capacity_enforced(self):
-        from utils.poms_entry import validate_window
+        from utils.map_entry import validate_window
         validate_window(5000, 2000, 7000)  # exactly fits
         with self.assertRaises(ValueError):
             validate_window(5000, 2001, 7000)
 
     def test_njobs_required(self):
-        from utils.poms_entry import validate_window
+        from utils.map_entry import validate_window
         with self.assertRaises(ValueError):
             validate_window(5000, None, 0)
 
@@ -4915,7 +4915,7 @@ class TestCampaignLedger(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Entry resource keys (utils/poms_entry.py, utils/submit.py)
+# Entry resource keys (utils/map_entry.py, utils/submit.py)
 # ---------------------------------------------------------------------------
 class TestEntryResources(unittest.TestCase):
     """memory/disk/expected_lifetime: entry keys, precedence, snapshot."""
@@ -4926,7 +4926,7 @@ class TestEntryResources(unittest.TestCase):
                                   expected_lifetime=expected_lifetime)
 
     def test_resources_of_subset(self):
-        from utils.poms_entry import resources_of
+        from utils.map_entry import resources_of
         self.assertEqual(resources_of({'tarball': 't'}), {})
         self.assertEqual(
             resources_of({'memory': '4000MB', 'njobs': 5}),
@@ -4937,7 +4937,7 @@ class TestEntryResources(unittest.TestCase):
             {'memory': '4000MB', 'disk': '50GB', 'expected_lifetime': '48h'})
 
     def test_resources_of_nonstring_raises(self):
-        from utils.poms_entry import resources_of
+        from utils.map_entry import resources_of
         with self.assertRaises(ValueError):
             resources_of({'memory': 4000})
 
@@ -8871,12 +8871,12 @@ class TestIsDraining(unittest.TestCase):
     """Campaign/row kind is discriminated ONLY by input_pattern presence."""
 
     def test_pattern_entry_is_draining(self):
-        from utils.poms_entry import is_draining
+        from utils.map_entry import is_draining
         self.assertTrue(is_draining(
             {'tarball': 't', 'input_pattern': 'dig.mu2e.%.X.art'}))
 
     def test_index_entry_is_not(self):
-        from utils.poms_entry import is_draining
+        from utils.map_entry import is_draining
         self.assertFalse(is_draining({'tarball': 't', 'njobs': 100}))
 
 

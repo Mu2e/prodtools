@@ -148,7 +148,7 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
       against njobs alone reports 12.5% when the truth is 100% of what is
       in flight.
     """
-    from utils.poms_entry import is_draining, outputs_of
+    from utils.map_entry import is_draining, outputs_of
     if is_draining(entry):
         return _draining_outputs_block(
             rows, tarball, count_fn, job_pars_fn or _default_job_pars_fn)
@@ -233,7 +233,7 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     With neither `campaign` nor `campaign_id`, this is ledger-only: local
     sqlite, no network, and the queue/outputs blocks are omitted.
     """
-    from utils.poms_entry import njobs_of
+    from utils.map_entry import njobs_of
 
     # One snapshot, one connection: campaigns and rows must agree. See
     # ledger_ro.snapshot.
@@ -307,7 +307,7 @@ def list_campaigns(state=None, db_path=None):
             f'unknown state {state!r}',
             f'Expected one of {CAMPAIGN_STATES}.')
     camps = ledger_ro.campaigns(db_path, state=state)
-    from utils.poms_entry import njobs_of
+    from utils.map_entry import njobs_of
     listing = [{
         'id': c['id'],
         'state': c['state'],

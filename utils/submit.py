@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for)
-from utils.poms_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
+from utils.map_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
                               firstjob_of, validate_window, resources_of,
                               is_draining)
 from utils import jobsub_argv as _jobsub_argv
@@ -455,7 +455,7 @@ def _compute_jobset(opts, njobs_total, firstjob=0, entry_njobs=None):
     entry's `firstjob` offset is applied worker-side by `resolve_map_index`
     (the entry ships in ops['jobdesc']), not here. A window is sized by the
     entry's njobs and validated against the cnf capacity (njobs_total,
-    0 = open-ended) via poms_entry.validate_window.
+    0 = open-ended) via map_entry.validate_window.
 
     Default: every index 0..size-1 (== mu2ejobsub --all).
     --first N alone: 1 job at index N.

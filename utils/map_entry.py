@@ -1,7 +1,8 @@
-"""POMS-map entry accessors.
+"""Submission-map entry accessors.
 
-POMS-map files (`/exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC*.json`)
-are lists of entries with stable shape:
+Submission-map files (`/exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC*.json`)
+are lists of entries with stable shape — historically the POMS-map entry
+shape, now also the direct backend's map format:
 
     {
         "tarball":  "cnf.mu2e.<desc>.<dsconf>.<index>.tar",   # required
@@ -19,8 +20,8 @@ tarball (statistics expansion of open-ended resampler/generator cnfs).
 
 These helpers enforce fail-loud access on the required fields and the
 documented sentinel defaults on the optional ones. Use them instead of
-bare `entry[...]` or `entry.get(...)` so a malformed POMS-map is caught
-at the boundary, not as a downstream crash.
+bare `entry[...]` or `entry.get(...)` so a malformed submission-map entry
+is caught at the boundary, not as a downstream crash.
 """
 
 import os

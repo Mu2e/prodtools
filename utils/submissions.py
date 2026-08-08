@@ -39,7 +39,7 @@ from utils.file_resolver import infer_dataset_location, sam_physical_path_or_non
 from utils.job_common import Mu2eName, expected_outputs_for
 from utils.jobdef_lookup import build_file_maps, extract_datasets_from_tarball
 from utils.jobquery import Mu2eJobPars
-from utils.poms_entry import njobs_of, is_draining
+from utils.map_entry import njobs_of, is_draining
 from utils.samweb_wrapper import (files_in_dataset, definitions_matching,
                                   dataset_file_count, metadata_for_files,
                                   _parse_sam_datetime)
