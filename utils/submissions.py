@@ -1224,6 +1224,13 @@ def _acquire_lock(db_path):
         sys.exit(f"another submissions run holds {lock_path} — exiting")
 
 
+# Summary keys that mean "a human must look": any nonzero count makes
+# the tick exit 2, repeated every tick until someone clears the cause.
+ATTENTION_KEYS = ('held', 'exhausted', 'would-exhaust', 'child-missing',
+                  'campaign-paused', 'would-pause-overlap', 'count-error',
+                  'paused-campaign', 'drain-error')
+
+
 def _run_pass(args):
     """The tick: recovery pass over active ledger rows, then campaign
     top-up. Exits 2 when anything needs human attention."""
@@ -1252,14 +1259,12 @@ def _run_pass(args):
     if args.row is None:
         # Top-up AFTER the recovery pass: resubmissions are already in
         # the queue when the count is taken, so the cap covers them.
-        for k, v in top_up(args.db, resolve_cap(args.max_queued),
-                           dry_run=args.dry_run).items():
-            summary[k] = summary.get(k, 0) + v
-        # Draining campaigns are fed separately (file-keyed batches, no
-        # index cursor) but share the same queue cap as index top-up.
-        for k, v in drain_tick(args.db, resolve_cap(args.max_queued),
-                               dry_run=args.dry_run).items():
-            summary[k] = summary.get(k, 0) + v
+        # drain_tick feeds draining campaigns separately (file-keyed
+        # batches, no index cursor) but shares the same queue cap.
+        for tick_fn in (top_up, drain_tick):
+            for k, v in tick_fn(args.db, resolve_cap(args.max_queued),
+                                dry_run=args.dry_run).items():
+                summary[k] = summary.get(k, 0) + v
         # A paused campaign means "waiting on a human" — repeat the
         # exit-2 signal EVERY tick until someone resumes or cancels,
         # not just on the tick that paused it.
@@ -1274,13 +1279,7 @@ def _run_pass(args):
     if summary:
         print("submissions summary: "
               + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
-    if (summary.get('held') or summary.get('exhausted')
-            or summary.get('would-exhaust') or summary.get('child-missing')
-            or summary.get('campaign-paused')
-            or summary.get('would-pause-overlap')
-            or summary.get('count-error')
-            or summary.get('paused-campaign')
-            or summary.get('drain-error')):
+    if any(summary.get(k) for k in ATTENTION_KEYS):
         sys.exit(2)
 
 

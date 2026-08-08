@@ -797,7 +797,7 @@ def _push_with_retry(push_fn, *args, retries=3, base_delay=30, **kwargs):
     raise last_exc
 
 
-def _push_all(data_push, log_push, prefix=''):
+def _push_all(data_push, log_push):
     """Run `data_push`, then `log_push` — and run `log_push` even when
     `data_push` raises.
 
@@ -821,7 +821,7 @@ def _push_all(data_push, log_push, prefix=''):
         data_push()
     except subprocess.CalledProcessError as exc:
         data_exc = exc
-        print(f"{prefix}data push failed (rc={exc.returncode}) — pushing the "
+        print(f"[direct] data push failed (rc={exc.returncode}) — pushing the "
               f"log before failing the job")
 
     try:
@@ -829,22 +829,21 @@ def _push_all(data_push, log_push, prefix=''):
     except subprocess.CalledProcessError as exc:
         if data_exc is None:
             raise
-        print(f"{prefix}WARNING: log push also failed (rc={exc.returncode}); "
+        print(f"[direct] WARNING: log push also failed (rc={exc.returncode}); "
               f"re-raising the data-push failure")
 
     if data_exc is not None:
         raise data_exc
 
 
-def _execute_mu2e(fcl, simjob_setup, args, prefix=''):
-    """Shared execute step for both backends: build the mu2e command, run
+def _execute_mu2e(fcl, simjob_setup, args):
+    """Execute step for the direct worker: build the mu2e command, run
     it, return True iff it failed. Callers push data only on success but
-    always push logs (so failures stay debuggable) — that split, and the
-    direct-mode extras (retry, manifest, log location), stay caller-side
-    because they differ by design."""
+    always push logs (so failures stay debuggable) — that split, plus
+    retry/manifest/log-location, stay caller-side by design."""
     cmd = build_mu2e_cmd(fcl, simjob_setup, args)
-    print(f"{prefix}Executing: {cmd}")
-    print(f"{prefix}Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
+    print(f"[direct] Executing: {cmd}")
+    print(f"[direct] Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
     print("=== Starting Mu2e execution ===")
     try:
         run(cmd, shell=False)
@@ -910,7 +909,7 @@ def _direct_dispatch(args, ops, index):
     # have no SAM parents.
     track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
 
-    job_failed = _execute_mu2e(fcl, simjob_setup, args, prefix='[direct] ')
+    job_failed = _execute_mu2e(fcl, simjob_setup, args)
 
     # Append SHA256 manifest to the log BEFORE pushing.
     # mu2eClusterCheckAndMove parses the log for `mu2egrid manifest`.
@@ -952,7 +951,7 @@ def _direct_dispatch(args, ops, index):
         print("[direct] mu2e failed — skipping data push, still pushing log")
     # Push outputs only on success; the log ALWAYS — including when the
     # data push itself raises (see _push_all).
-    _push_all(data_push, log_push, prefix='[direct] ')
+    _push_all(data_push, log_push)
 
     return job_failed
 

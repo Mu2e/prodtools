@@ -880,17 +880,15 @@ def main():
 
     args = parser.parse_args()
 
-    try:
-        args.indices = _parse_indices(args.indices, args.indices_file)
-    except (ValueError, OSError) as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    def _parse_or_exit(fn, *fn_args):
+        try:
+            return fn(*fn_args)
+        except (ValueError, OSError) as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
-    try:
-        args.files = _parse_files(args.files)
-    except (ValueError, OSError) as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    args.indices = _parse_or_exit(_parse_indices, args.indices, args.indices_file)
+    args.files = _parse_or_exit(_parse_files, args.files)
     if args.files is not None and (
             args.first is not None or args.num is not None
             or args.indices is not None or args.enqueue):
