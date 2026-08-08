@@ -25,7 +25,15 @@ from utils.file_resolver import storage_scope
 
 # --- Mu2egrid-compatible defaults (mirrors mu2egrid::commonOptDefaultsJobsub) ---
 DEFAULT_DISK = "30GB"
-DEFAULT_MEMORY = "2000MB"
+# Deliberately ABOVE mu2egrid's 2000MB. Mu2e primaries cluster just over
+# that line -- measured VmHWM 2266 MB (PiTargetStops) and 2377 MB (the
+# RPC primaries), both base-10 -- so the mu2egrid value OOM'd entries
+# whose only sin was not naming a memory key. 2500MB clears the observed
+# peaks while staying low enough not to distort slot matching. Raising an
+# entry above this is still an entry-key decision; note that naming the
+# key forfeits the 4000MB recovery floor (see submissions.RECOVERY_MEMORY
+# and recovery_resource_argv, which apply only when the key is absent).
+DEFAULT_MEMORY = "2500MB"
 DEFAULT_LIFETIME = "24h"
 DEFAULT_RESOURCE = "usage_model=OPPORTUNISTIC,DEDICATED"
 DEFAULT_GROUP = "mu2e"
