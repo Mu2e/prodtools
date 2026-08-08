@@ -554,7 +554,7 @@ def main():
     p.add_argument('--dsconf', type=str, help='Dataset configuration')
     p.add_argument('--index', type=int, help='Entry index in JSON list')
     p.add_argument('--pushout', action='store_true', help='Enable SAM pushOutput')
-    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and create SAM index definitions after generation')
+    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and print the submission-map summary after generation')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.json)')
@@ -598,12 +598,12 @@ def main():
             ignore_empty=args.ignore_empty,
         )
     
-    # If --prod mode, create index definition after generation
+    # If --prod mode, print the submission-map summary after generation
     if args.prod:
 
         jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.json'
         print(f"\n{'='*60}")
-        print(f"Creating index definition from {jobdefs_file}")
+        print(f"Submission-map summary: {jobdefs_file}")
         print(f"{'='*60}")
         summarize_map(jobdefs_file)
 

@@ -23,7 +23,7 @@ or `--prod` for SAM registration.
   - Bare tag like `Run1Bag`, `MDC2025af`, `MDC2025an` → treated as `SimJob/<tag>`.
   - `<Musing>/<Version>` form like `AnalysisMDC2025/v02_00_00` → sources that musing's `setup.sh` directly.
   - Omitted → defaults to `SimJob/Run1Bag`.
-- `command` — the prodtools command, e.g. `json2jobdef`, `mkrecovery`.
+- `command` — the prodtools command, e.g. `json2jobdef`, `jobfcl`.
 
 Relative paths in arguments are resolved against the repo root, because
 the command runs in `/tmp`. `/cvmfs/...` and other absolute paths pass
