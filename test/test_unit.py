@@ -56,6 +56,7 @@ def _make_tarball(jobpars: dict, fcl_content: str = "#include \"base.fcl\"\n") -
     """
     Build an in-memory tarball containing jobpars.json + mu2e.fcl and write
     it to a temporary file.  Returns the path to the .tar file.
+    fcl_content=None omits the mu2e.fcl member entirely (code-tarball cnfs).
 
     The file is placed in /tmp and must be removed by the caller if desired.
     """
@@ -67,11 +68,12 @@ def _make_tarball(jobpars: dict, fcl_content: str = "#include \"base.fcl\"\n") -
         ti = tarfile.TarInfo(name='jobpars.json')
         ti.size = len(jp_bytes)
         tar.addfile(ti, io.BytesIO(jp_bytes))
-        # Add mu2e.fcl
-        fcl_bytes = fcl_content.encode()
-        ti2 = tarfile.TarInfo(name='mu2e.fcl')
-        ti2.size = len(fcl_bytes)
-        tar.addfile(ti2, io.BytesIO(fcl_bytes))
+        if fcl_content is not None:
+            # Add mu2e.fcl
+            fcl_bytes = fcl_content.encode()
+            ti2 = tarfile.TarInfo(name='mu2e.fcl')
+            ti2.size = len(fcl_bytes)
+            tar.addfile(ti2, io.BytesIO(fcl_bytes))
     buf.seek(0)
 
     tmp = tempfile.NamedTemporaryFile(suffix='.tar', delete=False)
@@ -3780,23 +3782,13 @@ class TestJobParsRecipe(unittest.TestCase):
         """A code-tarball cnf has no mu2e.fcl; say so rather than raising —
         the jobpars half of the recipe is still worth printing."""
         from utils.jobquery import Mu2eJobPars
-        import tempfile
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w') as tar_w:
-            jp_bytes = json.dumps({"code": "", "setup": "/cvmfs/test/setup.sh",
-                                   "jobname": "cnf.mu2e.X.TC.0.tar",
-                                   "tbs": {}}).encode()
-            ti = tarfile.TarInfo(name='jobpars.json')
-            ti.size = len(jp_bytes)
-            tar_w.addfile(ti, io.BytesIO(jp_bytes))
-        buf.seek(0)
-        tmp = tempfile.NamedTemporaryFile(suffix='.tar', delete=False)
-        tmp.write(buf.read())
-        tmp.close()
+        tar = _make_tarball({"code": "", "setup": "/cvmfs/test/setup.sh",
+                             "jobname": "cnf.mu2e.X.TC.0.tar",
+                             "tbs": {}}, fcl_content=None)
         try:
-            out = Mu2eJobPars(tmp.name).recipe()
+            out = Mu2eJobPars(tar).recipe()
         finally:
-            os.unlink(tmp.name)
+            os.unlink(tar)
         self.assertIn("cnf.mu2e.X.TC.0.tar", out)
         self.assertIn("no embedded mu2e.fcl", out)
 
