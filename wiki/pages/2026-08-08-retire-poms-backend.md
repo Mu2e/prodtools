@@ -47,11 +47,13 @@ shipped at submit time.
   grammar, shared by the direct backend.
 - `validate_jobdesc` / `process_jobdef` in runmu2e: called by the
   direct worker path.
-- `process_g4bl_jobdef` and `process_template` in runmu2e: g4bl and
-  template-mode machinery, not POMS. Both are now uncalled in-repo —
-  their only caller was the POMS dispatch tail — so a follow-up
-  decides whether the upstream mu2eg4bl path and the template workflow
-  still want them.
+- `process_g4bl_jobdef` and `process_template` in runmu2e: initially
+  kept (g4bl/template machinery, not POMS), then DELETED in the
+  2026-08-08 dead-code follow-up together with their validate_jobdesc
+  branches and `data/mdc2025/g4bl.json` — nothing could produce or
+  dispatch those modes any more, and the g4bl branch had zero test
+  coverage. Recoverable at `pre-poms-removal`; a g4bl revival goes
+  through the upstream `mu2eg4bl` CLI.
 - The `poms_map/` directory name and numbered-map convention
   (external, mu2epro area).
 - pushOutput's `_POMS` suffix in `Dataset.Tag` (external tool).

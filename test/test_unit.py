@@ -1921,12 +1921,6 @@ class TestGetOutputDatasetNames(unittest.TestCase):
 
 class TestValidateJobdesc(unittest.TestCase):
 
-    def test_template_mode(self):
-        from utils.runmu2e import validate_jobdesc
-        jd = [{'fcl_template': 'base.fcl', 'setup_script': '/s/setup.sh',
-               'inloc': 'tape', 'outputs': []}]
-        self.assertEqual(validate_jobdesc(jd), 'template')
-
     def test_direct_input_mode(self):
         from utils.runmu2e import validate_jobdesc
         jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',

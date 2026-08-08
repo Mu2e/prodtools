@@ -653,11 +653,12 @@ Flags: `--map` (required), `--entry N`, `--first N` / `--num M`,
 (default 1000, only meaningful with `--enqueue`), `--wftop`,
 `--wfproject`, `--role`, `--disk` (default `30GB`), `--memory` (default
 `2500MB`), `--expected-lifetime` (default `24h`), `--prodtools-tar`,
-`--dry-run`, `--verbose`.
+`--dry-run`.
 
-Entries `submit_map` cannot submit — `template`/`direct_input`/`g4bl`
-modes, and HPC — go through the upstream `mu2ejobsub`/`mu2eg4bl` CLIs
-directly; `submit_map` never touches those.
+Entries `submit_map` cannot submit as index campaigns — `direct_input`
+entries run as draining batches (`--files`), and HPC submission goes
+through the upstream `mu2ejobsub`/`mu2eg4bl` CLIs directly. The
+`template`/`g4bl` runner modes were deleted with the POMS backend.
 
 Every successful submission (one that produced a cluster ID) is
 recorded in the submission ledger (sqlite3, `--ledger-db`) — the

@@ -176,10 +176,11 @@ reading the code:
   `mu2ejobsub`/`mu2eg4bl` CLIs) simply never passed through it; the POMS
   backend was removed 2026-08 (legacy stages recover from the
   `pre-poms-removal` git tag).
-- `template`/`direct_input`/`g4bl` entry modes and HPC submission are
-  not submittable via `submit_map` — the direct worker doesn't support
-  them. They run via the upstream `mu2ejobsub`/`mu2eg4bl` CLIs directly
-  (the POMS backend was removed 2026-08).
+- `direct_input` entries are not index-submittable — they run as
+  draining batches (`submit_map --files`). The `template` and `g4bl`
+  runner modes were deleted with the POMS backend (2026-08, tag
+  `pre-poms-removal`); g4bl and HPC submission go through the upstream
+  `mu2ejobsub`/`mu2eg4bl` CLIs, which never pass through `submit_map`.
 - Optional per-entry resource keys `"memory"` / `"disk"` /
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
   `48h`) live in the POMS-map entry itself, or in the jobdef JSON config
