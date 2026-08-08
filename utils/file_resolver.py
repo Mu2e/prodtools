@@ -236,6 +236,18 @@ def sam_physical_path(filename, prefer_location=None):
                                    prefer_location)
 
 
+def sam_physical_path_or_none(filename, prefer_location=None):
+    """sam_physical_path, but returns None instead of raising when SAM
+    has no usable location. For swallow-and-skip consumers (submissions
+    verify loop, MCP status) — formerly utils.mkrecovery.locate_tarball.
+    NOT the same as jobdef_lookup.locate_tarball, which takes a cnf
+    DEFNAME and raises."""
+    try:
+        return sam_physical_path(filename, prefer_location)
+    except Exception:
+        return None
+
+
 def classify_sam_location(raw: Optional[str]) -> str:
     """Normalize a SAM location string (location / location_type /
     full_path) to the storage system it names: 'enstore', 'dcache', or

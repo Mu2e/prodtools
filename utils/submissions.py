@@ -35,11 +35,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import submission_ledger
 from utils.check_inputs import _default_locality, _LOC_TO_MDH
-from utils.file_resolver import infer_dataset_location
+from utils.file_resolver import infer_dataset_location, sam_physical_path_or_none
 from utils.job_common import Mu2eName, expected_outputs_for
+from utils.jobdef_lookup import build_file_maps, extract_datasets_from_tarball
 from utils.jobquery import Mu2eJobPars
-from utils.mkrecovery import (build_file_maps, extract_datasets_from_tarball,
-                              locate_tarball)
 from utils.poms_entry import njobs_of, is_draining
 from utils.samweb_wrapper import (files_in_dataset, definitions_matching,
                                   dataset_file_count, metadata_for_files,
@@ -185,7 +184,7 @@ def verify_row(row, sam_lister=files_in_dataset):
     no output datasets, SAM failure): the caller keeps the row active
     and reports. A row is never guessed complete.
     """
-    tarball_path = locate_tarball(row['tarball'])
+    tarball_path = sam_physical_path_or_none(row['tarball'])
     if not tarball_path or not os.path.exists(tarball_path):
         raise RuntimeError(f"cannot locate tarball {row['tarball']}")
     job_io = Mu2eJobPars(tarball_path)
@@ -263,7 +262,7 @@ def _draining_expected(camp, datasets, job_pars, count_fn):
 
 
 def ledger_expected(db_path, dsconfs=None, *, datasets=None,
-                    locate=locate_tarball, count_fn=dataset_file_count):
+                    locate=sam_physical_path_or_none, count_fn=dataset_file_count):
     """Map output dataset name -> expected job count, from the submission ledger.
 
     The ledger entry carries njobs -- the SUBMITTED window, not the cnf's baked
@@ -393,7 +392,7 @@ def _matches_pattern(name, pattern):
 def draining_state(camp, db_path, *,
                    defs_fn=definitions_matching,
                    sam_lister=files_in_dataset,
-                   locate=locate_tarball):
+                   locate=sam_physical_path_or_none):
     """One draining campaign's file sets, computed fresh from SAM + the
     ledger — draining has NO cursor; nothing counts as done until its
     output exists (the fix for POMS drainingn's launch-time cursor).
@@ -622,7 +621,7 @@ def verify_files_row(row, sam_lister=files_in_dataset):
     Raises on anything that prevents verification (unlocatable tarball,
     SAM failure): a row is never guessed complete.
     """
-    tarball_path = locate_tarball(row['tarball'])
+    tarball_path = sam_physical_path_or_none(row['tarball'])
     if not tarball_path or not os.path.exists(tarball_path):
         raise RuntimeError(f"cannot locate tarball {row['tarball']}")
     jp = Mu2eJobPars(tarball_path)

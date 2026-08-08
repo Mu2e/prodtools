@@ -404,8 +404,8 @@ def _parse_indices(spec, path):
 
     Returns None when neither is given. Accepts comma- and/or
     whitespace-separated values; in a file, `#` starts a comment (so
-    `mkrecovery --print-indices` output, which headers each tarball with
-    `# <tarball>`, pipes straight in).
+    an index dump that headers each tarball with `# <tarball>` pipes
+    straight in).
     """
     if spec and path:
         raise ValueError("--indices and --indices-file are mutually exclusive")
@@ -824,8 +824,8 @@ def main():
                              'non-windowed entry (no firstjob).')
     parser.add_argument('--indices-file', default=None,
                         help='File of ABSOLUTE cnf indices, whitespace/'
-                             'comma separated, `#` comments ignored. Consumes '
-                             '`mkrecovery --print-indices` output directly.')
+                             'comma separated, `#` comments ignored. '
+                             '`#` comment lines (e.g. per-tarball headers) are ignored.')
     parser.add_argument('--files', default=None,
                         help='File of input art filenames (one per line, '
                              '`#` comments) for a draining '

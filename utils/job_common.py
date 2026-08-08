@@ -433,8 +433,8 @@ class Mu2eJobBase:
     # ------------------------------------------------------------------
     # Per-index job arithmetic. These are THE single implementation —
     # the worker names its actual output files through them (via
-    # Mu2eJobFCL.generate_fcl), so every other consumer (mkrecovery,
-    # submit, db_builder, jobdef_lookup) must get identical answers.
+    # Mu2eJobFCL.generate_fcl), so every other consumer (submit,
+    # submissions, jobdef_lookup) must get identical answers.
     # Formerly duplicated (divergently) in the deleted jobiodetail.py and in jobquery.py.
     # ------------------------------------------------------------------
 

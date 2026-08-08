@@ -193,8 +193,8 @@ def _default_job_pars_fn(tarball):
     state='unknown', never a zero count."""
     import os
     from utils.jobquery import Mu2eJobPars
-    from utils.mkrecovery import locate_tarball
-    path = locate_tarball(tarball)
+    from utils.file_resolver import sam_physical_path_or_none
+    path = sam_physical_path_or_none(tarball)
     if not path or not os.path.exists(path):
         raise RuntimeError('tarball not locatable in SAM')
     return Mu2eJobPars(path)

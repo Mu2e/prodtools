@@ -3594,7 +3594,7 @@ class TestSkipProduced(unittest.TestCase):
 class TestJobArithmeticConsolidation(unittest.TestCase):
     """sequencer/job_outputs/job_event_settings/job_seed/njobs live once in
     Mu2eJobBase; the worker names its real output files through them, so
-    Mu2eJobPars (mkrecovery, submit, db_builder, jobdef_lookup) must return
+    Mu2eJobPars (submit, submissions, jobdef_lookup) must return
     byte-identical answers. Regression tests for the divergences that existed
     while jobiodetail.py and jobquery.py carried stale copies."""
 
@@ -3609,7 +3609,7 @@ class TestJobArithmeticConsolidation(unittest.TestCase):
 
     def test_sequencer_from_index_via_jobpars(self):
         """Position-based sequencer (worker semantics), not the parent file's
-        name — old Mu2eJobIO returned the parent sequencer, so mkrecovery
+        name — old Mu2eJobIO returned the parent sequencer, so recovery
         mispredicted filenames whenever the parent dataset had holes."""
         from utils.jobquery import Mu2eJobPars
         tar = self._tar({
@@ -4104,8 +4104,9 @@ class TestParseIndices(unittest.TestCase):
             _parse_indices(' , ', None)
 
     def test_file_ignores_comments_and_blanks(self):
-        """Consumes `mkrecovery --print-indices` output, whose `# <tarball>`
-        headers must not parse as indices."""
+        """Accepts `#`-prefixed comment headers (the historical mkrecovery
+        --print-indices format), whose `# <tarball>` headers must not parse
+        as indices."""
         import tempfile
         from utils.submit import _parse_indices
         with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as f:
@@ -4141,27 +4142,6 @@ class TestIndicesOpsEntryContract(unittest.TestCase):
         from utils.prod_utils import resolve_map_index
         ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0, 'njobs': 24301}
         self.assertEqual(resolve_map_index([ops_entry], 24301), (None, None, None))
-
-
-class TestMkrecoveryPrintIndices(unittest.TestCase):
-    """print_indices emits ABSOLUTE cnf indices (firstjob + window-relative)."""
-
-    def test_adds_firstjob_offset_and_headers(self):
-        import contextlib
-        from utils.mkrecovery import print_indices
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            print_indices('cnf.mu2e.X.0.tar', 15000, {944, 991})
-        self.assertEqual(buf.getvalue().splitlines(),
-                         ['# cnf.mu2e.X.0.tar', '15944', '15991'])
-
-    def test_zero_firstjob_is_identity(self):
-        import contextlib
-        from utils.mkrecovery import print_indices
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            print_indices('cnf.mu2e.X.0.tar', 0, {7})
-        self.assertEqual(buf.getvalue().splitlines(), ['# cnf.mu2e.X.0.tar', '7'])
 
 
 class TestLogStorageLocation(unittest.TestCase):
@@ -4638,33 +4618,6 @@ class TestJobdefsDedupePerWindow(unittest.TestCase):
             entries = json.loads(path.read_text())
             self.assertEqual(len(entries), 2)
             self.assertEqual(entries[1].get('firstjob'), 5000)
-
-
-class TestMkrecoveryWindow(unittest.TestCase):
-    """find_missing_indices over a window: expected names come from cnf
-    indices [firstjob, firstjob+njobs) but returned indices are
-    WINDOW-RELATIVE, so callers map to global with plain cumulative+idx."""
-
-    def test_windowed_expected_names(self):
-        from utils import mkrecovery
-        seen = []
-
-        class FakeJP:
-            def __init__(self, path):
-                pass
-
-            def job_outputs(self, idx):
-                seen.append(idx)
-                return {'out': f'dts.mu2e.X.C.001470_{idx:08d}.art'}
-
-        with patch.object(mkrecovery, 'Mu2eJobPars', FakeJP), \
-             patch.object(mkrecovery, 'files_in_dataset',
-                          return_value=[f'dts.mu2e.X.C.001470_{i:08d}.art'
-                                        for i in (5000, 5002)]):
-            missing_idx, missing_files = mkrecovery.find_missing_indices(
-                'x.tar', 'dts.mu2e.X.C.art', 3, firstjob=5000)
-        self.assertEqual(seen, [5000, 5001, 5002])
-        self.assertEqual(missing_idx, {1})  # window-relative, not 5001
 
 
 class TestValidateWindow(unittest.TestCase):
@@ -5952,13 +5905,13 @@ class TestSubmitLedgerHook(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 13. mkrecovery scoped index scan (utils/mkrecovery.py)
+# 13. Scoped index scan (utils/jobdef_lookup.py)
 # ---------------------------------------------------------------------------
 
 class TestBuildFileMapsScoped(unittest.TestCase):
     def test_scoped_scan_matches_windowed_scan(self):
         from utils.jobquery import Mu2eJobPars
-        from utils.mkrecovery import build_file_maps
+        from utils.jobdef_lookup import build_file_maps
         files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(6)]
         tar = _make_tarball(_root_input_jobpars(files))
         try:
@@ -6214,7 +6167,7 @@ class TestRecoverLoop(unittest.TestCase):
                         out.append(f)
                 return out
 
-            with patch.object(recover, 'locate_tarball', return_value=tar):
+            with patch.object(recover, 'sam_physical_path_or_none', return_value=tar):
                 missing, partial = recover.verify_row(
                     row, sam_lister=fake_lister)
             self.assertEqual(missing, [1, 2])
@@ -6226,7 +6179,7 @@ class TestRecoverLoop(unittest.TestCase):
         from utils import submissions as recover
         row = {'id': 1, 'tarball': 'cnf.mu2e.gone.C.0.tar',
                'indices': [0], 'entry': {}, 'attempt': 1, 'jobsub_id': 'x'}
-        with patch.object(recover, 'locate_tarball', return_value=None):
+        with patch.object(recover, 'sam_physical_path_or_none', return_value=None):
             with self.assertRaises(RuntimeError):
                 recover.verify_row(row, sam_lister=lambda ds: [])
 
@@ -6241,7 +6194,7 @@ class TestRecoverLoop(unittest.TestCase):
             row = {'id': 1, 'tarball': 'cnf.mu2e.T.C.0.tar',
                    'indices': [0, 1], 'entry': {}, 'attempt': 1,
                    'jobsub_id': 'x'}
-            with patch.object(recover, 'locate_tarball', return_value=tar):
+            with patch.object(recover, 'sam_physical_path_or_none', return_value=tar):
                 with self.assertRaises(RuntimeError):
                     recover.verify_row(row, sam_lister=lambda ds: [])
         finally:
@@ -9664,7 +9617,7 @@ class TestVerifyFilesRow(unittest.TestCase):
 
     def _verify(self, existing_outputs):
         from utils import submissions
-        with patch.object(submissions, 'locate_tarball',
+        with patch.object(submissions, 'sam_physical_path_or_none',
                           return_value='/tmp/t.tar'), \
              patch.object(submissions.os.path, 'exists',
                           return_value=True), \
@@ -9684,7 +9637,7 @@ class TestVerifyFilesRow(unittest.TestCase):
 
     def test_unlocatable_tarball_raises(self):
         from utils import submissions
-        with patch.object(submissions, 'locate_tarball',
+        with patch.object(submissions, 'sam_physical_path_or_none',
                           return_value=None):
             with self.assertRaises(RuntimeError):
                 submissions.verify_files_row(dict(self.ROW))
@@ -9709,7 +9662,7 @@ class TestVerifyFilesRow(unittest.TestCase):
             'mcs.mu2e.B.MDC2025au_best_v1_5.art': [],
             'nts.mu2e.B.MDC2025au_best_v1_5.root': [],
         }
-        with patch.object(submissions, 'locate_tarball',
+        with patch.object(submissions, 'sam_physical_path_or_none',
                           return_value='/tmp/t.tar'), \
              patch.object(submissions.os.path, 'exists',
                           return_value=True), \
