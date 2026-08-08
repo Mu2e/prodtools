@@ -39,24 +39,11 @@ sys.path.insert(0, os.path.join(
 # test suite runs standalone.
 _STUB_MODULES = [
     'samweb_client',
-    'poms_client',
     'ifdh',
 ]
 for _mod in _STUB_MODULES:
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
-
-# SQLAlchemy can't be MagicMock-stubbed (poms_db declares real ORM models),
-# so DB-backed tests are skipped when it's absent (plain ops env; see
-# reference_pyenv_ana_for_db).
-try:
-    import sqlalchemy  # noqa: F401
-    _HAVE_SQLALCHEMY = True
-except ImportError:
-    _HAVE_SQLALCHEMY = False
-requires_sqlalchemy = unittest.skipUnless(
-    _HAVE_SQLALCHEMY,
-    "requires SQLAlchemy (source pyenv.sh ana after muse setup ops)")
 
 from utils.job_common import Mu2eName, remove_storage_prefix, Mu2eJobBase
 
@@ -318,10 +305,9 @@ class TestMu2eName(unittest.TestCase):
         self.assertEqual(str(n.log_dataset()), "log.mu2e.FlatMuMinus.MDC2025ab.log")
 
     def test_log_dataset_matches_legacy_helper(self):
-        """Pinned against db_builder._jobdef_to_log_dataset's published output.
-
-        Imported indirectly (expected values listed inline) because db_builder
-        uses `str | None` syntax that needs Python 3.10+.
+        """Pinned against the published output of the legacy
+        db_builder._jobdef_to_log_dataset helper (deleted with the POMS
+        monitoring toolchain; expected values listed inline).
         """
         from utils.job_common import Mu2eName
         cases = [
@@ -3602,143 +3588,6 @@ class TestSkipProduced(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 35. gencount + uniformity (poms_db.DatasetInfo, db_builder, pomsMonitor)
-# ---------------------------------------------------------------------------
-
-@requires_sqlalchemy
-class TestDatasetInfoGencount(unittest.TestCase):
-    """DatasetInfo.filter_eff derived from gencount."""
-
-    def _info(self, **kw):
-        from utils.poms_db import DatasetInfo
-        return DatasetInfo(**kw)
-
-    def test_filter_eff(self):
-        i = self._info(nfiles=2000, nevts=2761, gencount=5000)
-        self.assertAlmostEqual(i.filter_eff, 2761 / 5000)
-
-    def test_filter_eff_none_without_gencount(self):
-        self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=None).filter_eff)
-        self.assertIsNone(self._info(nfiles=10, nevts=5, gencount=0).filter_eff)
-
-
-@requires_sqlalchemy
-class TestGetDatasetGencount(unittest.TestCase):
-    """db_builder._get_dataset_gencount: gencount(file) * nfiles, one metadata call."""
-
-    def test_multiplies_per_file_by_nfiles(self):
-        from utils import db_builder
-        with patch.object(db_builder, 'first_file_in_definition',
-                          return_value='f0.art'), \
-             patch.object(db_builder, 'get_metadata',
-                          return_value={'dh.gencount': 5000}) as gm:
-            self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)
-            gm.assert_called_once()  # only ONE metadata call regardless of nfiles
-
-    def test_none_when_no_gencount_field(self):
-        from utils import db_builder
-        with patch.object(db_builder, 'first_file_in_definition', return_value='f0.art'), \
-             patch.object(db_builder, 'get_metadata', return_value={'event_count': 5}):
-            self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
-
-    def test_none_when_no_files(self):
-        from utils import db_builder
-        self.assertIsNone(db_builder._get_dataset_gencount('ds', 0))
-
-    def test_none_on_exception(self):
-        from utils import db_builder
-        with patch.object(db_builder, 'first_file_in_definition',
-                          side_effect=Exception('SAM down')):
-            self.assertIsNone(db_builder._get_dataset_gencount('ds', 100))
-
-    def test_supplied_first_file_skips_the_list_fetch(self):
-        """When the build loop passes first_file, the probes must NOT re-fetch
-        the dataset's first file (the round-trip the optimization eliminates).
-        infer_dataset_location now lives in file_resolver and does a lazy
-        `from .samweb_wrapper import ...` at call time, so its fetch is
-        patched on samweb_wrapper."""
-        from utils import db_builder, file_resolver, samweb_wrapper
-        with patch.object(db_builder, 'first_file_in_definition') as lst, \
-             patch.object(samweb_wrapper, 'first_file_in_definition') as lst2, \
-             patch.object(db_builder, 'get_metadata',
-                          return_value={'dh.gencount': 5000}), \
-             patch.object(db_builder, 'children_of_file', return_value=['c.art']), \
-             patch.object(samweb_wrapper, 'locate_file_strict',
-                          return_value=[{'location_type': 'dcache:/pnfs/x'}]):
-            self.assertEqual(
-                db_builder._get_dataset_gencount('ds', 2000, 'f0.art'), 5000 * 2000)
-            self.assertTrue(db_builder._check_dataset_has_children('ds', 'f0.art'))
-            self.assertEqual(
-                file_resolver.infer_dataset_location('ds', 'f0.art'), 'dcache')
-            lst.assert_not_called()   # first_file supplied -> zero fetches
-            lst2.assert_not_called()
-
-    def test_omitted_first_file_still_self_fetches(self):
-        """Standalone callers (db_analyzer, tests) that omit first_file keep
-        the self-fetch behavior."""
-        from utils import db_builder
-        with patch.object(db_builder, 'first_file_in_definition',
-                          return_value='f0.art') as lst, \
-             patch.object(db_builder, 'get_metadata',
-                          return_value={'dh.gencount': 5000}):
-            self.assertEqual(db_builder._get_dataset_gencount('ds', 2000), 5000 * 2000)
-            lst.assert_called_once()
-
-
-@requires_sqlalchemy
-class TestUniformityReport(unittest.TestCase):
-    """pomsMonitor.uniformity_report: events/job = round(target/eff)."""
-
-    def _session_with(self, datasets):
-        """In-memory DB session seeded with (name, nfiles, nevts, gencount)."""
-        from utils.poms_db import get_db_session, DatasetInfo
-        s = get_db_session(None)  # in-memory
-        for name, nf, ne, gc in datasets:
-            s.add(DatasetInfo(dataset_name=name, nfiles=nf, nevts=ne, gencount=gc))
-        s.commit()
-        return s
-
-    def test_events_per_job_rounded(self):
-        from utils import pomsMonitor
-        # eff = nevts/gencount.
-        #   CeMLeadingLog: 2_761_000/5_000_000 = .5522 -> 2000/.5522 = 3622 -> 4000
-        #   DIOtail95:       500_000/1_000_000 = .5000 -> 2000/.50  = 4000
-        s = self._session_with([
-            ('dts.mu2e.CeMLeadingLog.MDC2025ap.art', 2000, 2_761_000, 5_000_000),
-            ('dts.mu2e.DIOtail95.MDC2025ap.art',     1000,   500_000, 1_000_000),
-        ])
-        import io, contextlib
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            pomsMonitor.uniformity_report(s, 'MDC2025ap', target=2000, round_to=1000)
-        out = buf.getvalue()
-        self.assertIn('CeMLeadingLog', out)
-        self.assertIn('4,000', out)  # 2000/0.5522 = 3623 -> 4000
-        # DIOtail95 eff exactly 0.5 -> 2000/0.5 = 4000
-        self.assertRegex(out, r'DIOtail95\s+0\.5000.*4,000')
-
-    def test_requires_campaign(self):
-        from utils import pomsMonitor
-        s = self._session_with([])
-        with self.assertRaises(SystemExit):
-            pomsMonitor.uniformity_report(s, None, target=2000)
-
-    def test_skips_missing_gencount(self):
-        from utils import pomsMonitor
-        s = self._session_with([
-            ('dts.mu2e.Good.MDC2025ap.art', 100, 50, 1000),
-            ('dts.mu2e.NoGen.MDC2025ap.art', 100, 50, None),
-        ])
-        import io, contextlib
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            pomsMonitor.uniformity_report(s, 'MDC2025ap', target=2000, round_to=1000)
-        out = buf.getvalue()
-        self.assertIn('Good', out)
-        self.assertNotIn('NoGen', out)  # missing-gencount goes to stderr, not the table
-
-
-# ---------------------------------------------------------------------------
 # 32. Mu2eJobBase job arithmetic (hoisted single implementation)
 # ---------------------------------------------------------------------------
 
@@ -4856,48 +4705,6 @@ class TestValidateJobdescFirstjob(unittest.TestCase):
                'outputs': [], 'firstjob': 5000, 'njobs': 10}]
         self.assertEqual(validate_jobdesc(ok), False)  # normal mode
 
-
-# ---------------------------------------------------------------------------
-# 35. jobs_payload: static dashboard data builder (web/pomsMonitor/jobs_payload.py)
-# ---------------------------------------------------------------------------
-
-@requires_sqlalchemy
-class TestJobsPayload(unittest.TestCase):
-    """build_jobs_payload replaces the Flask /api/jobs route for render_static."""
-
-    @classmethod
-    def setUpClass(cls):
-        d = os.path.join(os.path.dirname(__file__), '..', 'web', 'pomsMonitor')
-        if d not in sys.path:
-            sys.path.insert(0, d)
-        import jobs_payload
-        cls.jp = jobs_payload
-
-    def test_empty_db_yields_empty_list_and_closes_session(self):
-        mock_session = MagicMock()
-        mock_session.query.return_value.all.return_value = []
-        with patch.object(self.jp, 'get_db_session', return_value=mock_session), \
-             patch.object(self.jp, 'build_dataset_info_map', return_value={}):
-            self.assertEqual(self.jp.build_jobs_payload('/nonexistent.db'), [])
-        mock_session.close.assert_called_once()
-
-    def test_job_row_shape_matches_api_jobs(self):
-        job = MagicMock(njobs=3, tarball='', source_file='x.json',
-                        complete=True, avg_real_h=None, avg_vmhwm_gb=None,
-                        outputs=[])
-        mock_session = MagicMock()
-        mock_session.query.return_value.all.return_value = [job]
-        with patch.object(self.jp, 'get_db_session', return_value=mock_session), \
-             patch.object(self.jp, 'build_dataset_info_map', return_value={}):
-            payload = self.jp.build_jobs_payload('/nonexistent.db')
-        self.assertEqual(len(payload), 1)
-        self.assertEqual(payload[0]['njobs'], 3)
-        self.assertEqual(payload[0]['setup_script'], '')
-        self.assertEqual(payload[0]['outputs'], [])
-        self.assertEqual(
-            sorted(payload[0].keys()),
-            sorted(['njobs', 'tarball', 'source_file', 'setup_script',
-                    'complete', 'avg_real_h', 'avg_vmhwm_gb', 'outputs']))
 
 # ---------------------------------------------------------------------------
 # Submission ledger (utils/submission_ledger.py) — direct-backend recovery
