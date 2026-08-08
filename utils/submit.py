@@ -877,8 +877,6 @@ def main():
                              'newer than every utils/*.py source file.')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print the submission command without running it')
-    parser.add_argument('--verbose', action='store_true',
-                        help='Verbose output')
 
     args = parser.parse_args()
 

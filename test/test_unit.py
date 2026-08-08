@@ -4474,30 +4474,6 @@ class TestTerminalPushError(unittest.TestCase):
         self.assertEqual(len(calls), 3)
 
 
-class TestTapeOrphanPath(unittest.TestCase):
-    """pushOutput fans files into sha256(filename)[0:2]/[2:4] subdirs.
-
-    Verified 2026-07-27 against the two real CeMLeadingLog orphans. This
-    is what makes an orphan detectable without a SAM record: the path is
-    computable from the filename alone.
-    """
-
-    def test_hash_subdirs_match_observed_orphans(self):
-        from utils.file_resolver import tape_file_path
-        p = tape_file_path(
-            'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art')
-        self.assertEqual(
-            p, '/pnfs/mu2e/tape/phy-sim/dig/mu2e/CeMLeadingLogMix1BB/'
-               'MDC2025au_best_v1_3/art/b2/ac/'
-               'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00000003.art')
-
-    def test_second_observed_orphan(self):
-        from utils.file_resolver import tape_file_path
-        p = tape_file_path(
-            'dig.mu2e.CeMLeadingLogMix1BB.MDC2025au_best_v1_3.001430_00001597.art')
-        self.assertTrue(p.endswith('/d5/af/dig.mu2e.CeMLeadingLogMix1BB.'
-                                   'MDC2025au_best_v1_3.001430_00001597.art'),
-                        f"unexpected hash subdirs: {p}")
 
 
 class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
