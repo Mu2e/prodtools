@@ -9284,6 +9284,31 @@ class TestDirectDispatchFiles(unittest.TestCase):
         lfs.assert_any_call(self.FILES[1])
         ffl.assert_any_call(self.FILES[1], src_location='tape')
 
+    def test_dry_run_skips_pushes(self):
+        """--dry-run must gate the push step (EXAMPLES local-smoke recipe
+        depends on it) — regression for the flag being silently ignored
+        after the POMS dispatch tail was deleted."""
+        from utils import runmu2e
+        ops = {'jobs': [0, 1], 'files': list(self.FILES),
+               'jobdesc': [dict(self.DRAIN)]}
+        args = self._args()
+        args.dry_run = True
+
+        def fake_pdi(jobdesc, fname, _args):
+            fcl = Path(fname).stem + '.fcl'
+            return (fcl, '/cvmfs/setup.sh', fname,
+                    ops['jobdesc'][0]['outputs'])
+
+        with patch.object(runmu2e, 'process_direct_input', fake_pdi), \
+             patch.object(runmu2e, 'locate_file_strict',
+                          return_value=[{'location_type': 'tape'}]), \
+             patch.object(runmu2e, '_fetch_file_local'), \
+             patch.object(runmu2e, '_execute_mu2e', return_value=False), \
+             patch.object(runmu2e, '_push_all') as pa:
+            failed = runmu2e._direct_dispatch(args, ops, 0)
+        self.assertFalse(failed)
+        pa.assert_not_called()
+
     def test_index_out_of_range_exits(self):
         from utils import runmu2e
         ops = {'jobs': [0, 1, 2], 'files': list(self.FILES),

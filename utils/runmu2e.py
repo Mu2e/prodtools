@@ -941,6 +941,13 @@ def _direct_dispatch(args, ops, index):
         _push_with_retry(push_logs, fcl, simjob_setup=simjob_setup,
                          location=log_location)
 
+    if args.dry_run:
+        datasets = ('none (job failed)' if job_failed
+                    else ', '.join(o['dataset'] for o in outputs))
+        print(f"[direct] DRY RUN — would push data: {datasets}; "
+              f"would push log to '{log_location}'. Skipping pushes.")
+        return job_failed
+
     if job_failed:
         print("[direct] mu2e failed — skipping data push, still pushing log")
     # Push outputs only on success; the log ALWAYS — including when the
