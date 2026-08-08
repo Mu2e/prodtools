@@ -2,9 +2,10 @@
 """
 json2jobdef.py: JSON to jobdef generator.
 
-Usage:
-  - As module:   python3 -m mu2e_poms_util.json2jobdef --help
-  - Direct file: python3 mu2e_poms_util/json2jobdef.py --help
+Usage (from the repo root, with `muse setup ops` sourced):
+  - Wrapper:     bin/json2jobdef --help          # sets up the Mu2e env itself
+  - As module:   python3 -m utils.json2jobdef --help
+  - Direct file: python3 utils/json2jobdef.py --help
 """
 import os, sys
 import random
