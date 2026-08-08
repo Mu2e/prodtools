@@ -357,5 +357,22 @@
 			"*.art": "tape"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh"
+	},
+	{
+		"dsconf": "Run1Ban",
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"input_data": [
+			{"dts.mu2e.EarlyNeutralsFlash.Run1Ban-001.art": 5000},
+			{"dts.mu2e.EarlyMuBeamFlash.Run1Ban-001.art": 5000},
+			{"dts.mu2e.EarlyEleBeamFlash.Run1Ban-001.art": 5000}
+		],
+		"inloc": "disk",
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.{desc}Cat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh"
 	}
 ]
