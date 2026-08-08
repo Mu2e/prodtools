@@ -604,7 +604,7 @@ def main():
         print(f"\n{'='*60}")
         print(f"Creating index definition from {jobdefs_file}")
         print(f"{'='*60}")
-        summarize_and_index(jobdefs_file, prod=True)
+        summarize_map(jobdefs_file)
 
 def _build_job_args(config):
     """Dispatch on `determine_job_type(config)` and return the per-mode

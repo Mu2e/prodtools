@@ -908,7 +908,7 @@ def _direct_dispatch(args, ops, index):
             jobdesc, fname, args)
 
     # `dir:<path>` inloc means inputs come from a locally-mounted FS and
-    # have no SAM parents — match the POMS-mode logic in _dispatch_and_execute.
+    # have no SAM parents.
     track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
 
     job_failed = _execute_mu2e(fcl, simjob_setup, args, prefix='[direct] ')
@@ -979,109 +979,21 @@ def _direct_main(args):
         sys.exit(1)
 
 
-
-def _dispatch_and_execute(mode, jobdesc, fname, args):
-    """Dispatch on runner mode, prep, execute, push. Returns True iff the
-    execute step failed (so main can exit nonzero).
-
-    Encapsulates the per-runner asymmetry in one place:
-    - art runners (template / direct_input / normal) return an FCL which
-      this function then executes via `mu2e -c`.
-    - g4bl runner executes inside `process_g4bl_jobdef`; this function
-      only pushes its outputs.
-    """
-    # G4Beamline: process_g4bl_jobdef both prepares and executes; it
-    # streams stdout to a SAM-named .log file. Push data only on success
-    # but always push the log if it exists, so failed grid jobs are
-    # debuggable in SAM.
-    if mode == 'g4bl':
-        try:
-            outputs, log_file, succeeded = process_g4bl_jobdef(jobdesc[0], fname, args)
-        except RuntimeError as e:
-            print(f"=== g4bl prep failed: {e} ===")
-            return True
-
-        if not succeeded:
-            print("=== g4bl execution failed ===")
-
-        if args.dry_run:
-            print("[DRY RUN] Would run: pushOutput output.txt")
-        else:
-            if succeeded:
-                push_data(outputs, infiles="", simjob_setup=None, track_parents=False)
-            else:
-                print("g4bl failed - skipping data push, attempting log push")
-            if log_file and Path(log_file).is_file():
-                push_logs(log_file=log_file, simjob_setup=None)
-
-        return not succeeded
-
-    # Art runners: prep returns FCL; execute `mu2e -c` here.
-    inloc = None  # populated by process_jobdef; None for template/direct_input
-    if mode == 'template':
-        fcl, simjob_setup = process_template(jobdesc[0], fname)
-        infiles = fname
-        outputs = jobdesc[0]['outputs']
-    elif mode == 'direct_input':
-        fcl, simjob_setup, infiles, outputs = process_direct_input(jobdesc, fname, args)
-    else:
-        fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(jobdesc, fname, args)
-
-    # dir:<path> inloc means inputs are on a locally-mounted filesystem
-    # (typically cvmfs) and aren't SAM-registered — skip parent tracking
-    # on the push. All other cases (including None for template / direct
-    # input) default to tracking parents.
-    track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
-
-    job_failed = _execute_mu2e(fcl, simjob_setup, args)
-
-    if not args.dry_run:
-        def data_push():
-            if job_failed:
-                return
-            push_data(outputs, infiles, simjob_setup=simjob_setup,
-                      track_parents=track_parents)
-
-        if job_failed:
-            print("Job failed - skipping data file push, but uploading logs")
-        # Always upload logs, even on failure — including when push_data
-        # itself raises, which used to skip this entirely (see _push_all).
-        _push_all(data_push, lambda: push_logs(fcl, simjob_setup=simjob_setup))
-    else:
-        print("[DRY RUN] Would run: pushOutput output.txt")
-
-    return job_failed
-
-
 def main():
     parser = argparse.ArgumentParser(description="Execute production jobs from job definitions.")
     parser.add_argument("--copy-input", action="store_true", help="Copy input files using mdh")
     parser.add_argument('--dry-run', action='store_true', help='Print commands without actually running pushOutput')
     parser.add_argument('--nevts', type=int, default=-1, help='Number of events to process (-1 for all events, default: -1)')
     parser.add_argument('--mu2e-options', type=str, default='', help='Extra options to pass to mu2e command (e.g., "--no-timing --debug")')
-    parser.add_argument('--jobdesc', help='Path to the job descriptions JSON file (e.g., jobdefs_list.json). Required for POMS mode; ignored in direct mode (MU2EGRID_JOBDEF set).')
 
     args = parser.parse_args()
 
-    if _is_direct_mode():
-        _direct_main(args)
-        return
-
-    if not args.jobdesc:
-        print("Error: --jobdesc is required (or set MU2EGRID_JOBDEF for direct mode)")
+    if not _is_direct_mode():
+        print("Error: MU2EGRID_JOBDEF is not set. runmu2e runs only as the "
+              "direct-backend worker; the POMS --jobdesc mode was removed "
+              "(recover it from the pre-poms-removal git tag).")
         sys.exit(1)
-
-    with open(args.jobdesc, 'r') as f:
-        jobdesc = json.load(f)
-    mode = validate_jobdesc(jobdesc)
-
-    fname = os.getenv("fname")
-    if not fname:
-        print("Error: fname environment variable is not set.")
-        sys.exit(1)
-
-    if _dispatch_and_execute(mode, jobdesc, fname, args):
-        sys.exit(1)
+    _direct_main(args)
 
 
 if __name__ == "__main__":

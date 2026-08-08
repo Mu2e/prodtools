@@ -12,12 +12,8 @@ from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
 from .poms_entry import firstjob_of, inloc_of, njobs_of, outputs_of, tarball_of
 from .samweb_wrapper import (
-    create_definition,
-    delete_definition,
-    describe_definition,
     dataset_summary,
     definition_file_count,
-    q_dataset_below_sequencer,
 )
 
 def setup_logging(verbose: bool) -> None:
@@ -205,11 +201,10 @@ def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
         for line in post_lines:
             f.write(line + '\n')
 
-def summarize_and_index(jobdefs_file, prod=True):
-    """Print the per-entry summary of a jobdefs/POMS-map JSON and (when
-    `prod`) recreate its SAM index definition. Shared by `json2jobdef
-    --prod`. Tolerates njobs-less (generic) entries — they contribute 0
-    to the index size."""
+def summarize_map(jobdefs_file):
+    """Print the per-entry summary of a jobdefs/submission-map JSON.
+    Shared by `json2jobdef --prod`. Tolerates njobs-less (generic)
+    entries — they contribute 0 to the total."""
     with open(jobdefs_file, 'r') as f:
         jobdefs = json.load(f)
 
@@ -223,30 +218,6 @@ def summarize_and_index(jobdefs_file, prod=True):
         print(f"[{i}] {tarball_of(j)}: {njobs} jobs, input={inloc_of(j)}, outputs={outputs}{window}")
 
     print(f"\nTotal: {total_jobs} jobs")
-
-    if prod:
-        map_stem = Path(jobdefs_file).stem
-        create_index_definition(map_stem, total_jobs, "etc.mu2e.index.000.txt")
-
-
-def create_index_definition(output_index_dataset, job_count, input_index_dataset):
-    idx_name = f"i{output_index_dataset}"
-    idx_format = f"{job_count:07d}"
-    
-    # Check if definition exists before trying to delete it.
-    # samweb_wrapper.describe_definition catches errors internally and
-    # returns "" for a missing definition — check truthiness, don't
-    # try/except (the wrapper never raises).
-    if describe_definition(idx_name):
-        print(f"Definition {idx_name} exists, deleting...")
-        delete_definition(idx_name)
-    else:
-        print(f"Definition {idx_name} does not exist, skipping deletion")
-
-    # Create the new definition
-    print(f"Creating definition {idx_name}...")
-    create_definition(idx_name, q_dataset_below_sequencer(input_index_dataset, idx_format))
-    describe_definition(idx_name)
 
 def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False):
     """Write the direct-input FCL for `fname` from a generic cnf's base FCL:
