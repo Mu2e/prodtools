@@ -266,7 +266,7 @@ def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False
 
 
 def resolve_map_index(jobdesc, job_index):
-    """Map a global (index-dataset) job index to its POMS-map entry and
+    """Map a global (index-dataset) job index to its map entry and
     the cnf-local job index.
 
     Each njobs-bearing entry occupies the next `njobs` slots of the global

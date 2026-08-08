@@ -395,7 +395,7 @@ def draining_state(camp, db_path, *,
                    locate=sam_physical_path_or_none):
     """One draining campaign's file sets, computed fresh from SAM + the
     ledger — draining has NO cursor; nothing counts as done until its
-    output exists (the fix for POMS drainingn's launch-time cursor).
+    output exists (the fix for the POMS-era draining launch-time cursor).
 
         inputs    pattern datasets' files (exclude_desc removed)
         landed    inputs whose expected outputs ALL exist in SAM
@@ -672,8 +672,8 @@ def total_queued(user='mu2epro', runner=subprocess.run):
     Counts states I (idle) and R (running) from the default
     `jobsub_q --user` table (see _jobsub_table_states); held/removed/
     other states do not consume cap headroom. Covers ALL the user's
-    jobs (POMS-launched included), so the cap bounds the account's
-    whole farm footprint."""
+    jobs regardless of how they were launched, so the cap bounds the
+    account's whole farm footprint."""
     res = runner(['jobsub_q', '--user', user],
                  capture_output=True, text=True)
     if res.returncode != 0:

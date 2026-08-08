@@ -77,7 +77,7 @@ def output_storage_dirs(output_filenames, outputs):
     Args:
         output_filenames: actual filenames the cnf will produce, e.g. from
             `Mu2eJobPars(jobdef).job_outputs(0).values()`.
-        outputs: POMS-map `outputs[]` — list of ``{dataset, location}``
+        outputs: map-entry `outputs[]` — list of ``{dataset, location}``
             globs that map dataset patterns to a location.
 
     Each filename is matched against the dataset globs to find its
@@ -142,7 +142,7 @@ _LOCATION_DEFAULT_PROTOCOL = {
 
 
 def default_protocol_for_inloc(inloc):
-    """Pick a default protocol for a POMS-map `inloc`. Returns `None` for
+    """Pick a default protocol for a map entry's `inloc`. Returns `None` for
     `inloc == 'none'` (jobs without input data — e.g. POT generators)."""
     if not inloc or inloc == "none":
         return None
@@ -154,7 +154,7 @@ def default_protocol_for_inloc(inloc):
 def build_inspec(input_datasets, inloc):
     """`{dataset: [protocol, location]}` for every input dataset.
 
-    POMS-maps carry one `inloc` per entry, so all input datasets share the
+    Submission maps carry one `inloc` per entry, so all input datasets share the
     same protocol/location in v1. mu2ejobsub allows per-dataset overrides
     (`--protocol ds:proto`) which we can fold in later if a campaign needs them.
     """
@@ -167,7 +167,7 @@ def build_ops_json(*, entry, jobset, input_datasets, files=None):
 
     - `jobs`: PROCESS → real-job-index lookup table (replaces `mu2ejobmap`)
     - `inspec`: per-input-dataset (protocol, location)
-    - `jobdesc`: single-element POMS-map entry, consumed by
+    - `jobdesc`: single-element submission-map entry, consumed by
       `runmu2e._direct_dispatch` via `process_jobdef`
     - `files` (draining batches only): job index → input art filename;
       the worker runs process_direct_input on files[index]

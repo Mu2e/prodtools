@@ -360,7 +360,7 @@ def main():
                          "before this key ever saw them")
     ap.add_argument("--emit", choices=("digi", "reco", "ntuple", "mix"),
                     help="synthesize a json2jobdef config for this stage, one entry "
-                         "per latest input dataset (POMS-free chain hop)")
+                         "per latest input dataset (chain hop)")
     ap.add_argument("--campaign",
                     help="campaign tag. With --emit: selects the per-campaign "
                          "template. Without --emit: lists that campaign's "

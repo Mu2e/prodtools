@@ -238,7 +238,7 @@ def _resolve_njobs(config: Dict, tbs: Dict) -> Optional[int]:
     Returns None when the count is unknowable (generator without a declared
     njobs, generic tarball) — the key is then omitted and readers treat the
     jobdef as open-ended (job count is a submit-time decision, authoritative
-    in the POMS map).
+    in the submission map).
     """
     if config.get('generic_tarball'):
         return None
@@ -664,7 +664,7 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
 
     # Embed the resolved job count so the tarball is self-descriptive.
     # Absent tbs.njobs = open-ended (generic tarball, or generator with no
-    # declared count); readers then fall back to the POMS map.
+    # declared count); readers then fall back to the submission map.
     embedded_njobs = _resolve_njobs(config, tbs)
     if embedded_njobs is not None:
         tbs['njobs'] = embedded_njobs

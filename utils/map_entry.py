@@ -40,28 +40,28 @@ POMS_MAP_PATTERN = "MDC202*"
 def tarball_of(entry: dict) -> str:
     """Return the cnf tarball name. Fail loud if missing or not a cnf tarball."""
     if "tarball" not in entry:
-        raise ValueError("POMS entry missing required field: 'tarball'")
+        raise ValueError("map entry missing required field: 'tarball'")
     name = entry["tarball"]
     try:
         n = Mu2eName.parse(name)
     except ValueError as exc:
-        raise ValueError(f"POMS entry 'tarball' is not a valid Mu2e name: {name!r}: {exc}")
+        raise ValueError(f"map entry 'tarball' is not a valid Mu2e name: {name!r}: {exc}")
     if not n.is_tarball:
-        raise ValueError(f"POMS entry 'tarball' is not a cnf tarball: {name!r}")
+        raise ValueError(f"map entry 'tarball' is not a cnf tarball: {name!r}")
     return name
 
 
 def outputs_of(entry: dict) -> list:
     """Return the outputs list. Fail loud if missing."""
     if "outputs" not in entry:
-        raise ValueError("POMS entry missing required field: 'outputs'")
+        raise ValueError("map entry missing required field: 'outputs'")
     return entry["outputs"]
 
 
 def njobs_of(entry: dict, default: Optional[int] = None) -> Optional[int]:
     """Return njobs, or `default` if absent.
 
-    njobs is informational at the POMS-map layer (the authoritative count
+    njobs is informational at the submission-map layer (the authoritative count
     comes from the cnf tarball at submission time). Pass an explicit
     default at the call site for diagnostic or dry-run paths.
     """
@@ -81,9 +81,9 @@ def firstjob_of(entry: dict) -> int:
     """
     firstjob = entry.get("firstjob", 0)
     if isinstance(firstjob, bool) or not isinstance(firstjob, int):
-        raise ValueError(f"POMS entry 'firstjob' must be an integer, got {firstjob!r}")
+        raise ValueError(f"map entry 'firstjob' must be an integer, got {firstjob!r}")
     if firstjob < 0:
-        raise ValueError(f"POMS entry 'firstjob' must be >= 0, got {firstjob}")
+        raise ValueError(f"map entry 'firstjob' must be >= 0, got {firstjob}")
     return firstjob
 
 
@@ -127,7 +127,7 @@ def resources_of(entry: dict) -> dict:
         if key in entry:
             if not isinstance(entry[key], str):
                 raise ValueError(
-                    f"POMS entry {key!r} must be a string "
+                    f"map entry {key!r} must be a string "
                     f"(jobsub format), got {entry[key]!r}")
             res[key] = entry[key]
     return res

@@ -433,7 +433,7 @@ def _direct_input_dir():
 def _load_direct_ops():
     """Load the ops JSON shipped via dropbox. Contains: jobs (PROCESS→index
     array), inspec (dataset → [protocol, location]), jobdesc (a one-element
-    list mirroring the POMS-map entry shape for reuse via process_jobdef)."""
+    list mirroring the submission-map entry shape for reuse via process_jobdef)."""
     ops_basename = os.environ['MU2EGRID_OPSJSON']
     ops_path = os.path.join(_direct_input_dir(), ops_basename)
     with open(ops_path) as f:
@@ -653,7 +653,7 @@ def _direct_dispatch(args, ops, index):
         fname = files[index]
         print(f"[direct] files[{index}] = {fname}")
         inloc = jobdesc[0].get('inloc')
-        # Stage the input locally (direct mode has no POMS pre-staging, and
+        # Stage the input locally (nothing pre-stages for the worker, and
         # direct-input FCL has no xroot streaming fallback — it writes the
         # bare local filename, so every draining input must be fetched).
         # Resolve the file's REAL location via SAM rather than trusting

@@ -386,7 +386,7 @@ def _read_cnf_facts(tarball_path):
     """One Mu2eJobPars parse per cnf, returning the three facts the direct
     backend needs: (njobs, input_datasets, output_filenames_index0).
 
-    - njobs is authoritative from the cnf, not the POMS-map (the map field
+    - njobs is authoritative from the cnf, not the submission map (the map field
       can be stale or absent for direct-input mode).
     - output filenames (index 0) feed the per-(area, tier, owner) token
       scope derivation; templates that resolved to a path (`/dev/null`)
@@ -516,7 +516,7 @@ def submit_entry_direct(entry, idx, opts):
     else:
         tarball_path = _ensure_local_tarball(tarball_name)
 
-    # njobs from the cnf is authoritative; POMS-map's field is informational.
+    # njobs from the cnf is authoritative; the map's field is informational.
     # output_filenames feeds the per-(area, tier, owner) token scope derivation
     # so pushOutput can MAKE_PARENT in `/pnfs/mu2e/<area>/datasets/...`.
     if files is not None:
@@ -690,10 +690,10 @@ def _check_token():
 
 
 def submit_map(map_path, opts):
-    """Submit all (or selected) entries from a POMS-map JSON.
+    """Submit all (or selected) entries from a submission-map JSON.
 
     Args:
-        map_path: path to the POMS-map JSON
+        map_path: path to the submission-map JSON
         opts: argparse namespace
 
     Returns:
@@ -804,10 +804,10 @@ def submit_map(map_path, opts):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Submit Mu2e grid jobs from a POMS-map JSON via the direct jobsub backend'
+        description='Submit Mu2e grid jobs from a submission-map JSON via the direct jobsub backend'
     )
     parser.add_argument('--map', required=True,
-                        help='Path to POMS-map JSON (e.g., MDC2025-001.json)')
+                        help='Path to submission-map JSON (e.g., MDC2025-001.json)')
     parser.add_argument('--entry', type=int, default=None,
                         help='Submit only this entry index (0-based)')
     parser.add_argument('--first', type=int, default=None,

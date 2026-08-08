@@ -2,8 +2,8 @@
 
 One row per `submit_map` submission, including the
 recovery loop's own resubmissions (chained via parent_id, attempt+1).
-POMS-backend submissions never touch this ledger, so the recovery loop
-cannot race POMS by construction.
+Only submit_map writes rows here (the retired POMS backend never did),
+so the recovery loop races nothing by construction.
 
 Stdlib sqlite3 ONLY — this module is imported by the submit path, which
 runs as mu2epro in the bare ops environment (no pyenv ana, no

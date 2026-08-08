@@ -3701,7 +3701,7 @@ class TestJobArithmeticConsolidation(unittest.TestCase):
 
     def test_njobs_open_ended_is_zero(self):
         """Generator with no embedded count: 0 = 'not a property of this
-        jobdef' (count lives in the POMS map), never a guess."""
+        jobdef' (count lives in the submission map), never a guess."""
         from utils.jobquery import Mu2eJobPars
         tar = self._tar({"event_id": {"source.firstRun": 1430}})
         try:
@@ -4132,7 +4132,7 @@ class TestIndicesOpsEntryContract(unittest.TestCase):
 
 class TestLogStorageLocation(unittest.TestCase):
     """Logs go to persistent disk regardless of where data lands — the
-    Mu2e convention and what the POMS path does. Only `scratch` runs keep
+    Mu2e convention (and what the retired POMS path did). Only `scratch` runs keep
     logs beside their data (no persistent scope for non-mu2epro accounts).
 
     Regression: the first direct campaign put 500 log files on tape

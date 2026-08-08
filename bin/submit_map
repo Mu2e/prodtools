@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# submit_map - Submit Mu2e grid jobs from a POMS-map JSON (direct
+# submit_map - Submit Mu2e grid jobs from a submission-map JSON (direct
 # jobsub backend). Wrapper for utils/submit.py
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,7 +12,7 @@ if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
 fi
 
 if [[ $# -eq 0 ]]; then
-    echo "Usage: submit_map --map <poms_map.json> [--entry N] [--dry-run] [--verbose]"
+    echo "Usage: submit_map --map <map.json> [--entry N] [--dry-run]"
     echo ""
     echo "For complete help: submit_map --help"
     exit 1
