@@ -634,14 +634,13 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
 
 
 # ============================================================
-# Direct mode (jobsub_submit, no POMS) — Phase 2 v1
+# Direct mode (jobsub_submit) — Phase 2 v1, and the only worker mode
 #
-# POMS mode is invoked with --jobdesc <json> and the per-job index
-# encoded in the `fname` env var (sequencer field).
 # Direct mode is detected by presence of MU2EGRID_JOBDEF in the
-# environment (set by the jobsub_submit argv). The submitter ships
-# the cnf tarball + an "ops JSON" via dropbox, both landing under
-# $CONDOR_DIR_INPUT. Index resolves via ops['jobs'][PROCESS].
+# environment (set by the jobsub_submit argv); runmu2e refuses to run
+# without it. The submitter ships the cnf tarball + an "ops JSON" via
+# dropbox, both landing under $CONDOR_DIR_INPUT. The per-job index
+# resolves via ops['jobs'][PROCESS].
 # ============================================================
 
 
@@ -858,7 +857,7 @@ def _execute_mu2e(fcl, simjob_setup, args, prefix=''):
 
 
 def _direct_dispatch(args, ops, index):
-    """Direct-mode equivalent of _dispatch_and_execute: run the entry's
+    """Dispatch one direct-mode job: run the entry's
     prep — normal index mode via process_jobdef, or a draining batch
     (ops ships a `files` list) via process_direct_input — then the
     shared mu2e -c → manifest → push (with retries) tail."""

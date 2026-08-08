@@ -7,8 +7,8 @@ dropbox tarball. Worker bootstraps `bin/runjob.sh` →
 `utils/runmu2e.py` direct mode → per-job pushOutput. The Phase-1
 mu2ejobsub backend was retired 2026-07-19 (spec
 2026-07-19-workflow-hardening-design.md): template/direct_input/g4bl
-entries and HPC submission run via POMS campaigns or the upstream
-mu2ejobsub/mu2eg4bl CLIs, never through submit_map.
+entries and HPC submission run via the upstream mu2ejobsub/mu2eg4bl
+CLIs, never through submit_map.
 
 Plans:
 - wiki/pages/2026-04-29-remove-poms-from-submit-loop.md (Phase 1, POMS removal)

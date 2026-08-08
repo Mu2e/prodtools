@@ -358,10 +358,10 @@ class TestMu2eName(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 1c. POMS-map entry accessors (map_entry.py)
+# 1c. Submission-map entry accessors (map_entry.py)
 # ---------------------------------------------------------------------------
 
-class TestPomsEntry(unittest.TestCase):
+class TestMapEntry(unittest.TestCase):
     """Pin the fail-loud / sentinel-default contract of utils.map_entry."""
 
     GOOD = {

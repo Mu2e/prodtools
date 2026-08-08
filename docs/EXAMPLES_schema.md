@@ -15,7 +15,7 @@ command from it and have it run.
 ## Audience
 
 Mu2e collaborators running production workflows — mix of experts and
-newcomers. Assume familiarity with `art`, `FCL`, `SAM`, `POMS`, and the
+newcomers. Assume familiarity with `art`, `FCL`, `SAM`, and the
 `mu2e` executable. Do not assume familiarity with this repo's internals.
 
 ## Tone
@@ -66,19 +66,23 @@ When regenerating, read in this order:
 6. **Mixing Jobs** — JSON schema with `pileup_datasets` list-of-dict form,
    automatic mixer mapping. Do not use the legacy `*_dataset` / `*_count`
    split form.
-7. **Production Execution (`runmu2e`)** — role of `fname`
-   env var, `etc.mu2e.index.NNN.NNNNNNN.txt` format, dry-run flag.
+7. **Production Execution (`runmu2e`)** — direct-worker-only entry
+   point: it refuses to run without `MU2EGRID_JOBDEF`, resolves its job
+   index from `$PROCESS` via the ops JSON's `jobs` table, and carries
+   that index internally in a synthesized `fname` (sequencer field).
+   Cover the dry-run flag. Do not document a `fname=...` invocation —
+   the POMS `--jobdesc` mode was removed 2026-08.
 8. **Sequential vs. pseudo-random auxiliary input selection** — the
    `tbs.sequential_aux` flag.
 9. **FCL overrides** — `fcl_overrides` dict, how template + `--embed`
     works, that base FCL stays unexpanded.
 10. **Parity Tests** — `test/parity_test.sh` usage.
 11. **Additional Tools** — one subsection per script in `bin/` that has
-    user-facing CLI: `pomsMonitor`, `famtree`,
+    user-facing CLI: `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
-    `latestDatasets`, `mkrecovery`, `jobquery`,
+    `latestDatasets`, `jobquery`,
     `submit_map`, `submissions`, `check_inputs`, `copy_to_stash`. Ops scripts
-    (`install_prodtools.sh`, `update_pomsmonitor_web`, `submissions_cron`)
+    (`install_prodtools.sh`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
     key flags. Enumerate from the current `bin/` directory — add any new
     script found there, remove any that no longer exist. (`runjob.sh` is
@@ -95,7 +99,9 @@ When regenerating, read in this order:
       (`status` is the default/read-only verb; `run` with `--dry-run`/
       `--row`/`--max-attempts`/`--max-queued`; `pause CAMP_ID [--note
       TEXT]`; `resume CAMP_ID`; `cancel CAMP_ID`; `complete CAMP_ID
-      [--note TEXT]` — the operator close-out for a draining campaign),
+      [--note TEXT]` — the operator close-out for a draining campaign;
+      `set-slice CAMP_ID N` and `set-memory CAMP_ID MEM` — retune a live
+      campaign's slice size / memory request for its remaining slices),
       the global `--db` flag, the read-only guarantees (`status` and
       `run --dry-run` take no lock and submit nothing), and the
       extended exit-2 list for `run`: held,
@@ -136,9 +142,11 @@ reading the code:
   is required.
 - The `etc.mu2e.index.000.NNNNNNN.txt` filename in `fname` encodes the
   job index — the seventh-field `NNNNNNN` (the **sequencer**) is the
-  job index, zero-padded to 7 digits. `mkrecovery` writes these as
-  `etc.mu2e.index.000.{idx:07d}.txt`. The `000` field is a fixed
-  description placeholder, not the index.
+  job index, zero-padded to 7 digits. The `000` field is a fixed
+  description placeholder, not the index. Since the POMS backend was
+  removed (2026-08) `fname` is no longer an operator-set env var: the
+  worker synthesizes it from the `$PROCESS`-resolved index, and the
+  same sequencer-carries-the-index rule still applies internally.
 - `inloc` accepts `disk`, `tape`, `scratch`, `resilient`, `stash`,
   `none`, or `dir:<path>` (locally-mounted FS, e.g. cvmfs). There is no
   `auto`. `resilient` reads via xrootd, `stash` reads via CVMFS, and
@@ -155,8 +163,6 @@ reading the code:
   their original count; closed cnfs are capacity-checked.
 - Parity tests validate byte-for-byte equivalence against the Perl
   `mu2ejobdef` reference implementation.
-- `pomsMonitor` database default path is `poms_data.db` at the repo root
-  (`db_analyzer.get_default_db_path`).
 - `genFilterEff` output is Proditions-compatible (`TABLE
   SimEfficiencies2`).
 - `famtree` auto-excludes `etc*.txt` files from diagrams.
@@ -164,15 +170,16 @@ reading the code:
   ledger (default `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`,
   env `MU2E_SUBMISSION_DB`); `submissions run` drain-checks via jobsub_q,
   verifies outputs against SAM, and resubmits only missing indices
-  (attempt cap, then `exhausted` for a human). POMS-launched entries are
-  never in the ledger — `submit_map` is single-backend direct, so a
-  POMS-launched job (or one submitted via the upstream `mu2ejobsub`/
-  `mu2eg4bl` CLIs) simply never passes through it; POMS owns its own
-  recovery (`mkrecovery`).
+  (attempt cap, then `exhausted` for a human). Legacy POMS-launched
+  entries are never in the ledger — `submit_map` is single-backend
+  direct, so a POMS-launched job (or one submitted via the upstream
+  `mu2ejobsub`/`mu2eg4bl` CLIs) simply never passed through it; the POMS
+  backend was removed 2026-08 (legacy stages recover from the
+  `pre-poms-removal` git tag).
 - `template`/`direct_input`/`g4bl` entry modes and HPC submission are
   not submittable via `submit_map` — the direct worker doesn't support
-  them. They run via POMS campaigns, or the upstream `mu2ejobsub`/
-  `mu2eg4bl` CLIs directly.
+  them. They run via the upstream `mu2ejobsub`/`mu2eg4bl` CLIs directly
+  (the POMS backend was removed 2026-08).
 - Optional per-entry resource keys `"memory"` / `"disk"` /
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
   `48h`) live in the POMS-map entry itself, or in the jobdef JSON config
