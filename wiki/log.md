@@ -1217,3 +1217,29 @@ MDC2025-NNN.json), and `json2jobdef --prod` is idempotent so re-running
 it is the correct way to add an already-pushed cnf to a map — hand-
 editing skips the index-definition rebuild. Both /mu2epro-run and
 /mu2epro-submit amended accordingly. See [[2026-07-25-mdc2025au-mix-round]].
+
+## [2026-08-08] update | POMS-removal final-review polish (index/log entries, stale comment, dead code)
+
+Pages updated: index.md (new Decisions entry for
+[[2026-08-08-retire-poms-backend]]; superseded-by pointers added to the
+three older bullets — `2026-07-02-jobdef-arithmetic-and-tbs-njobs`,
+`2026-07-10-firstjob-index-windows`, `justin-vs-prodtools` — that still
+described mkrecovery/db_builder as live mechanics).
+
+Reason: the whole-branch final review of the POMS-removal work
+(`.superpowers/sdd/2026-08-08-poms-removal/final-review.md`) flagged
+that `wiki/pages/2026-08-08-retire-poms-backend.md` was unindexed and
+unlogged — a SCHEMA.md obligation triggered by adding the page, not
+pre-existing drift — plus three index summaries still presenting
+retired tools as live. Same commit also fixed the code-side minors the
+review named: reworded the present-tense `DEFAULT_POMS_DIR`/
+`POMS_MAP_PATTERN` comment in `utils/map_entry.py` to document the
+external mu2epro convention as intentionally unreferenced; deleted the
+now consumer-less `q_dataset_below_sequencer`/`q_dataset_files_named`
+query builders from `utils/samweb_wrapper.py` (verified zero remaining
+references repo-wide); realigned the `map_entry` import continuation
+indentation in `utils/submit.py` (stale from the `poms_entry` rename,
+one column short/long); de-duplicated the `--indices-file` help text's
+double "ignored". `[[slug]]` cross-ref additions and the EXAMPLES.md
+tag-pointer bullet remain deferred per the review's own triage.
+Source: .superpowers/sdd/2026-08-08-poms-removal/final-review.md

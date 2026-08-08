@@ -34,8 +34,8 @@ from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for)
 from utils.map_entry import (tarball_of, outputs_of, njobs_of, inloc_of,
-                              firstjob_of, validate_window, resources_of,
-                              is_draining)
+                             firstjob_of, validate_window, resources_of,
+                             is_draining)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
 from utils.check_inputs import check_inputs, format_report, Problem
@@ -824,8 +824,8 @@ def main():
                              'non-windowed entry (no firstjob).')
     parser.add_argument('--indices-file', default=None,
                         help='File of ABSOLUTE cnf indices, whitespace/'
-                             'comma separated, `#` comments ignored. '
-                             '`#` comment lines (e.g. per-tarball headers) are ignored.')
+                             'comma separated; `#` comment lines (e.g. '
+                             'per-tarball headers) are ignored.')
     parser.add_argument('--files', default=None,
                         help='File of input art filenames (one per line, '
                              '`#` comments) for a draining '

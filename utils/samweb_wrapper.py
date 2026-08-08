@@ -85,18 +85,6 @@ def _parse_sam_datetime(date_str) -> Optional[datetime]:
     return None
 
 
-def q_dataset_below_sequencer(dataset: str, sequencer_upper: str) -> str:
-    """Files of `dataset` with sequencer strictly below `sequencer_upper`
-    (index-definition windows)."""
-    return f"dh.dataset {dataset} and dh.sequencer < {sequencer_upper}"
-
-
-def q_dataset_files_named(dataset: str, filenames: List[str]) -> str:
-    """Files of `dataset` restricted to an explicit basename list
-    (recovery definitions)."""
-    return f"dh.dataset {dataset} and file_name in ({', '.join(filenames)})"
-
-
 def _q_dataset_like(pattern: str, sequencer: Optional[str] = None) -> str:
     """Files whose dataset matches a SAM `like` pattern (% wildcards),
     optionally pinned to one sequencer."""
