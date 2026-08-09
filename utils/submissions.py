@@ -736,7 +736,7 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
 
 
 def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
-           submit_fn=submit_slice):
+           submit_fn=submit_slice, only_campaign=None):
     """Feed slices from active campaigns while total idle+running stays
     under the cap. Whole slices only (n = min(slice_size, remaining) is
     short only at end of entry — never clamped to headroom); cycles
@@ -750,13 +750,21 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
     whose cursor is already at njobs but is still 'active' (crash
     between advance_campaign and the completion write) self-heals to
     'complete'. Returns an action-count summary in the recovery pass's
-    style."""
+    style.
+
+    `only_campaign`, when given, restricts feeding to that one campaign
+    id — every other active campaign is left untouched this tick. The
+    default (None) feeds every active campaign, which is the cron's
+    `submissions run` behaviour and must not change when the filter is
+    unused."""
     summary = {}
 
     def bump(key):
         summary[key] = summary.get(key, 0) + 1
 
     camps = submission_ledger.active_campaigns(db_path)
+    if only_campaign is not None:
+        camps = [c for c in camps if c['id'] == only_campaign]
     if not camps:
         return summary
     count = count_fn()
@@ -1213,6 +1221,11 @@ def build_parser():
                      help=f'Total mu2epro idle+running cap for the '
                           f'top-up phase (default: MU2E_MAX_QUEUED env, '
                           f'then {DEFAULT_MAX_QUEUED})')
+    run.add_argument('--campaign', type=int, default=None,
+                     help='Top up only this campaign id (the recovery '
+                          'pass still runs). Without it every active '
+                          'campaign is ticked, which is the cron '
+                          'behaviour.')
 
     pause = sub.add_parser('pause', help='Pause an active campaign')
     pause.add_argument('camp_id', type=int)
@@ -1308,8 +1321,14 @@ def _run_pass(args):
         # drain_tick feeds draining campaigns separately (file-keyed
         # batches, no index cursor) but shares the same queue cap.
         for tick_fn in (top_up, drain_tick):
+            kwargs = {'dry_run': args.dry_run}
+            if tick_fn is top_up:
+                # Only top_up understands --campaign: drain_tick feeds
+                # draining campaigns separately and is unaffected by
+                # the filter (see the flag's own help text).
+                kwargs['only_campaign'] = args.campaign
             for k, v in tick_fn(args.db, resolve_cap(args.max_queued),
-                                dry_run=args.dry_run).items():
+                                **kwargs).items():
                 summary[k] = summary.get(k, 0) + v
         # A paused campaign means "waiting on a human" — repeat the
         # exit-2 signal EVERY tick until someone resumes or cancels,

@@ -119,10 +119,20 @@ def _tarball_matches(tarball, tarball_desc, dsconf):
     return name.description == tarball_desc and name.dsconf == dsconf
 
 
-def _read_map_entry(map_path, tarball_desc, dsconf, before_entries):
+def _read_map_entry(map_path, tarball_desc=None, dsconf=None,
+                    before_entries=None, index=None):
     """Return (index, entry) for the entry THIS push actually produced.
 
-    Selected by parsing tarball_desc+dsconf out of each candidate
+    `index`, when given, bypasses all of the disambiguation below:
+    submit_map's own `--entry N` already names an EXISTING map entry
+    unambiguously (it neither appends nor guesses at that entry), so
+    enqueue_campaign uses this mode to read it back by plain position
+    rather than by desc+dsconf disambiguation -- there is nothing to
+    disambiguate when the index was already known before the command
+    ran.
+
+    Without `index` (push_cnf's use): selected by parsing tarball_desc+dsconf
+    out of each candidate
     entry's own tarball name (`Mu2eName`), never by an owner-qualified
     tarball name computed in this process (`owner` defaults to `$USER`
     when a JSON entry omits it, and this process's `$USER` -- the
@@ -148,6 +158,14 @@ def _read_map_entry(map_path, tarball_desc, dsconf, before_entries):
     message lists every candidate so an operator can resolve it by
     hand -- there is no "last entry" fallback.
     """
+    if index is not None:
+        entries = _read_entries(map_path)
+        if not (0 <= index < len(entries)):
+            raise RuntimeError(
+                f"entry {index} out of range for {map_path} "
+                f"({len(entries)} entries)")
+        return index, entries[index]
+
     after_entries = _read_entries(map_path)
     candidates = [(i, e) for i, e in enumerate(after_entries)
                   if _tarball_matches(e.get('tarball'), tarball_desc, dsconf)]
@@ -224,11 +242,90 @@ def push_cnf(json, desc, dsconf, jobdefs_map, run_as, confirm=False):
     }
 
 
+def _ledger_path_for(run_as):
+    """Which ledger this identity writes.
+
+    For run_as='mu2epro' this IS the production ledger (see
+    submission_ledger.ledger_for) -- defaulting to THIS process's own
+    user here would look up the CALLER's personal ledger while
+    submit_map --enqueue actually wrote the campaign row into
+    production's (inside the ksu block, as mu2epro), silently
+    reporting a successful production enqueue as "no campaign found".
+    """
+    from utils import submission_ledger
+    return submission_ledger.ledger_for(
+        'mu2epro' if run_as == 'mu2epro' else None)
+
+
 def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
-    """Enqueue a campaign entry into the submission map/ledger."""
-    raise NotImplementedError('enqueue_campaign lands in Task 9')
+    """Register ONE entry of a map as a sliced-submission campaign.
+
+    `entry` is required: a map can hold several entries, and
+    `submit_map` itself fans out over every one of them when `--entry`
+    is omitted -- a typed tool defaulting to "all of them" is exactly
+    the hazard this signature exists to remove.
+
+    `map_path` must be an absolute path for the same reason as
+    push_cnf's jobdefs_map: under run_as='mu2epro' the ksu block cd's
+    into its own mktemp workdir, so submit_map would read a relative
+    path from THERE while this function reads it back relative to the
+    server's own cwd.
+
+    The campaign id is never scraped from stdout: it is read back from
+    the ledger THIS identity writes (_ledger_path_for), matched by the
+    tarball of the map entry submit_map was told to enqueue -- read
+    back via `_read_map_entry`'s index mode, since `--entry N` already
+    names the entry unambiguously and there is nothing to disambiguate.
+    """
+    runner.require_confirmed(run_as, confirm)
+
+    if not Path(map_path).is_absolute():
+        raise ValueError(
+            f"map_path must be an absolute path (got {map_path!r})")
+
+    argv = ['bin/submit_map', '--map', map_path, '--entry', str(entry),
+            '--enqueue', '--slice-size', str(slice_size)]
+    result = runner.run_cli(argv, run_as)
+    if result['rc'] != 0:
+        raise RuntimeError(
+            f"submit_map --enqueue failed (rc={result['rc']}): "
+            f"{result['stderr'] or result['stdout']}")
+
+    from utils import submission_ledger
+    _, map_entry = _read_map_entry(map_path, index=entry)
+    tarball = map_entry.get('tarball')
+    db = _ledger_path_for(run_as)
+    match = [c for c in submission_ledger.all_campaigns(db)
+             if c['tarball'] == tarball]
+    if not match:
+        raise RuntimeError(
+            f"submit_map --enqueue reported success but no campaign for "
+            f"{tarball!r} is in {db} -- reconcile before retrying")
+    campaign = match[-1]
+    return {'campaign_id': campaign['id'],
+            'njobs': (campaign.get('entry') or {}).get('njobs'),
+            'tarball': tarball}
 
 
 def run_submissions(campaign_id, run_as, confirm=False):
-    """Drive queued submissions for a campaign to the grid."""
-    raise NotImplementedError('run_submissions lands in Task 9')
+    """Tick ONE campaign: top-up plus the recovery pass.
+
+    `campaign_id` is required. `submissions run` with no filter ticks
+    every active campaign -- that is the cron's job, not an
+    interactive call from this tool, so there is no default that means
+    "everything".
+    """
+    runner.require_confirmed(run_as, confirm)
+    argv = ['bin/submissions', 'run', '--campaign', str(campaign_id)]
+    result = runner.run_cli(argv, run_as)
+    # rc=2 is the documented "something needs attention" exit -- held
+    # rows, exhausted recoveries, a paused campaign. It is a report,
+    # not a crash, and must never be raised as an error.
+    if result['rc'] not in (0, 2):
+        raise RuntimeError(
+            f"submissions run failed (rc={result['rc']}): "
+            f"{result['stderr'] or result['stdout']}")
+    return {'rc': result['rc'],
+            'needs_attention': result['rc'] == 2,
+            'campaign_id': campaign_id,
+            'output': result['stdout']}
