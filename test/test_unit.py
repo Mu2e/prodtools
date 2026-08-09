@@ -4790,6 +4790,69 @@ class TestTwoPhaseLedgerWrite(unittest.TestCase):
         self.assertTrue(_slice_overlaps_ledger(
             self.db, self.entry['tarball'], 0, 0, 3))
 
+    # -- reconcile: the ONLY exit from a blocking failed/stuck window ----
+    # Without it a failed submit deadlocked its campaign permanently:
+    # the 'failed' row keeps overlapping, top_up re-pauses on every
+    # tick, and `resume` cannot help because it is the ROW, not the
+    # cursor, that blocks. Hand-editing sqlite was the only escape.
+
+    def test_reconciled_failed_window_stops_blocking(self):
+        from utils.submissions import _slice_overlaps_ledger
+        rid = self._reserve(indices=(0, 1, 2))
+        self.sl.fail_reservation(self.db, rid, 'submit failed')
+        self.assertTrue(_slice_overlaps_ledger(
+            self.db, self.entry['tarball'], 0, 0, 3))
+        self.sl.reconcile_row(self.db, rid, 'jobsub_q checked, no jobs')
+        self.assertFalse(_slice_overlaps_ledger(
+            self.db, self.entry['tarball'], 0, 0, 3))
+
+    def test_reconciled_reservation_stops_blocking(self):
+        from utils.submissions import _slice_overlaps_ledger
+        rid = self._reserve(indices=(0, 1, 2))
+        self.sl.reconcile_row(self.db, rid, 'jobsub_q checked, no jobs')
+        self.assertFalse(_slice_overlaps_ledger(
+            self.db, self.entry['tarball'], 0, 0, 3))
+
+    def test_reconcile_keeps_the_row_and_records_the_assertion(self):
+        # The row is closed, never deleted: the audit trail of the
+        # failed attempt (and of who said the window was free) survives.
+        rid = self._reserve()
+        self.sl.fail_reservation(self.db, rid, 'submit failed')
+        was = self.sl.reconcile_row(self.db, rid, 'jobsub_q checked')
+        row = self.sl.all_rows(self.db)[0]
+        self.assertEqual(was, 'failed')
+        self.assertEqual(row['id'], rid)
+        self.assertEqual(row['state'], 'reconciled')
+        self.assertIsNotNone(row['closed_utc'])
+        self.assertIn('jobsub_q checked', row['note'])
+
+    def test_reconcile_refuses_a_row_that_is_not_failed_or_reserved(self):
+        # An active row has a live cluster; clearing its window would
+        # re-feed indices that are genuinely running.
+        rid = self._reserve()
+        self.sl.attach_cluster(self.db, rid, jobsub_id='9.0@s',
+                               cluster_id='9')
+        with self.assertRaises(ValueError) as ctx:
+            self.sl.reconcile_row(self.db, rid, 'x')
+        self.assertIn('active', str(ctx.exception))
+
+    def test_reconcile_unknown_row_raises(self):
+        with self.assertRaises(ValueError):
+            self.sl.reconcile_row(self.db, 999, 'x')
+
+    def test_nothing_reconciles_a_row_automatically(self):
+        # The safety property that keeps 'failed' rows blocking: only an
+        # explicit human invocation may clear one, so no tick function
+        # may call reconcile_row.
+        import inspect
+        from utils import submissions
+        src = inspect.getsource(submissions)
+        for fn in ('top_up', 'drain_tick', 'process_row', '_run_pass'):
+            body = inspect.getsource(getattr(submissions, fn))
+            self.assertNotIn('reconcile_row', body, fn)
+        # It is reachable from exactly one place: the CLI verb.
+        self.assertEqual(src.count('reconcile_row('), 1)
+
 
 class TestCampaignLedger(unittest.TestCase):
     """campaigns table in utils/submission_ledger.py (sliced submission)."""
@@ -5602,6 +5665,24 @@ class TestTopUp(unittest.TestCase):
         self.assertIn('crash-window', c['note'])
         self.assertEqual(s['campaign-paused'], 1)
 
+    def test_overlap_pause_note_names_the_blocking_row_and_the_fix(self):
+        # The note used to say "reconcile cursor manually", which is
+        # wrong twice: it is the ROW that blocks, not the cursor, and
+        # there was no verb that could clear it. It must name the row id
+        # and the reconcile verb, or the operator loops on `resume`.
+        from utils.submissions import top_up
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        rid = self.sl.reserve_submission(
+            self.db, tarball=tarball, entry={}, indices=[1],
+            map_path='m.json')
+        self.sl.fail_reservation(self.db, rid, 'submit failed')
+        self._campaign(tarball=tarball, njobs=10, slice=4)
+        top_up(self.db, cap=100, count_fn=lambda: 0,
+               submit_fn=self._submit())
+        note = self.sl.all_campaigns(self.db)[0]['note']
+        self.assertIn(f'row {rid}', note)
+        self.assertIn(f'submissions reconcile {rid}', note)
+
     def test_overlap_below_cursor_does_not_block(self):
         """Ledger rows for the same tarball covering only windows BELOW
         the cursor (e.g. the recovery loop's own resubmits of already-
@@ -5881,6 +5962,55 @@ class TestSubmissionsVerbs(unittest.TestCase):
             submissions.main()
         self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
                          'cancelled')
+
+    def test_reconcile_verb_unblocks_a_deadlocked_campaign(self):
+        # The whole deadlock, end to end through the CLI: a failed
+        # submit leaves a 'failed' row over [0,2), top_up pauses, and
+        # `resume` alone would be re-paused on the next tick because the
+        # ROW still overlaps. `reconcile` is the only escape.
+        from utils import submissions
+        cid = self._campaign()
+        rid = self.sl.reserve_submission(
+            self.db, tarball='cnf.mu2e.V.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.V.C.0.tar', 'njobs': 4},
+            indices=[0, 1], map_path='m.json')
+        self.sl.fail_reservation(self.db, rid, 'jobsub_submit returned 1')
+        self.assertTrue(submissions._slice_overlaps_ledger(
+            self.db, 'cnf.mu2e.V.C.0.tar', 0, 0, 2))
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'reconcile', str(rid)]):
+            submissions.main()
+        self.assertEqual(self.sl.all_rows(self.db)[0]['state'], 'reconciled')
+        self.assertFalse(submissions._slice_overlaps_ledger(
+            self.db, 'cnf.mu2e.V.C.0.tar', 0, 0, 2))
+        # It does not touch the campaign: resume is still the operator's
+        # own, separate decision.
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'active')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['id'], cid)
+
+    def test_reconcile_verb_help_states_what_the_operator_asserts(self):
+        # The safety property is carried by the human running it: the
+        # help must say they are asserting the window's jobs are gone
+        # from the queue, since nothing else can check that.
+        from utils import submissions
+        import io as _io
+        buf = _io.StringIO()
+        with patch('sys.stdout', buf), \
+             patch.object(sys, 'argv', ['submissions', 'reconcile', '--help']):
+            with self.assertRaises(SystemExit):
+                submissions.main()
+        text = ' '.join(buf.getvalue().split())
+        self.assertIn('jobsub_q', text)
+        self.assertIn('genuinely absent from the queue', text)
+
+    def test_reconcile_verb_bad_row_exits_one_line(self):
+        from utils import submissions
+        with patch.object(sys, 'argv', ['submissions', '--db', self.db,
+                                        'reconcile', '404']):
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main()
+        self.assertIn('submissions:', str(cm.exception.code))
 
     def test_invalid_transition_one_line_exit_1(self):
         from utils import submissions
@@ -11601,7 +11731,7 @@ class TestSubmissionsDbResolution(unittest.TestCase):
         with patch('getpass.getuser', return_value='bob'), \
              patch.object(self.sl, 'ensure_ledger_dir', side_effect=lambda p: p):
             for verb in ('run', 'pause', 'resume', 'cancel', 'complete',
-                         'set-slice', 'set-memory'):
+                         'set-slice', 'set-memory', 'reconcile'):
                 self.assertEqual(
                     self.submissions.resolve_db(self._opts(verb)),
                     '/exp/mu2e/data/users/bob/prodtools/submissions.db',

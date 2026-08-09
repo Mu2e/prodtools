@@ -704,9 +704,14 @@ def submit_slice(camp, n, db_path, runner=subprocess.run):
 
 
 def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
-    """True if any ledger row (ANY state) for `tarball` already has an
-    absolute cnf index inside the slice's absolute window
-    [firstjob+cursor, firstjob+cursor+n).
+    """The blocking ledger row (truthy) if any row for `tarball` already
+    has an absolute cnf index inside the slice's absolute window
+    [firstjob+cursor, firstjob+cursor+n), else None.
+
+    Returns the ROW, not a bool, so the caller can name its id in the
+    pause note: the operator's next move is `submissions reconcile
+    <row-id>`, and "some row overlaps" would leave them hunting for
+    which one.
 
     Crash-window guard. Rows are RESERVED before jobsub_submit
     (submission_ledger.reserve_submission), so a process that dies
@@ -722,6 +727,14 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
     OWN resubmits: a child row's indices are a subset of an ALREADY
     ADVANCED-PAST parent slice, strictly below the cursor — they can
     never fall inside a slice window that starts at cursor.
+
+    A 'reconciled' row is skipped: that state exists only because a
+    human ran `submissions reconcile <id>` and asserted the window's
+    jobs are genuinely absent from the queue (see
+    submission_ledger.reconcile_row). It is kept in the DB for the audit
+    trail, but it no longer claims index space — otherwise the row would
+    block its campaign forever and reconciliation would be impossible
+    without hand-editing sqlite.
     """
     lo = firstjob + cursor
     hi = lo + n
@@ -730,9 +743,11 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
             continue
         if is_draining(row['entry']):
             continue   # file-keyed row — no index space to overlap
+        if row.get('state') == 'reconciled':
+            continue   # human-cleared window — see the docstring
         if any(lo <= idx < hi for idx in row['indices']):
-            return True
-    return False
+            return row
+    return None
 
 
 def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
@@ -810,25 +825,36 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
                 bump('cap-wait')
                 return summary
             firstjob = camp['entry'].get('firstjob', 0)
-            if _slice_overlaps_ledger(db_path, camp['tarball'], firstjob,
-                                      camp['cursor'], n):
+            blocker = _slice_overlaps_ledger(db_path, camp['tarball'],
+                                             firstjob, camp['cursor'], n)
+            if blocker:
+                # Name the BLOCKING ROW, not the cursor: `resume` alone
+                # cannot clear this — the row keeps overlapping and the
+                # next tick re-pauses the campaign immediately. The way
+                # out is `submissions reconcile <row-id>` (after
+                # checking jobsub_q), which is why the id is in the note.
+                bid = blocker.get('id')
+                fix = (f"check jobsub_q, then `submissions reconcile "
+                       f"{bid}` and `submissions resume {camp['id']}`"
+                       if blocker.get('state') in
+                       submission_ledger.RECONCILABLE_STATES else
+                       f"row {bid} is {blocker.get('state')!r} — reconcile "
+                       f"the campaign cursor before "
+                       f"`submissions resume {camp['id']}`")
                 if dry_run:
-                    print(f"campaign {camp['id']}: ledger already covers "
-                          f"indices in [{firstjob + camp['cursor']}.."
+                    print(f"campaign {camp['id']}: ledger row {bid} already "
+                          f"covers indices in [{firstjob + camp['cursor']}.."
                           f"{firstjob + camp['cursor'] + n - 1}] — would "
                           f"pause (crash-window suspected)")
                     bump('would-pause-overlap')
                 else:
                     submission_ledger.set_campaign_state(
                         db_path, camp['id'], 'paused',
-                        note='ledger already covers indices in this '
-                             'slice — crash-window suspected; reconcile '
-                             'cursor manually before `submissions resume '
-                             '<ID>`')
-                    print(f"campaign {camp['id']}: ledger already covers "
-                          f"indices in this slice — PAUSED (crash-window "
-                          f"suspected; reconcile cursor manually before "
-                          f"`submissions resume <ID>`)")
+                        note=f'ledger row {bid} already covers indices in '
+                             f'this slice — crash-window suspected; {fix}')
+                    print(f"campaign {camp['id']}: ledger row {bid} already "
+                          f"covers indices in this slice — PAUSED "
+                          f"(crash-window suspected; {fix})")
                     camp['state'] = 'paused'
                     bump('campaign-paused')
                 continue
@@ -838,13 +864,20 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
                 bump('would-slice')
             else:
                 if not submit_fn(camp, n, db_path):
+                    # A failed submit usually leaves a 'failed'
+                    # reservation row covering this very window, and
+                    # that row keeps overlapping: `resume` on its own
+                    # re-pauses the campaign on the next tick. Say so
+                    # here, or the operator loops.
+                    fix = ('check the submit log and jobsub_q, then '
+                           '`submissions reconcile <ROW>` for the failed '
+                           'reservation (if any) and `submissions resume '
+                           f"{camp['id']}`")
                     submission_ledger.set_campaign_state(
                         db_path, camp['id'], 'paused',
-                        note='submit failed — check the submit log and '
-                             'jobsub_q, then `submissions resume <ID>`')
+                        note=f'submit failed — {fix}')
                     print(f"campaign {camp['id']}: submit FAILED — PAUSED "
-                          f"(no blind retry; check the submit log and "
-                          f"jobsub_q, then `submissions resume <ID>`)")
+                          f"(no blind retry; {fix})")
                     camp['state'] = 'paused'
                     bump('campaign-paused')
                     continue
@@ -1143,8 +1176,8 @@ def print_status(db_path):
     stuck = submission_ledger.reserved_rows(db_path)
     if stuck:
         print(f"\nNEEDS RECONCILIATION — {len(stuck)} reserved row(s) with "
-              f"no cluster. A submit died mid-flight; check jobsub_q "
-              f"before reusing these windows:")
+              f"no cluster. A submit died mid-flight; check jobsub_q, then "
+              f"`submissions reconcile <ROW>` to free these windows:")
         for row in stuck:
             idx = row['indices']
             span = f"{idx[0]}..{idx[-1]}" if idx else 'none'
@@ -1185,8 +1218,9 @@ def build_parser():
         prog='submissions',
         description='Direct-submission subsystem CLI: status (default '
                     'verb, read-only), the hourly verify/resubmit/'
-                    'top-up tick (run), and campaign management '
-                    '(pause/resume/cancel).')
+                    'top-up tick (run), campaign management '
+                    '(pause/resume/cancel/complete), and row '
+                    'reconciliation (reconcile).')
     p.add_argument('--db', default=None,
                    help='Submission-ledger sqlite DB. Default: the '
                         f'production ledger ({submission_ledger.PRODUCTION_DB}) '
@@ -1253,6 +1287,28 @@ def build_parser():
                                   '(takes effect on the next tick)')
     slice_p.add_argument('camp_id', type=int)
     slice_p.add_argument('slice_size', type=int)
+
+    rec_p = sub.add_parser(
+        'reconcile',
+        help='Close a failed/stuck RESERVATION ROW after checking '
+             'jobsub_q (the only way to unblock a campaign whose slice '
+             'window a failed submit still covers)',
+        description='Close a ledger row left in `failed` or `submitting` '
+                    'so its index window stops blocking the campaign. '
+                    'BY RUNNING THIS YOU ASSERT that you have checked '
+                    'jobsub_q and that the jobs for this window are '
+                    'genuinely absent from the queue: a jobsub_submit '
+                    'that exits non-zero can still have created a '
+                    'cluster, and re-feeding a window that is actually '
+                    'running duplicates physics (deterministic '
+                    'payloads). Nothing clears these rows '
+                    'automatically, and this never touches a campaign '
+                    'cursor — run `submissions resume <ID>` afterwards.')
+    rec_p.add_argument('row_id', type=int)
+    rec_p.add_argument('--note', default=None,
+                       help='Reason recorded on the row (default: '
+                            '"operator reconcile: jobsub_q checked, '
+                            'window free")')
 
     mem_p = sub.add_parser('set-memory',
                            help='Set a live campaign\'s memory request '
@@ -1383,6 +1439,19 @@ def main():
               f"{args.memory} (applies from the next tick; rows already "
               f"submitted keep their own entry, so their recoveries use "
               f"the {RECOVERY_MEMORY} floor)")
+        return
+
+    if verb == 'reconcile':
+        _acquire_lock(db)
+        note = args.note or ('operator reconcile: jobsub_q checked, '
+                             'window free')
+        try:
+            was = submission_ledger.reconcile_row(db, args.row_id, note)
+        except ValueError as e:
+            sys.exit(f"submissions: {e}")
+        print(f"row {args.row_id}: {was} -> reconciled ({note}). Its "
+              f"indices no longer block a campaign slice; "
+              f"`submissions resume <ID>` to restart the campaign.")
         return
 
     if verb in ('pause', 'resume', 'cancel', 'complete'):

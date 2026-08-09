@@ -78,8 +78,16 @@ DEFAULT_DB = os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB)
 # launched. 'failed' is a reservation whose submit definitively failed;
 # it stays in the DB because jobsub_submit can exit non-zero having
 # already made a cluster, so its window is not proven free.
+# 'reconciled' is the ONLY way out of either: a human has checked
+# jobsub_q and asserted the window's jobs are genuinely absent (see
+# reconcile_row). Nothing sets it automatically, and the row is kept
+# rather than deleted so the audit trail of the failed attempt survives.
 STATES = ('submitting', 'active', 'complete', 'recovered', 'exhausted',
-          'failed')
+          'failed', 'reconciled')
+
+# States reconcile_row may close. Both are windows whose jobs may or may
+# not exist; neither can be cleared by any automatic path.
+RECONCILABLE_STATES = ('failed', 'submitting')
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
@@ -244,6 +252,43 @@ def fail_reservation(db_path, row_id, note):
         if cur.rowcount != 1:
             raise ValueError(f"no reserved row {row_id} to fail")
         con.commit()
+    finally:
+        con.close()
+
+
+def reconcile_row(db_path, row_id, note):
+    """Close a 'failed' or 'submitting' row after a HUMAN has checked
+    jobsub_q; return the state it was in.
+
+    This is the only exit from either state, and the only way a campaign
+    blocked by one can ever move again: a failed reservation leaves a row
+    covering [cursor, cursor+n), `_slice_overlaps_ledger` keeps seeing
+    it, and top_up re-pauses the campaign on every tick — `submissions
+    resume` alone can never clear that, because it is the ROW, not the
+    cursor, that blocks. Before this existed the only escape was editing
+    sqlite by hand.
+
+    The safety property is preserved by making the call itself the
+    assertion: jobsub_submit can exit non-zero having already made a
+    cluster, so nobody but a human who has just looked at jobsub_q can
+    say the window is free. Nothing in the tick calls this.
+    """
+    con = _connect(db_path)
+    try:
+        row = con.execute(
+            'SELECT state FROM submissions WHERE id = ?',
+            (row_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"ledger has no row {row_id}")
+        if row['state'] not in RECONCILABLE_STATES:
+            raise ValueError(
+                f"row {row_id} is {row['state']!r}; only "
+                f"{list(RECONCILABLE_STATES)} rows can be reconciled")
+        con.execute(
+            "UPDATE submissions SET state = 'reconciled', closed_utc = ?, "
+            'note = ? WHERE id = ?', (_now(), note, row_id))
+        con.commit()
+        return row['state']
     finally:
         con.close()
 
