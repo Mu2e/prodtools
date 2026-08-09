@@ -10028,6 +10028,63 @@ class TestStatusDrainingLine(unittest.TestCase):
         self.assertIn('draining', out)
 
 
+class TestLedgerPathResolution(unittest.TestCase):
+    def setUp(self):
+        from utils import submission_ledger as sl
+        self.sl = sl
+
+    def test_mu2epro_reproduces_the_production_path_exactly(self):
+        # This is what makes the change a pure generalization: the
+        # existing production path IS what the formula yields for
+        # mu2epro, so no migration and no cron change.
+        self.assertEqual(self.sl.ledger_for('mu2epro'), self.sl.PRODUCTION_DB)
+
+    def test_ledger_for_named_user(self):
+        self.assertEqual(
+            self.sl.ledger_for('alice'),
+            '/exp/mu2e/data/users/alice/prodtools/submissions.db')
+
+    def test_ledger_for_defaults_to_current_account(self):
+        with patch('getpass.getuser', return_value='bob'):
+            self.assertEqual(
+                self.sl.ledger_for(),
+                '/exp/mu2e/data/users/bob/prodtools/submissions.db')
+
+    def test_default_db_still_means_production(self):
+        # Readers (ledger_ro, the read-only MCP, listNewDatasets,
+        # `submissions status`) resolve to DEFAULT_DB and must keep
+        # seeing production.
+        import importlib
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('MU2E_SUBMISSION_DB', None)
+            reloaded = importlib.reload(self.sl)
+            try:
+                self.assertEqual(reloaded.DEFAULT_DB, reloaded.PRODUCTION_DB)
+            finally:
+                importlib.reload(self.sl)
+
+    def test_ensure_ledger_dir_creates_a_derived_parent(self):
+        base = tempfile.mkdtemp()
+        db = os.path.join(base, 'prodtools', 'submissions.db')
+        self.assertEqual(self.sl.ensure_ledger_dir(db), db)
+        self.assertTrue(os.path.isdir(os.path.dirname(db)))
+
+    def test_ensure_ledger_dir_is_idempotent(self):
+        base = tempfile.mkdtemp()
+        db = os.path.join(base, 'prodtools', 'submissions.db')
+        self.sl.ensure_ledger_dir(db)
+        self.sl.ensure_ledger_dir(db)   # must not raise
+
+    def test_ensure_ledger_dir_raises_and_never_falls_back(self):
+        # A personal ledger that cannot be created must fail loudly.
+        # Silently using PRODUCTION_DB would write personal campaigns
+        # into the production ledger.
+        db = '/proc/cannot/exist/prodtools/submissions.db'
+        with self.assertRaises(RuntimeError) as ctx:
+            self.sl.ensure_ledger_dir(db)
+        self.assertNotIn(self.sl.PRODUCTION_DB, str(ctx.exception))
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

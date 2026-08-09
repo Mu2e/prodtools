@@ -11,14 +11,19 @@ SQLAlchemy; see reference_pyenv_ana_for_db).
 
 The DB lives at a stable absolute path: mu2epro submissions run from
 throwaway /tmp workdirs, so a repo-relative path would scatter state.
-The parent directory is a one-time ops creation — a missing directory
-is surfaced (sqlite3.OperationalError), never silently mkdir'd over.
+An OPERATOR-SUPPLIED directory (MU2E_SUBMISSION_DB, --ledger-db) is
+surfaced when missing (sqlite3.OperationalError), never silently
+mkdir'd over — a typo must fail, not create a stray DB. A DERIVED
+path from ledger_for() is created by ensure_ledger_dir(), since it
+cannot be a typo.
 """
+import getpass
 import json
 import os
 import re
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 # jobsub_submit's --memory grammar, as the house format uses it
 # ('2500MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
@@ -26,9 +31,46 @@ from datetime import datetime, timezone
 # rejected rather than passed through to fail at submit time.
 _MEMORY_RE = re.compile(r'^\d+(MB|GB)$')
 
-DEFAULT_DB = os.environ.get(
-    'MU2E_SUBMISSION_DB',
-    '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db')
+PRODUCTION_DB = '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'
+
+
+def ledger_for(user=None):
+    """Ledger path for a UNIX account.
+
+    There is ONE production ledger everyone reads and N personal
+    ledgers each person writes, so readers and writers resolve
+    differently (see DEFAULT_DB below). For 'mu2epro' this returns
+    PRODUCTION_DB exactly, which is why the split needs no migration
+    and leaves the production cron untouched.
+    """
+    return (f'/exp/mu2e/data/users/{user or getpass.getuser()}'
+            f'/prodtools/submissions.db')
+
+
+def ensure_ledger_dir(db_path):
+    """Create the parent directory of a DERIVED ledger path; return it.
+
+    Called ONLY on a ledger_for() path. An operator-supplied path
+    (MU2E_SUBMISSION_DB, --ledger-db) is deliberately never mkdir'd:
+    a typo there would silently create a stray database instead of
+    failing, which is why this module has always surfaced a missing
+    directory rather than creating one. A derived path cannot be a
+    typo, so the reasoning does not apply to it.
+
+    Raises rather than falling back: writing a personal campaign into
+    the production ledger is the worst available outcome.
+    """
+    parent = Path(db_path).parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"cannot create ledger directory {parent}: {exc}") from exc
+    return db_path
+
+
+# Readers resolve here and keep seeing production.
+DEFAULT_DB = os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB)
 
 STATES = ('active', 'complete', 'recovered', 'exhausted')
 
