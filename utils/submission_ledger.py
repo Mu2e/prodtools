@@ -72,7 +72,14 @@ def ensure_ledger_dir(db_path):
 # Readers resolve here and keep seeing production.
 DEFAULT_DB = os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB)
 
-STATES = ('active', 'complete', 'recovered', 'exhausted')
+# 'submitting' is a RESERVED row: its indices are claimed but
+# jobsub_submit has not returned yet. It is deliberately not 'active' —
+# the recovery loop must not try to verify a window that may never have
+# launched. 'failed' is a reservation whose submit definitively failed;
+# it stays in the DB because jobsub_submit can exit non-zero having
+# already made a cluster, so its window is not proven free.
+STATES = ('submitting', 'active', 'complete', 'recovered', 'exhausted',
+          'failed')
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
@@ -167,6 +174,93 @@ def record_submission(db_path, *, tarball, entry, indices, jobsub_id,
              jobsub_id, cluster_id))
         con.commit()
         return cur.lastrowid
+    finally:
+        con.close()
+
+
+def reserve_submission(db_path, *, tarball, entry, indices, map_path=None,
+                       parent_id=None):
+    """Claim an index window BEFORE jobsub_submit runs; return the row id.
+
+    This is what makes _slice_overlaps_ledger's "crash-window guard"
+    claim true. Written after the fact, a row cannot cover the window
+    between a successful jobsub_submit and the ledger write — there is
+    nothing in the DB to overlap against, and the next tick re-submits
+    the same deterministic payload as duplicate physics.
+
+    Raising here is correct and load-bearing: if the window cannot be
+    recorded, the submission must not happen.
+    """
+    con = _connect(db_path)
+    try:
+        attempt = 1
+        if parent_id is not None:
+            parent = con.execute(
+                'SELECT attempt FROM submissions WHERE id = ?',
+                (parent_id,)).fetchone()
+            if parent is None:
+                raise ValueError(f"ledger has no row {parent_id} (parent)")
+            attempt = parent['attempt'] + 1
+        cur = con.execute(
+            'INSERT INTO submissions '
+            '(created_utc, state, attempt, parent_id, map_path, tarball, '
+            ' entry_json, indices_json, jobsub_id, cluster_id) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)',
+            (_now(), 'submitting', attempt, parent_id, map_path, tarball,
+             json.dumps(entry), json.dumps(sorted(indices))))
+        con.commit()
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def attach_cluster(db_path, row_id, *, jobsub_id, cluster_id):
+    """Promote a reserved row to 'active' once its cluster is known."""
+    con = _connect(db_path)
+    try:
+        cur = con.execute(
+            "UPDATE submissions SET state = 'active', jobsub_id = ?, "
+            "cluster_id = ? WHERE id = ? AND state = 'submitting'",
+            (jobsub_id, cluster_id, row_id))
+        if cur.rowcount != 1:
+            raise ValueError(f"no reserved row {row_id} to attach a cluster to")
+        con.commit()
+    finally:
+        con.close()
+
+
+def fail_reservation(db_path, row_id, note):
+    """Close a reserved row whose submit definitively failed.
+
+    The row is kept, not deleted: jobsub_submit can exit non-zero having
+    already created a cluster, so the window is not proven free and must
+    keep blocking until a human reconciles it.
+    """
+    con = _connect(db_path)
+    try:
+        cur = con.execute(
+            "UPDATE submissions SET state = 'failed', closed_utc = ?, "
+            "note = ? WHERE id = ? AND state = 'submitting'",
+            (_now(), note, row_id))
+        if cur.rowcount != 1:
+            raise ValueError(f"no reserved row {row_id} to fail")
+        con.commit()
+    finally:
+        con.close()
+
+
+def reserved_rows(db_path):
+    """Rows still in 'submitting' — claimed windows with no cluster.
+
+    A row that stays here is the needs-reconciliation case: someone must
+    check jobsub_q before its window can be reused.
+    """
+    con = _connect(db_path)
+    try:
+        rows = con.execute(
+            "SELECT * FROM submissions WHERE state = 'submitting' "
+            "ORDER BY id").fetchall()
+        return [_to_dict(r) for r in rows]
     finally:
         con.close()
 

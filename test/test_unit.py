@@ -4699,6 +4699,86 @@ class TestSubmissionLedger(unittest.TestCase):
                 entry={}, indices=[0], jobsub_id=None, cluster_id='1')
 
 
+class TestTwoPhaseLedgerWrite(unittest.TestCase):
+    def setUp(self):
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 5, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+
+    def _reserve(self, indices=(0, 1, 2)):
+        return self.sl.reserve_submission(
+            self.db, tarball=self.entry['tarball'], entry=self.entry,
+            indices=list(indices), map_path='/tmp/map.json')
+
+    def test_reserved_row_records_indices_before_any_cluster_exists(self):
+        rid = self._reserve()
+        rows = self.sl.all_rows(self.db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['id'], rid)
+        self.assertEqual(rows[0]['state'], 'submitting')
+        self.assertEqual(rows[0]['indices'], [0, 1, 2])
+        self.assertIsNone(rows[0]['cluster_id'])
+        self.assertIsNone(rows[0]['jobsub_id'])
+
+    def test_reserved_row_is_not_an_open_row(self):
+        # The recovery loop must not treat a not-yet-submitted window as
+        # a live submission to verify.
+        self._reserve()
+        self.assertEqual(self.sl.open_rows(self.db), [])
+
+    def test_reserved_row_is_visible_to_reserved_rows(self):
+        rid = self._reserve()
+        self.assertEqual([r['id'] for r in self.sl.reserved_rows(self.db)],
+                         [rid])
+
+    def test_attach_cluster_promotes_to_active(self):
+        rid = self._reserve()
+        self.sl.attach_cluster(self.db, rid, jobsub_id='99.0@jobsub03.fnal.gov',
+                               cluster_id='99')
+        rows = self.sl.open_rows(self.db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['state'], 'active')
+        self.assertEqual(rows[0]['cluster_id'], '99')
+        self.assertEqual(rows[0]['jobsub_id'], '99.0@jobsub03.fnal.gov')
+        self.assertEqual(self.sl.reserved_rows(self.db), [])
+
+    def test_attach_cluster_twice_raises(self):
+        rid = self._reserve()
+        self.sl.attach_cluster(self.db, rid, jobsub_id='99.0@s', cluster_id='99')
+        with self.assertRaises(ValueError):
+            self.sl.attach_cluster(self.db, rid, jobsub_id='99.0@s',
+                                   cluster_id='99')
+
+    def test_fail_reservation_closes_the_row(self):
+        rid = self._reserve()
+        self.sl.fail_reservation(self.db, rid, 'jobsub_submit returned 1')
+        row = self.sl.all_rows(self.db)[0]
+        self.assertEqual(row['state'], 'failed')
+        self.assertIsNotNone(row['closed_utc'])
+        self.assertIn('jobsub_submit', row['note'])
+        self.assertEqual(self.sl.open_rows(self.db), [])
+
+    def test_failed_window_still_blocks_reuse(self):
+        # jobsub_submit can exit non-zero having already created a
+        # cluster, so a failed reservation's window is NOT proven free.
+        # It must keep blocking until a human reconciles it.
+        from utils.submissions import _slice_overlaps_ledger
+        rid = self._reserve(indices=(0, 1, 2))
+        self.sl.fail_reservation(self.db, rid, 'submit failed')
+        self.assertTrue(_slice_overlaps_ledger(
+            self.db, self.entry['tarball'], 0, 0, 3))
+
+    def test_reserved_window_blocks_a_duplicate_slice(self):
+        # The crash window itself: reserved, process dies, next tick.
+        from utils.submissions import _slice_overlaps_ledger
+        self._reserve(indices=(0, 1, 2))
+        self.assertTrue(_slice_overlaps_ledger(
+            self.db, self.entry['tarball'], 0, 0, 3))
+
+
 class TestCampaignLedger(unittest.TestCase):
     """campaigns table in utils/submission_ledger.py (sliced submission)."""
 
