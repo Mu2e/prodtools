@@ -6463,6 +6463,40 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertEqual(sorted(r['id'] for r in self.sl.open_rows(self.db)),
                          [self.rid, child])
 
+    def test_reserved_child_blocks_the_resubmit(self):
+        # Regression, measured 2026-08-09: killing `submissions run`
+        # mid-recovery leaves the child in 'submitting'. open_rows()
+        # selects state='active' only, so the orphan was invisible to
+        # the crash-window repair and a SECOND child was cut for the
+        # same indices. If the kill had landed after jobsub_submit
+        # created the cluster, that is duplicate physics.
+        child = self.sl.reserve_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], parent_id=self.rid)
+        action, calls = self._process(missing=(1,))
+        self.assertEqual(action, 'child-reserved')
+        self.assertNotIn('resubmit', calls)
+        rows = {r['id']: r for r in self.sl.all_rows(self.db)}
+        # Fail-closed: the parent is NOT closed (its window is unproven)
+        # and no third row appeared.
+        self.assertEqual(rows[self.rid]['state'], 'active')
+        self.assertEqual(rows[child]['state'], 'submitting')
+        self.assertEqual(len(rows), 2)
+
+    def test_reserved_child_blocks_even_at_the_attempt_cap(self):
+        # 'exhausted' would close the parent and stop watching it while
+        # a possibly-live cluster is still unaccounted for.
+        self.sl.reserve_submission(
+            self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
+            indices=[1], parent_id=self.rid)
+        action, _ = self._process(missing=(1,), max_attempts=1)
+        self.assertEqual(action, 'child-reserved')
+
+    def test_reserved_child_is_an_attention_outcome(self):
+        # Otherwise the tick exits 0 and a cron would never surface it.
+        from utils.submissions import ATTENTION_KEYS
+        self.assertIn('child-reserved', ATTENTION_KEYS)
+
     def test_child_active_wins_over_cap(self):
         self.sl.record_submission(
             self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
@@ -11471,17 +11505,21 @@ class TestProcessRowKindDispatch(unittest.TestCase):
             calls['resubmit'] = True
             return True
 
-        # open_rows is consulted twice on the resubmit path: once for the
-        # crash-window "child already active" pre-check (no children yet),
-        # once after resubmit_fn succeeds to find the new child row (see
-        # TestRecoverLoop, which fakes this via a real ledger; here it's
-        # patched directly since this test uses a fake db_path).
+        # The resubmit path consults the ledger three times: reserved_rows
+        # for the "child reserved, window unproven" guard, then open_rows
+        # for the crash-window "child already active" pre-check (no
+        # children yet), then open_rows again after resubmit_fn succeeds
+        # to find the new child row (see TestRecoverLoop, which fakes this
+        # via a real ledger; here it's patched directly since this test
+        # uses a fake db_path).
         child_row = {'id': 8, 'parent_id': row['id'], 'state': 'active'}
 
         with patch.object(submissions, 'verify_files_row', fake_verify), \
              patch.object(submissions, 'resubmit_files', fake_resubmit_files), \
              patch.object(submissions, 'resubmit', fake_resubmit), \
              patch.object(submissions.submission_ledger, 'close_row'), \
+             patch.object(submissions.submission_ledger, 'reserved_rows',
+                          return_value=[]), \
              patch.object(submissions.submission_ledger, 'open_rows',
                           side_effect=[[], [child_row]]):
             action = submissions.process_row(

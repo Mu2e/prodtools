@@ -1038,7 +1038,7 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
     Returns the action taken: 'running' | 'held' | 'queue-error' |
     'verify-error' | 'complete' | 'resubmitted' | 'resubmit-error' |
     'exhausted' | 'would-resubmit' | 'would-complete' | 'would-exhaust' |
-    'child-active' | 'child-missing' | 'would-recover'.
+    'child-active' | 'child-reserved' | 'child-missing' | 'would-recover'.
     """
     if verify_fn is None:
         verify_fn = (verify_files_row if is_draining(row['entry'])
@@ -1082,6 +1082,35 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
         return 'complete'
     print(f"row {rid}: {len(missing)}/{len(row['indices'])} indices "
           f"missing outputs")
+    # A RESERVED child — 'submitting', window claimed, no cluster
+    # attached — is checked BEFORE the active-child repair below, and it
+    # is not the same case. Measured 2026-08-09 by killing `submissions
+    # run` mid-recovery: open_rows() selects state='active' only, so the
+    # orphan child was invisible here and the loop cheerfully cut a
+    # SECOND child for the same indices. In that run the kill landed
+    # before jobsub_submit created anything, so nothing duplicated — but
+    # had it landed in the window the two-phase write exists to survive
+    # (cluster created, attach not yet written), two clusters would now
+    # be running the same deterministic payload.
+    #
+    # _slice_overlaps_ledger does not cover this: it guards CAMPAIGN
+    # slices, and a recovery child's indices sit strictly below the
+    # campaign cursor by construction (see its docstring). Recoveries
+    # need their own parent-scoped guard, which is this.
+    #
+    # Whether that cluster exists cannot be decided from the ledger, so
+    # this refuses rather than guessing: the parent stays active, no
+    # resubmit is issued, and the operator is pointed at the one row
+    # they must resolve (`submissions reconcile <id>` after checking
+    # jobsub_q). Fail-closed — an unproven window is not a free window.
+    reserved = [r for r in submission_ledger.reserved_rows(db_path)
+                if r['parent_id'] == rid]
+    if reserved:
+        print(f"row {rid}: child row {reserved[0]['id']} is RESERVED with "
+              f"no cluster — a prior recovery died mid-submit. NOT "
+              f"resubmitting: its jobs may be live. Check jobsub_q, then "
+              f"`submissions reconcile {reserved[0]['id']}`")
+        return 'child-reserved'
     children = [r for r in submission_ledger.open_rows(db_path)
                 if r['parent_id'] == rid]
     if children:
@@ -1343,7 +1372,7 @@ def _acquire_lock(db_path):
 # the tick exit 2, repeated every tick until someone clears the cause.
 ATTENTION_KEYS = ('held', 'exhausted', 'would-exhaust', 'child-missing',
                   'campaign-paused', 'would-pause-overlap', 'count-error',
-                  'paused-campaign', 'drain-error')
+                  'paused-campaign', 'drain-error', 'child-reserved')
 
 
 def _run_pass(args):
