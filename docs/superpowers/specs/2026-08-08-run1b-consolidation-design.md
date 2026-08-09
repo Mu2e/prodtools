@@ -306,3 +306,89 @@ reference to the superseded line. Not part of this consolidation.
   the wiki page. A machine-readable gate in prodtools that refuses to submit a
   frozen entry would be better and is recorded as a follow-up; it is not part of
   this consolidation.
+
+## Pre-flight findings (2026-08-09)
+
+Workspace: `$WS/Offline` at HEAD `f14370362` on `main` (built, ENVSET
+`al9-prof-e29-p103`). All checks below are read-only against that clone plus a
+shallow clone of `Mu2e/EventNtuple`; nothing was modified in either.
+
+**Baselines captured.** Both match Task 1's dumps and each other's determinism
+proof — the normalized-gdml gate is sound before PR1 lands anything.
+
+| File | `<volume` entries | residual `0x` |
+|---|---|---|
+| `baseline_common.gdml.norm` (`geom_common.txt` via `gdmldump.fcl`) | 13767 | 0 |
+| `baseline_run1_a.gdml.norm` (`geom_run1_a.txt` via `gdmldump_run1_a.fcl`) | 14355 | 0 |
+
+`baseline_common` reproduces Task 1's 13767/0 exactly — the geometry is
+reproducible run to run, so the plan's gate stands.
+
+**Step 2 — does anything size itself off `lastEnum`?** `grep -rn "lastEnum"
+--include=*.cc --include=*.hh . | grep -v VirtualDetectorId.hh` in
+`$WS/Offline` returns ~45 hits, but most belong to unrelated enum classes that
+share the same "unknown/lastEnum" codegen idiom — `GenId`, `ProcessCode`,
+`StepInstanceName`, `StepFilterMode`, `STMChannel`, `BFMapType`,
+`CompressionLevel`. None of those resolve to `VirtualDetectorId::lastEnum`;
+appending 22 VD enumerators does not touch them.
+
+The hits that do resolve to `VirtualDetectorId::lastEnum`:
+
+- `DataProducts/src/VirtualDetectorId.cc:49` — `printAll()`'s
+  `for (int i=0;i<lastEnum;++i)`. Bounded by `lastEnum`, grows harmlessly.
+- `DataProducts/src/VirtualDetectorId.cc:65` —
+  `BOOST_STATIC_ASSERT(sizeof(tmp)/sizeof(char*) == lastEnum)`, checking the
+  `VIRTUALDETECTORID_NAMES` macro (defined `DataProducts/inc/VirtualDetectorId.hh:95`)
+  against `lastEnum`. Not a silent hazard — a compile-time consistency check.
+  It does mean Task 3 must add 22 name strings to `VIRTUALDETECTORID_NAMES`
+  alongside the 22 new enumerators, or the build fails loudly at this assert.
+  Recorded as a required companion edit, not a defect.
+- `DataProducts/src/VirtualDetectorId.cc:66` —
+  `nam.insert(nam.begin(), tmp, tmp+lastEnum)`. Grows in lockstep with the
+  assert above; harmless once the names macro is extended.
+- `Analyses/src/ReadVirtualDetector_module.cc:41` —
+  `const unsigned int nvdet = VirtualDetectorId::lastEnum;`, then used at
+  lines 98–110 to dimension fixed-size C arrays inside a ROOT TTree struct
+  (`Bool_t isvd[nvdet]`, `Float_t tvd[nvdet]`, etc.) and at line 946 to
+  bounds-check `id > nvdet`. Dimensioned off `lastEnum` itself, not a literal
+  — grows harmlessly and recompiles correctly at the wider size.
+
+**Verdict:** no fixed-size array dimensioned on a literal, no persisted
+format bakes in a width, no switch/lookup assumes a maximum id. One required
+companion edit for Task 3 (extend `VIRTUALDETECTORID_NAMES`), enforced
+fail-loud by a `BOOST_STATIC_ASSERT` rather than posing a silent risk. Clear
+to proceed with PR1.
+
+**Step 3 — does anything reference VD ids numerically?** Shallow-cloned
+`Mu2e/EventNtuple` into `$WS/EventNtuple`.
+
+`grep -rn "VirtualDetectorId\|vdid\|vd_id" EventNtuple/src EventNtuple/inc`:
+
+- `EventNtuple/src/InfoMCStructHelper.cc:13,36-41` — builds
+  `_vdmap` (`std::map<VirtualDetectorId,SurfaceId>`) keyed by symbolic names
+  (`TT_FrontHollow`, `TT_Mid`, `TT_MidInner`, `TT_Back`, `TT_OutSurf`,
+  `TT_InSurf`). Symbolic, not numeric — unaffected by appending enumerators
+  before `lastEnum`.
+- `EventNtuple/src/InfoMCStructHelper.cc:315,323` — range-for over
+  `kseedmc._vdsteps` (a container, not a fixed array), storing
+  `vdstep._vdid.id()` into a struct field. No hardcoded count or range.
+- `EventNtuple/inc/InfoMCStructHelper.hh:50-51` — declares `_vdmap`; no count
+  assumption.
+
+`EventNtuple/fcl/from_mcs-Run1B.fcl` and its ancestor
+`from_mcs-primary_addVDSteps.fcl` only set
+`stepPointMCTags: ["compressRecoMCs:virtualdetector"]` — a string instance-name
+tag, no numeric VD id anywhere.
+
+**Verdict:** no hardcoded count, no numeric id literal, no fixed-range
+iteration found in EventNtuple. Clear to proceed with PR1.
+
+**Step 4 — was #1849's `trigger` failure ours?** Answered without
+re-investigation: PRs #1844 and #1846, tested in the same June 2026 window as
+#1849, both show `trigger` failing (`:x:`) in their FNALbuild comments against
+main. The #1849 `trigger` RC 2 was pre-existing breakage on main, not caused
+by the Run1B changes.
+
+**Net:** all three pre-flight questions are answered clear. Nothing here
+blocks PR1; the one actionable item (extend `VIRTUALDETECTORID_NAMES`) is a
+required step of Task 3's own enum edit, not a new risk it introduces.
