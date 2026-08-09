@@ -289,6 +289,40 @@ def _ledger_path_for(run_as):
         'mu2epro' if run_as == 'mu2epro' else None)
 
 
+# A campaign that still owns its index space. Mirrors the states in
+# submission_ledger._connect's campaigns_live_tarball unique index --
+# the DB guarantee that makes "the live campaign for this tarball"
+# a single, unambiguous row.
+_LIVE_CAMPAIGN_STATES = ('active', 'paused')
+
+
+def _all_campaigns(db):
+    """`all_campaigns(db)`, with sqlite's bare "unable to open database
+    file" turned into a message that names the path.
+
+    A first-time caller has no `/exp/mu2e/data/users/<you>/prodtools/`
+    directory at all, and sqlite3 reports that as a context-free
+    `OperationalError` several frames below the tool the operator
+    actually called — unreadable as an answer to "why did my enqueue
+    fail?".
+
+    Never silently treated as "no campaigns": a ledger that cannot be
+    opened is not an empty ledger, and reporting it as one would let
+    run_submissions raise "no campaign <id>" (a typo) for what is
+    actually a missing directory (a setup problem).
+    """
+    import sqlite3
+    from utils import submission_ledger
+    try:
+        return submission_ledger.all_campaigns(db)
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(
+            f"cannot read the submission ledger at {db}: {e}. Its parent "
+            f"directory is created by the submitting identity on its "
+            f"first write, so this usually means the command never got "
+            f"as far as writing the ledger") from e
+
+
 def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
     """Register ONE entry of a map as a sliced-submission campaign.
 
@@ -308,6 +342,17 @@ def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
     tarball of the map entry submit_map was told to enqueue -- read
     back via `_read_map_entry`'s index mode, since `--entry N` already
     names the entry unambiguously and there is nothing to disambiguate.
+
+    The match is restricted to a LIVE campaign (see _LIVE_CAMPAIGN_STATES)
+    rather than taking the last of every campaign that tarball ever had.
+    A tarball accumulates campaigns over its life -- complete, cancelled,
+    then a new one -- and `match[-1]` silently returns whichever is
+    newest in the ledger. The live set is unique by construction: the
+    campaigns_live_tarball index (submission_ledger._connect) forbids a
+    second active-or-paused campaign per tarball, which is the same
+    invariant create_campaign refuses on. Exactly one live match is
+    therefore this enqueue's campaign, and anything else is reported
+    rather than guessed at.
     """
     runner.require_confirmed(run_as, confirm)
 
@@ -323,17 +368,24 @@ def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
             f"submit_map --enqueue failed (rc={result['rc']}): "
             f"{result['stderr'] or result['stdout']}")
 
-    from utils import submission_ledger
     _, map_entry = _read_map_entry(map_path, index=entry)
     tarball = map_entry.get('tarball')
     db = _ledger_path_for(run_as)
-    match = [c for c in submission_ledger.all_campaigns(db)
-             if c['tarball'] == tarball]
+    match = [c for c in _all_campaigns(db)
+             if c['tarball'] == tarball
+             and c['state'] in _LIVE_CAMPAIGN_STATES]
     if not match:
         raise RuntimeError(
-            f"submit_map --enqueue reported success but no campaign for "
-            f"{tarball!r} is in {db} -- reconcile before retrying")
-    campaign = match[-1]
+            f"submit_map --enqueue reported success but no live campaign "
+            f"for {tarball!r} is in {db} -- reconcile before retrying")
+    if len(match) > 1:
+        ids = ', '.join(f"{c['id']} ({c['state']})" for c in match)
+        raise RuntimeError(
+            f"{db} holds {len(match)} live campaigns for {tarball!r} "
+            f"({ids}) -- the ledger's own uniqueness invariant is broken; "
+            f"resolve by hand rather than guessing which one this "
+            f"enqueue created")
+    campaign = match[0]
     return {'campaign_id': campaign['id'],
             'njobs': (campaign.get('entry') or {}).get('njobs'),
             'tarball': tarball}
@@ -364,9 +416,8 @@ def run_submissions(campaign_id, run_as, confirm=False):
     """
     runner.require_confirmed(run_as, confirm)
 
-    from utils import submission_ledger
     db = _ledger_path_for(run_as)
-    campaigns = {c['id']: c for c in submission_ledger.all_campaigns(db)}
+    campaigns = {c['id']: c for c in _all_campaigns(db)}
     campaign = campaigns.get(campaign_id)
     if campaign is None:
         raise ValueError(

@@ -10084,6 +10084,48 @@ class TestEnqueueAndRunTools(unittest.TestCase):
                 with self.assertRaises(RuntimeError) as ctx:
                     self.tools.run_submissions(campaign_id=cid, run_as='self')
         self.assertIn('holds the lock', str(ctx.exception))
+
+    def test_enqueue_refuses_to_return_a_closed_campaign_for_the_tarball(self):
+        # `match[-1]` returned the highest-id campaign for the tarball
+        # whether or not this call created it. Only a LIVE campaign
+        # (active/paused — the ledger's own uniqueness set) can be the
+        # one just enqueued.
+        cid = self.sl.create_campaign(
+            self.db, tarball='cnf.mu2e.D.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 500},
+            slice_size=500)
+        self.sl.set_campaign_state(self.db, cid, 'complete', note='done')
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
+            with patch('prodtools_mcp_write.tools._ledger_path_for',
+                       return_value=self.db):
+                with patch('prodtools_mcp_write.tools._read_map_entry',
+                           return_value=(0, {'tarball': 'cnf.mu2e.D.C.0.tar'})):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        self.tools.enqueue_campaign(
+                            map_path='/tmp/m.json', entry=0, slice_size=500,
+                            run_as='self')
+        self.assertIn('cnf.mu2e.D.C.0.tar', str(ctx.exception))
+
+    def test_unopenable_ledger_is_named_not_a_bare_sqlite_error(self):
+        # A brand-new user has no /exp/mu2e/data/users/<them>/prodtools
+        # directory; sqlite reports that as a context-free
+        # OperationalError several frames down.
+        missing = '/nonexistent-ledger-dir-mcp-test/submissions.db'
+        with self.assertRaises(RuntimeError) as ctx:
+            self.tools._all_campaigns(missing)
+        self.assertIn(missing, str(ctx.exception))
+
+    def test_run_submissions_surfaces_the_named_ledger_error(self):
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value='/nonexistent-ledger-dir-mcp-test/s.db'):
+            with patch('prodtools_mcp_write.runner.run_cli') as run:
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.tools.run_submissions(campaign_id=1, run_as='self')
+        run.assert_not_called()
+        self.assertIn('/nonexistent-ledger-dir-mcp-test/s.db',
+                      str(ctx.exception))
+
     def test_ledger_path_for_mu2epro_is_production(self):
         from utils import submission_ledger
         self.assertEqual(self.tools._ledger_path_for('mu2epro'),
