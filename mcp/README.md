@@ -33,6 +33,21 @@ Every tool takes a required `run_as`:
   the in-tool refusal survives a hook left un-armed by a settings
   reload.
 
+`confirm=true` is a **model-facing** gate — the model supplies it to
+itself — so the hook is the only *human*-in-the-loop checkpoint on a
+`run_as="mu2epro"` call. It is written to fail CLOSED: only a
+positively parsed `run_as=="self"` passes silently; `run_as=="mu2epro"`,
+a missing `run_as`, malformed hook input, an unrecognised value, or a
+failing/missing `jq` binary all produce a prompt.
+
+**A settings-hooks edit is not live in an already-running session.**
+Registering a new `PreToolUse` matcher in `.claude/settings.json` (as
+this one is) requires a `/hooks` reload — a session started before the
+edit will call `prodtools-write` tools with the hook un-armed even
+though `CLAUDE.md` documents the gate as present. Run `/hooks` (or
+start a fresh session) after any change here before relying on the
+prompt.
+
 Health check: `bash mcp/scripts/start_write_mcp.sh --check`.
 
 Both launchers share environment setup via `mcp/scripts/_mcp_env.sh`.
@@ -41,7 +56,10 @@ Both launchers share environment setup via `mcp/scripts/_mcp_env.sh`.
 
 The `submissions status` verb (see `utils/submissions.py`) reads the
 **production ledger by default** — the same ledger the direct-submission
-cron uses. Pass `--mine` to read your own ledger
+cron uses — *only when the `MU2E_SUBMISSION_DB` env var is unset*; if
+it is set, that path wins over the production default (see
+`resolve_db`/`build_parser` in `utils/submissions.py`). Pass `--mine` to
+read your own ledger
 (`/exp/mu2e/data/users/$USER/prodtools/submissions.db`) instead, e.g.
 after a `run_as="self"` campaign run through `prodtools-write`. Plain
 `submissions status` will not show a self-run campaign; `submissions

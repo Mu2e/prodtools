@@ -9148,6 +9148,48 @@ class TestWriteRunnerGate(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# mcp-write-guard.sh: the PreToolUse hook, exercised as a subprocess so a
+# later edit that un-arms the gate (e.g. reverting to fail-open, or a typo
+# in the jq filter) fails this suite instead of only being caught by
+# someone manually re-running the two `echo | bash` commands from the
+# task brief.
+# ---------------------------------------------------------------------------
+
+class TestMcpWriteGuardHook(unittest.TestCase):
+    HOOK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        '.claude', 'hooks', 'mcp-write-guard.sh')
+
+    def _run(self, stdin_text):
+        result = subprocess.run(['bash', self.HOOK], input=stdin_text,
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0)
+        return result.stdout.strip()
+
+    def test_mu2epro_prompts(self):
+        out = self._run('{"tool_input":{"run_as":"mu2epro"}}')
+        self.assertIn('"permissionDecision":"ask"', out)
+        self.assertIn('mu2epro', out)
+
+    def test_self_is_silent(self):
+        out = self._run('{"tool_input":{"run_as":"self"}}')
+        self.assertEqual(out, '')
+
+    def test_missing_run_as_prompts(self):
+        # This is the fail-closed requirement: an empty/absent run_as
+        # must NOT be silently treated as safe.
+        out = self._run('{}')
+        self.assertIn('"permissionDecision":"ask"', out)
+
+    def test_malformed_json_prompts(self):
+        out = self._run('not json')
+        self.assertIn('"permissionDecision":"ask"', out)
+
+    def test_unrecognised_run_as_prompts(self):
+        out = self._run('{"tool_input":{"run_as":"root"}}')
+        self.assertIn('"permissionDecision":"ask"', out)
+
+
+# ---------------------------------------------------------------------------
 # push_cnf tool
 # ---------------------------------------------------------------------------
 
