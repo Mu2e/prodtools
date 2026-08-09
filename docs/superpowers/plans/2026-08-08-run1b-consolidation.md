@@ -83,21 +83,40 @@ cat > $WS/gdml_baseline.sh <<'SH'
 set -euo pipefail
 fcl="$1"; name="$2"
 work=$(mktemp -d)
-pushd "$work" >/dev/null
-mu2e -c "$fcl" -n 1 >"$name.log" 2>&1 || { echo "RUN FAILED: see $work/$name.log"; exit 1; }
-gdml=$(ls *.gdml 2>/dev/null | head -1)
-[ -n "$gdml" ] || { echo "NO GDML PRODUCED: see $work/$name.log"; exit 1; }
+cd "$work"
+rc=0
+mu2e -c "$fcl" -n 1 >"$name.log" 2>&1 || rc=$?
+# Save the log FIRST, before any early exit, so it is always retrievable.
+cp "$name.log" "$WS/gdml/$name.log"
+if [ "$rc" -ne 0 ]; then
+  echo "RUN FAILED (exit $rc): log at $WS/gdml/$name.log" >&2; exit 1
+fi
+# Do NOT use `ls *.gdml | head -1`: with no match, ls exits 2, pipefail
+# propagates it, and set -e kills the script before any error message.
+shopt -s nullglob
+gdmls=(*.gdml)
+shopt -u nullglob
+if [ "${#gdmls[@]}" -eq 0 ]; then
+  echo "NO GDML PRODUCED: log at $WS/gdml/$name.log" >&2; exit 1
+fi
+gdml="${gdmls[0]}"
+if [ ! -s "$gdml" ] || [ "$(stat -c%s "$gdml")" -lt 1000 ]; then
+  echo "GDML TRUNCATED ($(stat -c%s "$gdml") bytes): log at $WS/gdml/$name.log" >&2; exit 1
+fi
 # Geant4 appends 0x<address> to solid/volume/material names when
 # storeReferences is true (Mu2eWorld.cc:326 calls parser.Write with the default).
 sed -E 's/0x[0-9a-f]{6,}//g' "$gdml" > "$WS/gdml/$name.gdml.norm"
-cp "$name.log" "$WS/gdml/$name.log"
-popd >/dev/null
+cd / && rm -rf "$work"
 echo "wrote $WS/gdml/$name.gdml.norm ($(wc -l < "$WS/gdml/$name.gdml.norm") lines)"
 SH
 chmod +x $WS/gdml_baseline.sh
 ```
 
-Note the harness copies the run log next to the dump — later tasks grep it for overlap warnings.
+Three things in that script are load-bearing and were bugs in an earlier draft:
+
+- **The log is copied before any early exit.** Later tasks read these logs, and a failure whose log is stranded in an unnamed `mktemp` dir is unactionable.
+- **`ls *.gdml | head -1` is forbidden here.** Under `set -euo pipefail`, a no-match glob makes `ls` exit 2, `pipefail` surfaces it despite `head` exiting 0, and `set -e` kills the script *before* the error message ever prints. The failure path becomes dead code and the run dies with a bare exit 2.
+- **Size check.** A crash that still exits 0 can leave a truncated dump; an empty file would otherwise normalize to an empty baseline and silently "match" nothing.
 
 - [ ] **Step 4: Prove determinism — dump the same geometry twice, unchanged**
 
