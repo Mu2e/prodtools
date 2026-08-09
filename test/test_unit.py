@@ -9242,7 +9242,7 @@ class TestPushCnfTool(unittest.TestCase):
         with open(self.jobdefs_map, 'w') as f:
             json.dump([], f)
         with self.assertRaises(RuntimeError):
-            self.tools._read_map_entry(self.jobdefs_map, 'D', 'C')
+            self.tools._read_map_entry(self.jobdefs_map, 'D', 'C', [])
 
     def test_read_map_entry_against_a_real_file_returns_datasets(self):
         with open(self.jobdefs_map, 'w') as f:
@@ -9251,7 +9251,7 @@ class TestPushCnfTool(unittest.TestCase):
                 'outputs': [{'dataset': 'dig.mu2e.D.C.art', 'location': 'disk'},
                             {'dataset': 'rec.mu2e.D.C.art', 'location': 'tape'}],
             }], f)
-        index, entry = self.tools._read_map_entry(self.jobdefs_map, 'D', 'C')
+        index, entry = self.tools._read_map_entry(self.jobdefs_map, 'D', 'C', [])
         self.assertEqual(index, 0)
         self.assertEqual(entry['tarball'], self.tarball)
 
@@ -9267,9 +9267,12 @@ class TestPushCnfTool(unittest.TestCase):
                        'data' / 'Run1B' / 'mix.json')
         expected_setup = (
             '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh')
-        setup = self.tools._select_simjob_setup(
+        setup, tarball_desc = self.tools._select_push_params(
             mix_json, 'CeEndpointMixLow', 'Run1Bab_best_v1_2')
         self.assertEqual(setup, expected_setup)
+        # No tarball_append on a mixing entry -- tarball_desc falls
+        # back to the (derived) desc itself.
+        self.assertEqual(tarball_desc, 'CeEndpointMixLow')
 
         # And push_cnf itself, end to end (run_cli mocked, map faked).
         jobdefs_map = os.path.join(self._tmpdir, 'mix_m.json')
@@ -9334,6 +9337,110 @@ class TestPushCnfTool(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.tools.push_cnf(json=path, desc='D', dsconf='C',
                                 jobdefs_map=self.jobdefs_map, run_as='self')
+
+    # -- Round-3 review fixes: tarball_append collision, windowed dedupe --
+
+    def test_tarball_append_collision_returns_the_reco_entry_not_digi(self):
+        # Real regression against data/mdc2025/reco.json's
+        # CosmicCRYExtracted / MDC2025au_best_v1_5 entry, which has
+        # tarball_append='-reco' -- its real tarball is
+        # cnf.mu2e.CosmicCRYExtracted-reco.MDC2025au_best_v1_5.0.tar.
+        # Matching on the bare desc (round 2) would find only a
+        # DIFFERENT stage's entry sharing the same desc+dsconf with no
+        # append -- this repo's own jobdefs_list.json holds -reco and
+        # -nts entries at this exact dsconf, so the collision is real,
+        # not hypothetical. 103/642 expanded entries across data/**/*
+        # use tarball_append (all of Run1B/reco.json, mdc2025/reco.json,
+        # mdc2030/reco.json, mdc2025/evntuple.json, both mds3a.json).
+        reco_json = str(Path(__file__).resolve().parent.parent /
+                        'data' / 'mdc2025' / 'reco.json')
+        jobdefs_map = os.path.join(self._tmpdir, 'reco_collision_m.json')
+        with open(jobdefs_map, 'w') as f:
+            json.dump([
+                # A DIFFERENT stage's entry sharing the same bare
+                # desc+dsconf -- the collision that silently misfired.
+                {'tarball': 'cnf.mu2e.CosmicCRYExtracted.'
+                            'MDC2025au_best_v1_5.0.tar',
+                 'outputs': [{'dataset': 'dig.mu2e.CosmicCRYExtracted.'
+                                         'MDC2025au_best_v1_5.art',
+                              'location': 'tape'}]},
+                # The entry this push actually produces.
+                {'tarball': 'cnf.mu2e.CosmicCRYExtracted-reco.'
+                            'MDC2025au_best_v1_5.0.tar',
+                 'outputs': [{'dataset': 'rec.mu2e.CosmicCRYExtracted.'
+                                         'MDC2025au_best_v1_5.art',
+                              'location': 'tape'}]},
+            ], f)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
+            out = self.tools.push_cnf(
+                json=reco_json, desc='CosmicCRYExtracted',
+                dsconf='MDC2025au_best_v1_5', jobdefs_map=jobdefs_map,
+                run_as='self')
+        self.assertEqual(
+            out['tarball'],
+            'cnf.mu2e.CosmicCRYExtracted-reco.MDC2025au_best_v1_5.0.tar')
+        self.assertEqual(
+            out['datasets'],
+            ['rec.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art'])
+
+    def test_windowed_campaign_new_window_disambiguated_not_raised(self):
+        # _write_jobdef_json_entry dedupes on (tarball, firstjob), not
+        # tarball alone: a windowed campaign appends a NEW entry
+        # sharing the SAME tarball as an existing window. Matching on
+        # tarball_desc+dsconf alone finds both -- the before-push
+        # snapshot must identify the newly appended one instead of
+        # raising ">1 match" on a push that actually succeeded, and
+        # must never fall back to "last entry".
+        jobdefs_map = os.path.join(self._tmpdir, 'windowed_m.json')
+        existing = {'tarball': self.tarball, 'firstjob': 0,
+                   'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                                'location': 'tape'}]}
+        with open(jobdefs_map, 'w') as f:
+            json.dump([existing], f)
+
+        new_window = {'tarball': self.tarball, 'firstjob': 500,
+                      'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                                   'location': 'tape'}]}
+
+        def _fake_run_cli(argv, run_as, simjob_setup=None):
+            # Simulate json2jobdef appending the new window's entry.
+            entries = json.loads(Path(jobdefs_map).read_text())
+            entries.append(new_window)
+            Path(jobdefs_map).write_text(json.dumps(entries))
+            return {'rc': 0, 'stdout': '', 'stderr': ''}
+
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   side_effect=_fake_run_cli):
+            out = self.tools.push_cnf(json=self.json_path, desc='D',
+                                      dsconf='C', jobdefs_map=jobdefs_map,
+                                      run_as='self')
+        self.assertEqual(out['entry_index'], 1)
+        self.assertEqual(out['tarball'], self.tarball)
+
+    def test_genuinely_ambiguous_match_raises_listing_candidates(self):
+        # If nothing is newly appended (e.g. a pre-existing map already
+        # has more than one candidate for this desc+dsconf, none of
+        # them new) this cannot be resolved and must raise -- never
+        # silently pick one, and the message must name the candidates
+        # so an operator can resolve it by hand.
+        jobdefs_map = os.path.join(self._tmpdir, 'ambiguous_m.json')
+        pre_existing = [
+            {'tarball': self.tarball, 'firstjob': 0,
+             'outputs': [{'dataset': 'a', 'location': 'tape'}]},
+            {'tarball': self.tarball, 'firstjob': 500,
+             'outputs': [{'dataset': 'b', 'location': 'tape'}]},
+        ]
+        with open(jobdefs_map, 'w') as f:
+            json.dump(pre_existing, f)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': 'Entry already exists',
+                                  'stderr': ''}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
+                                    jobdefs_map=jobdefs_map, run_as='self')
+        self.assertIn('index 0', str(ctx.exception))
+        self.assertIn('index 1', str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
