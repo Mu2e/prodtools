@@ -343,13 +343,20 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     return {'db_path': db_path or ledger_ro.DEFAULT_DB, 'campaigns': out}
 
 
-def list_campaigns(state=None, db_path=None):
-    """Ledger-only campaign listing. No network."""
+def list_campaigns(state=None, mine=False, db_path=None):
+    """Ledger-only campaign listing. No network.
+
+    `db_path` is echoed back for the same reason campaign_status echoes
+    it: with `mine` there is more than one possible ledger, and a listing
+    that does not say which one it read cannot be checked by its reader.
+    """
     if state is not None and state not in CAMPAIGN_STATES:
         raise ToolError(
             'invalid_argument',
             f'unknown state {state!r}',
             f'Expected one of {CAMPAIGN_STATES}.')
+    resolved_db, _ = _resolve_identity(mine)
+    db_path = db_path or resolved_db
     camps = ledger_ro.campaigns(db_path, state=state)
     from utils.map_entry import njobs_of
     listing = [{
@@ -362,4 +369,6 @@ def list_campaigns(state=None, db_path=None):
         'slice_size': c['slice_size'],
         'created_utc': c['created_utc'],
     } for c in camps]
-    return {'count': len(listing), 'campaigns': listing}
+    return {'count': len(listing),
+            'db_path': db_path or ledger_ro.DEFAULT_DB,
+            'campaigns': listing}

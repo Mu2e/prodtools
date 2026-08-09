@@ -8469,6 +8469,38 @@ class TestMcpReadIdentity(unittest.TestCase):
             result = self.status.campaign_status(db_path=db)
         self.assertEqual(result['db_path'], db)
 
+    def test_list_campaigns_names_the_ledger_it_read(self):
+        # Its silence was harmless only while there was one possible
+        # answer. With `mine` there are two.
+        with tempfile.TemporaryDirectory() as td:
+            db = TestMcpCampaignStatus()._make_db(td)
+            result = self.status.list_campaigns(db_path=db)
+        self.assertEqual(result['db_path'], db)
+        self.assertEqual(result['count'], 1)
+
+    def test_list_campaigns_mine_reads_the_callers_ledger(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = TestMcpCampaignStatus()._make_db(td)
+            with patch.object(self.status, '_resolve_identity',
+                              return_value=(db, 'alice')):
+                result = self.status.list_campaigns(mine=True)
+        self.assertEqual(result['db_path'], db)
+        self.assertEqual(result['count'], 1)
+
+    def test_list_campaigns_default_reports_the_production_ledger(self):
+        from prodtools_mcp import ledger_ro
+        with patch.object(self.status.ledger_ro, 'campaigns',
+                          return_value=[]) as camps:
+            result = self.status.list_campaigns()
+        self.assertIsNone(camps.call_args.args[0])
+        self.assertEqual(result['db_path'], ledger_ro.DEFAULT_DB)
+
+    def test_list_campaigns_still_rejects_an_unknown_state(self):
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            self.status.list_campaigns(state='banana')
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
 
 class TestMcpListCampaigns(unittest.TestCase):
     def test_filters_by_state(self):
