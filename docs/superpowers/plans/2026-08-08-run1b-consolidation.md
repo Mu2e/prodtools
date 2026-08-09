@@ -169,11 +169,20 @@ Read each hit. A loop bounded by `lastEnum` grows harmlessly. A **fixed-size arr
 
 - [ ] **Step 3: Risk check — does anything reference VD ids numerically?**
 
+**Clone EventNtuple OUTSIDE `$WS`.** `$WS` is the Muse workspace root: any repository sitting there is picked up by `muse setup` and compiled by `muse build`. Cloning EventNtuple into `$WS` silently adds it to the build — which lengthens every rebuild and, far worse, changes the build environment away from the one the Step 1 baselines were captured against, making every later "nominal unchanged" comparison suspect. This is read-only reference material; keep it out of the workspace.
+
 ```bash
-cd $WS
-git clone --depth 1 https://github.com/Mu2e/EventNtuple
-grep -rn "VirtualDetectorId\|vdid\|vd_id" EventNtuple/src EventNtuple/inc 2>/dev/null | head -30
-cat EventNtuple/fcl/from_mcs-Run1B.fcl
+REF=/exp/mu2e/data/users/oksuzian/claude-scratch/eventntuple-ref
+git clone --depth 1 https://github.com/Mu2e/EventNtuple $REF
+grep -rn "VirtualDetectorId\|vdid\|vd_id" $REF/src $REF/inc 2>/dev/null | head -30
+cat $REF/fcl/from_mcs-Run1B.fcl
+```
+
+If an earlier run already cloned it into `$WS`, move it out and drop its build artifacts before the next rebuild:
+
+```bash
+mv $WS/EventNtuple /exp/mu2e/data/users/oksuzian/claude-scratch/eventntuple-ref
+rm -rf $WS/build/*/EventNtuple
 ```
 
 The 22 new enums are appended *before* `lastEnum`, so existing ids keep their numbers and even numeric references stay valid. What you are looking for is a hardcoded *count*.
