@@ -8846,6 +8846,70 @@ class TestWriteServerRegistration(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Write-server identity dispatch and confirm gate
+# ---------------------------------------------------------------------------
+
+class TestWriteRunnerGate(unittest.TestCase):
+    def setUp(self):
+        from prodtools_mcp_write import runner
+        self.runner = runner
+
+    def test_mu2epro_without_confirm_is_refused(self):
+        with self.assertRaises(PermissionError) as ctx:
+            self.runner.require_confirmed('mu2epro', False)
+        self.assertIn('confirm', str(ctx.exception).lower())
+
+    def test_mu2epro_with_confirm_is_allowed(self):
+        self.runner.require_confirmed('mu2epro', True)   # must not raise
+
+    def test_self_needs_no_confirm(self):
+        self.runner.require_confirmed('self', False)     # must not raise
+
+    def test_unknown_run_as_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.runner.require_confirmed('root', True)
+
+    def test_ksu_wrapper_has_every_required_env_export(self):
+        # Each of these is a known failure, not a style choice:
+        # a caller-owned workdir breaks condor_vault_storer, an
+        # unreset USER picks the wrong submitter and tarball, and
+        # without the CVMFS sourcing jobsub_submit is not on PATH.
+        cmd = ' '.join(self.runner.ksu_wrapper(['bin/submit_map', '--map', '/tmp/m.json']))
+        self.assertIn('ksu mu2epro', cmd)
+        self.assertIn('unset MUSE_WORK_DIR', cmd)
+        self.assertIn('USER=mu2epro', cmd)
+        self.assertIn('LOGNAME=mu2epro', cmd)
+        self.assertIn('HOME=/exp/mu2e/app/home/mu2epro', cmd)
+        self.assertIn('XDG_RUNTIME_DIR', cmd)
+        self.assertIn('mktemp -d', cmd)
+        self.assertIn('setupmu2e-art.sh', cmd)
+        self.assertIn('muse setup ops', cmd)
+
+    def test_self_does_not_use_ksu(self):
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout='', stderr='')
+            self.runner.run_cli(['bin/submit_map', '--map', '/tmp/m.json'], 'self')
+        argv = run.call_args[0][0]
+        # Token-exact, not a substring check: this checkout's own path
+        # (.../oksuzian/...) contains the substring "ksu", so a naive
+        # `'ksu' in ' '.join(argv)` would false-positive on REPO_ROOT
+        # alone even though no ksu process is ever invoked.
+        self.assertNotIn('ksu', argv)
+
+    def test_missing_mu2epro_token_is_reported_never_remediated(self):
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(
+                returncode=1, stdout='',
+                stderr='kx509: no credentials cache found')
+            out = self.runner.run_cli(['bin/submit_map'], 'mu2epro')
+        self.assertEqual(out['rc'], 1)
+        # Nothing in the runner may attempt a refresh.
+        joined = ' '.join(' '.join(c[0][0]) for c in run.call_args_list)
+        for forbidden in ('htgettoken', 'getToken', 'kinit', 'voms-proxy-init'):
+            self.assertNotIn(forbidden, joined)
+
+
+# ---------------------------------------------------------------------------
 # Recovery resource headroom
 # ---------------------------------------------------------------------------
 
