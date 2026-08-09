@@ -9147,6 +9147,119 @@ class TestWriteRunnerGate(unittest.TestCase):
         self.assertNotIn(' id\n', remainder)
 
 
+class TestRunCliExitStatusSentinel(unittest.TestCase):
+    """`ksu -e` does NOT propagate the child's exit status.
+
+    MIT ksu (krb5 1.21.1) exits with the RAW wait status, and a normal
+    exit N encodes as N<<8, which exit() truncates to 0. Measured on
+    this host: children exiting 1, 2, 7, 42 and 255 all came back as
+    ksu rc=0. Every write tool decides success from that rc, so before
+    the stderr sentinel a crashed `submissions run`, a failed
+    json2jobdef push and a refused duplicate campaign ALL reported
+    success — in production, silently.
+
+    These tests pin the replacement: the rc comes from the
+    `__PRODTOOLS_RC__:<n>` line on stderr, and no sentinel is a failure.
+    """
+
+    def setUp(self):
+        from prodtools_mcp_write import runner
+        self.runner = runner
+
+    def _run(self, rc, stderr, run_as='mu2epro'):
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(
+                returncode=rc, stdout='', stderr=stderr)
+            return self.runner.run_cli(['bin/submissions', 'run'], run_as)
+
+    def test_sentinel_beats_the_process_rc(self):
+        # THE bug: ksu says 0, the command really exited 7.
+        out = self._run(0, 'trouble\n__PRODTOOLS_RC__:7\n')
+        self.assertEqual(out['rc'], 7)
+
+    def test_sentinel_line_is_stripped_from_the_returned_stderr(self):
+        out = self._run(0, 'trouble\n__PRODTOOLS_RC__:7\n')
+        self.assertEqual(out['stderr'], 'trouble\n')
+
+    def test_missing_sentinel_is_a_failure_not_a_success(self):
+        # Fail closed: rc=0 with no sentinel means the shell died before
+        # it could report, so the real status is unknown.
+        out = self._run(0, 'some output but no sentinel\n')
+        self.assertNotEqual(out['rc'], 0)
+        self.assertEqual(out['rc'], self.runner.SENTINEL_MISSING_RC)
+        self.assertIn('sentinel', out['stderr'])
+        self.assertIn('some output but no sentinel', out['stderr'])
+
+    def test_missing_sentinel_never_reports_the_needs_attention_code(self):
+        # rc=2 means "the tick ran fine, a human should look". An
+        # unknown status must never be laundered into that.
+        out = self._run(2, 'no sentinel here\n')
+        self.assertNotEqual(out['rc'], 2)
+
+    def test_missing_sentinel_keeps_a_trustworthy_nonzero_process_rc(self):
+        # ksu's own failures (and signal deaths) DO come through its rc;
+        # only ordinary child statuses are truncated. Keep them.
+        out = self._run(1, 'ksu: user not authorized\n')
+        self.assertEqual(out['rc'], 1)
+
+    def test_last_sentinel_wins(self):
+        # A child that prints a sentinel-shaped line cannot forge the
+        # status: ours is echoed after the command has finished.
+        out = self._run(0, '__PRODTOOLS_RC__:0\nreal failure\n'
+                           '__PRODTOOLS_RC__:3\n')
+        self.assertEqual(out['rc'], 3)
+        self.assertEqual(out['stderr'], 'real failure\n')
+
+    def test_self_identity_goes_through_the_same_parse(self):
+        # run_as='self' is not subject to the ksu truncation, but it
+        # must not be a second, rc-unchecked code path either.
+        out = self._run(0, '__PRODTOOLS_RC__:4\n', run_as='self')
+        self.assertEqual(out['rc'], 4)
+
+    def test_sentinel_tail_reports_the_real_status_under_real_bash(self):
+        # The generated tail, run by an actual shell: what the subshell
+        # exited with is what the sentinel says and what the script
+        # exits with.
+        for status in (0, 1, 7, 42):
+            proc = subprocess.run(
+                ['bash', '-c', f'( exit {status} )\n' + self.runner._RC_TAIL],
+                capture_output=True, text=True)
+            self.assertEqual(proc.returncode, status)
+            self.assertIn(f'__PRODTOOLS_RC__:{status}', proc.stderr)
+
+    def test_a_failing_setup_step_still_reaches_the_sentinel(self):
+        # The setup guards are `|| { echo ...; exit 1; }`. They only
+        # end the SUBSHELL: the whole chain is wrapped in `( ... )` and
+        # the sentinel is echoed outside it. Written as a flat chain the
+        # first guard would exit before any sentinel could print, and
+        # run_cli would see an rc-less (unknown) failure instead of 1.
+        script = self.runner.ksu_wrapper(['bin/submit_map'])[-1]
+        chain_open = script.index('\n(\n')
+        chain_close = script.index('\n)\n')
+        guard = script.index("exit 1; }")
+        echo = script.index('echo "__PRODTOOLS_RC__:')
+        self.assertLess(chain_open, guard)
+        self.assertLess(guard, chain_close)
+        self.assertLess(chain_close, echo)
+        # And it really behaves that way in bash.
+        proc = subprocess.run(
+            ['bash', '-c',
+             "( false || { echo 'step failed' >&2; exit 1; } && true )\n"
+             + self.runner._RC_TAIL],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn('step failed', proc.stderr)
+        self.assertIn('__PRODTOOLS_RC__:1', proc.stderr)
+
+    def test_generated_scripts_still_parse(self):
+        for cmd in (self.runner.ksu_wrapper(['bin/submit_map']),
+                    self.runner._self_wrapper(['bin/json2jobdef'],
+                                              simjob_setup='/cvmfs/a/setup.sh')):
+            proc = subprocess.run(['bash', '-n', '-c', cmd[-1]],
+                                  capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
 # ---------------------------------------------------------------------------
 # mcp-write-guard.sh: the PreToolUse hook, exercised as a subprocess so a
 # later edit that un-arms the gate (e.g. reverting to fail-open, or a typo
@@ -9583,6 +9696,46 @@ class TestPushCnfTool(unittest.TestCase):
         self.assertIn('index 0', str(ctx.exception))
         self.assertIn('index 1', str(ctx.exception))
 
+    def test_failed_push_never_returns_a_pre_existing_entry_as_success(self):
+        # The re-run case the map read-back could NOT save: an entry for
+        # this tarball is already in the map from an earlier push, so a
+        # FAILED json2jobdef would find exactly one candidate, call it
+        # "this push's entry" and report success. The rc must stop it
+        # first.
+        jobdefs_map = os.path.join(self._tmpdir, 'rerun_m.json')
+        pre_existing = [{'tarball': self.tarball, 'firstjob': 0,
+                         'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                                      'location': 'tape'}]}]
+        with open(jobdefs_map, 'w') as f:
+            json.dump(pre_existing, f)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 1, 'stdout': '',
+                                 'stderr': 'json2jobdef: boom'}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
+                                    jobdefs_map=jobdefs_map, run_as='self')
+        self.assertIn('boom', str(ctx.exception))
+
+    def test_ksu_truncated_failure_does_not_report_a_push_that_never_ran(self):
+        # Same scenario one layer down, with run_cli REAL: ksu returns 0
+        # for a child that failed, and the only thing that catches it is
+        # the missing stderr sentinel. Before it existed this returned
+        # the pre-existing entry as a fresh, successful production push.
+        jobdefs_map = os.path.join(self._tmpdir, 'truncated_m.json')
+        pre_existing = [{'tarball': self.tarball, 'firstjob': 0,
+                         'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                                      'location': 'tape'}]}]
+        with open(jobdefs_map, 'w') as f:
+            json.dump(pre_existing, f)
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(
+                returncode=0, stdout='',
+                stderr='json2jobdef: no such Musing\n')
+            with self.assertRaises(RuntimeError) as ctx:
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
+                                    jobdefs_map=jobdefs_map, run_as='self')
+        self.assertIn('no such Musing', str(ctx.exception))
+
 
 # ---------------------------------------------------------------------------
 # enqueue_campaign / run_submissions tools
@@ -9770,6 +9923,37 @@ class TestEnqueueAndRunTools(unittest.TestCase):
         # different fix, and an operator needs to tell them apart.
         self.assertNotIn('no campaign', msg)
 
+    def test_run_submissions_rc2_survives_the_ksu_truncation(self):
+        # End to end with run_cli REAL: the tick exits 2 ("held rows,
+        # exhausted recoveries, a paused campaign — a human should
+        # look"), ksu truncates that to 0, and only the stderr sentinel
+        # carries it out. Without it every such tick reported
+        # needs_attention=False.
+        cid = self._active_campaign()
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('subprocess.run') as run:
+                run.return_value = SimpleNamespace(
+                    returncode=0, stdout='submissions summary: held=1',
+                    stderr='__PRODTOOLS_RC__:2\n')
+                out = self.tools.run_submissions(campaign_id=cid,
+                                                 run_as='self')
+        self.assertEqual(out['rc'], 2)
+        self.assertTrue(out['needs_attention'])
+
+    def test_run_submissions_crashed_tick_is_not_reported_as_success(self):
+        # A tick that died (lock contention, traceback) leaves no
+        # sentinel. That is a failure, not a clean rc=0 tick.
+        cid = self._active_campaign()
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('subprocess.run') as run:
+                run.return_value = SimpleNamespace(
+                    returncode=0, stdout='',
+                    stderr='another submissions run holds the lock\n')
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.tools.run_submissions(campaign_id=cid, run_as='self')
+        self.assertIn('holds the lock', str(ctx.exception))
     def test_ledger_path_for_mu2epro_is_production(self):
         from utils import submission_ledger
         self.assertEqual(self.tools._ledger_path_for('mu2epro'),

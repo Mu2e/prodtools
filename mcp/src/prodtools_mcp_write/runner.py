@@ -5,9 +5,44 @@ that enforces confirm. Kept apart from tools.py so the security-
 critical logic is testable without MCP plumbing.
 """
 import os
+import re
 import subprocess
 
 RUN_AS_VALUES = ('self', 'mu2epro')
+
+# --- the exit status of anything run through `ksu -e` is UNUSABLE ------
+#
+# MIT ksu (krb5 1.21.1, this host) does NOT propagate the child's exit
+# code on its non-`execv` path: it waits, then calls
+# `exit(raw_wait_status)`. A normal exit N encodes as N<<8, and exit()
+# keeps only the low 8 bits, so EVERY ordinary child status truncates to
+# 0. Measured here: children exiting 1, 2, 7, 42 and 255 all give
+# `ksu` rc=0. (Only a signal death survives -- a SIGKILLed child gives
+# 9 -- because the signal number lives in the low byte. A bare
+# `bash -c 'exit 7'` does give 7; the loss is specifically ksu's.)
+#
+# Every write tool reads that rc to decide success, so before this
+# sentinel existed a crashed tick, a failed push, and a refused
+# duplicate campaign all reported SUCCESS -- silently, and in
+# production. NOTE: restoring the `RC=${PIPESTATUS[0]}; exit $RC` tail
+# from the .claude/commands/mu2epro-submit.md block does NOT help.
+# ksu truncates whatever the inner shell exits with, so no amount of
+# care INSIDE the script can get a status out through ksu's own rc.
+# Do not "simplify" this back to trusting `proc.returncode`.
+#
+# The status therefore travels out of band, on stderr, as
+# `__PRODTOOLS_RC__:<n>` -- text ksu passes through untouched.
+RC_SENTINEL_PREFIX = '__PRODTOOLS_RC__:'
+
+_RC_SENTINEL_RE = re.compile(
+    r'^' + re.escape(RC_SENTINEL_PREFIX) + r'(\d+)\s*$')
+
+# Reported when stderr carries NO sentinel: the child's real status is
+# then unknown, and unknown is treated as failure, never as success.
+# Deliberately not 0, 1 or 2: `submissions run` documents 2 as "ran
+# fine, something needs a human", and an unknown status must never
+# masquerade as that.
+SENTINEL_MISSING_RC = 125
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
@@ -25,9 +60,9 @@ ALLOWED_ENTRY_POINTS = frozenset({
 # Adapted from the ksu block in .claude/commands/mu2epro-submit.md
 # (mktemp workdir, USER/LOGNAME/HOME exports, XDG_RUNTIME_DIR, unset
 # MUSE_WORK_DIR only) — NOT byte-for-byte verbatim: this template adds
-# `setup OfflineOps` (not present in that source block) and drops its
-# `RC=${PIPESTATUS[0]}; exit $RC` tail (benign here — the exit status
-# still propagates through `ksu -e`'s own return code). Every exported
+# `setup OfflineOps` (not present in that source block) and replaces its
+# `RC=${PIPESTATUS[0]}; exit $RC` tail with the stderr sentinel (see
+# RC_SENTINEL_PREFIX: that tail cannot work through ksu). Every exported
 # variable and the mktemp/cd/source sequence below is still a known
 # failure mode, not a style choice:
 #   - mktemp INSIDE ksu: a caller-owned workdir makes
@@ -60,14 +95,34 @@ ALLOWED_ENTRY_POINTS = frozenset({
 # setup failure. The braces are doubled (`{{` `}}`) because this is a
 # str.format() TEMPLATE — {musing_clause} and {command} are its only
 # real placeholders.
-_SETUP_CHAIN = """source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \\
+#
+# The whole setup-plus-command sequence runs inside a SUBSHELL, and the
+# sentinel is echoed from outside it. That shape is what makes the
+# sentinel unconditional: the `exit 1` guards above end the SUBSHELL,
+# not the script, so a failed CVMFS source still reaches the echo
+# below. Written as a plain `&&` chain the first guard would exit the
+# whole `bash -c` before any sentinel could be printed, and run_cli
+# would see an rc-less failure — the very hole this closes.
+_RC_TAIL = f"""__prodtools_rc=$?
+echo "{RC_SENTINEL_PREFIX}$__prodtools_rc" >&2
+exit $__prodtools_rc
+"""
+
+_SETUP_CHAIN = """(
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1; }} \\
   && muse setup ops > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: muse setup ops failed' >&2; exit 1; }} \\
   && setup OfflineOps > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: setup OfflineOps failed' >&2; exit 1; }} \\
-  && {musing_clause}{command}"""
+  && {musing_clause}{command}
+)
+""" + _RC_TAIL
 
+# `mktemp ... || exit 1` stays a hard exit: it is BEFORE the setup
+# subshell, so it prints no sentinel — and a sentinel-less result is
+# reported as a failure by run_cli anyway (fail-closed), which is the
+# right answer for "could not even make a workdir".
 _KSU_TEMPLATE = """
 unset MUSE_WORK_DIR
 export USER=mu2epro LOGNAME=mu2epro HOME=/exp/mu2e/app/home/mu2epro
@@ -169,6 +224,40 @@ def _quote(arg):
     return "'" + str(arg).replace("'", "'\\''") + "'"
 
 
+def _rc_from_sentinel(proc_rc, stderr):
+    """(rc, stderr-without-sentinel-lines) for a finished process.
+
+    The LAST sentinel wins: ours is echoed after the command has
+    finished, so anything a child printed that happens to look like one
+    is necessarily earlier. Every sentinel-shaped line is stripped from
+    the returned stderr, spoofed ones included, so callers only ever see
+    the command's own output.
+
+    No sentinel at all means the shell died before the echo could run
+    (or something ate stderr) — the child's status is UNKNOWN, and this
+    returns a failure rc rather than the process rc of 0 that ksu
+    manufactures. A nonzero process rc is still trustworthy in that case
+    and is passed through (it can only be ksu's own failure or a signal
+    death, never a truncated child status), EXCEPT for 2: that is
+    `submissions run`'s "ran fine, needs a human" code, which an unknown
+    status must never be reported as.
+    """
+    kept, rc = [], None
+    for line in stderr.splitlines(keepends=True):
+        m = _RC_SENTINEL_RE.match(line.rstrip('\n'))
+        if m:
+            rc = int(m.group(1))
+            continue
+        kept.append(line)
+    if rc is not None:
+        return rc, ''.join(kept)
+    unknown = (proc_rc if proc_rc not in (0, 2) else SENTINEL_MISSING_RC)
+    note = (f"run_cli: no {RC_SENTINEL_PREFIX} status sentinel on stderr "
+            f"(process rc={proc_rc}) — the command's real exit status is "
+            f"unknown, reporting rc={unknown} (failure)\n")
+    return unknown, ''.join(kept) + note
+
+
 def run_cli(argv, run_as, cwd=None, simjob_setup=None):
     """Run a prodtools command under the requested identity.
 
@@ -182,6 +271,14 @@ def run_cli(argv, run_as, cwd=None, simjob_setup=None):
     Credentials are NEVER remediated. A missing mu2epro token comes back
     as a non-zero rc with its stderr intact; no refresh is attempted,
     ever.
+
+    The returned `rc` is the STDERR SENTINEL's value, not
+    `proc.returncode` — `ksu -e` truncates every ordinary child status
+    to 0 (see RC_SENTINEL_PREFIX). Both identities go through the same
+    parse: run_as='self' is not subject to the truncation, but a second
+    code path that trusted the process rc there would be one refactor
+    away from being reused for mu2epro, and an unchecked rc is the
+    failure mode this whole mechanism exists to prevent.
     """
     if run_as not in RUN_AS_VALUES:
         raise ValueError(
@@ -198,5 +295,5 @@ def run_cli(argv, run_as, cwd=None, simjob_setup=None):
         cmd = _self_wrapper(argv, simjob_setup)
         run_cwd = cwd or REPO_ROOT
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=run_cwd)
-    return {'rc': proc.returncode, 'stdout': proc.stdout,
-            'stderr': proc.stderr}
+    rc, stderr = _rc_from_sentinel(proc.returncode, proc.stderr)
+    return {'rc': rc, 'stdout': proc.stdout, 'stderr': stderr}
