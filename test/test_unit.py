@@ -8998,6 +8998,61 @@ class TestWriteRunnerGate(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# push_cnf tool
+# ---------------------------------------------------------------------------
+
+class TestPushCnfTool(unittest.TestCase):
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        self.tools = tools
+
+    def test_mu2epro_without_confirm_refused_before_running_anything(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(PermissionError):
+                self.tools.push_cnf(json='data/Run1B/resampler_beam.json',
+                                    desc='PhysicalPionStops', dsconf='Run1Bap',
+                                    jobdefs_map='/tmp/m.json',
+                                    run_as='mu2epro')
+        run.assert_not_called()
+
+    def test_builds_the_expected_argv(self):
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
+            with patch('prodtools_mcp_write.tools._read_map_entry',
+                       return_value=(3, {'tarball': 'cnf.mu2e.D.C.0.tar'})):
+                self.tools.push_cnf(json='data/Run1B/resampler_beam.json',
+                                    desc='PhysicalPionStops', dsconf='Run1Bap',
+                                    jobdefs_map='/tmp/m.json',
+                                    run_as='mu2epro', confirm=True)
+        argv = run.call_args[0][0]
+        self.assertEqual(argv[0], 'bin/json2jobdef')
+        self.assertIn('--prod', argv)
+        self.assertIn('--jobdefs', argv)
+        self.assertIn('/tmp/m.json', argv)
+        self.assertIn('PhysicalPionStops', argv)
+
+    def test_result_is_read_from_the_map_not_stdout(self):
+        noisy = 'Added JSON entry for cnf.mu2e.WRONG.tar to jobdefs_list.json'
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': noisy, 'stderr': ''}):
+            with patch('prodtools_mcp_write.tools._read_map_entry',
+                       return_value=(0, {'tarball': 'cnf.mu2e.RIGHT.C.0.tar'})):
+                out = self.tools.push_cnf(json='j.json', desc='D', dsconf='C',
+                                          jobdefs_map='/tmp/m.json',
+                                          run_as='self')
+        self.assertEqual(out['tarball'], 'cnf.mu2e.RIGHT.C.0.tar')
+        self.assertEqual(out['entry_index'], 0)
+
+    def test_nonzero_rc_raises_with_stderr(self):
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 2, 'stdout': '', 'stderr': 'boom'}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.tools.push_cnf(json='j.json', desc='D', dsconf='C',
+                                    jobdefs_map='/tmp/m.json', run_as='self')
+        self.assertIn('boom', str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
 # Recovery resource headroom
 # ---------------------------------------------------------------------------
 
