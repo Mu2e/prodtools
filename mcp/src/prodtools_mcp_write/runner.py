@@ -328,6 +328,19 @@ def run_cli(argv, run_as, cwd=None, simjob_setup=None):
     else:
         cmd = _self_wrapper(argv, simjob_setup)
         run_cwd = cwd or REPO_ROOT
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=run_cwd)
+    # stdin=DEVNULL is load-bearing, not tidiness. capture_output redirects
+    # stdout and stderr and says nothing about stdin, and an unset stdin is
+    # INHERITED — for a stdio MCP server that is the JSON-RPC client->server
+    # socket (proved by fd identity: the child's fd 0 and the server's fd 0
+    # were the same socket inode). A child that reads stdin then (a) blocks
+    # forever, since nothing will ever write to it, and (b) races the server
+    # for protocol bytes, silently desyncing the session. OfflineOps
+    # `pushOutput` does exactly this: its unconditional debugprint runs
+    # `cat $BEARER_TOKEN_FILE`, and that variable is empty in this chain, so
+    # the argument vanishes and cat reads stdin. Observed 2026-08-09: a
+    # push_cnf hung 30 min, the client abandoned the call, and the child
+    # kept running past the reported failure.
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=run_cwd,
+                          stdin=subprocess.DEVNULL)
     rc, stderr = _rc_from_sentinel(proc.returncode, proc.stderr)
     return {'rc': rc, 'stdout': proc.stdout, 'stderr': stderr}

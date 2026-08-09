@@ -9568,6 +9568,63 @@ class TestRunCliExitStatusSentinel(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
+class TestChildStdinIsClosed(unittest.TestCase):
+    """A child of a stdio MCP server must never inherit the server's stdin.
+
+    `capture_output=True` redirects stdout and stderr and says NOTHING
+    about stdin, and an unset stdin is inherited. The write server speaks
+    JSON-RPC over stdio, so its fd 0 is the client->server socket. A child
+    that reads stdin therefore (a) blocks forever, because nothing will
+    ever write to it, and (b) consumes bytes the client meant for the
+    server, desyncing the session with no error anywhere.
+
+    Measured 2026-08-09 on a real push_cnf: the child's fd 0 and the
+    server's fd 0 were the same socket inode. OfflineOps `pushOutput`
+    trips it -- its unconditional `debugprint` runs `cat
+    $BEARER_TOKEN_FILE`, that variable is empty in this chain, the
+    argument vanishes, and `cat` reads stdin. The call hung 30 minutes,
+    the client gave up and reported failure, and the child kept running.
+    Under run_as='mu2epro' that is a live production write proceeding
+    past a reported failure.
+    """
+
+    def setUp(self):
+        from prodtools_mcp_write import runner
+        self.runner = runner
+
+    def test_run_cli_closes_the_child_stdin(self):
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(
+                returncode=0, stdout='', stderr='__PRODTOOLS_RC__:0\n')
+            self.runner.run_cli(['bin/submissions', 'run'], 'mu2epro')
+        self.assertEqual(run.call_args.kwargs.get('stdin'),
+                         subprocess.DEVNULL,
+                         'child stdin must be DEVNULL, never inherited')
+
+    def test_both_identities_close_it(self):
+        # self and mu2epro build different commands but share the one
+        # subprocess.run call; a future split must not drop this on either.
+        for run_as in ('self', 'mu2epro'):
+            with patch('subprocess.run') as run:
+                run.return_value = SimpleNamespace(
+                    returncode=0, stdout='', stderr='__PRODTOOLS_RC__:0\n')
+                self.runner.run_cli(['bin/json2jobdef'], run_as,
+                                    simjob_setup='/cvmfs/a/setup.sh')
+            self.assertEqual(run.call_args.kwargs.get('stdin'),
+                             subprocess.DEVNULL, run_as)
+
+    def test_devnull_actually_stops_a_stdin_reading_child(self):
+        # Why DEVNULL and not a closed fd or a timeout: a bare `cat` is
+        # the exact shape that hung, and with DEVNULL it reads EOF and
+        # exits at once. The timeout is the assertion -- if this ever
+        # blocks, the remedy is wrong, and the suite says so instead of
+        # hanging forever.
+        proc = subprocess.run(['cat'], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=10)
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, '')
+
+
 # ---------------------------------------------------------------------------
 # mcp-write-guard.sh: the PreToolUse hook, exercised as a subprocess so a
 # later edit that un-arms the gate (e.g. reverting to fail-open, or a typo
