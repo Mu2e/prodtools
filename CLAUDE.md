@@ -51,6 +51,21 @@ may still be running. Do not start a recovery pass on an `unknown`.
 Setup: `bash mcp/scripts/install.sh`. Health check:
 `bash mcp/scripts/start_mcp.sh --check`.
 
+A second, write-capable server (`prodtools-write`) exposes submission:
+`push_cnf`, `enqueue_campaign`, `run_submissions`. Every tool takes a
+required `run_as`:
+
+- `run_as="self"` needs no privilege and writes only your own scratch,
+  datasets and ledger (`/exp/mu2e/data/users/$USER/prodtools/`). No
+  prompt.
+- `run_as="mu2epro"` registers artifacts in production SAM and submits
+  production grid jobs. It is refused unless `confirm=true`, AND a
+  PreToolUse hook prompts. Both gates are deliberate: a hook can be
+  un-armed by a settings reload.
+
+The read-only `prodtools` server still performs NO writes. Keep it that
+way — that claim is why its tools are called without deliberation.
+
 ## Memory discipline
 
 Save a memory immediately when you learn something non-obvious about
