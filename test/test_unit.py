@@ -10,6 +10,7 @@ Run with:  python -m pytest test/test_unit.py -v
        or: python test/test_unit.py
 """
 
+import contextlib
 import copy
 import hashlib
 import io
@@ -5918,43 +5919,211 @@ class TestSubmitLedgerHook(unittest.TestCase):
         return argparse.Namespace(ledger_db=db, ledger_parent=parent,
                                   no_ledger=False, map='/tmp/m.json')
 
-    def test_record_in_ledger_absolute_indices(self):
+    def test_reserve_then_attach_absolute_indices(self):
         import tempfile
         from utils import submit, submission_ledger
         db = os.path.join(tempfile.mkdtemp(), 'sub.db')
         entry = {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 3, 'firstjob': 100}
+        rid = submit._reserve_in_ledger(entry, 100, [0, 1, 2],
+                                        self._opts(db))
         result = {'tarball': 'cnf.mu2e.T.C.0.tar', 'cluster_id': '1',
                   'jobsub_id': '1.0@js.fnal.gov', 'njobs': 3,
                   'status': 'submitted'}
-        submit._record_in_ledger(entry, 100, [0, 1, 2], result, self._opts(db))
+        submit._attach_cluster(rid, result, self._opts(db))
         row = submission_ledger.open_rows(db)[0]
         self.assertEqual(row['indices'], [100, 101, 102])
         self.assertEqual(row['entry'], entry)
         self.assertEqual(row['jobsub_id'], '1.0@js.fnal.gov')
         self.assertEqual(row['map_path'], '/tmp/m.json')
 
-    def test_record_in_ledger_parent_chains(self):
+    def test_reserve_then_attach_parent_chains(self):
         import tempfile
         from utils import submit, submission_ledger
         db = os.path.join(tempfile.mkdtemp(), 'sub.db')
         rid = submission_ledger.record_submission(
             db, tarball='t', entry={}, indices=[0, 1],
             jobsub_id='1.0@js', cluster_id='1')
+        child = submit._reserve_in_ledger({'tarball': 't'}, 0, [1],
+                                          self._opts(db, parent=rid))
         result = {'tarball': 't', 'cluster_id': '2', 'jobsub_id': '2.0@js',
                   'njobs': 1, 'status': 'submitted'}
-        submit._record_in_ledger({}, 0, [1], result, self._opts(db, parent=rid))
+        submit._attach_cluster(child, result, self._opts(db, parent=rid))
         rows = submission_ledger.open_rows(db)
         self.assertEqual(rows[1]['attempt'], 2)
         self.assertEqual(rows[1]['parent_id'], rid)
 
-    def test_ledger_failure_does_not_raise(self):
+    def test_reserve_failure_raises(self):
+        # An unrecordable window must not be submitted — the caller
+        # (_submit_one) reserves BEFORE jobsub_submit, so this raising
+        # is what makes the whole submission fail closed.
+        from utils import submit
+        with self.assertRaises(Exception):
+            submit._reserve_in_ledger(
+                {}, 0, [0],
+                self._opts('/nonexistent-dir-recovery-test/s.db'))
+
+    def test_attach_failure_does_not_raise(self):
+        # By the time attach runs, the submission already happened —
+        # a ledger problem here must only warn.
         from utils import submit
         result = {'tarball': 't', 'cluster_id': '1', 'jobsub_id': None,
                   'njobs': 1, 'status': 'submitted'}
-        # nonexistent directory → sqlite3.OperationalError inside, warning out
-        submit._record_in_ledger(
-            {}, 0, [0], result,
-            self._opts('/nonexistent-dir-recovery-test/s.db'))  # must not raise
+        submit._attach_cluster(
+            1, result, self._opts('/nonexistent-dir-recovery-test/s.db'))
+
+    def test_fail_reservation_does_not_raise(self):
+        from utils import submit
+        result = {'status': 'failed', 'cluster_id': None}
+        submit._fail_reservation(
+            1, result, self._opts('/nonexistent-dir-recovery-test/s.db'))
+
+    def test_none_row_id_is_a_noop(self):
+        # --no-ledger: _reserve_in_ledger returns None, and both
+        # closing calls must tolerate that without touching the DB.
+        from utils import submit
+        opts = self._opts('/nonexistent-dir-recovery-test/s.db')
+        submit._attach_cluster(None, {'cluster_id': '1'}, opts)
+        submit._fail_reservation(None, {'status': 'failed'}, opts)
+
+
+class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
+    """Ordering is the whole contract: the row must exist while
+    jobsub_submit is in flight."""
+
+    def setUp(self):
+        from utils import submit, submission_ledger as sl
+        self.submit = submit
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 5, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+        self.opts = SimpleNamespace(ledger_db=self.db, map='/tmp/map.json',
+                                    ledger_parent=None, no_ledger=False)
+
+    def test_row_exists_and_is_reserved_during_submit(self):
+        seen = {}
+
+        def fake_run_submit(*a, **kw):
+            rows = self.sl.all_rows(self.db)
+            seen['states'] = [r['state'] for r in rows]
+            seen['indices'] = rows[0]['indices'] if rows else None
+            return {'status': 'submitted', 'cluster_id': '4242',
+                    'jobsub_id': '4242.0@jobsub03.fnal.gov',
+                    'tarball': self.entry['tarball'], 'njobs': 3}
+
+        rid = self.submit._reserve_in_ledger(
+            self.entry, 0, [0, 1, 2], self.opts)
+        result = fake_run_submit()
+        self.assertEqual(seen['states'], ['submitting'])
+        self.assertEqual(seen['indices'], [0, 1, 2])
+
+        self.submit._attach_cluster(rid, result, self.opts)
+        self.assertEqual(self.sl.open_rows(self.db)[0]['cluster_id'], '4242')
+
+    def test_failed_submit_marks_the_reservation_failed(self):
+        rid = self.submit._reserve_in_ledger(
+            self.entry, 0, [0, 1, 2], self.opts)
+        self.submit._fail_reservation(
+            rid, {'status': 'failed', 'cluster_id': None}, self.opts)
+        self.assertEqual(self.sl.all_rows(self.db)[0]['state'], 'failed')
+
+    def test_unwritable_ledger_raises_before_any_submit(self):
+        self.opts.ledger_db = '/proc/nope/submissions.db'
+        with self.assertRaises(Exception):
+            self.submit._reserve_in_ledger(self.entry, 0, [0, 1, 2], self.opts)
+
+    def test_no_ledger_skips_reservation(self):
+        self.opts.no_ledger = True
+        self.assertIsNone(
+            self.submit._reserve_in_ledger(self.entry, 0, [0, 1, 2], self.opts))
+
+
+class TestSubmitResolveLedgerDb(unittest.TestCase):
+    """utils/submit.py's writer-side counterpart to
+    submissions.resolve_db: a DEFAULTED --ledger-db gets its directory
+    created; an operator-supplied one never does."""
+
+    def setUp(self):
+        from utils import submit, submission_ledger as sl
+        self.submit = submit
+        self.sl = sl
+
+    def test_defaulted_ledger_db_creates_its_directory(self):
+        base = tempfile.mkdtemp()
+        derived = os.path.join(base, 'someuser', 'prodtools',
+                               'submissions.db')
+        opts = SimpleNamespace(ledger_db=None)
+        with patch.object(self.sl, 'ledger_for', return_value=derived):
+            got = self.submit._resolve_ledger_db(opts)
+        self.assertEqual(got, derived)
+        self.assertTrue(os.path.isdir(os.path.dirname(derived)))
+
+    def test_explicit_ledger_db_directory_is_never_created(self):
+        base = tempfile.mkdtemp()
+        explicit = os.path.join(base, 'no', 'such', 'dir',
+                                'submissions.db')
+        opts = SimpleNamespace(ledger_db=explicit)
+        got = self.submit._resolve_ledger_db(opts)
+        self.assertEqual(got, explicit)
+        self.assertFalse(os.path.isdir(os.path.dirname(explicit)))
+
+
+class TestSubmitEnqueueCreatesFreshLedgerDir(unittest.TestCase):
+    """--enqueue writes to the ledger (create_campaign) before any
+    submission — main() must resolve+create a never-used personal
+    ledger's directory, or this dies in _connect with
+    sqlite3.OperationalError before a campaign is ever registered."""
+
+    def setUp(self):
+        from utils import submit
+        self.submit = submit
+        self.map_path = os.path.join(tempfile.mkdtemp(), 'map.json')
+        with open(self.map_path, 'w') as f:
+            json.dump([{'tarball': 'cnf.mu2e.E.C.0.tar', 'njobs': 5,
+                       'inloc': 'tape',
+                       'outputs': [{'location': 'tape'}]}], f)
+        tb_patcher = patch.object(submit, '_ensure_local_tarball',
+                                  return_value=Path('cnf.mu2e.E.C.0.tar'))
+        ci_patcher = patch.object(submit, 'check_inputs',
+                                  return_value=(True, []))
+        tb_patcher.start()
+        ci_patcher.start()
+        self.addCleanup(tb_patcher.stop)
+        self.addCleanup(ci_patcher.stop)
+
+    def test_enqueue_creates_fresh_personal_ledger_directory(self):
+        base = tempfile.mkdtemp()
+        derived = os.path.join(base, 'freshuser', 'prodtools',
+                               'submissions.db')
+        with patch.object(self.submit.submission_ledger, 'ledger_for',
+                          return_value=derived), \
+             patch.object(sys, 'argv',
+                          ['submit_map', '--map', self.map_path,
+                           '--enqueue']):
+            self.submit.main()
+        self.assertTrue(os.path.isdir(os.path.dirname(derived)))
+        self.assertEqual(
+            len(self.submit.submission_ledger.all_campaigns(derived)), 1)
+
+
+class TestSubmissionsRunCreatesFreshLedgerDir(unittest.TestCase):
+    """A mutating verb's _acquire_lock does a bare open() for the lock
+    file — if resolve_db hadn't already created the directory, `run`
+    against a never-used personal ledger would crash there before
+    reaching any ledger logic. Exercised via main(), not resolve_db in
+    isolation, so the actual gap is covered."""
+
+    def test_run_creates_directory_before_acquiring_the_lock(self):
+        from utils import submissions
+        base = tempfile.mkdtemp()
+        derived = os.path.join(base, 'freshuser2', 'prodtools',
+                               'submissions.db')
+        with patch.object(submissions.submission_ledger, 'ledger_for',
+                          return_value=derived), \
+             patch.object(sys, 'argv', ['submissions', 'run']):
+            submissions.main()
+        self.assertTrue(os.path.isdir(os.path.dirname(derived)))
 
 
 # ---------------------------------------------------------------------------
@@ -6318,6 +6487,17 @@ class TestRecoverCLI(unittest.TestCase):
         self.assertIn('complete', out)
         self.assertIn('active', out)
         self.assertIn('cnf.mu2e.T2.C.0.tar', out)
+
+    def test_status_surfaces_stuck_reservations(self):
+        from utils import submissions as recover
+        rid = self.sl.reserve_submission(
+            self.db, tarball='cnf.mu2e.D.C.0.tar', entry={},
+            indices=[0, 1, 2])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            recover.print_status(self.db)
+        self.assertIn('NEEDS RECONCILIATION', out.getvalue())
+        self.assertIn(f'row {rid}', out.getvalue())
 
     def test_main_exit_2_on_attention(self):
         from utils import submissions as recover
@@ -9178,11 +9358,11 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
 
     def test_files_submission_records_filenames_in_ledger(self):
         from utils import submit
-        recorded = {}
+        reserved = {}
 
-        def fake_record(db, *, tarball, entry, indices, jobsub_id,
-                        cluster_id, map_path=None, parent_id=None):
-            recorded['indices'] = indices
+        def fake_reserve(db, *, tarball, entry, indices, map_path=None,
+                         parent_id=None):
+            reserved['indices'] = indices
             return 99
 
         with patch.object(submit, '_ensure_local_tarball',
@@ -9197,12 +9377,13 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
                                         'njobs': 2, 'status': 'submitted',
                                         'raw_output': ''}) as rs, \
              patch.object(submit, '_log_submission'), \
-             patch.object(submit.submission_ledger, 'record_submission',
-                          fake_record):
+             patch.object(submit.submission_ledger, 'reserve_submission',
+                          fake_reserve), \
+             patch.object(submit.submission_ledger, 'attach_cluster'):
             result = submit.submit_entry_direct(dict(self.ENTRY), 0,
                                                 self._opts())
         self.assertEqual(result['status'], 'submitted')
-        self.assertEqual(recorded['indices'], self.FILES)
+        self.assertEqual(reserved['indices'], self.FILES)
         # the jobsub argv references an ops JSON (shipped via dropbox)
         cmd = rs.call_args[0][0]
         self.assertEqual(cmd[0], 'jobsub_submit')
@@ -9261,8 +9442,9 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
                                         'njobs': 2, 'status': 'submitted',
                                         'raw_output': ''}) as rs, \
              patch.object(submit, '_log_submission'), \
-             patch.object(submit.submission_ledger, 'record_submission',
-                          lambda *a, **k: 99):
+             patch.object(submit.submission_ledger, 'reserve_submission',
+                          lambda *a, **k: 99), \
+             patch.object(submit.submission_ledger, 'attach_cluster'):
             submit.submit_entry_direct(entry, 0, self._opts())
         cmd = rs.call_args[0][0]
         scopes = [cmd[i + 1] for i, c in enumerate(cmd)
@@ -10091,6 +10273,8 @@ class TestStatusDrainingLine(unittest.TestCase):
                           return_value=[row]), \
              patch.object(submissions.submission_ledger, 'all_campaigns',
                           return_value=[camp]), \
+             patch.object(submissions.submission_ledger, 'reserved_rows',
+                          return_value=[]), \
              _ctx.redirect_stdout(buf):
             submissions.print_status('/x.db')
         out = buf.getvalue()
@@ -10111,6 +10295,8 @@ class TestStatusDrainingLine(unittest.TestCase):
                           return_value=[]), \
              patch.object(submissions.submission_ledger, 'all_campaigns',
                           return_value=[camp]), \
+             patch.object(submissions.submission_ledger, 'reserved_rows',
+                          return_value=[]), \
              _ctx.redirect_stdout(buf):
             submissions.print_status('/x.db')
         out = buf.getvalue()
@@ -10194,7 +10380,12 @@ class TestSubmissionsDbResolution(unittest.TestCase):
                          self.sl.DEFAULT_DB)
 
     def test_status_mine_selects_personal(self):
-        with patch('getpass.getuser', return_value='bob'):
+        # resolve_db now mkdir's a derived path (see the dedicated
+        # directory-creation tests below) — patched here to a passthrough
+        # since this test is only about which PATH wins, not filesystem
+        # side effects under the real /exp/mu2e/data/users/bob.
+        with patch('getpass.getuser', return_value='bob'), \
+             patch.object(self.sl, 'ensure_ledger_dir', side_effect=lambda p: p):
             self.assertEqual(
                 self.submissions.resolve_db(self._opts('status', mine=True)),
                 '/exp/mu2e/data/users/bob/prodtools/submissions.db')
@@ -10202,8 +10393,10 @@ class TestSubmissionsDbResolution(unittest.TestCase):
     def test_mutating_verbs_default_to_personal(self):
         # As a non-mu2epro user you cannot write production at all, so a
         # mutating verb defaulting there is never useful. For mu2epro the
-        # two paths are identical.
-        with patch('getpass.getuser', return_value='bob'):
+        # two paths are identical. ensure_ledger_dir patched for the same
+        # reason as test_status_mine_selects_personal.
+        with patch('getpass.getuser', return_value='bob'), \
+             patch.object(self.sl, 'ensure_ledger_dir', side_effect=lambda p: p):
             for verb in ('run', 'pause', 'resume', 'cancel', 'complete',
                          'set-slice', 'set-memory'):
                 self.assertEqual(
@@ -10212,9 +10405,35 @@ class TestSubmissionsDbResolution(unittest.TestCase):
                     f'verb {verb}')
 
     def test_mutating_default_is_production_for_mu2epro(self):
-        with patch('getpass.getuser', return_value='mu2epro'):
+        with patch('getpass.getuser', return_value='mu2epro'), \
+             patch.object(self.sl, 'ensure_ledger_dir', side_effect=lambda p: p):
             self.assertEqual(self.submissions.resolve_db(self._opts('run')),
                              self.sl.PRODUCTION_DB)
+
+    def test_mutating_verb_creates_its_derived_ledger_directory(self):
+        # Real ensure_ledger_dir (not patched): a mutating verb's
+        # DEFAULTED path must get its directory created, so `submissions
+        # run` against a never-used personal ledger doesn't die in
+        # _connect/_acquire_lock before it can do anything.
+        base = tempfile.mkdtemp()
+        derived = os.path.join(base, 'someuser', 'prodtools',
+                               'submissions.db')
+        with patch.object(self.sl, 'ledger_for', return_value=derived):
+            got = self.submissions.resolve_db(self._opts('run'))
+        self.assertEqual(got, derived)
+        self.assertTrue(os.path.isdir(os.path.dirname(derived)))
+
+    def test_explicit_db_directory_is_never_created(self):
+        # An operator-supplied --db pointing at a typo'd/nonexistent
+        # directory must fail loudly downstream, never get silently
+        # mkdir'd — only a DERIVED (ledger_for()) path is ever created.
+        base = tempfile.mkdtemp()
+        explicit = os.path.join(base, 'no', 'such', 'dir',
+                                'submissions.db')
+        got = self.submissions.resolve_db(
+            self._opts('run', db=explicit))
+        self.assertEqual(got, explicit)
+        self.assertFalse(os.path.isdir(os.path.dirname(explicit)))
 
 
 # ---------------------------------------------------------------------------

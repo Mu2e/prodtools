@@ -134,39 +134,77 @@ def _parse_jobsub_id(stdout):
     return m.group(1) if m else None
 
 
-def _record_in_ledger(entry, firstjob, jobset, result, opts, files=None):
-    """Append a ledger row for a successful direct submission.
+def _ledger_payload(firstjob, jobset, files=None):
+    """Absolute cnf indices, or the FILENAME list for a draining batch.
+    jobset is entry-relative; the ledger stores absolute (firstjob + i).
+    For --indices submissions jobset is already absolute and firstjob is
+    0, so the same expression holds."""
+    return (list(files) if files is not None
+            else [firstjob + i for i in jobset])
 
-    jobset is entry-relative; the ledger stores ABSOLUTE cnf indices
-    (firstjob + i). For --indices submissions jobset is already absolute
-    and firstjob is 0, so the same expression holds. For a draining
-    batch (files given) the ledger stores the FILENAME list in
-    indices_json — file-keyed rows are discriminated by
-    is_draining(entry), never by content.
 
-    Never raises: the submission already happened, so a ledger failure
-    is reported with everything needed to insert the row manually.
+def _reserve_in_ledger(entry, firstjob, jobset, opts, files=None):
+    """Claim this window BEFORE jobsub_submit. Returns the row id, or
+    None when --no-ledger.
+
+    RAISES on failure, deliberately: an unrecordable window must not be
+    submitted, because nothing would then stop the next tick from
+    re-sending the same deterministic payload. This is also what makes a
+    self-submission fail fast rather than launching jobs and only then
+    discovering it cannot write the ledger.
+
+    opts.ledger_db is expected already resolved (see
+    _resolve_ledger_db, called once in main()): a DERIVED path arrives
+    with its directory already created, an explicit --ledger-db arrives
+    exactly as given. Creating it again here would defeat the point of
+    resolving once — an explicit path pointing at a missing directory
+    must fail here, not get silently mkdir'd.
     """
-    payload = (list(files) if files is not None
-              else [firstjob + i for i in jobset])
+    if opts.no_ledger:
+        return None
+    return submission_ledger.reserve_submission(
+        opts.ledger_db,
+        tarball=entry['tarball'],
+        entry=entry,
+        indices=_ledger_payload(firstjob, jobset, files),
+        map_path=opts.map,
+        parent_id=opts.ledger_parent)
+
+
+def _attach_cluster(row_id, result, opts):
+    """Fill in the cluster on a reserved row. Never raises: the
+    submission already happened, so a ledger failure is reported with
+    everything needed to fix the row by hand."""
+    if row_id is None:
+        return
     try:
-        row_id = submission_ledger.record_submission(
-            opts.ledger_db,
-            tarball=result['tarball'],
-            entry=entry,
-            indices=payload,
+        submission_ledger.attach_cluster(
+            opts.ledger_db, row_id,
             jobsub_id=result.get('jobsub_id'),
-            cluster_id=result['cluster_id'],
-            map_path=opts.map,
-            parent_id=opts.ledger_parent,
-        )
-        print(f"Ledger: row {row_id} recorded in {opts.ledger_db}")
+            cluster_id=result['cluster_id'])
+        print(f"Ledger: row {row_id} attached to cluster "
+              f"{result['cluster_id']} in {opts.ledger_db}")
     except Exception as e:
-        print(f"WARNING: ledger write failed ({e}) — the submission DID "
-              f"go through (cluster {result['cluster_id']}). Record "
-              f"manually: tarball={result['tarball']} indices={payload} "
-              f"jobsub_id={result.get('jobsub_id')} "
-              f"parent={opts.ledger_parent} db={opts.ledger_db}")
+        print(f"WARNING: ledger attach failed ({e}) — the submission DID "
+              f"go through (cluster {result['cluster_id']}). Row {row_id} "
+              f"is still 'submitting'; set it active by hand: "
+              f"jobsub_id={result.get('jobsub_id')} db={opts.ledger_db}")
+
+
+def _fail_reservation(row_id, result, opts):
+    """Close a reserved row after a definitively failed submit. Never
+    raises."""
+    if row_id is None:
+        return
+    try:
+        submission_ledger.fail_reservation(
+            opts.ledger_db, row_id,
+            f"submit failed (status={result.get('status')}); window NOT "
+            f"proven free — check jobsub_q before reusing these indices")
+        print(f"Ledger: row {row_id} marked failed in {opts.ledger_db}")
+    except Exception as e:
+        print(f"WARNING: could not mark row {row_id} failed ({e}); it "
+              f"remains 'submitting' in {opts.ledger_db}")
 
 
 def _submission_log_path(ledger_db):
@@ -233,6 +271,16 @@ def _snapshot_entry(entry, resources):
         if val is not None:
             snap[key] = val
     return snap
+
+
+def _resolve_ledger_db(opts):
+    """Writer ledger path, resolved ONCE in main(). A DEFAULTED (derived)
+    path gets its directory created (submission_ledger.ensure_ledger_dir);
+    an operator-supplied --ledger-db never does — a typo there must fail
+    loudly rather than silently make a stray database."""
+    if opts.ledger_db:
+        return opts.ledger_db
+    return submission_ledger.ensure_ledger_dir(submission_ledger.ledger_for())
 
 
 def _validate_draining_entry(entry):
@@ -663,12 +711,15 @@ def submit_entry_direct(entry, idx, opts):
             'status': 'dry_run',
         }
 
+    row_id = _reserve_in_ledger(_snapshot_entry(entry, resources), firstjob,
+                                jobset, opts, files=files)
     result = _run_submit(cmd, tarball_name, len(jobset))
     if not opts.no_ledger:
         _log_submission(firstjob, jobset, result, opts, files=files)
-    if result['status'] == 'submitted' and not opts.no_ledger:
-        _record_in_ledger(_snapshot_entry(entry, resources), firstjob,
-                          jobset, result, opts, files=files)
+    if result['status'] == 'submitted':
+        _attach_cluster(row_id, result, opts)
+    else:
+        _fail_reservation(row_id, result, opts)
     return result
 
 
@@ -833,12 +884,13 @@ def main():
                              'input job per file. Written by the '
                              'submissions drain tick; also the operator '
                              'path for re-dispatching parked files.')
-    parser.add_argument('--ledger-db',
-                        default=submission_ledger.ledger_for(),
+    parser.add_argument('--ledger-db', default=None,
                         help='Submission-ledger sqlite DB (default: your '
                              'own ledger; for mu2epro that IS the '
-                             'production ledger). Every direct submission '
-                             'is recorded for the recovery loop '
+                             'production ledger — resolved once in main() '
+                             'via _resolve_ledger_db, which also creates '
+                             "the default's directory). Every direct "
+                             'submission is recorded for the recovery loop '
                              '(`submissions run`).')
     parser.add_argument('--ledger-parent', type=int, default=None,
                         help='Ledger row id this submission '
@@ -896,6 +948,14 @@ def main():
         print("Error: --files cannot be combined with "
               "--first/--num/--indices/--indices-file/--enqueue")
         sys.exit(1)
+
+    # Resolved ONCE here, before anything writes to the ledger (--enqueue
+    # included): the rest of the flow sees a plain string, already
+    # pointed at a directory that exists if it was defaulted. Skipped
+    # under --no-ledger, since nothing downstream then touches the DB —
+    # args.ledger_db just keeps whatever (possibly None) it was given.
+    if not args.no_ledger:
+        args.ledger_db = _resolve_ledger_db(args)
 
     if args.enqueue:
         if args.no_ledger:

@@ -708,13 +708,15 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
     absolute cnf index inside the slice's absolute window
     [firstjob+cursor, firstjob+cursor+n).
 
-    Crash-window guard: a parent `submit_map` process can die after
-    `jobsub_submit` succeeds but before its own ledger write (the same
-    residual window the recovery pass's resubmits have). Without this
-    check, the NEXT top-up tick would re-submit indices already queued
-    — deterministic payloads make that a duplicate-physics-events bug,
-    not a harmless retry. Also catches a human manually submitting
-    `--first/--num` on a tarball that has a live campaign.
+    Crash-window guard. Rows are RESERVED before jobsub_submit
+    (submission_ledger.reserve_submission), so a process that dies
+    anywhere between claiming the window and recording the cluster
+    still leaves a row here to overlap against. Without that ordering
+    this check could not see the window at all — deterministic payloads
+    make a re-send duplicate physics, not a harmless retry. Also catches
+    a human manually submitting `--first/--num` on a tarball that has a
+    live campaign, and a 'failed' reservation whose window is not proven
+    free.
 
     Deliberately not a false-positive source for the recovery loop's
     OWN resubmits: a child row's indices are a subset of an ALREADY
@@ -1130,6 +1132,16 @@ def print_status(db_path):
                   f"{str(c['cursor']) + '/' + str(njobs):>12} "
                   f"{c['slice_size']:>6}  {c['created_utc']:<20} "
                   f"{c['tarball']}")
+    stuck = submission_ledger.reserved_rows(db_path)
+    if stuck:
+        print(f"\nNEEDS RECONCILIATION — {len(stuck)} reserved row(s) with "
+              f"no cluster. A submit died mid-flight; check jobsub_q "
+              f"before reusing these windows:")
+        for row in stuck:
+            idx = row['indices']
+            span = f"{idx[0]}..{idx[-1]}" if idx else 'none'
+            print(f"  row {row['id']}  {row['tarball']}  indices {span}  "
+                  f"reserved {row['created_utc']}")
 
 
 # `status` is the only read verb. Every other verb mutates, and a
@@ -1141,14 +1153,23 @@ _READ_VERBS = ('status',)
 
 def resolve_db(opts):
     """Ledger path for this invocation: explicit --db, else --mine or
-    the per-verb default."""
+    the per-verb default.
+
+    A DEFAULTED (derived) path — the --mine branch and the mutating-verb
+    fallback, both ledger_for() — gets its directory created here, since
+    it cannot be a typo. An explicit --db, and the read verb `status`'s
+    production default, never do: a typo there must fail loudly rather
+    than silently make a stray database (see
+    submission_ledger.ensure_ledger_dir).
+    """
     if getattr(opts, 'db', None):
         return opts.db
     if getattr(opts, 'mine', False):
-        return submission_ledger.ledger_for()
+        return submission_ledger.ensure_ledger_dir(
+            submission_ledger.ledger_for())
     if getattr(opts, 'verb', None) in _READ_VERBS:
         return submission_ledger.DEFAULT_DB
-    return submission_ledger.ledger_for()
+    return submission_ledger.ensure_ledger_dir(submission_ledger.ledger_for())
 
 
 def build_parser():
