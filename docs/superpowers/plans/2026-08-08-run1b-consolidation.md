@@ -346,15 +346,36 @@ grep -n "supportArm" GeometryService/src/MECOStyleProtonAbsorberMaker.cc | head
 
 Expected: `degrader_v02.txt` sets `degrader.build = false` ("off by default") and only `geom_run1_b_v40.txt` sets it `true`. That is why this can land unconditionally. Also expected: every `degrader.supportArm.*` key is read with a default at `MECOStyleProtonAbsorberMaker.cc:444-456`, so v40's overrides need no new plumbing.
 
-- [ ] **Step 3: Capture the pre-change v40 geometry**
+- [ ] **Step 3: Capture the pre-change v40 geometry, with overlap checking actually enabled**
+
+A GDML dump does **not** report overlaps. Geant4's surface check is gated on the SimpleConfig key `g4.doSurfaceCheck` (read at `GeometryService/src/G4GeometryOptions.cc:102`), which is set `true` only in `Mu2eG4/geom/geom_SurfaceCheck.txt`. `gdmldump.fcl` runs `geom_common.txt`, so grepping a dump log for "overlap" is **vacuously silent** — it reports nothing whether or not overlaps exist. Verified empirically in Task 1: neither determinism run log contained any overlap string.
+
+So the overlap evidence needs its own geometry wrapper. Create it as an **untracked** file in the scratch clone — it is verification scaffolding and must never be committed:
 
 ```bash
+cd $WS/Offline
+cat > Mu2eG4/geom/_scratch_v40_surfcheck.txt <<'EOF'
+#include "Offline/Mu2eG4/geom/geom_run1_b_v40.txt"
+bool g4.doSurfaceCheck             = true;
+int  g4.nSurfaceCheckPointsPercmsq = 1;
+int  g4.minSurfaceCheckPoints      = 100;
+int  g4.maxSurfaceCheckPoints      = 10000000;
+EOF
+cat > /tmp/surfcheck_v40.fcl <<'EOF'
+#include "Offline/Mu2eG4/fcl/gdmldump.fcl"
+services.GeometryService.inputFile : "Offline/Mu2eG4/geom/_scratch_v40_surfcheck.txt"
+physics.producers.g4run.debug.GDMLFileName: "mu2e_v40_surfcheck.gdml"
+EOF
 cd $WS && muse build -j 20
-./gdml_baseline.sh Offline/Mu2eG4/fcl/gdmldump_run1_b_v40.fcl v40_before_degrader
-grep -ic "overlap" gdml/v40_before_degrader.log || echo "no overlaps"
+./gdml_baseline.sh /tmp/surfcheck_v40.fcl v40_before_degrader
+grep -ic "overlap" gdml/v40_before_degrader.log
 ```
 
-Record the overlap count. This is the "before" that the fix has to improve on — if it is already zero, the fix is not doing what the commit message will claim, and you should find out why before proceeding.
+Surface checking samples points per volume across ~14k volumes, so this run takes substantially longer than a plain dump — do not mistake slowness for a hang, and run it backgrounded.
+
+Record the overlap count. This is the "before" the fix must improve on. **If it is zero, stop and investigate**: either the surface check is still not enabled (check the log for surface-check output at all, not just the word "overlap") or the degrader fix addresses something other than an overlap, in which case the commit message must be rewritten to claim only what is true.
+
+`.gitignore` note: confirm `git status --porcelain` shows `_scratch_v40_surfcheck.txt` as untracked and never stage it. Delete it before the final push.
 
 - [ ] **Step 4: Port the change**
 
@@ -388,12 +409,14 @@ Expected: both `UNCHANGED`. The degrader is not built in either, so the rewritte
 
 ```bash
 cd $WS
-./gdml_baseline.sh Offline/Mu2eG4/fcl/gdmldump_run1_b_v40.fcl v40_after_degrader
-grep -ic "overlap" gdml/v40_after_degrader.log || echo "no overlaps"
+./gdml_baseline.sh /tmp/surfcheck_v40.fcl v40_after_degrader
+grep -ic "overlap" gdml/v40_after_degrader.log
 diff gdml/v40_before_degrader.gdml.norm gdml/v40_after_degrader.gdml.norm | head -40
 ```
 
-Expected: overlap count drops to zero, and the diff shows `degraderFilter`, `degraderFrame`, `degraderRod` and the mother box moving. Those are the only volumes that may change.
+Use the **same** surface-check wrapper as Step 3, or the comparison is meaningless.
+
+Expected: the overlap count drops to zero from the non-zero baseline recorded in Step 3, and the geometry diff shows `degraderFilter`, `degraderFrame`, `degraderRod` and the degrader mother box moving. Those are the only volumes that may change.
 
 - [ ] **Step 7: Commit**
 
@@ -515,10 +538,11 @@ Expected: both `UNCHANGED`, and no `EMC_Source` volumes in the nominal dump. Nei
 cd $WS
 ./gdml_baseline.sh Offline/Mu2eG4/fcl/gdmldump_run1_b_v40.fcl emc_run1_b_v40
 grep -c "EMC_Source\|EMC_0_Front" gdml/emc_run1_b_v40.gdml.norm
-grep -ic "overlap" gdml/emc_run1_b_v40.log || echo "no overlaps"
+./gdml_baseline.sh /tmp/surfcheck_v40.fcl emc_v40_surfcheck
+grep -ic "overlap" gdml/emc_v40_surfcheck.log
 ```
 
-Expected: a non-zero count and no overlaps.
+Expected: a non-zero VD count, and an overlap count no worse than Task 4 Step 6 left it. The overlap check must use the surface-check wrapper from Task 4 Step 3 — a plain dump log never reports overlaps, so grepping one proves nothing.
 
 - [ ] **Step 7: Commit**
 
@@ -590,10 +614,33 @@ services.GeometryService.inputFile : "Offline/Mu2eG4/geom/geom_run1_b_ds_on_v40.
 physics.producers.g4run.debug.GDMLFileName: "mu2e_ds_on_v40.gdml"
 EOF
 ./gdml_baseline.sh /tmp/gdmldump_ds_on_v40.fcl consolidated_ds_on_v40
-grep -ic "overlap" gdml/consolidated_ds_on_v40.log || echo "no overlaps"
+
+# and the overlap check, which needs surface checking enabled
+cat > $WS/Offline/Mu2eG4/geom/_scratch_ds_on_v40_surfcheck.txt <<'EOF'
+#include "Offline/Mu2eG4/geom/geom_run1_b_ds_on_v40.txt"
+bool g4.doSurfaceCheck             = true;
+int  g4.nSurfaceCheckPointsPercmsq = 1;
+int  g4.minSurfaceCheckPoints      = 100;
+int  g4.maxSurfaceCheckPoints      = 10000000;
+EOF
+cat > /tmp/surfcheck_ds_on_v40.fcl <<'EOF'
+#include "Offline/Mu2eG4/fcl/gdmldump.fcl"
+services.GeometryService.inputFile : "Offline/Mu2eG4/geom/_scratch_ds_on_v40_surfcheck.txt"
+physics.producers.g4run.debug.GDMLFileName: "mu2e_ds_on_v40_surfcheck.gdml"
+EOF
+./gdml_baseline.sh /tmp/surfcheck_ds_on_v40.fcl ds_on_v40_surfcheck
+grep -ic "overlap" gdml/ds_on_v40_surfcheck.log
 ```
 
-ds_on_v40 is v40 with `degrader.rotation = 120.0`, moving the mobile target out of the beam. Expected: builds, no overlaps. It exercises the degrader fix at a different rotation, which is the case most likely to expose a sign error in the new z arithmetic.
+ds_on_v40 is v40 with `degrader.rotation = 120.0`, moving the mobile target out of the beam. Expected: builds, zero overlaps. This is the most valuable overlap check in the plan — it exercises the rewritten degrader z arithmetic at a *different* rotation from the one Task 4 verified, which is exactly where a sign error would hide.
+
+Both `_scratch_*_surfcheck.txt` files must be untracked and deleted before the final push:
+
+```bash
+rm -f $WS/Offline/Mu2eG4/geom/_scratch_v40_surfcheck.txt \
+      $WS/Offline/Mu2eG4/geom/_scratch_ds_on_v40_surfcheck.txt
+cd $WS/Offline && git status --porcelain   # must be clean
+```
 
 - [ ] **Step 5: Final nominal check**
 
