@@ -8893,8 +8893,11 @@ class TestWriteRunnerGate(unittest.TestCase):
         # Token-exact, not a substring check: this checkout's own path
         # (.../oksuzian/...) contains the substring "ksu", so a naive
         # `'ksu' in ' '.join(argv)` would false-positive on REPO_ROOT
-        # alone even though no ksu process is ever invoked.
-        self.assertNotIn('ksu', argv)
+        # alone even though no ksu process is ever invoked. Compare
+        # basenames too, so an absolute `/usr/bin/ksu` argv element
+        # would also be caught, not just a bare `'ksu'` token.
+        self.assertFalse(
+            any(os.path.basename(a) == 'ksu' for a in argv))
 
     def test_missing_mu2epro_token_is_reported_never_remediated(self):
         with patch('subprocess.run') as run:
@@ -8907,6 +8910,91 @@ class TestWriteRunnerGate(unittest.TestCase):
         joined = ' '.join(' '.join(c[0][0]) for c in run.call_args_list)
         for forbidden in ('htgettoken', 'getToken', 'kinit', 'voms-proxy-init'):
             self.assertNotIn(forbidden, joined)
+
+    # -- Round-1 review fixes: injection, allowlist, run_as/cwd validation --
+
+    def test_ksu_wrapper_quotes_the_executable_path_too(self):
+        # The Critical: argv[0] used to be interpolated unquoted into
+        # the `bash -c` string, so a hostile argv[0] could break out of
+        # the intended command and execute arbitrary code as mu2epro.
+        # argv[0] must now be quoted exactly like every argv[1:] element.
+        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        script = cmd[-1]
+        expected = self.runner._quote(
+            os.path.join(self.runner.REPO_ROOT, 'bin/submit_map'))
+        self.assertIn(expected, script)
+
+    def test_ksu_wrapper_quotes_a_hostile_argv_element(self):
+        hostile = "a'; id #"
+        cmd = self.runner.ksu_wrapper(['bin/json2jobdef', hostile])
+        script = cmd[-1]
+        expected_quoted = self.runner._quote(hostile)
+        self.assertIn(expected_quoted, script)
+        # Outside of its one properly-escaped, quoted occurrence, the
+        # injected text must not appear as a bare shell word — i.e. it
+        # can never form a second, separately-executed command.
+        remainder = script.replace(expected_quoted, '', 1)
+        self.assertNotIn(' id ', remainder)
+        self.assertNotIn(' id\n', remainder)
+
+    def test_ksu_wrapper_rejects_argv0_outside_allowlist(self):
+        # Quoting alone makes injection impossible; the allowlist is the
+        # separate control that stops a caller running an arbitrary repo
+        # script as mu2epro even when it's harmlessly quoted.
+        with self.assertRaises(ValueError):
+            self.runner.ksu_wrapper(['bin/x; id #'])
+
+    def test_run_cli_rejects_argv0_outside_allowlist(self):
+        with self.assertRaises(ValueError):
+            self.runner.run_cli(['bin/x; id #'], 'self')
+
+    def test_ksu_block_unsets_only_muse_work_dir(self):
+        # Negative half of the MUSE_WORK_DIR constraint: MUSE_DIR must
+        # survive (the `muse` shell function needs it), and there must
+        # be no `unset MUSE_*` glob that would sweep it up.
+        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        script = cmd[-1]
+        unset_lines = [ln.strip() for ln in script.splitlines()
+                       if ln.strip().startswith('unset ')]
+        self.assertEqual(unset_lines, ['unset MUSE_WORK_DIR'])
+
+    def test_setup_chain_is_conjunctive_not_sequential(self):
+        # A failed CVMFS source or `muse setup ops` must abort the
+        # command via &&, not run silently in a broken environment
+        # (both setup lines are `> /dev/null 2>&1`, so a bare sequence
+        # of statements would hide the failure entirely).
+        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        script = cmd[-1]
+        self.assertIn(
+            'setupmu2e-art.sh > /dev/null 2>&1 \\\n  && muse setup ops',
+            script)
+        self.assertIn(
+            'muse setup ops > /dev/null 2>&1 \\\n  && setup OfflineOps',
+            script)
+        self.assertIn(
+            'setup OfflineOps > /dev/null 2>&1 \\\n  && bash', script)
+
+    def test_mktemp_failure_is_guarded(self):
+        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        script = cmd[-1]
+        self.assertIn('mktemp -d /tmp/mu2epro_mcp.XXXXXX) || exit 1', script)
+
+    def test_run_cli_rejects_unknown_run_as_rather_than_falling_through(self):
+        # A typo like 'mu2Epro' must not silently fall into the 'self'
+        # branch: that would run as the CALLER while the caller believes
+        # it ran as production. Reject outright instead.
+        with patch('subprocess.run') as run:
+            with self.assertRaises(ValueError):
+                self.runner.run_cli(['bin/submit_map'], 'mu2Epro')
+        run.assert_not_called()
+
+    def test_run_cli_rejects_explicit_cwd_under_mu2epro(self):
+        # The ksu block always cd's into its own mktemp workdir, so a
+        # caller-supplied cwd would be silently ignored on this path.
+        # Reject it instead of accepting and discarding it.
+        with self.assertRaises(ValueError):
+            self.runner.run_cli(['bin/submit_map'], 'mu2epro',
+                                cwd='/tmp/somewhere')
 
 
 # ---------------------------------------------------------------------------
