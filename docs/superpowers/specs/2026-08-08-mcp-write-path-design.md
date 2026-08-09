@@ -1,6 +1,8 @@
 # prodtools MCP write path — identity-aware submission
 
-**Status:** approved design, not yet implemented
+**Status:** implemented; acceptance-tested `run_as="self"` 2026-08-09.
+See "What the acceptance run changed" at the end — three claims in this
+document were wrong and the code, not the document, was corrected.
 **Supersedes:** the "Deferred: submission" section of
 `2026-07-26-prodtools-mcp-design.md:492-529`
 
@@ -266,3 +268,51 @@ real use is a deliberate manual one.
 - **The MCP output-count defect** (`tools/status.py:161-168` feeding the
   bare glob `*.art` to SAM, degrading every glob-output campaign to
   `state: "unknown"`). Real, unrelated, tracked separately.
+
+---
+
+## What the acceptance run changed
+
+Run 2026-08-09: a real `run_as="self"` campaign (NoPrimary, 50 events,
+4 jobs) pushed, enqueued, submitted, recovered, and killed mid-submit.
+It found three defects that three review passes and 900+ unit tests had
+not. Each is now fixed in code; the claims below were wrong as written.
+
+**1. `run_as="self"` could not push at all.** §2.3 says self "writes
+only the caller's scratch outstage, datasets, and ledger". It could
+not: `_pushout_to_sam` hardcoded location class `disk`, i.e.
+`/pnfs/mu2e/persistent/datasets/usr-etc/cnf/<owner>/`, which no user
+token covers — `DESTINATION MAKE_PARENT HTTP 403` after three gfal
+retries. `cnf_location(owner)` now keeps `disk` for owner `mu2e` and
+gives everyone else the scratch datasets area (`f26d00f`). The
+"already identity-parameterized" table in *Findings* had one more
+exception than the ledger.
+
+**2. §1.4's crash guard covered campaign slices, not recoveries.** The
+claim that reserving before `jobsub_submit` "retires the never-`timeout`
+rule by making the code idempotent" held only for `top_up`. The
+recovery loop looked for an existing child through `open_rows()`, which
+selects `state='active'` only, so a child left in `submitting` — the
+very state the two-phase write creates — was invisible and a SECOND
+child was cut for the same indices. `_slice_overlaps_ledger` cannot
+catch it: recovery indices sit below the campaign cursor by
+construction, as its own docstring says. Recoveries now have a
+parent-scoped guard that refuses and names the row (`ff2b4ca`).
+
+**3. Failures reported the wrong stream.** The write tools used
+`stderr or stdout`. A CLI dying inside pushOutput puts the traceback on
+stderr and the diagnosis on stdout, so defect 1 above cost two full
+diagnostic round-trips before the 403 was visible. Both streams are
+now reported, labelled.
+
+Two smaller corrections: the self setup chain now runs `getToken` (a
+~3 h token in a session-long server surfaces as an unexplained
+`pushOutput` failure) and the ksu chain explicitly does not; and the rc
+sentinel is emitted with a leading newline so a command whose last
+stderr write lacks one is not misread as rc=125.
+
+**Still unverified: the MCP transport itself and the `PreToolUse`
+hook.** Everything above was driven through `tools.py` in-process. No
+JSON-RPC call and no live hook payload has been exercised, so
+`.tool_input.run_as` remains an assumption. The first
+`run_as="mu2epro"` call must confirm the prompt fires.
