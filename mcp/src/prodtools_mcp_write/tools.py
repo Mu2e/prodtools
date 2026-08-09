@@ -6,48 +6,39 @@ Signatures are fixed here; real bodies land in Tasks 8 (push_cnf) and
 Thin by design: validate, delegate to runner, read the result back
 from the artifact the CLI wrote -- never from its stdout.
 
-`utils.config_utils` and `utils.job_common` are safe to import at
-module level: unlike `utils.json2jobdef` (which pulls in
-`utils.samweb_wrapper` -> `samweb_client`, unavailable outside the
-Mu2e/Muse environment), they are pure string/dict computation with no
-Fermilab-specific dependency, so this module still imports cleanly
-under bare system python3.9.
+Entry selection is delegated to `utils.json2jobdef.load_json` /
+`find_json_entry` -- the SAME functions the real `bin/json2jobdef`
+CLI uses -- rather than re-implemented here. A parallel scan over raw
+JSON previously matched the literal `desc` key, but `desc` is often
+absent in the raw config and auto-derived during expansion (mixing
+entries append `pbeam`; every stage can omit it), so the two
+implementations inevitably drifted: mixing could never be pushed. This
+module now cannot drift from what json2jobdef actually does, by
+construction.
+
+`utils.json2jobdef` (transitively `utils.samweb_wrapper`) needs
+`samweb_client`, which is not on a bare interpreter's path -- but this
+module is never imported except after `samweb_client` is already
+either genuinely on PYTHONPATH (the real write-MCP server's launcher,
+`mcp/scripts/_mcp_env.sh`, sources the Mu2e ops environment before
+starting Python) or stubbed into `sys.modules` (this repo's own
+`test/test_unit.py`, before it imports anything under `utils/`).
+Nothing imported here performs any I/O (SAM query, subprocess, network)
+at import time or during entry selection -- only at model
+instantiation, which this module never does.
 """
 import json as _json
 from pathlib import Path
 
 from prodtools_mcp_write import runner
-from utils.config_utils import cnf_name
+from utils.job_common import Mu2eName
+from utils.json2jobdef import load_json, find_json_entry
 
 
-def _values(entry, key):
-    """A JSON config field as a list, whether it was written as a bare
-    scalar or as the single/multi-element list json2jobdef itself
-    expands combinatorially."""
-    v = entry.get(key)
-    if v is None:
-        return []
-    return v if isinstance(v, list) else [v]
-
-
-def _unwrap(value):
-    """Un-wrap a scalar-or-list JSON field to a single scalar.
-
-    A real campaign never varies owner/version/tarball_append/
-    simjob_setup within one desc+dsconf pair, so more than one
-    distinct value here is ambiguous and refused rather than guessed.
-    """
-    if not isinstance(value, list):
-        return value
-    distinct = set(value)
-    if len(distinct) > 1:
-        raise ValueError(f"ambiguous list value {value!r}; expected one value")
-    return value[0] if value else None
-
-
-def _select_push_params(json_path, desc, dsconf):
-    """Read `json_path` and derive the Musing setup + expected tarball
-    name for the entry matching `desc` + `dsconf`.
+def _select_simjob_setup(json_path, desc, dsconf):
+    """Read `json_path` and return the `simjob_setup` of the entry
+    matching `desc` + `dsconf`, using json2jobdef's own loader and
+    selector so this can never disagree with what a real push does.
 
     Refuses rather than guessing: a caller-passed Musing tag could
     disagree with the entry and silently build a cnf against the wrong
@@ -60,62 +51,63 @@ def _select_push_params(json_path, desc, dsconf):
     if not path.is_file():
         raise ValueError(f"push_cnf: --json config not found: {json_path!r}")
     try:
-        raw = _json.loads(path.read_text())
+        configs = load_json(path)
     except _json.JSONDecodeError as e:
         raise ValueError(f"push_cnf: {json_path!r} is not valid JSON: {e}")
-    if not isinstance(raw, list):
-        raw = [raw]
 
-    matches = [e for e in raw
-               if desc in _values(e, 'desc') and dsconf in _values(e, 'dsconf')]
-    if not matches:
-        raise ValueError(
-            f"push_cnf: no entry in {json_path!r} matches desc={desc!r} "
-            f"dsconf={dsconf!r}")
-    if len(matches) > 1:
-        raise ValueError(
-            f"push_cnf: desc={desc!r} dsconf={dsconf!r} matches "
-            f"{len(matches)} entries in {json_path!r}; expected exactly 1")
-    entry = matches[0]
+    # find_json_entry sys.exit()s on 0 or >1 matches -- fine for a CLI,
+    # fatal for a long-running server process. Convert to ValueError
+    # instead of letting SystemExit propagate and kill the server.
+    try:
+        entry = find_json_entry(configs, desc, dsconf, None)
+    except SystemExit as e:
+        raise ValueError(f"push_cnf: {e}") from e
 
-    simjob_setup = _unwrap(entry.get('simjob_setup'))
+    simjob_setup = entry.get('simjob_setup')
     if not simjob_setup:
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
             f"{json_path!r} has no simjob_setup field")
-
-    cfg = {'desc': desc, 'dsconf': dsconf,
-           'version': _unwrap(entry.get('version')) or 0}
-    owner = _unwrap(entry.get('owner'))
-    if owner:
-        cfg['owner'] = owner
-    tarball_append = _unwrap(entry.get('tarball_append'))
-    if tarball_append:
-        cfg['tarball_append'] = tarball_append
-    tarball = cnf_name(cfg)
-
-    return simjob_setup, tarball
+    return simjob_setup
 
 
-def _read_map_entry(map_path, tarball):
+def _read_map_entry(map_path, desc, dsconf):
     """Return (index, entry) for the entry THIS push actually produced.
 
-    Selected by the tarball name computed from the pushed config, never
-    by position: `_write_jobdef_json_entry` dedupes on (tarball,
-    firstjob) and returns WITHOUT appending when the entry already
-    exists -- re-running `--prod` is the documented way to finish a
-    partial push -- so `entries[-1]` can silently return some OTHER
-    campaign's tarball and index as if it were this push's result.
+    Selected by parsing desc+dsconf out of each candidate entry's own
+    tarball name (`Mu2eName`), not by an owner-qualified tarball name
+    computed in this process: `owner` defaults to `$USER` when a JSON
+    entry omits it, and this process's `$USER` (the caller) is not the
+    identity json2jobdef actually ran as inside the ksu block
+    (`mu2epro` -> `mu2e`) -- computing the tarball name here would
+    report a successful production push as a failure. Nor by position:
+    `_write_jobdef_json_entry` dedupes on (tarball, firstjob) and
+    returns WITHOUT appending when the entry already exists --
+    re-running `--prod` is the documented way to finish a partial push
+    -- so `entries[-1]` could silently return some OTHER campaign's
+    tarball and index as if it were this push's result.
     """
     entries = _json.loads(Path(map_path).read_text())
-    matches = [(i, e) for i, e in enumerate(entries)
-               if e.get('tarball') == tarball]
+    matches = []
+    for i, e in enumerate(entries):
+        tarball = e.get('tarball')
+        if not tarball:
+            continue
+        try:
+            name = Mu2eName.parse(tarball)
+        except ValueError:
+            continue
+        if name.description == desc and name.dsconf == dsconf:
+            matches.append((i, e))
     if not matches:
-        raise RuntimeError(f"{tarball} not found in {map_path} after the push")
+        raise RuntimeError(
+            f"no entry for desc={desc!r} dsconf={dsconf!r} found in "
+            f"{map_path} after the push")
     if len(matches) > 1:
         raise RuntimeError(
-            f"{tarball} appears {len(matches)} times in {map_path}; cannot "
-            f"select the entry for this push unambiguously")
+            f"desc={desc!r} dsconf={dsconf!r} matches {len(matches)} "
+            f"entries in {map_path}; cannot select the entry for this "
+            f"push unambiguously")
     return matches[0]
 
 
@@ -143,7 +135,7 @@ def push_cnf(json, desc, dsconf, jobdefs_map, run_as, confirm=False):
         raise ValueError(
             f"jobdefs_map must be an absolute path (got {jobdefs_map!r})")
 
-    simjob_setup, tarball = _select_push_params(json, desc, dsconf)
+    simjob_setup = _select_simjob_setup(json, desc, dsconf)
 
     argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
             '--dsconf', dsconf, '--prod', '--jobdefs', jobdefs_map]
@@ -152,7 +144,7 @@ def push_cnf(json, desc, dsconf, jobdefs_map, run_as, confirm=False):
         raise RuntimeError(
             f"json2jobdef failed (rc={result['rc']}): "
             f"{result['stderr'] or result['stdout']}")
-    index, entry = _read_map_entry(jobdefs_map, tarball)
+    index, entry = _read_map_entry(jobdefs_map, desc, dsconf)
     return {
         'tarball': entry.get('tarball'),
         'datasets': [o.get('dataset') for o in entry.get('outputs', [])],

@@ -50,9 +50,22 @@ ALLOWED_ENTRY_POINTS = frozenset({
 # .claude/commands/mu2e-run.md uses for any Musing, SimJob or not — so
 # the caller derives the release from the JSON config instead of
 # passing a tag that could silently disagree with it.
+#
+# Every step redirects its own stdout/stderr to /dev/null (CVMFS setup
+# scripts are chatty), so a bare `&&` chain would abort on failure with
+# rc != 0 but EMPTY stdout/stderr — push_cnf would raise
+# `RuntimeError("json2jobdef failed (rc=1): ")` with nothing to debug.
+# Each `|| { echo ... >&2; exit 1; }` names which step failed on stderr
+# before exiting, so `run_cli`'s captured stderr is never empty on a
+# setup failure. The braces are doubled (`{{` `}}`) because this is a
+# str.format() TEMPLATE — {musing_clause} and {command} are its only
+# real placeholders.
 _SETUP_CHAIN = """source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \\
+  || {{ echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1; }} \\
   && muse setup ops > /dev/null 2>&1 \\
+  || {{ echo 'push_cnf: muse setup ops failed' >&2; exit 1; }} \\
   && setup OfflineOps > /dev/null 2>&1 \\
+  || {{ echo 'push_cnf: setup OfflineOps failed' >&2; exit 1; }} \\
   && {musing_clause}{command}"""
 
 _KSU_TEMPLATE = """
@@ -82,11 +95,18 @@ def _musing_clause(simjob_setup):
     """`&&`-chained `source <simjob_setup>` step, or '' when not given.
 
     Quoted with `_quote` like every other interpolated word — a
-    hostile `simjob_setup` value must not be able to escape it.
+    hostile `simjob_setup` value must not be able to escape it. Also
+    announces its own failure on stderr instead of swallowing it into
+    `/dev/null` like the base setup steps (see _SETUP_CHAIN) -- kept as
+    a static message rather than echoing the quoted path itself, since
+    embedding an already-quoted value inside a second, differently-
+    quoted echo string would reopen the same escaping problem `_quote`
+    exists to close.
     """
     if not simjob_setup:
         return ''
-    return f"source {_quote(simjob_setup)} > /dev/null 2>&1 \\\n  && "
+    return (f"source {_quote(simjob_setup)} > /dev/null 2>&1 "
+            "|| { echo 'push_cnf: Musing setup failed' >&2; exit 1; } \\\n  && ")
 
 
 def require_confirmed(run_as, confirm):

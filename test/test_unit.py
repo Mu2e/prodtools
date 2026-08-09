@@ -8960,19 +8960,56 @@ class TestWriteRunnerGate(unittest.TestCase):
 
     def test_setup_chain_is_conjunctive_not_sequential(self):
         # A failed CVMFS source or `muse setup ops` must abort the
-        # command via &&, not run silently in a broken environment
-        # (both setup lines are `> /dev/null 2>&1`, so a bare sequence
-        # of statements would hide the failure entirely).
+        # command -- via `|| { ...; exit 1; }` chained onward with &&,
+        # not run silently in a broken environment (both setup lines
+        # redirect stdout/stderr to /dev/null, so a bare sequence of
+        # statements would hide the failure entirely).
         cmd = self.runner.ksu_wrapper(['bin/submit_map'])
         script = cmd[-1]
         self.assertIn(
-            'setupmu2e-art.sh > /dev/null 2>&1 \\\n  && muse setup ops',
+            "setupmu2e-art.sh > /dev/null 2>&1 \\\n"
+            "  || { echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1; }"
+            " \\\n  && muse setup ops",
             script)
         self.assertIn(
-            'muse setup ops > /dev/null 2>&1 \\\n  && setup OfflineOps',
+            "muse setup ops > /dev/null 2>&1 \\\n"
+            "  || { echo 'push_cnf: muse setup ops failed' >&2; exit 1; }"
+            " \\\n  && setup OfflineOps",
             script)
         self.assertIn(
-            'setup OfflineOps > /dev/null 2>&1 \\\n  && bash', script)
+            "setup OfflineOps > /dev/null 2>&1 \\\n"
+            "  || { echo 'push_cnf: setup OfflineOps failed' >&2; exit 1; }"
+            " \\\n  && bash",
+            script)
+
+    def test_setup_chain_syntax_is_valid_bash(self):
+        # bash -n (parse-only) on the generated script, so a malformed
+        # brace/quote in the per-step error-reporting clauses would
+        # fail loudly here instead of only at ksu-run time.
+        cmd = self.runner._self_wrapper(
+            ['bin/json2jobdef'],
+            simjob_setup='/cvmfs/mu2e.opensciencegrid.org/Musings/'
+                         'SimJob/Run1Bap/setup.sh')
+        script = cmd[-1]
+        proc = subprocess.run(['bash', '-n', '-c', script],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_each_setup_step_announces_its_own_failure_on_stderr(self):
+        # Minor fix: every setup line used to redirect BOTH stdout and
+        # stderr to /dev/null, so a failed CVMFS source, `muse setup
+        # ops`, or Musing source returned rc != 0 with EMPTY stdout and
+        # stderr -- push_cnf would raise RuntimeError("... rc=1): ")
+        # with nothing to debug. Each step must name itself on stderr
+        # before exiting.
+        setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh'
+        cmd = self.runner.ksu_wrapper(['bin/json2jobdef'], simjob_setup=setup)
+        script = cmd[-1]
+        for needle in ("echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1",
+                       "echo 'push_cnf: muse setup ops failed' >&2; exit 1",
+                       "echo 'push_cnf: setup OfflineOps failed' >&2; exit 1",
+                       "echo 'push_cnf: Musing setup failed' >&2; exit 1"):
+            self.assertIn(needle, script)
 
     def test_mktemp_failure_is_guarded(self):
         cmd = self.runner.ksu_wrapper(['bin/submit_map'])
@@ -9002,15 +9039,18 @@ class TestWriteRunnerGate(unittest.TestCase):
         # setupmu2e-art.sh + muse setup ops + setup OfflineOps alone
         # leaves MUSE_DIR set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH
         # empty -- bin/json2jobdef hard-exits in that state. The
-        # Musing must be sourced from the entry's own simjob_setup.
+        # Musing must be sourced from the entry's own simjob_setup,
+        # after OfflineOps and before the command.
         setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh'
         cmd = self.runner.ksu_wrapper(['bin/json2jobdef'], simjob_setup=setup)
         script = cmd[-1]
         quoted = self.runner._quote(setup)
-        self.assertIn(
-            f"setup OfflineOps > /dev/null 2>&1 \\\n  && source {quoted}"
-            f" > /dev/null 2>&1 \\\n  && bash",
-            script)
+        offline_ops_idx = script.index('setup OfflineOps')
+        musing_idx = script.index(f'source {quoted}')
+        command_idx = script.index('bash ')
+        self.assertLess(offline_ops_idx, musing_idx)
+        self.assertLess(musing_idx, command_idx)
+        self.assertIn(f"source {quoted} > /dev/null 2>&1", script)
 
     def test_ksu_wrapper_without_simjob_setup_is_unchanged(self):
         # No Musing given (e.g. bin/submit_map, which needs none) must
@@ -9081,7 +9121,8 @@ class TestPushCnfTool(unittest.TestCase):
                 'simjob_setup': self.simjob_setup,
                 'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
             }], f)
-        # The tarball utils.config_utils.cnf_name derives for that entry.
+        # A tarball name matching desc=D dsconf=C -- who computed it is
+        # no longer this module's concern (see _read_map_entry).
         self.tarball = 'cnf.mu2e.D.C.0.tar'
         self.jobdefs_map = os.path.join(self._tmpdir, 'm.json')
 
@@ -9151,10 +9192,14 @@ class TestPushCnfTool(unittest.TestCase):
         run.assert_not_called()
 
     def test_no_matching_json_entry_raises_without_guessing(self):
+        # find_json_entry's own "found 0" message -- reused verbatim
+        # (via a ValueError wrapping its SystemExit) rather than
+        # rephrased, so this can't drift from what json2jobdef itself
+        # reports for the same input.
         with self.assertRaises(ValueError) as ctx:
             self.tools.push_cnf(json=self.json_path, desc='NOPE', dsconf='C',
                                 jobdefs_map=self.jobdefs_map, run_as='self')
-        self.assertIn('no entry', str(ctx.exception).lower())
+        self.assertIn('found 0', str(ctx.exception).lower())
 
     def test_entry_missing_simjob_setup_raises_without_guessing(self):
         path = os.path.join(self._tmpdir, 'no_simjob.json')
@@ -9197,7 +9242,7 @@ class TestPushCnfTool(unittest.TestCase):
         with open(self.jobdefs_map, 'w') as f:
             json.dump([], f)
         with self.assertRaises(RuntimeError):
-            self.tools._read_map_entry(self.jobdefs_map, self.tarball)
+            self.tools._read_map_entry(self.jobdefs_map, 'D', 'C')
 
     def test_read_map_entry_against_a_real_file_returns_datasets(self):
         with open(self.jobdefs_map, 'w') as f:
@@ -9206,10 +9251,89 @@ class TestPushCnfTool(unittest.TestCase):
                 'outputs': [{'dataset': 'dig.mu2e.D.C.art', 'location': 'disk'},
                             {'dataset': 'rec.mu2e.D.C.art', 'location': 'tape'}],
             }], f)
-        index, entry = self.tools._read_map_entry(self.jobdefs_map,
-                                                   self.tarball)
+        index, entry = self.tools._read_map_entry(self.jobdefs_map, 'D', 'C')
         self.assertEqual(index, 0)
         self.assertEqual(entry['tarball'], self.tarball)
+
+    # -- Round-2 review fixes: reuse json2jobdef's own expansion/naming --
+
+    def test_mixing_entry_with_no_raw_desc_resolves_end_to_end(self):
+        # Mixing entries carry no literal `desc` key in the raw JSON --
+        # it is derived from input_data + pbeam by
+        # prepare_fields_for_job during expansion. A parallel scan over
+        # raw entries (matching the literal `desc` key) can never find
+        # this; only json2jobdef's own load_json + find_json_entry can.
+        mix_json = str(Path(__file__).resolve().parent.parent /
+                       'data' / 'Run1B' / 'mix.json')
+        expected_setup = (
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh')
+        setup = self.tools._select_simjob_setup(
+            mix_json, 'CeEndpointMixLow', 'Run1Bab_best_v1_2')
+        self.assertEqual(setup, expected_setup)
+
+        # And push_cnf itself, end to end (run_cli mocked, map faked).
+        jobdefs_map = os.path.join(self._tmpdir, 'mix_m.json')
+        with open(jobdefs_map, 'w') as f:
+            json.dump([{
+                'tarball': 'cnf.mu2e.CeEndpointMixLow.Run1Bab_best_v1_2.0.tar',
+                'outputs': [{'dataset': 'dig.mu2e.CeEndpointMixLow.'
+                                        'Run1Bab_best_v1_2.art',
+                             'location': 'tape'}],
+            }], f)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
+            out = self.tools.push_cnf(
+                json=mix_json, desc='CeEndpointMixLow',
+                dsconf='Run1Bab_best_v1_2', jobdefs_map=jobdefs_map,
+                run_as='self')
+        self.assertEqual(run.call_args.kwargs.get('simjob_setup'),
+                         expected_setup)
+        self.assertEqual(
+            out['tarball'],
+            'cnf.mu2e.CeEndpointMixLow.Run1Bab_best_v1_2.0.tar')
+
+    def test_owner_omitted_under_mu2epro_still_finds_the_right_entry(self):
+        # cnf_name defaults an omitted `owner` to $USER. The OLD
+        # implementation computed that default in THIS server process
+        # (the caller, e.g. 'oksuzian') while json2jobdef actually ran
+        # inside ksu with USER=mu2epro -> owner 'mu2e' -- a push that
+        # ACTUALLY SUCCEEDED and irreversibly registered a dataset
+        # would report as a failure. Selecting by desc+dsconf parsed
+        # from the map's own tarball name never needs to know owner.
+        path = os.path.join(self._tmpdir, 'no_owner.json')
+        with open(path, 'w') as f:
+            json.dump([{
+                'desc': 'D', 'dsconf': 'C', 'simjob_setup': self.simjob_setup,
+                'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
+            }], f)
+        with open(self.jobdefs_map, 'w') as f:
+            json.dump([{
+                # 'mu2e' -- the identity ksu actually ran as, not this
+                # test process's own $USER.
+                'tarball': 'cnf.mu2e.D.C.0.tar',
+                'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                             'location': 'tape'}],
+            }], f)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
+            out = self.tools.push_cnf(json=path, desc='D', dsconf='C',
+                                      jobdefs_map=self.jobdefs_map,
+                                      run_as='mu2epro', confirm=True)
+        self.assertEqual(out['tarball'], 'cnf.mu2e.D.C.0.tar')
+
+    def test_find_json_entry_ambiguity_becomes_valueerror_not_systemexit(self):
+        # find_json_entry sys.exit()s on 0 or >1 matches -- fine for a
+        # CLI, fatal for a long-running server process if it leaked
+        # through uncaught.
+        path = os.path.join(self._tmpdir, 'dup.json')
+        with open(path, 'w') as f:
+            json.dump([
+                {'desc': 'D', 'dsconf': 'C', 'simjob_setup': self.simjob_setup},
+                {'desc': 'D', 'dsconf': 'C', 'simjob_setup': self.simjob_setup},
+            ], f)
+        with self.assertRaises(ValueError):
+            self.tools.push_cnf(json=path, desc='D', dsconf='C',
+                                jobdefs_map=self.jobdefs_map, run_as='self')
 
 
 # ---------------------------------------------------------------------------
