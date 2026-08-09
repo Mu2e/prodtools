@@ -998,7 +998,38 @@ if __name__ == '__main__':
     main()
 ```
 
-`mcp/scripts/start_write_mcp.sh` — copy `mcp/scripts/start_mcp.sh` verbatim and change only the final `exec` line to `-m prodtools_mcp_write.server`, and the `--check` block to import `prodtools_mcp_write.server`. The CVMFS sourcing, the stdout-is-JSON-RPC discipline, and the `PYTHONPATH` ordering are identical and must not be re-derived.
+**Launcher setup is factored into a shared helper, not duplicated.** Extract the environment preamble of `mcp/scripts/start_mcp.sh` — the guarded CVMFS sourcing, `muse setup ops`, the `PYTHON_BIN` selection, and the `VENV_SITE`/`REPO_ROOT`/ops `PYTHONPATH` ordering — verbatim into `mcp/scripts/_mcp_env.sh`, which ends by exporting `PYTHONPATH` and `PYTHON_BIN`. It is sourced, never executed, so it must not `exec` or `exit` on the success path.
+
+Both launchers then reduce to sourcing it and dispatching:
+
+```bash
+#!/usr/bin/env bash
+# Start the WRITE-capable prodtools MCP stdio server.
+#
+# All setup output goes to stderr: stdout is the JSON-RPC channel and a
+# single stray line on it corrupts the protocol stream.
+set -euo pipefail
+MCP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$MCP_ROOT/scripts/_mcp_env.sh"
+
+if [[ "${1:-}" == "--check" ]]; then
+  "$PYTHON_BIN" - <<'PY'
+import asyncio
+from prodtools_mcp_write.server import create_write_mcp_server, TOOL_NAMES
+registered = sorted(t.name for t in asyncio.run(create_write_mcp_server().list_tools()))
+if registered != sorted(TOOL_NAMES):
+    raise SystemExit(f"tool registration mismatch: {registered} != {sorted(TOOL_NAMES)}")
+print("OK: write tools", ", ".join(registered))
+PY
+  exit 0
+fi
+
+exec "$PYTHON_BIN" -m prodtools_mcp_write.server
+```
+
+Rewrite `start_mcp.sh` to source the same helper, keeping its existing two-part `--check` (the "MCP deps without the ops path" check and the full-environment check) exactly as it is. **Verify both still start**: `bash mcp/scripts/start_mcp.sh --check` must print the same four read-only tool names it printed before this task.
+
+The preamble carries subtle discipline — CVMFS scripts are not `set -e` clean, and the `PYTHONPATH` order (venv, then repo root, then ops) is load-bearing. Move it; do not re-derive it.
 
 Add `prodtools_mcp_write` to the packages list in `mcp/pyproject.toml`, and add a `prodtools-write` entry to `.mcp.json` pointing at `mcp/scripts/start_write_mcp.sh`.
 
