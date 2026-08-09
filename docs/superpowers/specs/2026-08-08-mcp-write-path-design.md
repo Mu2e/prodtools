@@ -116,7 +116,7 @@ Reserve the row **before** `jobsub_submit`, carrying the window and a
 `submitting` state; fill in `cluster_id` and `jobsub_id` after it
 returns.
 
-- The overlap guard (`_slice_overlaps_ledger`, `submissions.py:291`)
+- The overlap guard (`_slice_overlaps_ledger`, `submissions.py:706`)
   consults reserved rows, so a retry after a timeout hits an in-flight
   window and refuses instead of duplicating.
 - A reserved row with no cluster is a visible `needs_reconciliation`
@@ -127,7 +127,7 @@ returns.
 ### 1.5 `check_inputs` on the direct path
 
 `check_inputs` currently runs only in `_enqueue_entries`
-(`submit.py:241`), reached only via `--enqueue` (`submit.py:601`). A
+(`submit.py:280`), reached only via `--enqueue` (`submit.py:899`). A
 windowed direct submit never calls it and can launch against unverified
 inputs — the bulk-death failure the gate exists to prevent. Run it on
 the direct path too.
@@ -169,7 +169,7 @@ production can never arrive from an omitted argument.
 
 **Every argument that could fan out is required, none defaults to "all".**
 `entry` is required, retiring the `entry=None` fan-out over every entry
-in a map (`submit.py:583`). `campaign_id` is likewise required: ticking
+in a map (`submit.py:719-721`). `campaign_id` is likewise required: ticking
 every active campaign is the cron's job, not an interactive call, and a
 tool whose default action is "everything" is the hazard this rule exists
 to remove.
@@ -204,9 +204,15 @@ construction rather than by decision.
 
 ### 2.4 Execution
 
-- `run_as="self"` calls the CLI in-process through the existing
-  `adapters.py` (error envelope, `SystemExit` trap, stdout guard — built
-  for exactly this).
+Both identities run the CLI as a **subprocess**. An earlier draft had
+`run_as="self"` call it in-process through `adapters.py`; that was
+revised while planning. The MCP server's stdout *is* the JSON-RPC
+channel, and `json2jobdef`/`submit_map` print freely and `chdir`, so
+running them in-process risks corrupting the protocol stream.
+`adapters.py`'s stdout guard exists to contain that hazard; a subprocess
+removes it, and keeps both identities on one code path.
+
+- `run_as="self"` invokes the CLI directly, with no `ksu`.
 - `run_as="mu2epro"` shells the ksu block verbatim from
   `.claude/commands/mu2epro-submit.md:121-133`: `mktemp` **inside** ksu
   (a caller-owned workdir makes `condor_vault_storer` fail), `cd
@@ -216,7 +222,7 @@ construction rather than by decision.
 
 **Results are read back from the ledger, never scraped from stdout.**
 `submit_map` already records `cluster_id` and `jobsub_id`
-(`submit.py:137-166`); parsing human output through ksu would reintroduce
+(`submit.py:137`); parsing human output through ksu would reintroduce
 exactly the parsing this project exists to eliminate.
 
 ### 2.5 Failure handling
