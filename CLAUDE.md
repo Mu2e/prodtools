@@ -48,6 +48,15 @@ A queue or outputs block with `state: "unknown"` has **no count keys**.
 Never read a missing count as zero: the query failed and the campaign
 may still be running. Do not start a recovery pass on an `unknown`.
 
+`campaign_status` and `list_campaigns` read PRODUCTION by default. For a
+campaign you submitted yourself (`run_as="self"`), pass `mine=true` — it
+switches both the ledger and the grid queue to your account. Omitting it
+against a personal campaign returns an empty result that looks exactly
+like "no campaigns". Every reply names the ledger (`db_path`) and the
+queue account (`queue.owner`); check them when a count surprises you.
+Another user's ledger is not reachable here — use
+`submissions --db <path> status`.
+
 Setup: `bash mcp/scripts/install.sh`. Health check:
 `bash mcp/scripts/start_mcp.sh --check`.
 

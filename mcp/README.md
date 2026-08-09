@@ -64,3 +64,20 @@ read your own ledger
 after a `run_as="self"` campaign run through `prodtools-write`. Plain
 `submissions status` will not show a self-run campaign; `submissions
 status --mine` will.
+
+The MCP status tools take the same idea as a parameter: `campaign_status`
+and `list_campaigns` accept `mine` (default `false`). With `mine=true`
+they read `/exp/mu2e/data/users/$USER/prodtools/submissions.db` and count
+YOUR grid queue; with it omitted they read production's ledger and
+mu2epro's queue, exactly as before.
+
+Both axes move together by construction — a call cannot read one
+account's ledger against another's queue. Every reply names what it read:
+`db_path` at the top level, and `owner` inside each `queue` block.
+
+Another person's ledger is NOT reachable through MCP. Use the CLI, which
+already does this:
+
+    bash bin/submissions --db /exp/mu2e/data/users/<them>/prodtools/submissions.db status
+
+Personal ledgers are world-readable, so this works without privilege.

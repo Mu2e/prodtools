@@ -96,6 +96,16 @@ def get_server_info():
         'ledger_db': os.environ.get(
             'MU2E_SUBMISSION_DB',
             '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'),
+        'identity': {
+            'parameter': 'mine (campaign_status, list_campaigns)',
+            'default': 'production — the ledger in ledger_db and '
+                       'mu2epro\'s grid queue',
+            'mine_true': "your own ledger at "
+                         "/exp/mu2e/data/users/$USER/prodtools/"
+                         "submissions.db, and your own grid queue",
+            'other_accounts': 'not available through MCP — use '
+                              '`submissions --db <path> status`',
+        },
         'guidance': INSTRUCTIONS.strip(),
     }
 
@@ -119,19 +129,24 @@ def create_mcp_server():
     # layers) reject it, which defeats the "reach other clients" goal.
     @mcp.tool(description='Status of one campaign, or a cheap ledger-only '
                           'summary of all of them when called with no '
-                          'argument.')
+                          'argument. Pass mine=true to read YOUR ledger '
+                          'and queue instead of production\'s.')
     def campaign_status(campaign: Optional[str] = None,
                         campaign_id: Optional[int] = None,
                         include_queue: bool = True,
-                        include_outputs: bool = True) -> dict:
+                        include_outputs: bool = True,
+                        mine: bool = False) -> dict:
         return TOOL_FUNCTIONS['campaign_status'](
             campaign=campaign, campaign_id=campaign_id,
-            include_queue=include_queue, include_outputs=include_outputs)
+            include_queue=include_queue, include_outputs=include_outputs,
+            mine=mine)
 
     @mcp.tool(description='List submission campaigns, optionally filtered '
-                          'by state (active/complete/paused/cancelled).')
-    def list_campaigns(state: Optional[str] = None) -> dict:
-        return TOOL_FUNCTIONS['list_campaigns'](state=state)
+                          'by state (active/complete/paused/cancelled). '
+                          'Pass mine=true for your own ledger.')
+    def list_campaigns(state: Optional[str] = None,
+                       mine: bool = False) -> dict:
+        return TOOL_FUNCTIONS['list_campaigns'](state=state, mine=mine)
 
     @mcp.tool(description='Find datasets by campaign, tier, description, '
                           'or SAM defname pattern (* or % both work). '

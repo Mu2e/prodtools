@@ -8501,6 +8501,24 @@ class TestMcpReadIdentity(unittest.TestCase):
             self.status.list_campaigns(state='banana')
         self.assertEqual(ctx.exception.kind, 'invalid_argument')
 
+    def test_server_info_advertises_the_identity_parameter(self):
+        # A client must be able to discover `mine` without reading the
+        # source, and must be told where OTHER accounts are read from --
+        # `submissions --db <path> status`, not this server.
+        from prodtools_mcp import server
+        info = server.get_server_info()
+        self.assertIn('mine', info['identity']['parameter'])
+        self.assertIn('--db', info['identity']['other_accounts'])
+
+    def test_registered_wrappers_pass_mine_through(self):
+        # The wrapper is hand-written argument-by-argument, so a new
+        # parameter on the tool function is NOT automatically exposed.
+        import inspect
+        from prodtools_mcp import server
+        src = inspect.getsource(server.create_mcp_server)
+        self.assertIn('mine: bool = False', src)
+        self.assertIn('mine=mine', src)
+
 
 class TestMcpListCampaigns(unittest.TestCase):
     def test_filters_by_state(self):
