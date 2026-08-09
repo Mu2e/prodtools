@@ -9292,6 +9292,73 @@ class TestWriteServerRegistration(unittest.TestCase):
         self.assertIn('mu2epro', info['description'])
 
 
+class TestWriteToolParameterTypes(unittest.TestCase):
+    """FastMCP derives each tool's JSON Schema from the function's
+    signature, and an UNANNOTATED parameter is advertised to the model
+    as a string. Both consequences were live bugs (2026-08-09):
+
+      - `entry`/`slice_size`/`campaign_id` arrived as str. enqueue_campaign
+        got as far as running submit_map -- creating the campaign -- and
+        then died in _read_map_entry's `0 <= index < len(entries)` with
+        "'<=' not supported between instances of 'int' and 'str'", so a
+        campaign existed that the tool had reported as a failure.
+      - `confirm` arrived as str, and require_confirmed tests `not
+        confirm`. Every non-empty string is truthy, so confirm="false"
+        OPENED the production gate.
+
+    These assert the signatures, not the behaviour, because the schema
+    is where the defect lives: a correct body cannot repair a parameter
+    the model was told to send as text.
+    """
+
+    NUMERIC = {'entry', 'slice_size', 'campaign_id'}
+
+    def test_every_tool_parameter_is_annotated(self):
+        import inspect
+        from prodtools_mcp_write.server import TOOL_FUNCTIONS
+        for name, fn in TOOL_FUNCTIONS.items():
+            for pname, param in inspect.signature(fn).parameters.items():
+                self.assertIsNot(
+                    param.annotation, inspect.Parameter.empty,
+                    f'{name}({pname}) has no annotation, so FastMCP will '
+                    f'advertise it to the model as a string')
+
+    def test_numeric_and_confirm_parameters_have_the_right_types(self):
+        import inspect
+        from prodtools_mcp_write.server import TOOL_FUNCTIONS
+        seen = set()
+        for name, fn in TOOL_FUNCTIONS.items():
+            for pname, param in inspect.signature(fn).parameters.items():
+                if pname in self.NUMERIC:
+                    seen.add(pname)
+                    self.assertIs(
+                        param.annotation, int,
+                        f'{name}({pname}) must be int: it indexes or is '
+                        f'compared against ints')
+                elif pname == 'confirm':
+                    seen.add(pname)
+                    self.assertIs(
+                        param.annotation, bool,
+                        f'{name}(confirm) must be bool: require_confirmed '
+                        f'tests `not confirm`, and a non-empty string -- '
+                        f'including "false" -- is truthy')
+        self.assertEqual(seen, self.NUMERIC | {'confirm'},
+                         'a parameter this test pins has been renamed or '
+                         'removed; update the test with the signature')
+
+    def test_require_confirmed_is_defeated_by_a_string(self):
+        """Pins WHY confirm must be typed bool. This is not asserting
+        desired behaviour -- it documents that the gate cannot defend
+        itself against a mistyped parameter, so the annotation above is
+        the actual control."""
+        from prodtools_mcp_write import runner
+        runner.require_confirmed('mu2epro', True)          # no raise
+        with self.assertRaises(PermissionError):
+            runner.require_confirmed('mu2epro', False)
+        # The bug: a string the model believed meant "no".
+        runner.require_confirmed('mu2epro', 'false')       # no raise
+
+
 # ---------------------------------------------------------------------------
 # Write-server identity dispatch and confirm gate
 # ---------------------------------------------------------------------------

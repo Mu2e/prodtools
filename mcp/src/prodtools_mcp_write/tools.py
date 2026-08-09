@@ -249,7 +249,8 @@ def _read_map_entry(map_path, tarball_desc=None, dsconf=None,
         f"candidates: {listing}")
 
 
-def push_cnf(json, desc, dsconf, jobdefs_map, run_as, confirm=False):
+def push_cnf(json: str, desc: str, dsconf: str, jobdefs_map: str,
+             run_as: str, confirm: bool = False):
     """Build a cnf tarball and register it.
 
     run_as="self" registers under your own dataset owner and scratch
@@ -343,7 +344,8 @@ def _all_campaigns(db):
             f"as far as writing the ledger") from e
 
 
-def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
+def enqueue_campaign(map_path: str, entry: int, slice_size: int,
+                     run_as: str, confirm: bool = False):
     """Register ONE entry of a map as a sliced-submission campaign.
 
     `entry` is required: a map can hold several entries, and
@@ -411,7 +413,7 @@ def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
             'tarball': tarball}
 
 
-def run_submissions(campaign_id, run_as, confirm=False):
+def run_submissions(campaign_id: int, run_as: str, confirm: bool = False):
     """Tick `submissions run`, scoped to one campaign's index top-up.
 
     `--campaign` only narrows the top-up phase: the recovery pass still
