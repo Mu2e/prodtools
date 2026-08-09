@@ -116,10 +116,22 @@ printf '\\n{RC_SENTINEL_PREFIX}%s\\n' "$__prodtools_rc" >&2
 exit $__prodtools_rc
 """
 
+# {token_clause} is SELF-ONLY and deliberately empty under ksu. Running
+# as yourself, the bearer token at /run/user/$UID/bt_u$UID lasts ~3h
+# while this server lives for a whole session, and an expired one
+# surfaces as `pushOutput ... exit status 1` with no mention of auth --
+# so the self path refreshes it from the caller's own Kerberos ticket,
+# exactly where and how .claude/commands/mu2e-run.md does (getToken is
+# on PATH straight after setupmu2e-art.sh, before `muse setup ops`).
+#
+# It must NEVER appear in the mu2epro chain: refreshing the production
+# account's token is a standing hard rule (a missing mu2epro token is
+# reported, never remediated), and ksu_wrapper passes '' for exactly
+# that reason. TestTokenClauseIsSelfOnly pins it.
 _SETUP_CHAIN = """(
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1; }} \\
-  && muse setup ops > /dev/null 2>&1 \\
+  && {token_clause}muse setup ops > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: muse setup ops failed' >&2; exit 1; }} \\
   && setup OfflineOps > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: setup OfflineOps failed' >&2; exit 1; }} \\
@@ -212,9 +224,21 @@ def _command_of(argv):
         [_quote(a) for a in argv[1:]])
 
 
+# Self-only; see the _SETUP_CHAIN comment for why this must never reach
+# the ksu path. A getToken failure aborts rather than pressing on with
+# whatever stale token is on disk: continuing would fail later, deeper,
+# and without naming auth as the cause -- which is the failure this
+# step exists to remove.
+_TOKEN_CLAUSE = ("getToken > /dev/null 2>&1 "
+                 "|| { echo 'getToken failed: cannot refresh your bearer "
+                 "token (is your Kerberos ticket valid?)' >&2; exit 1; } \\\n"
+                 "  && ")
+
+
 def ksu_wrapper(argv, simjob_setup=None):
     """Wrap a repo-relative argv in the full working ksu block."""
     chain = _SETUP_CHAIN.format(
+        token_clause='',
         musing_clause=_musing_clause(simjob_setup), command=_command_of(argv))
     return ['ksu', 'mu2epro', '-e', '/bin/bash', '-c',
             _KSU_TEMPLATE.format(chain=chain)]
@@ -222,8 +246,10 @@ def ksu_wrapper(argv, simjob_setup=None):
 
 def _self_wrapper(argv, simjob_setup=None):
     """Wrap a repo-relative argv in the same setup chain as ksu_wrapper,
-    minus the ksu-only identity header (see _SELF_TEMPLATE)."""
+    minus the ksu-only identity header (see _SELF_TEMPLATE), plus the
+    self-only getToken step (see _TOKEN_CLAUSE)."""
     chain = _SETUP_CHAIN.format(
+        token_clause=_TOKEN_CLAUSE,
         musing_clause=_musing_clause(simjob_setup), command=_command_of(argv))
     return ['bash', '-c', _SELF_TEMPLATE.format(chain=chain)]
 

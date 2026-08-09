@@ -9058,6 +9058,35 @@ class TestCnfPushLocation(unittest.TestCase):
                          ['scratch', 'disk'])
 
 
+class TestTokenClauseIsSelfOnly(unittest.TestCase):
+    """getToken refreshes the CALLER's bearer token. Under ksu it would
+    refresh mu2epro's, which is a standing hard rule never to do."""
+
+    def setUp(self):
+        from prodtools_mcp_write import runner
+        self.runner = runner
+
+    def test_self_chain_refreshes_the_token(self):
+        script = self.runner._self_wrapper(['bin/submit_map'])[-1]
+        self.assertIn('getToken', script)
+        # Before `muse setup ops`, as .claude/commands/mu2e-run.md has it
+        # (getToken is on PATH straight after setupmu2e-art.sh).
+        self.assertLess(script.index('getToken'),
+                        script.index('muse setup ops'))
+
+    def test_ksu_chain_never_refreshes_a_token(self):
+        script = self.runner.ksu_wrapper(['bin/submit_map'])[-1]
+        self.assertNotIn('getToken', script)
+        self.assertNotIn('htgettoken', script)
+
+    def test_both_chains_are_valid_bash(self):
+        for argv in (self.runner._self_wrapper(['bin/submit_map']),
+                     self.runner.ksu_wrapper(['bin/submit_map'])):
+            proc = subprocess.run(['bash', '-n', '-c', argv[-1]],
+                                  capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
 class TestWriteToolFailureText(unittest.TestCase):
     """A failing CLI puts the traceback on stderr and the DIAGNOSIS on
     stdout. `stderr or stdout` reported only the traceback."""
