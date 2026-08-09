@@ -208,3 +208,24 @@ Live, against the acceptance fixture that already exists:
   meaning today. If a future change ever runs it under another account,
   §2.1's single-resolution rule is what keeps the two axes agreeing about
   which account that is.
+
+## 11. Verified (2026-08-09)
+
+Live verification against the fixture the write-path acceptance run left
+behind (`MCPTest001`, `MCPTest002` in the personal ledger), run from the
+repo root with `mcp/.venv/bin/python`:
+
+- `list_campaigns(mine=True)` — `db_path` =
+  `/exp/mu2e/data/users/oksuzian/prodtools/submissions.db`, `count` = 2,
+  both `MCPTest001` and `MCPTest002` present.
+- `list_campaigns()` (default) — `db_path` =
+  `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`, `count` = 53.
+- `campaign_status(campaign_id=1, mine=True)` — `queue.owner` =
+  `oksuzian` (not `mu2epro`). `queue.state` came back `"unknown"`
+  (HTCondor schedd query failed/unreachable at verification time), which
+  the task brief treats as an acceptable outcome — `owner` is the
+  assertion, not the counts.
+
+The two axes (ledger and queue) agree on identity. Full command
+transcripts are in
+`.superpowers/sdd/2026-08-09-mcp-read-identity/task-4-report.md`.
