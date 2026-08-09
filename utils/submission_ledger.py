@@ -145,6 +145,19 @@ def _now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
+def _next_attempt(con, parent_id):
+    """attempt number for a new row: parent's + 1, or 1 for an original.
+    An unknown parent_id is a ValueError."""
+    if parent_id is None:
+        return 1
+    parent = con.execute(
+        'SELECT attempt FROM submissions WHERE id = ?',
+        (parent_id,)).fetchone()
+    if parent is None:
+        raise ValueError(f"ledger has no row {parent_id} (parent)")
+    return parent['attempt'] + 1
+
+
 def record_submission(db_path, *, tarball, entry, indices, jobsub_id,
                       cluster_id, map_path=None, parent_id=None):
     """Append one submission row; return its id.
@@ -156,14 +169,7 @@ def record_submission(db_path, *, tarball, entry, indices, jobsub_id,
     """
     con = _connect(db_path)
     try:
-        attempt = 1
-        if parent_id is not None:
-            parent = con.execute(
-                'SELECT attempt FROM submissions WHERE id = ?',
-                (parent_id,)).fetchone()
-            if parent is None:
-                raise ValueError(f"ledger has no row {parent_id} (parent)")
-            attempt = parent['attempt'] + 1
+        attempt = _next_attempt(con, parent_id)
         cur = con.execute(
             'INSERT INTO submissions '
             '(created_utc, state, attempt, parent_id, map_path, tarball, '
@@ -193,14 +199,7 @@ def reserve_submission(db_path, *, tarball, entry, indices, map_path=None,
     """
     con = _connect(db_path)
     try:
-        attempt = 1
-        if parent_id is not None:
-            parent = con.execute(
-                'SELECT attempt FROM submissions WHERE id = ?',
-                (parent_id,)).fetchone()
-            if parent is None:
-                raise ValueError(f"ledger has no row {parent_id} (parent)")
-            attempt = parent['attempt'] + 1
+        attempt = _next_attempt(con, parent_id)
         cur = con.execute(
             'INSERT INTO submissions '
             '(created_utc, state, attempt, parent_id, map_path, tarball, '
@@ -295,11 +294,18 @@ def all_rows(db_path):
         con.close()
 
 
+# States close_row may move an active row INTO. Deliberately NOT derived
+# from STATES: 'submitting' is a pre-submit reservation and 'failed' is
+# fail_reservation's alone, so a future addition to STATES must not
+# silently become closable here.
+_CLOSABLE_STATES = ('complete', 'recovered', 'exhausted')
+
+
 def close_row(db_path, row_id, state, note=None):
     """Move an active row to a terminal state. Closing a non-active row
     (or to a non-terminal state) is a ValueError — state transitions are
     active → {complete, recovered, exhausted}, nothing else."""
-    if state not in STATES or state == 'active':
+    if state not in _CLOSABLE_STATES:
         raise ValueError(f"invalid closing state: {state}")
     con = _connect(db_path)
     try:

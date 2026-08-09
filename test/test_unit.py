@@ -4685,6 +4685,17 @@ class TestSubmissionLedger(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.sl.close_row(self.db, rid, 'active')
 
+    def test_close_row_rejects_reservation_states(self):
+        # 'submitting' and 'failed' are reservation states owned by
+        # reserve_submission/fail_reservation — close_row must not be
+        # able to move an active row into either, even though both are
+        # now members of STATES.
+        rid = self._record()
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'failed')
+        with self.assertRaises(ValueError):
+            self.sl.close_row(self.db, rid, 'submitting')
+
     def test_close_nonactive_row_rejected(self):
         rid = self._record()
         self.sl.close_row(self.db, rid, 'complete')
