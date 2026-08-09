@@ -70,21 +70,54 @@ TS5 endcap plate through the TSdA (`tsda.z0 = 4195`, `r4 = 600`, `rin = 135`,
 `halfLength4 = 8.75`, i.e. a 1.75 cm aluminium plate with a 135 mm hole), plus
 the pion degrader repurposed as the 1.75 cm mobile target.
 
-Consumers confirm v40 superseded the earlier line:
+v40 superseded the earlier line. The prodtools wiki records the migration
+directly: *"geometry file `geom_run1_b_v40.txt` instead of `v06`"*. But the
+earlier geometries are not unreferenced — `prodtools/data/Run1B/*.json`, the
+campaign definition store, names all of them:
 
-| geometry | referenced by |
-|---|---|
-| **v40** | `Production/Tests/Run1BReco.fcl`, prodtools `digi.json` + `reco.json`, Run1Bak and Run1Ban campaigns |
-| **ds_on_v40** | ships alongside v40; v40 plus `degrader.rotation = 120.0` to move the mobile target out of the beam for DS-on running |
-| **v01** | the default inside `NoFieldRun1B.fcl`, which prodtools overrides to v40; historical Run1Baa/Run1Baa1 |
-| v02, v03, v04, v05, v06 | nothing |
+| geometry | refs in `data/Run1B` | campaigns in G4 stages | other consumers |
+|---|---|---|---|
+| **v40** | 28 | Run1Ban, Run1Ban-001, Run1Bap | `Production/Tests/Run1BReco.fcl`, prodtools `templates/Run1B/{digi,reco}.json` |
+| **ds_on_v40** | 0 | — | ships alongside v40: v40 plus `degrader.rotation = 120.0`, moving the mobile target out of the beam for DS-on running |
+| **v01** | 13 | Run1Baa | `Production/JobConfig/recoMC/NoFieldRun1B.fcl` (default, overridden to v40 by every prodtools caller), `Offline/EventDisplay/fcl/EventDisplayRun1b.fcl` |
+| **v03** | 14 | Run1Bag, Run1Bah | — |
+| **v06** | 15 | Run1Bai, Run1Bai-001, -003, -007 | — |
+| v02, v04, v05 | 0 | — | — |
 
-The prodtools wiki records the migration directly: *"geometry file
-`geom_run1_b_v40.txt` instead of `v06`"*.
+The G4-stage references (`primary_muon.json`, `stage1.json`,
+`resampler_beam_mixing.json`) matter because those stages construct a world, and
+v01 and v03–v06 each set the three things the un-ported code supports:
 
-**Therefore consolidation ships only what production runs: v40 and ds_on_v40.**
-v02–v06 are not ported. The branch is archived under a tag before deletion so
-they remain recoverable if a study needs them.
+```
+bool hasSTM                                     = false;
+bool stoppingTarget.foilTarget_supportStructure = false;
+bool tracker.inDS2Vacuum                        = true;
+```
+
+**Decision: ship v40 and ds_on_v40; freeze the Run1Baa–Run1Bai campaigns.**
+v02–v06 are not ported and survive only under the archive tag. The campaigns
+that used them are treated as completed history, not as a re-runnable recovery
+path.
+
+`geom_run1_b_v01.txt` is a special case: it is **already on main** and is
+referenced from inside Offline itself by `EventDisplay/fcl/EventDisplayRun1b.fcl`.
+It stays exactly as it is. Note that main's copy is internally inconsistent — it
+relocates the tracker to `z = 7000` ("dpalo position") while leaving
+`mu2e.detectorSystemZ0` at `geom_run1_a.txt`'s `10171`, and it sets
+`tracker.inDS2Vacuum` / `calorimeter.inDS2Vacuum`, which no code on main reads.
+The branch's `mu2e.detectorSystemZ0 = 7000` line (commit `c1fd4c345`, "Fix
+detector system origin") addresses the first of those. Porting it is out of
+scope: it would change geometry for a file this consolidation otherwise leaves
+alone, and it would not fix the second problem without also porting the
+DS2Vacuum code.
+
+**What freezing costs.** Run1Baa, Run1Bag, Run1Bah and Run1Bai cannot be
+re-run or recovered against main. Their `data/Run1B` entries will still resolve
+`geom_run1_b_v01.txt` (it stays on main) but not v03 or v06, and even the v01
+entries would build a G4 world with `tracker.inDS2Vacuum` silently ignored and
+an undersized stopping-target mother. This is a **silent** wrong answer, not a
+loud failure, which is why the freeze must be documented where an operator will
+see it before attempting a recovery.
 
 This removes most of the contested surface from #1849, because every contested
 change existed to make the 600 mm-disk configurations build:
@@ -98,9 +131,11 @@ change existed to make the 600 mm-disk configurations build:
 | `isDumbbell` parent-volume defect | in the parent-volume rework, which is not ported. |
 | `constructTSdA.cc` cutout/extra/tubes | v40 uses only ordinary `TSdA_v01`/`v02` parameters that main already handles. |
 
-Nothing live builds a G4 world with v01–v06 either: `NoFieldRun1B.fcl` includes
-`recoMC/NoField.fcl` and has no `g4run`, so v01's undersized stopping-target
-mother is never constructed.
+This is a deliberate trade, not an absence of consumers. The `data/Run1B`
+entries for Run1Baa–Run1Bai do build G4 worlds; freezing them is the choice to
+stop supporting that, in exchange for not carrying the stopping-target,
+`STMUpstream` and DS2Vacuum changes on main for geometries that model the target
+incorrectly in the first place.
 
 ## Goal and non-goal
 
@@ -250,5 +285,14 @@ reference to the superseded line. Not part of this consolidation.
   numerically; confirm before PR1 changes the enum. Appending before `lastEnum`
   keeps existing numbers valid, so the risk is a hardcoded count, not a
   hardcoded id.
-- v02–v06 disappear from main. Anyone reproducing a Run1Baa-era study needs the
-  archive tag. This is why the tag is mandatory rather than optional.
+- **v02–v06 disappear from main, and Run1Baa–Run1Bai become non-reproducible
+  against it.** The archive tag is the only remaining path, which is why it is
+  mandatory rather than optional.
+- **The freeze fails silently, and that is the sharpest risk here.** A v01 entry
+  re-run against main still finds its geometry file, then builds a world with
+  `tracker.inDS2Vacuum` ignored and an undersized stopping-target mother. No
+  error, wrong answer. Mitigation is documentation at the point of use — a
+  `data/Run1B/README.md` naming the frozen campaigns and the archive tag — plus
+  the wiki page. A machine-readable gate in prodtools that refuses to submit a
+  frozen entry would be better and is recorded as a follow-up; it is not part of
+  this consolidation.

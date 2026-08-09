@@ -14,7 +14,7 @@
 
 - `Mu2eG4/geom/geom_common.txt` must **never** be modified. It keeps including `geom_run1_a_stickman.txt`.
 - `Mu2eG4/geom/geom_run1_b_v01.txt` must **never** be modified. It is already on main and is the declared default inside a live Production fcl.
-- `geom_run1_b_v02.txt` through `v06.txt` are **not ported**. They are the superseded single-disk modelling line with no consumers.
+- `geom_run1_b_v02.txt` through `v06.txt` are **not ported**. They are the superseded single-disk modelling line. `prodtools/data/Run1B` does reference v03 (14×) and v06 (15×) for the Run1Bag/Bah/Bai campaigns; those campaigns are deliberately **frozen** as completed history, not treated as a re-runnable recovery path. Task 7 documents the freeze.
 - No new configuration keys may be introduced. Use `SimpleConfig::hasName()` key-presence for the EMC virtual detectors.
 - After every PR, the normalized GDML dump of `geom_common.txt` and of `geom_run1_a.txt` must be byte-identical to the pre-change baseline.
 - All work happens in `Mu2e/Offline`. Branch from `main`, never from `Run1B`.
@@ -306,8 +306,10 @@ correctly -- it inherits `geom_run1_a.txt` untouched and adds the TS5
 plate via `tsda.*` plus the degrader as the mobile target. The earlier
 v01-v06 line instead overrode `stoppingTarget.radii` to a single 600 mm
 disk, replacing the foil target rather than adding to it. v40 superseded
-that line and is what the Run1Bak and Run1Ban campaigns run; v02-v06
-have no consumers and are not ported.
+that line and is what the Run1Bak and Run1Ban campaigns run. v02-v06 are
+not ported: the campaigns that used them (Run1Baa, Run1Bag, Run1Bah,
+Run1Bai) are being frozen as completed history, and those geometries are
+preserved under an archive tag rather than on main.
 
 **Nominal impact:** none. Normalized gdml dumps of `geom_common.txt` and
 `geom_run1_a.txt` are byte-identical to main.
@@ -639,9 +641,13 @@ Two commits:
 **Not ported, and why:** the stopping-target radius change, the
 `STMUpstream` gating, the DS2Vacuum parent-volume rework and the TSdA
 cutout options all existed to support the v01-v06 single-disk
-geometries, which v40 superseded and which have no consumers. v40 keeps
-the 37-foil target, inherits `hasSTM = true`, and has
-`tracker.inDS2Vacuum` commented out.
+geometries, which v40 superseded. Those geometries model the Run1B
+target incorrectly -- they replace the 37-foil target Run1B shares with
+Run1A rather than adding the TS5 disk to it. The campaigns that used
+them (Run1Baa, Run1Bag, Run1Bah, Run1Bai) are being frozen as completed
+history rather than kept re-runnable. v40 needs none of this code: it
+keeps the 37-foil target with its support structure, inherits
+`hasSTM = true`, and has `tracker.inDS2Vacuum` commented out.
 
 After this merges the `Run1B` branch is archived under a tag and
 deleted.
@@ -675,6 +681,52 @@ cd $WS && mu2e -c Production/Tests/Run1BReco.fcl -n 1
 
 Expected: exit status 0. Needs a Production checkout alongside Offline in the Muse workspace.
 
+- [ ] **Step 2b: Document the freeze where an operator will hit it**
+
+This is the highest-value step in the task, because the freeze fails *silently*: a Run1Baa entry re-run against main still finds `geom_run1_b_v01.txt`, then builds a world with `tracker.inDS2Vacuum` ignored and an undersized stopping-target mother. No error, wrong answer.
+
+Create `prodtools/data/Run1B/README.md`:
+
+```markdown
+# Run1B campaign entries — geometry status
+
+`geom_run1_b_v40.txt` and `geom_run1_b_ds_on_v40.txt` are on Offline main.
+Entries using them (Run1Ban, Run1Ban-001, Run1Bap) are runnable.
+
+## FROZEN — do not re-run against Offline main
+
+| campaign | geometry | status |
+|---|---|---|
+| Run1Baa | v01 | file is on main, but the code it needs is not |
+| Run1Bag, Run1Bah | v03 | geometry not on main |
+| Run1Bai, Run1Bai-001, -003, -007 | v06 | geometry not on main |
+
+v02-v06 exist only under the Offline tag `run1b-archive-2026-08-08`.
+
+Re-running a v01 entry against main does **not** fail loudly: the geometry
+file resolves, but `tracker.inDS2Vacuum` is silently ignored and the
+stopping-target mother is undersized. The result is a wrong world, not an
+error. Check out the archive tag to reproduce any of these campaigns.
+
+These geometries also model the Run1B target incorrectly -- they override
+`stoppingTarget.radii` to a single 600 mm disk, replacing the 37-foil target
+that Run1B shares with Run1A rather than adding the TS5 disk to it. v40
+supersedes them and models it correctly.
+```
+
+```bash
+cd /exp/mu2e/app/users/oksuzian/muse_050125/prodtools
+git add data/Run1B/README.md
+git commit -m "docs(Run1B): mark pre-v40 campaign entries frozen
+
+Run1Baa/Bag/Bah/Bai use geom_run1_b_v01/v03/v06, which are not
+supported on Offline main after the Run1B consolidation. Records that
+re-running them fails silently rather than loudly, and points at the
+archive tag.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
 - [ ] **Step 3: Archive the branch under a tag**
 
 ```bash
@@ -682,9 +734,16 @@ cd $WS/Offline
 git tag -a run1b-archive-2026-08-08 Run1B -m "Archive of the Run1B branch at retirement.
 
 Production geometry (v40, ds_on_v40) and the code it needs were
-consolidated into main. The v01-v06 single-disk stopping-target
+consolidated into Offline main. The v02-v06 single-disk stopping-target
 geometries were superseded by v40 and are preserved here rather than on
-main. See docs/superpowers/specs/2026-08-08-run1b-consolidation-design.md."
+main, along with the stopping-target radius, STMUpstream and DS2Vacuum
+changes they require.
+
+This tag is the only copy of v02-v06. The Run1Baa, Run1Bag, Run1Bah and
+Run1Bai campaigns (prodtools data/Run1B) can only be reproduced from
+here -- see data/Run1B/README.md.
+
+See docs/superpowers/specs/2026-08-08-run1b-consolidation-design.md."
 git push origin run1b-archive-2026-08-08
 ```
 
@@ -702,7 +761,7 @@ Confirm the tag resolves **before** deleting the branch.
 
 - [ ] **Step 5: Announce**
 
-State on the relevant Mu2e channel that: main's default geometry is deliberately still Run1A; Run1B production is selected by naming `geom_run1_b_v40.txt`; and the superseded v02–v06 study geometries live under `run1b-archive-2026-08-08`.
+State on the relevant Mu2e channel that: main's default geometry is deliberately still Run1A; Run1B production is selected by naming `geom_run1_b_v40.txt`; the superseded v02–v06 geometries live under `run1b-archive-2026-08-08`; and **Run1Baa, Run1Bag, Run1Bah and Run1Bai are frozen** — not re-runnable against main, and re-running them will not error, it will quietly build the wrong world.
 
 - [ ] **Step 6: Record the outcome in the prodtools wiki**
 
@@ -718,7 +777,9 @@ Write `wiki/pages/2026-XX-XX-run1b-consolidation.md` covering what landed in eac
 
 **Spec coverage.** PR1 contents → Task 3. Degrader → Task 4. EMC VD gating and v40 z values → Task 5. Fidelity check → Task 6. Branch archive and retirement → Task 7. Testing strategy → Task 1 (harness), Task 2 (baselines), gdml checks in every subsequent task. Risks: `lastEnum` → Task 2 Step 2; numeric VD ids → Task 2 Step 3; `trigger` RC 2 → Task 2 Step 4; v02–v06 recoverability → Task 7 Step 3.
 
-**Scope revision folded in.** Earlier drafts of this plan covered three PRs and thirteen tasks, porting v01–v06 along with the stopping-target radius fix, `STMUpstream` gating, the DS2Vacuum parent-volume rework and its whitespace split. All of that existed to support the single-disk geometries. Since Run1B keeps the 37-foil target shared with Run1A and adds the TS5 disk separately — which only v40 models, and only v40 has consumers — that work has no live consumer and is not ported. The spec has been rewritten to match; there is no remaining disagreement between the two documents.
+**Scope revision folded in.** Earlier drafts covered three PRs and thirteen tasks, porting v01–v06 along with the stopping-target radius fix, `STMUpstream` gating, the DS2Vacuum parent-volume rework and its whitespace split. All of that existed to support the single-disk geometries, which model the Run1B target incorrectly: they override `stoppingTarget.radii` to one 600 mm disk, replacing the 37-foil target Run1B shares with Run1A instead of adding the TS5 disk to it. Only v40 models it correctly, and v40 is what current production runs.
+
+**Correction folded in.** An intermediate draft justified this by claiming v02–v06 have no consumers. That was wrong — it came from searching the Mu2e GitHub repos but not `prodtools/data/Run1B`, which references v01 (13×), v03 (14×) and v06 (15×), including in G4 stages. The scope is unchanged, but the reason is not "nothing uses them" — it is the deliberate choice to freeze Run1Baa/Bag/Bah/Bai as completed history. Task 7 Step 2b exists because of this: the freeze fails silently, and silent wrong answers need documentation at the point of use. A second intermediate decision to delete `geom_run1_b_v01.txt` from main was withdrawn for the same reason — it is referenced by `Offline/EventDisplay/fcl/EventDisplayRun1b.fcl` inside Offline itself. The spec has been updated to match; there is no remaining disagreement between the two documents.
 
 **Placeholder scan.** No deferred values. The EMC z positions are fixed at the values v40 already receives (`5300 / 4800 / 5830`), which makes the commit behavior-preserving; the open physics question about whether those are correct for v40 is recorded in the spec and the PR body as explicitly out of scope, not as a blocking TBD.
 
