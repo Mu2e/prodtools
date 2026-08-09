@@ -4,8 +4,8 @@
 **Follows:** `2026-08-08-mcp-write-path-design.md`, whose acceptance run
 exposed this gap.
 
-**Goal:** let `campaign_status` and `list_campaigns` report on any
-account's submission ledger and grid queue, not only `mu2epro`'s.
+**Goal:** let `campaign_status` and `list_campaigns` report on the
+caller's own submission ledger and grid queue, not only `mu2epro`'s.
 
 **Scope:** two tools in `mcp/src/prodtools_mcp/`. No write capability is
 added, and the read-only server stays read-only — that claim is why its
@@ -41,75 +41,83 @@ non-production campaign.
 
 ## 2. Surface
 
-One new parameter, `owner`, on two tools:
+One new parameter, `mine`, on two tools:
 
 ```python
 campaign_status(campaign=None, campaign_id=None, include_queue=True,
-                include_outputs=True, owner=None)
-list_campaigns(state=None, owner=None)
+                include_outputs=True, mine=False)
+list_campaigns(state=None, mine=False)
 ```
+
+The name is deliberately the CLI's: `submissions --mine status` already
+means exactly this. One concept, one word, in both places.
 
 `find_datasets`, `dataset_details` and `trace_provenance` are unchanged.
 They are already identity-neutral: the owner is a field in the SAM name
 pattern, so `mcs.oksuzian.*` already works and no parameter would add
 anything.
 
-### 2.1 The default is `None`, not `'mu2epro'`
+### 2.1 Resolution
 
-This is load-bearing. Today `db_path=None` falls through to
-`ledger_ro.DEFAULT_DB`, which is
-`os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB)`. Defaulting `owner`
-to the literal `'mu2epro'` and resolving it through `ledger_for('mu2epro')`
-would reach the same file in the common case while silently destroying
-the env override — a config knob that works until the day someone relies
-on it.
-
-So the resolution is:
-
-| `owner` | ledger | condor owner |
+| `mine` | ledger | condor owner |
 |---|---|---|
-| `None` (default) | `ledger_ro.DEFAULT_DB` — unchanged, env honored | `condor.OWNER` |
-| `'mu2epro'` | `ledger_for('mu2epro')` == `PRODUCTION_DB` | `'mu2epro'` |
-| `'<user>'` | `ledger_for('<user>')` | `'<user>'` |
+| `False` (default) | `ledger_ro.DEFAULT_DB` — unchanged, `MU2E_SUBMISSION_DB` honored | `condor.OWNER` |
+| `True` | `submission_ledger.ledger_for()` | `getpass.getuser()` |
 
 Every existing call is byte-identical, because every existing call omits
-the parameter.
+the parameter. The default is `False` rather than "whoever is running":
+production is the answer to almost every status question, and a default
+that changed with the caller would make two people reading the same
+campaign name get different answers with no indication why.
+
+**Both sides of the `True` row must resolve the same account.**
+`ledger_for()` called with no argument uses `getpass.getuser()`
+internally, so passing no argument there and calling `getpass.getuser()`
+for the condor owner gives one rule with one outcome. Do not substitute
+`os.environ['USER']` on one side only: that is how the ledger and the
+queue come to disagree about whose campaign is being reported.
 
 ### 2.2 Both axes move together
 
-`owner` sets the ledger path *and* the condor query owner.
+`mine` sets the ledger path *and* the condor query owner.
 `_default_clusters_fn()` currently takes no arguments and calls
 `condor.query_owner_jobs()`, which defaults to the module constant; it
 becomes owner-aware, and `campaign_status` threads the value through.
 
-Splitting these — letting a caller read one account's ledger against
-another's queue — would manufacture the exact wrong-account-zero the
-write side already had to fix. There is no use case for the mismatch, so
-the parameter does not offer it.
+Splitting these — reading one account's ledger against another's queue —
+would manufacture the exact wrong-account zero the write side already had
+to fix. There is no use case for the mismatch, so the parameter does not
+offer it.
 
 `query_owner_jobs` needs no other change: it constrains on
 `Owner=="{owner}"` and the jobsub schedds carry every owner's jobs. Both
 acceptance clusters landed on jobsub schedds (`jobsub01`, `jobsub05`), so
 `_is_jobsub_schedd`'s filter holds for non-production owners.
 
-## 3. Validation
+## 3. Why a boolean, not an account name
 
-`owner` is interpolated directly into a filesystem path by `ledger_for()`,
-and its value comes from the model. It is therefore validated before use:
+An earlier draft took `owner: str`, which would also have answered "how
+is my colleague's campaign doing" inside a conversation. It was rejected
+for two reasons.
 
-```python
-_OWNER_RE = re.compile(r'^[a-z_][a-z0-9_-]{0,31}$')
-```
+**The capability already exists.** `submissions --db <path> status` reads
+any ledger the caller has permission to read, today, with no new code —
+verified 2026-08-09 by reading mu2epro's ledger from an unprivileged
+account. A colleague's campaign is a shell command away. The MCP
+parameter would have moved that capability, not created it.
 
-A non-matching value raises `ToolError('invalid_argument', ...)` naming
-the expected shape. This is the one cost of parameterizing by account
-name rather than by a `mine: bool`, and it is not optional: without it,
-`owner='../../mu2epro'` is a path traversal, read-only or not.
+**A boolean has no validation surface.** An account name supplied by the
+model is interpolated straight into a filesystem path by `ledger_for()`,
+so `owner='../../elsewhere'` has to be refused, and a shape check plus its
+tests has to be written and then maintained. `mine` is derived from
+`getpass.getuser()`; there is no caller-supplied string, so the question
+does not arise. Everything in this spec that fixes the actual bug (§2.2,
+§4, §5) is identical either way — the account-name version bought one
+convenience and charged one obligation.
 
-Validation is shape-only. Whether the account exists, and whether it has
-a ledger, are answered by the existing `catalog_unavailable` path — a
-shape check that also verified existence would be two failure modes
-wearing one error code.
+Widening later is contained: `mine: bool` → `owner: str` touches the same
+two functions, and by then there would be evidence about whether anyone
+wants cross-user reads in a conversation rather than in a shell.
 
 ## 4. What must not happen
 
@@ -124,7 +132,7 @@ claim. The resolution here calls `ledger_for()` and nothing else.
 `campaign_status` already returns the resolved `db_path`. Two additions:
 
 - `list_campaigns` returns `db_path` too. Its silence today is harmless
-  only because there is one possible answer.
+  only because there is one possible answer; with `mine` there are two.
 - The queue block gains `owner`, beside the existing `state` and counts.
 
 A status payload that does not name whose ledger and whose queue produced
@@ -134,66 +142,69 @@ about, and the fix each time has been to make the payload say which.
 
 ## 6. Error wording
 
-`ledger_ro._connect` tests `os.path.exists(db_path)` and, when false,
-raises `catalog_unavailable` with `submission ledger not found: <path>`.
-For a same-user read that is accurate. For a cross-user read it is a
-guess: `os.path.exists` returns False both for an absent file and for one
-inside a directory the caller cannot traverse.
+`ledger_ro._connect` raises `catalog_unavailable` with `submission ledger
+not found: <path>` when `os.path.exists` is false. With `mine=True` that
+is accurate — you can always traverse your own directory, so a false
+result means the ledger genuinely is not there, and the existing hint
+("the direct-submission subsystem has been run at least once") is the
+right advice.
 
-Cross-user reads work today — both ledgers are `-rw-r--r--` under
-world-executable directories — but the message must stop asserting a
-cause it has not established. It becomes "not found, or not readable by
-you", with the hint naming both.
+No change is required here. It is noted so a later reader does not
+mistake the omission for an oversight: the wording only becomes a guess
+if cross-user reads are ever added (§3), and it should be revisited then.
 
 ## 7. Testing
 
 Unit, in `test/test_unit.py`:
 
-- The resolution table of §2.1, including that `owner=None` still honors
-  `MU2E_SUBMISSION_DB`. This is the regression that a literal default
-  would cause and that no other test would catch.
-- `owner` validation: accepts plausible usernames, rejects `../x`, `/abs`,
-  empty, and a 33-character name.
-- The condor owner is threaded from the same parameter — asserted through
-  an injected `clusters_fn`, not by reading the constant.
-- No directory is created for an owner whose ledger does not exist.
+- The resolution table of §2.1, including that `mine=False` still honors
+  `MU2E_SUBMISSION_DB`. That is the regression a hardcoded production
+  default would cause and that no other test would catch.
+- Ledger account and condor account come from the same resolution — one
+  test that patches the account and asserts both move, so a future edit
+  cannot change one and leave the other.
+- The condor owner is threaded from the parameter, asserted through an
+  injected `clusters_fn` rather than by reading the module constant.
+- No directory is created for a caller whose ledger does not exist.
 - `list_campaigns` returns `db_path`; the queue block carries `owner`.
 
 Live, against the acceptance fixture that already exists:
 
-- `campaign_status(owner='oksuzian')` returns campaigns 1 and 2
-  (`MCPTest001`, `MCPTest002`) from the ledger at
-  `/exp/mu2e/data/users/oksuzian/prodtools/submissions.db`.
-- `campaign_status()` with no `owner` still returns the production
-  campaigns and is unchanged from today.
+- `campaign_status(mine=True)` returns campaigns 1 and 2 (`MCPTest001`,
+  `MCPTest002`) from `/exp/mu2e/data/users/oksuzian/prodtools/submissions.db`.
+- `campaign_status()` with no argument still returns the production
+  campaigns, unchanged from today.
 
 ## 8. Documentation
 
-- `mcp/README.md` and the CLAUDE.md MCP section: what `owner` does, and
-  that omitting it means production.
-- `get_server_info` advertises that status tools accept `owner`, so a
+- `mcp/README.md` and the CLAUDE.md MCP section: what `mine` does, that
+  omitting it means production, and that another account's ledger is
+  read with `submissions --db <path> status` rather than through MCP.
+- `get_server_info` advertises that the status tools accept `mine`, so a
   client can discover the capability without reading the source.
 
-`EXAMPLES.md` is not touched here: it documents the CLI, and the CLI's
-`--mine` / `--db` already cover this ground.
+`EXAMPLES.md` is not touched here: it documents the CLI, and `--mine` and
+`--db` are already covered there.
 
 ## 9. Non-goals
 
 - **No write capability.** Unchanged.
-- **No cross-user aggregation.** One call reads one account. A "show me
-  everything" view would have to merge ledgers whose campaign ids collide,
-  and nobody has asked for it.
-- **No `owner` on the discovery or lineage tools.** They are already
+- **No cross-user reads through MCP.** `submissions --db <path> status`
+  covers it today (§3).
+- **No cross-ledger aggregation.** One call reads one ledger. Merging
+  would have to reconcile campaign ids that collide across ledgers, and
+  nobody has asked for it.
+- **No `mine` on the discovery or lineage tools.** Already
   identity-neutral (§2).
 
 ## 10. Risks
 
-- **Permissions are conventional, not enforced.** Cross-user reads work
-  because personal ledgers happen to be mode 0644 under traversable
-  directories. A user with a private home directory yields
-  `catalog_unavailable`, which §6 makes legible rather than misleading.
-  Nothing here grants access it does not already have.
-- **The parameter can be forgotten.** A model that omits `owner` gets
+- **The parameter can be forgotten.** A model that omits `mine` gets
   production. That is the safe direction — an under-reported personal
   campaign, never a personal ledger mistaken for production — and §5's
   `db_path` in the payload makes the omission visible after the fact.
+- **`mine` is ambiguous under an identity switch.** The read server runs
+  as the invoking user and never shells through `ksu`, so "mine" has one
+  meaning today. If a future change ever runs it under another account,
+  §2.1's single-resolution rule is what keeps the two axes agreeing about
+  which account that is.
