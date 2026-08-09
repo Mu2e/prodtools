@@ -8812,8 +8812,26 @@ except ImportError:
 
 
 class TestWriteServerRegistration(unittest.TestCase):
+    def test_tool_names_covers_tool_functions(self):
+        """Static coverage check, runs under every interpreter (no
+        FastMCP needed): TOOL_NAMES and TOOL_FUNCTIONS cannot drift
+        from each other. create_write_mcp_server() registers exactly
+        TOOL_FUNCTIONS, so this also pins what gets registered."""
+        from prodtools_mcp_write import tools as write_tools
+        from prodtools_mcp_write.server import TOOL_FUNCTIONS, TOOL_NAMES
+        self.assertEqual(sorted(TOOL_NAMES), sorted(TOOL_FUNCTIONS))
+        for name, fn in TOOL_FUNCTIONS.items():
+            self.assertTrue(callable(fn), f'{name} is not callable')
+            self.assertIs(
+                fn, getattr(write_tools, name, None),
+                f'{name} is not the function of that name in '
+                'prodtools_mcp_write.tools')
+
     @unittest.skipUnless(_HAVE_FASTMCP, 'mcp package (py3.10+) not installed')
     def test_advertised_names_match_registered_tools(self):
+        """Live registration check, in addition to the static one above.
+        Only runs where the real mcp package (py3.10+) is available;
+        exercised for real by start_write_mcp.sh --check under the venv."""
         import asyncio
         from prodtools_mcp_write.server import create_write_mcp_server, TOOL_NAMES
         server = create_write_mcp_server()

@@ -1,7 +1,18 @@
 """FastMCP registration for the write server."""
 from prodtools_mcp_write import tools
 
-TOOL_NAMES = ('push_cnf', 'enqueue_campaign', 'run_submissions')
+# Computed without touching FastMCP, so registration coverage is
+# checkable under the system python3.9 that runs test_unit.py (the
+# real `mcp` package needs >=3.10). create_write_mcp_server() derives
+# its registrations from this dict, so it and TOOL_NAMES cannot drift
+# from what actually gets registered.
+TOOL_FUNCTIONS = {
+    'push_cnf': tools.push_cnf,
+    'enqueue_campaign': tools.enqueue_campaign,
+    'run_submissions': tools.run_submissions,
+}
+
+TOOL_NAMES = tuple(TOOL_FUNCTIONS)
 
 
 def get_write_server_info():
@@ -22,9 +33,8 @@ def create_write_mcp_server():
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP('prodtools-write')
-    mcp.tool()(tools.push_cnf)
-    mcp.tool()(tools.enqueue_campaign)
-    mcp.tool()(tools.run_submissions)
+    for name, fn in TOOL_FUNCTIONS.items():
+        mcp.tool(name=name)(fn)
     return mcp
 
 
