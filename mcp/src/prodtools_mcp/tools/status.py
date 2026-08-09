@@ -8,10 +8,38 @@ exceed the client's timeout.
 from prodtools_mcp import condor, ledger_ro
 from prodtools_mcp.adapters import ToolError
 
+import getpass
+
+from utils import submission_ledger
+
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
 
-def queue_block(cluster_ids, clusters):
+def _resolve_identity(mine):
+    """(ledger path, condor owner) for one call.
+
+    ONE resolution feeds BOTH axes. `ledger_for()` with no argument uses
+    getpass.getuser() internally, so asking it for the path and asking
+    getpass for the queue owner cannot disagree. Reaching for
+    os.environ['USER'] on one side only is exactly how the ledger and the
+    queue come to report different accounts — the failure 171517f fixed
+    on the write side.
+
+    The two halves are deliberately asymmetric when mine is False. The
+    ledger returns None so `ledger_ro.DEFAULT_DB` still applies, and that
+    constant is os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB): a
+    resolved path here would silently destroy the override. The condor
+    owner has no such override, so it is returned concrete and the
+    payload can always name it.
+
+    Creates nothing: `ensure_ledger_dir` is the CLI's, not this server's.
+    """
+    if not mine:
+        return None, condor.OWNER
+    return submission_ledger.ledger_for(), getpass.getuser()
+
+
+def queue_block(cluster_ids, clusters, owner=condor.OWNER):
     """Queue counts for a campaign's clusters from a
     condor.query_owner_jobs() snapshot: {cluster_id: [{'JobStatus',
     'HoldReasonCode', 'HoldReason'}, ...]}.
@@ -27,9 +55,15 @@ def queue_block(cluster_ids, clusters):
     When held > 0, adds `hold_reasons`: the held jobs' HoldReasonCode
     breakdown (see condor.hold_reasons — grouped by CODE, never by the
     HoldReason text, which embeds a unique slot/host per job).
+
+    `owner` is carried into the result so a reader can tell whose queue
+    was counted. A count that is correct for an account nobody asked
+    about is the recurring bug in this subsystem; naming it in the
+    payload is what makes it checkable.
     """
     if clusters is None:
         return {'state': 'unknown',
+                'owner': owner,
                 'reason': 'HTCondor queue query failed, timed out, or '
                           'could not reach every schedd'}
     running = idle = held = 0
@@ -51,8 +85,8 @@ def queue_block(cluster_ids, clusters):
                 held_jobs.append(job)
             # Anything else (removed/completed/transferring/suspended)
             # is neither a live nor a held job — not counted.
-    block = {'state': 'known', 'running': running, 'idle': idle,
-            'held': held, 'clusters': seen}
+    block = {'state': 'known', 'owner': owner, 'running': running,
+            'idle': idle, 'held': held, 'clusters': seen}
     if held:
         block['hold_reasons'] = condor.hold_reasons(held_jobs)
     return block
@@ -173,13 +207,17 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
     return {'state': 'known', 'datasets': datasets}
 
 
-def _default_clusters_fn():
+def _default_clusters_fn(owner=None):
     """condor.query_owner_jobs(), the MCP server's own path — direct
     ClassAd queries, independent of utils.submissions.live_clusters()
     (which backs the live production cron and stays untouched). Already
     bounded and already fail-closed to None on any timeout or
-    unreachable schedd; nothing to add here."""
-    return condor.query_owner_jobs()
+    unreachable schedd; nothing to add here.
+
+    `owner` is threaded rather than left to condor.OWNER so the queue is
+    always read for the SAME account as the ledger (see
+    _resolve_identity)."""
+    return condor.query_owner_jobs(owner or condor.OWNER)
 
 
 def _default_count_fn(dataset):
@@ -226,7 +264,7 @@ def _matches(camp, campaign, campaign_id):
 
 
 def campaign_status(campaign=None, campaign_id=None, include_queue=True,
-                    include_outputs=True, db_path=None,
+                    include_outputs=True, mine=False, db_path=None,
                     clusters_fn=None, count_fn=None, job_pars_fn=None):
     """Status of one campaign, or a ledger-only summary of all of them.
 
@@ -234,6 +272,11 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     sqlite, no network, and the queue/outputs blocks are omitted.
     """
     from utils.map_entry import njobs_of
+
+    resolved_db, owner = _resolve_identity(mine)
+    # An explicit db_path is the injection seam the tests use and wins
+    # over the derived one; `mine` only supplies a default.
+    db_path = db_path or resolved_db
 
     # One snapshot, one connection: campaigns and rows must agree. See
     # ledger_ro.snapshot.
@@ -256,7 +299,7 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
 
     clusters = None
     if want_queue:
-        clusters = (clusters_fn or _default_clusters_fn)()
+        clusters = (clusters_fn or _default_clusters_fn)(owner)
 
     tarball_counts = {}
     for camp in all_camps:
@@ -283,16 +326,17 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
         # Rows back both blocks: the queue reads their cluster ids, and a
         # draining campaign's output DATASETS are only discoverable from
         # the input filenames they dispatched.
-        mine = ([r for r in all_rows if r['tarball'] == camp['tarball']]
-                if (want_queue or want_outputs) else [])
+        camp_rows = ([r for r in all_rows if r['tarball'] == camp['tarball']]
+                     if (want_queue or want_outputs) else [])
         if want_queue:
-            rec['rows'] = _row_counts(mine)
-            cluster_ids = [r['cluster_id'] for r in mine if r['cluster_id']]
-            rec['queue'] = queue_block(cluster_ids, clusters)
+            rec['rows'] = _row_counts(camp_rows)
+            cluster_ids = [r['cluster_id'] for r in camp_rows
+                           if r['cluster_id']]
+            rec['queue'] = queue_block(cluster_ids, clusters, owner)
         if want_outputs:
             rec['outputs'] = _outputs_block(
                 camp['entry'], njobs, camp['cursor'],
-                count_fn or _default_count_fn, rows=mine,
+                count_fn or _default_count_fn, rows=camp_rows,
                 tarball=camp['tarball'], job_pars_fn=job_pars_fn)
         out.append(rec)
 

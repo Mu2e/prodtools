@@ -7940,7 +7940,7 @@ class TestMcpQueueBlock(unittest.TestCase):
         with patch.object(condor, 'query_owner_jobs',
                           return_value={'1': [_job(2)]}) as mock:
             result = status._default_clusters_fn()
-        mock.assert_called_once_with()
+        mock.assert_called_once_with(condor.OWNER)
         self.assertEqual(result, {'1': [_job(2)]})
 
 
@@ -8151,7 +8151,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
             db = self._make_db(td)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db,
-                clusters_fn=lambda: {'29308498': [running_job, running_job]},
+                clusters_fn=lambda owner: {'29308498': [running_job, running_job]},
                 count_fn=lambda ds: 412)
         camp = result['campaigns'][0]
         self.assertEqual(camp['queue']['running'], 2)
@@ -8288,7 +8288,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
                 submission_ledger.close_row(db, rid, state)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db, include_outputs=False,
-                clusters_fn=lambda: None)
+                clusters_fn=lambda owner: None)
         rows = result['campaigns'][0]['rows']
         self.assertEqual(rows['exhausted'], 2)
         self.assertEqual(rows['complete'], 1)
@@ -8330,7 +8330,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
             db = self._make_db(td)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db,
-                clusters_fn=lambda: None, count_fn=boom)
+                clusters_fn=lambda owner: None, count_fn=boom)
         camp = result['campaigns'][0]
         self.assertEqual(camp['outputs']['state'], 'unknown')
         self.assertNotIn('datasets', camp['outputs'])
@@ -8359,6 +8359,115 @@ class TestMcpCampaignStatus(unittest.TestCase):
                 entry={'njobs': 4000, 'outputs': []}, slice_size=500)
             result = status.campaign_status(db_path=db)
         self.assertTrue(any('note' in c for c in result['campaigns']))
+
+
+class TestMcpReadIdentity(unittest.TestCase):
+    """`mine` selects whose ledger AND whose queue — from one resolution.
+
+    The bug this closes: a run_as="self" campaign could be written but
+    not watched, and the failure was silent. An empty answer from the
+    production ledger is indistinguishable from "no campaigns", and a
+    queue counted against the wrong account reads as "nothing running".
+    That is the read-side twin of 171517f, where live_clusters()
+    defaulted to mu2epro, a self tick did not find its own cluster in
+    production's queue, and absent-from-snapshot read as 'drained'.
+    """
+
+    def setUp(self):
+        from prodtools_mcp import condor
+        from prodtools_mcp.tools import status
+        self.status = status
+        self.condor = condor
+
+    def test_default_returns_no_ledger_path_so_the_env_override_lives(self):
+        # NOT the resolved production path. ledger_ro.DEFAULT_DB is
+        # os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB); returning
+        # a concrete path here would reach the same file in the common
+        # case while silently destroying the override.
+        db, owner = self.status._resolve_identity(False)
+        self.assertIsNone(db)
+        self.assertEqual(owner, self.condor.OWNER)
+
+    def test_mine_resolves_the_ledger_to_the_calling_account(self):
+        with patch('getpass.getuser', return_value='alice'):
+            db, owner = self.status._resolve_identity(True)
+        self.assertEqual(db,
+                         '/exp/mu2e/data/users/alice/prodtools/submissions.db')
+        self.assertEqual(owner, 'alice')
+
+    def test_ledger_and_queue_cannot_name_different_accounts(self):
+        # The whole point of one resolution. If a later edit reads
+        # os.environ['USER'] on one side and getpass on the other, these
+        # two diverge and this test says so.
+        with patch('getpass.getuser', return_value='bob'):
+            db, owner = self.status._resolve_identity(True)
+        self.assertIn('/users/%s/' % owner, db)
+
+    def test_resolution_creates_nothing_on_disk(self):
+        # A read-only server has no first run. resolve_db() in the CLI
+        # mkdirs a derived path; this must not.
+        with patch('getpass.getuser', return_value='nobody_qqq'):
+            db, _ = self.status._resolve_identity(True)
+        self.assertFalse(os.path.exists(os.path.dirname(db)))
+        self.assertFalse(os.path.exists(db))
+
+    def test_queue_block_names_the_account_it_counted(self):
+        block = self.status.queue_block(['1'], {}, 'alice')
+        self.assertEqual(block['owner'], 'alice')
+
+    def test_queue_block_names_the_account_even_when_unknown(self):
+        # A fail-closed 'unknown' from the WRONG account is the most
+        # misleading answer this server can give; it must still say whose.
+        block = self.status.queue_block(['1'], None, 'alice')
+        self.assertEqual(block['state'], 'unknown')
+        self.assertEqual(block['owner'], 'alice')
+
+    def test_default_clusters_fn_passes_the_owner_to_condor(self):
+        with patch.object(self.condor, 'query_owner_jobs') as q:
+            self.status._default_clusters_fn('alice')
+        self.assertEqual(q.call_args.args[0], 'alice')
+
+    def test_default_clusters_fn_without_an_owner_asks_for_production(self):
+        with patch.object(self.condor, 'query_owner_jobs') as q:
+            self.status._default_clusters_fn()
+        self.assertEqual(q.call_args.args[0], self.condor.OWNER)
+
+    def test_campaign_status_threads_the_owner_into_the_queue_seam(self):
+        # Asserted through the seam, not by reading the constant: a test
+        # double that ignores identity would prove nothing about threading.
+        seen = {}
+
+        def fake_clusters(owner):
+            seen['owner'] = owner
+            return {}
+
+        with tempfile.TemporaryDirectory() as td:
+            db = TestMcpCampaignStatus()._make_db(td)
+            result = self.status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=fake_clusters)
+        self.assertEqual(seen['owner'], self.condor.OWNER)
+        self.assertEqual(result['campaigns'][0]['queue']['owner'],
+                         self.condor.OWNER)
+
+    def test_mine_true_reads_the_callers_ledger(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = TestMcpCampaignStatus()._make_db(td)
+            with patch.object(self.status, '_resolve_identity',
+                              return_value=(db, 'alice')):
+                result = self.status.campaign_status(
+                    mine=True, campaign='MDC2025au', include_outputs=False,
+                    clusters_fn=lambda owner: {})
+        self.assertEqual(result['db_path'], db)
+        self.assertEqual(result['campaigns'][0]['queue']['owner'], 'alice')
+
+    def test_an_explicit_db_path_still_wins(self):
+        # db_path is the injection seam the existing tests use; `mine`
+        # must not take it away from them.
+        with tempfile.TemporaryDirectory() as td:
+            db = TestMcpCampaignStatus()._make_db(td)
+            result = self.status.campaign_status(db_path=db)
+        self.assertEqual(result['db_path'], db)
 
 
 class TestMcpListCampaigns(unittest.TestCase):
