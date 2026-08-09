@@ -639,7 +639,26 @@ def _build_job_args(config):
     return []
 
 
-def _pushout_to_sam(parfile_name):
+def cnf_location(owner):
+    """Which storage class the cnf tarball is pushed to.
+
+    Production cnfs live in the persistent `datasets` area
+    (/pnfs/mu2e/persistent/datasets/usr-etc/cnf/...), and only the
+    production account can write there. An ordinary user's token grants
+    `storage.modify:/mu2e/scratch/datasets/usr-etc/cnf/<user>` but NOT
+    anything under `/mu2e/persistent/datasets`, so pushing a
+    user-owned cnf to 'disk' dies after three gfal retries with
+    `DESTINATION MAKE_PARENT HTTP 403 : Permission refused` — which is
+    what made `json2jobdef --prod` unusable for anyone but mu2epro.
+
+    Owner 'mu2e' keeps 'disk', so production is bit-for-bit unchanged;
+    every other owner gets the scratch datasets area its own token
+    actually covers.
+    """
+    return 'disk' if owner == 'mu2e' else 'scratch'
+
+
+def _pushout_to_sam(parfile_name, owner):
     """If `parfile_name` exists locally and isn't already in SAM, push it.
     Idempotent — repeat calls are no-ops once SAM has the file."""
     if not Path(parfile_name).exists():
@@ -650,8 +669,9 @@ def _pushout_to_sam(parfile_name):
         print(f"File {parfile_name} already exists on SAM, skipping push")
         return
 
-    print(f"Pushing {parfile_name} to SAM...")
-    push_output([('disk', parfile_name, 'none')], 'outputs.txt')
+    location = cnf_location(owner)
+    print(f"Pushing {parfile_name} to SAM ({location})...")
+    push_output([(location, parfile_name, 'none')], 'outputs.txt')
 
 
 def _cleanup_temp_files():
@@ -712,7 +732,7 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     parfile_name = get_parfile_name(config)
 
     if pushout:
-        _pushout_to_sam(parfile_name)
+        _pushout_to_sam(parfile_name, config['owner'])
 
     if no_cleanup:
         print("Temporary files kept (--no-cleanup specified)")

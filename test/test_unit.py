@@ -9025,6 +9025,57 @@ class TestWriteServerRegistration(unittest.TestCase):
 # Write-server identity dispatch and confirm gate
 # ---------------------------------------------------------------------------
 
+class TestCnfPushLocation(unittest.TestCase):
+    """The cnf tarball's storage class must follow the dataset owner.
+
+    Measured 2026-08-09: pushing a user-owned cnf to 'disk' resolves to
+    /pnfs/mu2e/persistent/datasets/usr-etc/cnf/<user>/... and dies after
+    three gfal retries with `DESTINATION MAKE_PARENT HTTP 403`. A user
+    token grants storage.modify on scratch/datasets/usr-etc/cnf/<user>,
+    never on persistent/datasets.
+    """
+
+    def test_production_owner_still_pushes_to_disk(self):
+        from utils.json2jobdef import cnf_location
+        self.assertEqual(cnf_location('mu2e'), 'disk')
+
+    def test_user_owner_pushes_to_scratch(self):
+        from utils.json2jobdef import cnf_location
+        for owner in ('oksuzian', 'someone_else'):
+            self.assertEqual(cnf_location(owner), 'scratch')
+
+    def test_pushout_passes_the_owner_derived_location(self):
+        from unittest import mock
+        from utils import json2jobdef
+        with mock.patch.object(json2jobdef.Path, 'exists',
+                               return_value=True), \
+             mock.patch.object(json2jobdef, 'locate_file',
+                               return_value=None), \
+             mock.patch.object(json2jobdef, 'push_output') as push:
+            json2jobdef._pushout_to_sam('cnf.oksuzian.D.C.0.tar', 'oksuzian')
+            json2jobdef._pushout_to_sam('cnf.mu2e.D.C.0.tar', 'mu2e')
+        self.assertEqual([call.args[0][0][0] for call in push.call_args_list],
+                         ['scratch', 'disk'])
+
+
+class TestWriteToolFailureText(unittest.TestCase):
+    """A failing CLI puts the traceback on stderr and the DIAGNOSIS on
+    stdout. `stderr or stdout` reported only the traceback."""
+
+    def test_both_streams_are_reported(self):
+        from prodtools_mcp_write import tools
+        text = tools._both_streams(
+            {'stdout': 'HTTP 403 : Permission refused',
+             'stderr': 'Traceback (most recent call last):'})
+        self.assertIn('HTTP 403 : Permission refused', text)
+        self.assertIn('Traceback', text)
+
+    def test_empty_streams_say_so_rather_than_reporting_nothing(self):
+        from prodtools_mcp_write import tools
+        self.assertIn('no output',
+                      tools._both_streams({'stdout': '', 'stderr': '  \n'}))
+
+
 class TestWriteRunnerGate(unittest.TestCase):
     def setUp(self):
         from prodtools_mcp_write import runner

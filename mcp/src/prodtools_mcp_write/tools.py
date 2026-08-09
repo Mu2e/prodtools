@@ -109,6 +109,26 @@ def _canon(entry):
     return _json.dumps(entry, sort_keys=True)
 
 
+def _both_streams(result):
+    """Failure text for a run_cli result: stdout AND stderr, labelled.
+
+    `stderr or stdout` looked reasonable and was actively harmful: a
+    prodtools CLI dying inside pushOutput puts a Python traceback on
+    stderr and the ACTUAL diagnosis on stdout (`gfal-copy error: 1 ...
+    DESTINATION MAKE_PARENT HTTP 403 : Permission refused`, hundreds of
+    lines of pushOutput log). The traceback wins the `or`, so the
+    caller is told `pushOutput ... returned non-zero exit status 2` and
+    nothing about why -- the one thing they need. Both streams are
+    reported, each named, so which one carried the answer is never a
+    guess.
+    """
+    parts = [f"--- {name} ---\n{text}"
+             for name, text in (('stdout', result.get('stdout')),
+                                ('stderr', result.get('stderr')))
+             if (text or '').strip()]
+    return '\n'.join(parts) if parts else '(no output on either stream)'
+
+
 def _read_entries_strict(map_path):
     """Same shape as `_read_entries`, but a missing file or malformed
     JSON is a real problem here, not "0 entries".
@@ -263,7 +283,7 @@ def push_cnf(json, desc, dsconf, jobdefs_map, run_as, confirm=False):
     if result['rc'] != 0:
         raise RuntimeError(
             f"json2jobdef failed (rc={result['rc']}): "
-            f"{result['stderr'] or result['stdout']}")
+            f"{_both_streams(result)}")
     index, entry = _read_map_entry(jobdefs_map, tarball_desc, dsconf,
                                    before_entries)
     return {
@@ -366,7 +386,7 @@ def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
     if result['rc'] != 0:
         raise RuntimeError(
             f"submit_map --enqueue failed (rc={result['rc']}): "
-            f"{result['stderr'] or result['stdout']}")
+            f"{_both_streams(result)}")
 
     _, map_entry = _read_map_entry(map_path, index=entry)
     tarball = map_entry.get('tarball')
@@ -442,7 +462,7 @@ def run_submissions(campaign_id, run_as, confirm=False):
     if result['rc'] not in (0, 2):
         raise RuntimeError(
             f"submissions run failed (rc={result['rc']}): "
-            f"{result['stderr'] or result['stdout']}")
+            f"{_both_streams(result)}")
     return {'rc': result['rc'],
             'needs_attention': result['rc'] == 2,
             'campaign_id': campaign_id,
