@@ -364,15 +364,27 @@ EOF
 cd $WS/Offline && git checkout main && git pull && git checkout -b run1b-degrader-and-emc-vds
 ```
 
-- [ ] **Step 2: Confirm the code is unreachable in nominal**
+- [ ] **Step 2: Understand exactly what changes, in nominal as well as v40**
 
 ```bash
 cd $WS/Offline
-grep -rn "degrader.build" Mu2eG4/geom/*.txt
+grep -n "degrader.build\|degrader.rotation" Mu2eG4/geom/degrader_v02.txt
+grep -c "degrader" $WS/gdml/baseline_common.gdml.norm
 grep -n "supportArm" GeometryService/src/MECOStyleProtonAbsorberMaker.cc | head
 ```
 
-Expected: `degrader_v02.txt` sets `degrader.build = false` ("off by default") and only `geom_run1_b_v40.txt` sets it `true`. That is why this can land unconditionally. Also expected: every `degrader.supportArm.*` key is read with a default at `MECOStyleProtonAbsorberMaker.cc:444-456`, so v40's overrides need no new plumbing.
+**The degrader IS built in nominal running.** `degrader_v02.txt:11` sets `degrader.build = true`; "off by default" means `degrader.rotation = 120.0`, swinging it out of the beam, not omitting it. The nominal baselines contain 57 degrader references and all six degrader volumes. Do not repeat the earlier mistake of treating this code as unreachable.
+
+The change is narrower than "placement". With `old = 2·filter_hl + frame_hl + 1` and `new = filter_hl + frame_hl + 0.1`:
+
+| | old mother half | new mother half | filter abs z | frame abs z |
+|---|---|---|---|---|
+| nominal (filter 1.00, frame 6.35) | 9.35 | 7.45 | unchanged | unchanged |
+| v40 (filter 8.75) | 24.85 | 15.20 | unchanged | unchanged |
+
+The filter and frame do **not** move in either case. Only the mother box shrinks and re-centres around them, removing a downstream overrun of 1.9 mm in nominal and 9.65 mm on v40 — which is why the overlap only bites on v40. Confirm this algebra against the code before you touch anything; if the filter or frame absolute positions do move, the analysis is wrong and you must stop.
+
+Also expected: every `degrader.supportArm.*` key is read with a default at `MECOStyleProtonAbsorberMaker.cc:444-456`, so v40's overrides need no new plumbing.
 
 - [ ] **Step 3: Capture the pre-change v40 geometry, with overlap checking actually enabled**
 
@@ -427,11 +439,17 @@ and the frame directly downstream of it, with the rod sharing the frame's z.
 cd $WS && muse build -j 20
 ./gdml_baseline.sh Offline/Mu2eG4/fcl/gdmldump.fcl        deg_common
 ./gdml_baseline.sh Offline/Mu2eG4/fcl/gdmldump_run1_a.fcl deg_run1_a
-diff gdml/baseline_common.gdml.norm gdml/deg_common.gdml.norm && echo "COMMON UNCHANGED"
-diff gdml/baseline_run1_a.gdml.norm gdml/deg_run1_a.gdml.norm && echo "RUN1A UNCHANGED"
+diff gdml/baseline_common.gdml.norm gdml/deg_common.gdml.norm > /tmp/deg_common.diff || true
+diff gdml/baseline_run1_a.gdml.norm gdml/deg_run1_a.gdml.norm > /tmp/deg_run1_a.diff || true
+wc -l /tmp/deg_common.diff /tmp/deg_run1_a.diff
+grep -oE 'name="[A-Za-z_0-9]+"' /tmp/deg_common.diff | sort -u
 ```
 
-Expected: both `UNCHANGED`. The degrader is not built in either, so the rewritten code never runs. A diff here means `degrader.build` is true somewhere unexpected — find it before proceeding.
+**Expect a bounded diff, not byte-identity** — the degrader is built in both nominal geometries. What must be proven is that the diff is confined to exactly two things: `degraderOutline`'s box dimensions and the `degraderMother` placement. **No other volume may appear.**
+
+In particular the filter, frame, rod and counterweight absolute positions must be identical; extract and compare them explicitly rather than eyeballing the diff. Any volume outside the degrader assembly showing up is a stop-and-report condition.
+
+Record the exact diff line count and the volume-name list in the report. The PR body must state this precisely, because the claim to reviewers is "the mother box tightens around contents that do not move" — not "nothing changed".
 
 - [ ] **Step 6: Confirm the fix improves v40**
 
@@ -451,16 +469,24 @@ Expected: the overlap count drops to zero from the non-zero baseline recorded in
 ```bash
 cd $WS/Offline
 git add Mu2eG4/src/constructProtonAbsorber.cc
-git commit -m "fix(Mu2eG4): correct degrader filter and frame placement
+git commit -m "fix(Mu2eG4): size the degrader mother to its contents
 
-The degrader mother half-width and its children's z offsets disagreed,
-leaving the filter partly outside its mother. Places the filter at the
-mother's upstream edge and the frame directly downstream, sizing the
-mother to contain both.
+The degrader mother half-width came from 2*filter_hl + frame_hl + 1
+while its children were placed from a different expression, leaving the
+mother oversized and overrunning its contents downstream. Sizes it as
+filter_hl + frame_hl + 0.1 and places the filter at its upstream edge
+with the frame directly downstream.
 
-Unreachable in nominal running: degrader.build is false by default and
-true only in geom_run1_b_v40.txt, which uses the degrader as the Run1B
-mobile stopping target. Nominal verified unchanged by gdml dump.
+The filter and frame do not move: their absolute z is identical before
+and after. Only the mother box shrinks and re-centres -- by 1.9 mm in
+nominal geometries and 9.65 mm with geom_run1_b_v40.txt's 1.75 cm
+plate, which is where the overrun actually caused an overlap.
+
+Note the degrader IS built in nominal running -- degrader_v02.txt sets
+degrader.build = true, and 'off by default' means rotation = 120 deg,
+out of the beam. The nominal gdml diff is therefore non-empty but
+bounded: degraderOutline dimensions and degraderMother placement only,
+with every other volume byte-identical.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
@@ -689,9 +715,12 @@ gh pr create -R Mu2e/Offline --base main --title "Run1B: degrader placement and 
 Second and final PR consolidating the Run1B production geometry into
 main. See docs/superpowers/specs/2026-08-08-run1b-consolidation-design.md.
 
-**Nominal unchanged**, verified by normalized gdml dumps of
-`geom_common.txt` and `geom_run1_a.txt` being byte-identical to main
-after every commit. `geom_common.txt` is never touched.
+**Nominal impact is bounded and stated up front.** `geom_common.txt` is
+never touched. Normalized gdml dumps of `geom_common.txt` and
+`geom_run1_a.txt` are byte-identical to main **except** for the degrader
+mother box, which the first commit deliberately resizes -- see below.
+Every other volume in both dumps is unchanged, and the exact diff is
+reproduced in the commit message.
 
 **Fidelity confirmed:** a normalized gdml dump of `geom_run1_b_v40.txt`
 built from this branch is identical to one built from the `Run1B`
@@ -700,11 +729,21 @@ approximate it.
 
 Two commits:
 
-1. **Degrader placement.** The mother half-width and its children's z
-   offsets disagreed, leaving the filter partly outside its mother.
-   Unreachable in nominal running -- `degrader.build` is false by
-   default and true only in v40, which uses the degrader as the Run1B
-   mobile target.
+1. **Degrader mother sizing.** The mother half-width came from
+   `2*filter_hl + frame_hl + 1` while its children were placed from a
+   different expression, so the mother was oversized and overran its
+   contents downstream. Now `filter_hl + frame_hl + 0.1`.
+
+   The filter and frame **do not move** -- their absolute z is identical
+   before and after. Only the mother shrinks and re-centres: by 1.9 mm
+   in nominal, 9.65 mm on v40's 1.75 cm plate, which is where the
+   overrun actually produced an overlap.
+
+   This *does* run in nominal: `degrader_v02.txt` sets
+   `degrader.build = true`, and "off by default" means
+   `rotation = 120` (out of the beam), not absent. So the nominal gdml
+   diff is non-empty but confined to `degraderOutline` dimensions and
+   `degraderMother` placement.
 
 2. **EMC source virtual detectors,** placed only where a geometry sets
    their z, so no configuration gains detectors it did not ask for --

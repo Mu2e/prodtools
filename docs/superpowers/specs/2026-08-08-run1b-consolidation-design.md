@@ -198,13 +198,42 @@ v40 cannot otherwise be verified.
 ### PR2 — degrader placement and EMC source virtual detectors
 
 **Degrader geometry** (`Mu2eG4/src/constructProtonAbsorber.cc`). The mother
-volume half-width and its children's z offsets disagreed, leaving the filter
-partly outside its mother. The rewrite places the filter at the mother's
-upstream edge and the frame directly downstream, sizing the mother to contain
-both. Unreachable in nominal running: `degrader.build` is `false` in
-`degrader_v02.txt` and `true` only in v40, which uses the degrader as the Run1B
-mobile target. Every `degrader.supportArm.*` key v40 overrides is already read
-by `MECOStyleProtonAbsorberMaker.cc:444-456` with defaults, so no new
+volume's half-width and its children's z offsets were derived from
+inconsistent formulas, leaving the mother oversized and extending downstream
+past its contents.
+
+**This code runs in nominal geometries.** `degrader_v02.txt:11` sets
+`bool degrader.build = true`; "off by default" refers to
+`degrader.rotation = 120.0`, which swings the degrader *out of the beam*, not
+to its absence. Verified empirically: normalized dumps of both `geom_common.txt`
+and `geom_run1_a.txt` contain all six degrader volumes, 57 references each.
+An earlier draft of this spec claimed the opposite and treated the change as
+unreachable in nominal — that was wrong.
+
+What the rewrite actually changes is narrower than "placement", and the
+distinction is what makes it reviewable. With nominal dimensions
+(`filter.halfLength = 1.00`, `frame.halfLength = 6.35`) and with v40's
+(`filter.halfLength = 8.75`):
+
+| | old mother half-length | new mother half-length | filter absolute z | frame absolute z |
+|---|---|---|---|---|
+| nominal | 9.35 | 7.45 | unchanged | unchanged |
+| v40 | 24.85 | 15.20 | unchanged | unchanged |
+
+`old = 2·filter_hl + frame_hl + 1`, `new = filter_hl + frame_hl + 0.1`. The
+filter and frame land at identical absolute z before and after in both cases —
+only the mother box shrinks and re-centres around them. The oversize is 1.9 mm
+in nominal and 9.65 mm with v40's 1.75 cm plate, which is why the overlap only
+bites on v40.
+
+So PR2 **cannot** claim nominal is byte-identical. It must claim, and
+demonstrate, a *bounded* diff: `degraderOutline`'s box dimensions and the
+`degraderMother` placement change; every other volume in the nominal dump is
+untouched, and the filter, frame and rod do not move. That is a stronger claim
+than "nothing changed" because it is checkable line by line.
+
+Every `degrader.supportArm.*` key v40 overrides is already read by
+`MECOStyleProtonAbsorberMaker.cc:444-456` with defaults, so no new
 configuration plumbing is required.
 
 **EMC source virtual detectors** (`GeometryService/src/VirtualDetectorMaker.cc`,
