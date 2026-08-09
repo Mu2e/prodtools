@@ -69,11 +69,19 @@ must be byte-identical before and after each PR.** This is the check Mackenzie
 proposed, and the branch already ships `Mu2eG4/fcl/gdmldump_run1_b_v01.fcl` to
 build on.
 
-A corollary that shaped the whole design: where the branch changes nominal
-behavior, prefer a gate keyed on **configuration that already exists** over a
-new flag. Two of the three contested changes turn out to need no new knob at
-all, which converts them from "behavior change under a switch" into "main-side
-bug fix that Run1B exposed" — a materially easier review.
+A corollary that shaped the whole design, in order of preference:
+
+1. **No gate at all** — find the rule that is unconditionally correct and
+   happens to reproduce main's behavior in main's configuration. This is where
+   the stopping-target radius lands.
+2. **A gate keyed on configuration that already exists** — `hasSTM`, or the
+   presence of a key. This is where `STMUpstream` and the EMC virtual detectors
+   land.
+3. **A new flag** — not needed anywhere in this consolidation.
+
+None of the three contested changes requires a new knob, which converts them
+from "behavior change under a switch" into "main-side bug fix that Run1B
+exposed" — a materially easier review.
 
 ## Classification of the 18 files
 
@@ -108,7 +116,7 @@ sets `235.0`. No geometry sets `tsda.rin = 0`. The change only matters for a
 future geometry wanting a hole-less disk, which the old sentinel could not
 express.
 
-### Group B — changes nominal today; gated by configuration that already exists
+### Group B — changes nominal today; resolved without any new configuration
 
 **B1. `STMUpstream` virtual detector.** The branch comments it out entirely.
 
@@ -125,29 +133,53 @@ only STM VD not gated on `hasSTM`.*
 `radius = _foilTarget_supportStructure_rOut - 0.001` with the older
 `max over foils(rOut + perp) + 1`.
 
-Main's value defaults to **250 mm** (`StoppingTargetMaker.cc:138`) unless
-`stoppingTarget.foilTarget_supportStructure_endAtOPA` derives it from the outer
-proton absorber. Run1B v01–v06 set:
+The two configurations describe physically different objects:
 
+| | Run1A / MDC / v40 | Run1B v01–v06 |
+|---|---|---|
+| foils | 37 | 1 |
+| `stoppingTarget.radii` | 75.00 mm each | 600.00 mm |
+| `stoppingTarget.halfThicknesses` | 0.0528 mm | 3.175 mm |
+| `foilTarget_supportStructure` | `true` (`stoppingTarget_CD3C_34foils.txt:74`) | `false` |
+
+Run1B's target is a single aluminium disk spanning essentially the whole DS
+aperture, so there are no suspension wires to model. The flag difference is
+deliberate, not an oversight.
+
+Main derives the mother radius solely from the support structure. Both
+configurations reach `StoppingTargetMaker.cc:123-136` with
+`endAtOPA = true` — v01 inherits it via `geom_run1_a.txt` — so both take the
+OPA-derived branch, not the 250 mm fallback at line 138:
+
+| | support-derived | foil-derived | main's radius | needed |
+|---|---|---|---|---|
+| Run1A | ≈503.6 | ≈76 | 503.6 | 503.6 |
+| Run1B v01 | ≈447.7 | 601 | **447.7** | 601 |
+
+So Run1B gets a mother cylinder smaller than the single foil it contains. That
+is the overlap the branch was fixing.
+
+Resolution: **do not branch on configuration at all.** Take the maximum of both
+constraints, unconditionally, in `StoppingTargetMaker.cc`:
+
+```cpp
+radius = std::max(_foilTarget_supportStructure_rOut - 0.001,  // reach the OPA
+                  maxFoilOuterRadius + 1);                    // enclose the foils
 ```
-bool hasProtonAbsorber = false;
-bool hasSTM            = false;
-bool stoppingTarget.foilTarget_supportStructure = false;
-vector<double> stoppingTarget.radii = {600.00};
-```
 
-With no support structure, no OPA, and 600 mm foils, a 250 mm mother cylinder is
-smaller than the foils it contains. That is the overlap the branch was fixing.
+Run1A yields `max(503.6, 76) = 503.6`, bit-identical to main. Run1B yields
+`max(447.7, 601) = 601`, correct. One code path in both, no dependence on
+`foilTarget_supportStructure`, and it stays correct if that flag is ever flipped
+on a Run1B geometry. Standalone justification: *the mother volume must satisfy
+both constraints it has always had; main only ever enforced one of them.*
 
-Resolution: branch on the existing `_foilTarget_supportStructure` in both
-`StoppingTargetMaker.cc` and `constructStoppingTarget.cc`. True (Run1A, MDC,
-v40) keeps main's formula unchanged; false (Run1B v01–v06) uses the foil-derived
-one. **No new knob.** Standalone justification: *the mother volume must enclose
-its foils; deriving the radius from the support structure is only valid when a
-support structure exists.*
-
-Note `constructStoppingTarget.cc` must not be allowed to grow the nominal mother
-volume via its new `maxMotherRadius`; it is tied to the same branch.
+`constructStoppingTarget.cc` keeps using `target->cylinderRadius()` as main does
+— the fix above already makes that value correct in both regimes. The branch's
+`maxMotherRadius` support-structure loop is **not** ported: it is empty exactly
+when Run1B needs it (no support structures) and only grows the mother in
+nominal, so it is dead code for its intended case and a behavior change for the
+other. The one part worth keeping is guarding the OPA overlap check on
+`hasProtonAbsorber`, since Run1B sets it false and `GeomHandle` would throw.
 
 **B3. EMC source virtual detectors.** The branch adds `EMC_Source` (117),
 `EMC_Source2` (118) and `EMC_0_Front` (119) with hardcoded defaults:
@@ -247,7 +279,8 @@ Five commits, ordered so the reviewer can skip the first:
 2. A2 — parent-volume ternaries on `tracker.inDS2Vacuum` and `Mu2eWorld.cc`;
    fix E1; reconcile E2.
 3. B1 — `STMUpstream` inside the existing `hasSTM` block.
-4. B2 — ST mother radius branched on `_foilTarget_supportStructure`.
+4. B2 — ST mother radius as the max of the support-derived and foil-derived
+   constraints, unconditionally.
 5. A2 — `constructTSdA.cc` gated additions and the `tsda.rin` sentinel.
 
 Verification: gdml dumps of `geom_common.txt` and `geom_run1_a.txt` byte-identical
