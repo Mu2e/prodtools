@@ -1,6 +1,6 @@
 # prodtools MCP read path — identity-parameterized status
 
-**Status:** designed 2026-08-09, not implemented.
+**Status:** implemented; live-verified against the acceptance fixture 2026-08-09.
 **Follows:** `2026-08-08-mcp-write-path-design.md`, whose acceptance run
 exposed this gap.
 
@@ -212,8 +212,13 @@ Live, against the acceptance fixture that already exists:
 ## 11. Verified (2026-08-09)
 
 Live verification against the fixture the write-path acceptance run left
-behind (`MCPTest001`, `MCPTest002` in the personal ledger), run from the
-repo root with `mcp/.venv/bin/python`:
+behind (`MCPTest001`, `MCPTest002` in the personal ledger), run with
+`cd mcp && ./.venv/bin/python`. Reproducing this requires
+`PYTHONPATH=<repo root>` in the environment first — without it,
+`from prodtools_mcp.tools import status` fails with
+`ModuleNotFoundError: No module named 'utils'`, since `ledger_ro.py`
+imports the top-level `utils` package from the repo root, not from
+`mcp/`.
 
 - `list_campaigns(mine=True)` — `db_path` =
   `/exp/mu2e/data/users/oksuzian/prodtools/submissions.db`, `count` = 2,
