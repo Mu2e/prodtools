@@ -8508,16 +8508,26 @@ class TestMcpReadIdentity(unittest.TestCase):
         from prodtools_mcp import server
         info = server.get_server_info()
         self.assertIn('mine', info['identity']['parameter'])
+        self.assertIn('production', info['identity']['default'])
         self.assertIn('--db', info['identity']['other_accounts'])
 
     def test_registered_wrappers_pass_mine_through(self):
         # The wrapper is hand-written argument-by-argument, so a new
         # parameter on the tool function is NOT automatically exposed.
+        # Checked per-wrapper, not against the whole source blob: a
+        # shared assertIn would still pass if only ONE of the two
+        # wrappers kept `mine` and the other lost it, since each marker
+        # string would still appear once, sourced from the survivor.
         import inspect
         from prodtools_mcp import server
         src = inspect.getsource(server.create_mcp_server)
-        self.assertIn('mine: bool = False', src)
-        self.assertIn('mine=mine', src)
+        campaign_status_src = src[src.index('def campaign_status'):
+                                  src.index('def list_campaigns')]
+        list_campaigns_src = src[src.index('def list_campaigns'):
+                                 src.index('def find_datasets')]
+        for wrapper_src in (campaign_status_src, list_campaigns_src):
+            self.assertIn('mine: bool = False', wrapper_src)
+            self.assertIn('mine=mine', wrapper_src)
 
 
 class TestMcpListCampaigns(unittest.TestCase):
