@@ -64,11 +64,21 @@ which **replaces** the 37×75 mm foils inherited from `geom_run1_a.txt` with a
 single 600 mm disk, collapsing both targets into one object and discarding the
 foil target that should be shared with Run1A.
 
-`geom_run1_b_v40.txt` models it correctly: it inherits `geom_run1_a.txt`
-untouched — so the 37 foils survive with their support structure — and adds the
-TS5 endcap plate through the TSdA (`tsda.z0 = 4195`, `r4 = 600`, `rin = 135`,
-`halfLength4 = 8.75`, i.e. a 1.75 cm aluminium plate with a 135 mm hole), plus
-the pion degrader repurposed as the 1.75 cm mobile target.
+`geom_run1_b_v40.txt` models it correctly. It inherits `geom_run1_a.txt`
+untouched — so the 37 foils survive with their support structure — and adds
+about fifteen lines that build a two-piece aluminium assembly at the TS5 face:
+
+| piece | mechanism | position |
+|---|---|---|
+| TS5 endcap plate | TSdA repurposed: `r4 = 600`, `halfLength4 = 8.75`, `rin = 135` — a 1.75 cm plate with a 135 mm aperture | `tsda.z0 = 4195` |
+| mobile target | pion degrader repurposed: `filter.rOut = 150`, `filter.halfLength = 8.75` | `degrader.upstreamEdge.z = 4235` |
+
+Both are `StoppingTarget_Al` so the stops finder captures in them. The plate
+blocks the TS5 face except its 135 mm aperture; the 150 mm disk rotates into
+that aperture at `degrader.rotation = 60.0` and out of the beam at `120.0`,
+which is the whole of `geom_run1_b_ds_on_v40.txt`. v40's own header states it:
+*"1.75 cm thick mobile target, 1.75 cm thick Al TS5 endcap plate with 135 mm
+hole added, otherwise a normal Run 1A config."*
 
 v40 superseded the earlier line. The prodtools wiki records the migration
 directly: *"geometry file `geom_run1_b_v40.txt` instead of `v06`"*. But the
