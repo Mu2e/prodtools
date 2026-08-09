@@ -33,5 +33,8 @@ python3 -m venv .venv
 env -u PYTHONPATH ./.venv/bin/pip install --upgrade pip 1>&2
 env -u PYTHONPATH ./.venv/bin/pip install -e . 1>&2
 
-echo "== verifying =="
-exec "$MCP_ROOT/scripts/start_mcp.sh" --check
+echo "== verifying read-only server =="
+"$MCP_ROOT/scripts/start_mcp.sh" --check
+
+echo "== verifying write server =="
+exec "$MCP_ROOT/scripts/start_write_mcp.sh" --check

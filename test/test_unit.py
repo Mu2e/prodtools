@@ -8798,6 +8798,35 @@ class TestMcpToolRegistration(unittest.TestCase):
         self.assertEqual(offenders, [])
 
 
+try:
+    import importlib
+    importlib.import_module('mcp.server.fastmcp')
+    _HAVE_FASTMCP = True
+except ImportError:
+    # The mcp package requires Python >= 3.10; this suite also runs under
+    # the system python3.9 (no MCP machinery available there, same reason
+    # prodtools_mcp.server defers its own FastMCP import). Skip rather
+    # than error so the plain interpreter still gets a clean run; a
+    # 3.10+ interpreter exercises the real registration.
+    _HAVE_FASTMCP = False
+
+
+class TestWriteServerRegistration(unittest.TestCase):
+    @unittest.skipUnless(_HAVE_FASTMCP, 'mcp package (py3.10+) not installed')
+    def test_advertised_names_match_registered_tools(self):
+        import asyncio
+        from prodtools_mcp_write.server import create_write_mcp_server, TOOL_NAMES
+        server = create_write_mcp_server()
+        registered = sorted(t.name for t in asyncio.run(server.list_tools()))
+        self.assertEqual(registered, sorted(TOOL_NAMES))
+
+    def test_server_info_declares_the_write_capability(self):
+        from prodtools_mcp_write.server import get_write_server_info
+        info = get_write_server_info()
+        self.assertTrue(info['performs_writes'])
+        self.assertIn('mu2epro', info['description'])
+
+
 # ---------------------------------------------------------------------------
 # Recovery resource headroom
 # ---------------------------------------------------------------------------
