@@ -833,12 +833,13 @@ def main():
                              'input job per file. Written by the '
                              'submissions drain tick; also the operator '
                              'path for re-dispatching parked files.')
-    parser.add_argument('--ledger-db', default=submission_ledger.DEFAULT_DB,
-                        help='Submission-ledger sqlite DB '
-                             f'(default: {submission_ledger.DEFAULT_DB}, '
-                             'env MU2E_SUBMISSION_DB). Every successful '
-                             'direct submission is recorded for the '
-                             'recovery loop (`submissions run`).')
+    parser.add_argument('--ledger-db',
+                        default=submission_ledger.ledger_for(),
+                        help='Submission-ledger sqlite DB (default: your '
+                             'own ledger; for mu2epro that IS the '
+                             'production ledger). Every direct submission '
+                             'is recorded for the recovery loop '
+                             '(`submissions run`).')
     parser.add_argument('--ledger-parent', type=int, default=None,
                         help='Ledger row id this submission '
                              'recovers (set by the recovery loop; chains '

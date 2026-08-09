@@ -1132,6 +1132,25 @@ def print_status(db_path):
                   f"{c['tarball']}")
 
 
+# `status` is the only read verb. Every other verb mutates, and a
+# non-mu2epro caller cannot write the production ledger at all, so a
+# mutating default of "production" would only ever fail. For mu2epro
+# ledger_for() IS the production path, so nothing changes there.
+_READ_VERBS = ('status',)
+
+
+def resolve_db(opts):
+    """Ledger path for this invocation: explicit --db, else --mine or
+    the per-verb default."""
+    if getattr(opts, 'db', None):
+        return opts.db
+    if getattr(opts, 'mine', False):
+        return submission_ledger.ledger_for()
+    if getattr(opts, 'verb', None) in _READ_VERBS:
+        return submission_ledger.DEFAULT_DB
+    return submission_ledger.ledger_for()
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog='submissions',
@@ -1139,10 +1158,16 @@ def build_parser():
                     'verb, read-only), the hourly verify/resubmit/'
                     'top-up tick (run), and campaign management '
                     '(pause/resume/cancel).')
-    p.add_argument('--db', default=submission_ledger.DEFAULT_DB,
-                   help=f'Submission-ledger sqlite DB (default: '
-                        f'{submission_ledger.DEFAULT_DB}, env '
-                        f'MU2E_SUBMISSION_DB)')
+    p.add_argument('--db', default=None,
+                   help='Submission-ledger sqlite DB. Default: the '
+                        f'production ledger ({submission_ledger.PRODUCTION_DB}) '
+                        'for `status`, your own ledger for every mutating '
+                        'verb. Env MU2E_SUBMISSION_DB overrides the '
+                        'production default.')
+    p.add_argument('--mine', action='store_true',
+                   help='Use your own ledger '
+                        '(/exp/mu2e/data/users/$USER/prodtools/submissions.db) '
+                        'instead of the per-verb default.')
     sub = p.add_subparsers(dest='verb')
 
     sub.add_parser('status',
@@ -1286,17 +1311,21 @@ def _run_pass(args):
 def main():
     args = build_parser().parse_args()
     verb = args.verb
+    # Resolved ONCE here; args.db is overwritten so every use below
+    # (including inside _run_pass) sees this same value rather than
+    # re-resolving and risking a second answer that disagrees.
+    db = args.db = resolve_db(args)
 
     if verb == 'status':
         print(f"queue cap in effect: {resolve_cap(None)}")
-        print_status(args.db)
+        print_status(db)
         return
 
     if verb == 'set-slice':
-        _acquire_lock(args.db)
+        _acquire_lock(db)
         try:
             old = submission_ledger.set_campaign_slice(
-                args.db, args.camp_id, args.slice_size)
+                db, args.camp_id, args.slice_size)
         except ValueError as e:
             sys.exit(f"submissions: {e}")
         print(f"campaign {args.camp_id}: slice_size {old} -> "
@@ -1304,10 +1333,10 @@ def main():
         return
 
     if verb == 'set-memory':
-        _acquire_lock(args.db)
+        _acquire_lock(db)
         try:
             old = submission_ledger.set_campaign_memory(
-                args.db, args.camp_id, args.memory)
+                db, args.camp_id, args.memory)
         except ValueError as e:
             sys.exit(f"submissions: {e}")
         print(f"campaign {args.camp_id}: memory {old or 'unset'} -> "
@@ -1317,9 +1346,9 @@ def main():
         return
 
     if verb in ('pause', 'resume', 'cancel', 'complete'):
-        _acquire_lock(args.db)
+        _acquire_lock(db)
         try:
-            manage_campaign(args.db, args.camp_id, verb,
+            manage_campaign(db, args.camp_id, verb,
                             note=getattr(args, 'note', None))
         except ValueError as e:
             sys.exit(f"submissions: {e}")
@@ -1327,7 +1356,7 @@ def main():
 
     # verb == 'run'
     if not args.dry_run:
-        _acquire_lock(args.db)
+        _acquire_lock(db)
     _run_pass(args)
 
 

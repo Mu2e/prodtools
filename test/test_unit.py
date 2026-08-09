@@ -10085,6 +10085,47 @@ class TestLedgerPathResolution(unittest.TestCase):
         self.assertNotIn(self.sl.PRODUCTION_DB, str(ctx.exception))
 
 
+class TestSubmissionsDbResolution(unittest.TestCase):
+    def setUp(self):
+        from utils import submissions, submission_ledger as sl
+        self.submissions = submissions
+        self.sl = sl
+
+    def _opts(self, verb, db=None, mine=False):
+        return SimpleNamespace(verb=verb, db=db, mine=mine)
+
+    def test_explicit_db_wins_everywhere(self):
+        opts = self._opts('status', db='/tmp/explicit.db', mine=True)
+        self.assertEqual(self.submissions.resolve_db(opts), '/tmp/explicit.db')
+
+    def test_status_defaults_to_production(self):
+        self.assertEqual(self.submissions.resolve_db(self._opts('status')),
+                         self.sl.DEFAULT_DB)
+
+    def test_status_mine_selects_personal(self):
+        with patch('getpass.getuser', return_value='bob'):
+            self.assertEqual(
+                self.submissions.resolve_db(self._opts('status', mine=True)),
+                '/exp/mu2e/data/users/bob/prodtools/submissions.db')
+
+    def test_mutating_verbs_default_to_personal(self):
+        # As a non-mu2epro user you cannot write production at all, so a
+        # mutating verb defaulting there is never useful. For mu2epro the
+        # two paths are identical.
+        with patch('getpass.getuser', return_value='bob'):
+            for verb in ('run', 'pause', 'resume', 'cancel', 'complete',
+                         'set-slice', 'set-memory'):
+                self.assertEqual(
+                    self.submissions.resolve_db(self._opts(verb)),
+                    '/exp/mu2e/data/users/bob/prodtools/submissions.db',
+                    f'verb {verb}')
+
+    def test_mutating_default_is_production_for_mu2epro(self):
+        with patch('getpass.getuser', return_value='mu2epro'):
+            self.assertEqual(self.submissions.resolve_db(self._opts('run')),
+                             self.sl.PRODUCTION_DB)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
