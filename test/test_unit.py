@@ -8450,23 +8450,40 @@ class TestMcpReadIdentity(unittest.TestCase):
         self.assertEqual(result['campaigns'][0]['queue']['owner'],
                          self.condor.OWNER)
 
-    def test_mine_true_reads_the_callers_ledger(self):
+    def test_mine_true_threads_the_caller_into_both_axes(self):
+        # Patches the ACCOUNT (getpass + ledger_for), not the resolver:
+        # a mock that just hands back (db, 'alice') would still pass if
+        # `mine` were silently dropped before reaching _resolve_identity,
+        # or if the queue call reverted to condor.OWNER. Both axes must
+        # actually be threaded from `mine=True` for this to go green.
+        from utils import submission_ledger
+        seen = {}
+
+        def fake_clusters(owner):
+            seen['owner'] = owner
+            return {}
+
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
-            with patch.object(self.status, '_resolve_identity',
-                              return_value=(db, 'alice')):
+            with patch('getpass.getuser', return_value='alice'), \
+                 patch.object(submission_ledger, 'ledger_for',
+                              return_value=db):
                 result = self.status.campaign_status(
                     mine=True, campaign='MDC2025au', include_outputs=False,
-                    clusters_fn=lambda owner: {})
-        self.assertEqual(result['db_path'], db)
+                    clusters_fn=fake_clusters)
+        self.assertEqual(seen['owner'], 'alice')          # kills Finding 2
+        self.assertEqual(result['db_path'], db)           # kills Finding 1
         self.assertEqual(result['campaigns'][0]['queue']['owner'], 'alice')
 
     def test_an_explicit_db_path_still_wins(self):
         # db_path is the injection seam the existing tests use; `mine`
-        # must not take it away from them.
+        # must not take it away from them. mine=True so resolved_db is
+        # non-None and there is something for db_path to actually win
+        # over -- with mine defaulted, resolved_db is None and this test
+        # is vacuous.
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
-            result = self.status.campaign_status(db_path=db)
+            result = self.status.campaign_status(mine=True, db_path=db)
         self.assertEqual(result['db_path'], db)
 
     def test_list_campaigns_names_the_ledger_it_read(self):
@@ -8479,10 +8496,15 @@ class TestMcpReadIdentity(unittest.TestCase):
         self.assertEqual(result['count'], 1)
 
     def test_list_campaigns_mine_reads_the_callers_ledger(self):
+        # Same patch pair as the campaign_status version: patches the
+        # ACCOUNT, not the resolver, so a mutation that hardcodes
+        # `_resolve_identity(False)` inside list_campaigns cannot pass.
+        from utils import submission_ledger
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
-            with patch.object(self.status, '_resolve_identity',
-                              return_value=(db, 'alice')):
+            with patch('getpass.getuser', return_value='alice'), \
+                 patch.object(submission_ledger, 'ledger_for',
+                              return_value=db):
                 result = self.status.list_campaigns(mine=True)
         self.assertEqual(result['db_path'], db)
         self.assertEqual(result['count'], 1)

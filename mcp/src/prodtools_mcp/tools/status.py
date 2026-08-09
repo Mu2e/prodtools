@@ -274,8 +274,15 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     from utils.map_entry import njobs_of
 
     resolved_db, owner = _resolve_identity(mine)
-    # An explicit db_path is the injection seam the tests use and wins
-    # over the derived one; `mine` only supplies a default.
+    # db_path is test-only: it is not exposed through MCP (server.py
+    # offers no such parameter). It wins over the ledger `mine` derived,
+    # but leaves `owner` (the queue axis) alone -- `owner` only ever
+    # comes from `mine` via _resolve_identity, never from db_path. That
+    # makes db_path the one way to split the two identity axes on
+    # purpose: point the ledger anywhere while the queue still follows
+    # `mine`, which is exactly what lets the tests probe each axis
+    # independently. `mine` only supplies a default for db_path when
+    # db_path is absent.
     db_path = db_path or resolved_db
 
     # One snapshot, one connection: campaigns and rows must agree. See

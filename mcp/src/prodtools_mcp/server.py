@@ -31,6 +31,10 @@ WHAT IT ANSWERS:
 READING THE RESULTS:
 - campaign_status called with NO argument is ledger-only and cheap. Name
   a campaign to include queue and output counts, which hit the network.
+- campaign_status and list_campaigns default to production; omitting
+  `mine` means production. Every reply names what it read: `db_path` at
+  the top level is the ledger, and `queue.owner` inside each campaign is
+  the grid account the counts came from.
 - A queue or outputs block with state="unknown" has NO count keys. Do
   NOT read a missing count as zero: the query failed, and the campaign
   may well be running. Never start a recovery pass on an "unknown".

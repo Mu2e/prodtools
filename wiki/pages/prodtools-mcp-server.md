@@ -2,7 +2,7 @@
 title: prodtools MCP server (read-only)
 tags: [reference, mcp, tooling, commissioned]
 sources: [2026-07-26-prodtools-mcp-design]
-updated: 2026-07-26
+updated: 2026-08-09
 ---
 
 # prodtools MCP server (read-only)
@@ -26,6 +26,20 @@ none needs mu2epro.
 
 - `campaign_status()` with no argument is ledger-only and cheap. Naming
   a campaign adds queue and output counts, which hit the network.
+- **`campaign_status` and `list_campaigns` read PRODUCTION by default,
+  and take `mine: bool = False`.** Omitting it (or passing `false`)
+  reads the production ledger and mu2epro's queue, exactly as before
+  `mine` existed. `mine=true` switches BOTH the ledger path and the
+  HTCondor queue owner to the caller's own account, from one resolution
+  (`status._resolve_identity`) — the two axes coming apart is the exact
+  bug this parameter exists to prevent; it already shipped once on the
+  write side (`171517f`, `live_clusters()` defaulting to mu2epro). A
+  personal (`run_as="self"`) campaign is invisible under the default
+  call — an empty ledger reads exactly like "no campaigns" — so a
+  self-submitted campaign needs `mine=true` to be found at all. Every
+  reply names what it read: `db_path` at the top level, and `owner`
+  inside each `queue` block. Another user's ledger is not reachable
+  through MCP; use `submissions --db <path> status`.
 - **The queue block comes from live HTCondor ClassAd queries**
   (`mcp/src/prodtools_mcp/condor.py`), not `jobsub_q` table parsing.
   This is an INDEPENDENT path from `utils/submissions.py`'s
@@ -37,10 +51,11 @@ none needs mu2epro.
   which is why this is a venv dep). Queries only the schedds whose
   `Name` starts with `jobsub` (8 daemons advertised, ~6 are jobsub
   schedds), filters server-side in the constraint
-  (`Owner=="mu2epro" && JobStatus==...`), and projects only
-  `ClusterId`/`JobStatus`/`HoldReasonCode`/`HoldReason` — never whole
-  ClassAds. Measured live against the real pool 2026-07-26: ~0.5s for
-  190 clusters / ~500 jobs across 6 schedds queried in parallel.
+  (`Owner==<resolved account> && JobStatus==...` — `"mu2epro"` by
+  default, or the caller's own account under `mine=true`), and projects
+  only `ClusterId`/`JobStatus`/`HoldReasonCode`/`HoldReason` — never
+  whole ClassAds. Measured live against the real pool 2026-07-26: ~0.5s
+  for 190 clusters / ~500 jobs across 6 schedds queried in parallel.
 - **`state: "unknown"` is not zero.** An unknown queue block omits its
   count keys entirely. Proc-form `jobsub_q` was verified on 2026-07-22
   reporting 0 total while 1976 jobs of one cluster ran, so a
