@@ -103,8 +103,16 @@ ALLOWED_ENTRY_POINTS = frozenset({
 # below. Written as a plain `&&` chain the first guard would exit the
 # whole `bash -c` before any sentinel could be printed, and run_cli
 # would see an rc-less failure — the very hole this closes.
+#
+# The sentinel is emitted with a LEADING newline, via printf rather than
+# echo. `echo` appends to whatever stderr byte came last, so a command
+# whose final stderr write lacks a trailing newline produces
+# `partial line__PRODTOOLS_RC__:0` — which the anchored regex misses, so
+# run_cli reports 125 on a SUCCESSFUL run. The leading newline puts the
+# sentinel at the start of its own line unconditionally. The cost is one
+# blank line in captured stderr on the (usual) well-terminated path.
 _RC_TAIL = f"""__prodtools_rc=$?
-echo "{RC_SENTINEL_PREFIX}$__prodtools_rc" >&2
+printf '\\n{RC_SENTINEL_PREFIX}%s\\n' "$__prodtools_rc" >&2
 exit $__prodtools_rc
 """
 

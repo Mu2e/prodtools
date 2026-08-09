@@ -9367,7 +9367,7 @@ class TestRunCliExitStatusSentinel(unittest.TestCase):
         chain_open = script.index('\n(\n')
         chain_close = script.index('\n)\n')
         guard = script.index("exit 1; }")
-        echo = script.index('echo "__PRODTOOLS_RC__:')
+        echo = script.index("printf '\\n__PRODTOOLS_RC__:")
         self.assertLess(chain_open, guard)
         self.assertLess(guard, chain_close)
         self.assertLess(chain_close, echo)
@@ -9380,6 +9380,24 @@ class TestRunCliExitStatusSentinel(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn('step failed', proc.stderr)
         self.assertIn('__PRODTOOLS_RC__:1', proc.stderr)
+
+    def test_sentinel_survives_stderr_with_no_trailing_newline(self):
+        # A command whose LAST stderr write has no trailing newline used
+        # to glue the sentinel onto that partial line
+        # (`no newline here__PRODTOOLS_RC__:0`), which the anchored regex
+        # misses -> run_cli reported 125 on a SUCCESSFUL run. The tail
+        # emits a leading newline so the sentinel always starts a line.
+        proc = subprocess.run(
+            ['bash', '-c',
+             "( printf 'no newline here' >&2; exit 0 )\n"
+             + self.runner._RC_TAIL],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn('no newline here', proc.stderr)
+        # The parser, not just the raw text, must agree.
+        rc, kept = self.runner._rc_from_sentinel(proc.returncode, proc.stderr)
+        self.assertEqual(rc, 0)
+        self.assertIn('no newline here', kept)
 
     def test_generated_scripts_still_parse(self):
         for cmd in (self.runner.ksu_wrapper(['bin/submit_map']),
