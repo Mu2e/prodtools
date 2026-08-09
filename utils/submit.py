@@ -544,6 +544,21 @@ def _compute_jobset(opts, njobs_total, firstjob=0, entry_njobs=None):
     return list(range(first, end))
 
 
+def _preflight_inputs(entry, tarball_path):
+    """Verify a cnf's baked inputs before submitting. Returns
+    (ok, problems).
+
+    Mirrors the gate _enqueue_entries applies, so the DIRECT path
+    (--first/--num and every recovery resubmit) gets it too — it is
+    exactly the bulk-death failure check_inputs exists to prevent.
+    A draining/generic cnf bakes no inputs and is skipped, the same
+    carve-out _enqueue_entries makes.
+    """
+    if is_draining(entry):
+        return True, []
+    return check_inputs(str(tarball_path), inloc_of(entry))
+
+
 def submit_entry_direct(entry, idx, opts):
     """Direct-backend submission: build jobsub_submit argv from scratch
     via utils.jobsub_argv, ship our prodtools as a dropbox tarball, run
@@ -710,6 +725,13 @@ def submit_entry_direct(entry, idx, opts):
             'njobs': len(jobset),
             'status': 'dry_run',
         }
+
+    ok, problems = _preflight_inputs(entry, tarball_path)
+    if not ok:
+        print(format_report(str(tarball_path), problems))
+        raise SystemExit(
+            f"input pre-flight FAILED for {tarball_name} — refusing to "
+            f"submit. Fix the inputs (or stage them) and retry.")
 
     row_id = _reserve_in_ledger(_snapshot_entry(entry, resources), firstjob,
                                 jobset, opts, files=files)

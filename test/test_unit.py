@@ -6039,6 +6039,42 @@ class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
             self.submit._reserve_in_ledger(self.entry, 0, [0, 1, 2], self.opts))
 
 
+class TestDirectPathPreflight(unittest.TestCase):
+    def setUp(self):
+        from utils import submit
+        self.submit = submit
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+                      'njobs': 5, 'inloc': 'tape',
+                      'outputs': [{'location': 'tape'}]}
+
+    def test_direct_submit_refuses_on_bad_inputs(self):
+        from utils.check_inputs import Problem
+        bad = [Problem(dataset='dts.mu2e.X.Y.art', filename='x.art',
+                       kind='missing', detail='0 files')]
+        with patch('utils.submit.check_inputs', return_value=(False, bad)):
+            ok, problems = self.submit._preflight_inputs(
+                self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
+        self.assertFalse(ok)
+        self.assertEqual(problems, bad)
+
+    def test_direct_submit_passes_on_good_inputs(self):
+        with patch('utils.submit.check_inputs', return_value=(True, [])):
+            ok, problems = self.submit._preflight_inputs(
+                self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
+        self.assertTrue(ok)
+
+    def test_generic_cnf_skips_the_check(self):
+        # A generic (direct-input) cnf bakes no inputs — there is
+        # nothing to pre-flight, and calling check_inputs would fail.
+        generic = dict(self.entry)
+        generic['input_pattern'] = 'dig.mu2e.%OnSpill.X.art'
+        with patch('utils.submit.check_inputs') as chk:
+            ok, problems = self.submit._preflight_inputs(
+                generic, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
+        self.assertTrue(ok)
+        chk.assert_not_called()
+
+
 class TestSubmitResolveLedgerDb(unittest.TestCase):
     """utils/submit.py's writer-side counterpart to
     submissions.resolve_db: a DEFAULTED --ledger-db gets its directory
