@@ -21,6 +21,7 @@ import argparse
 import contextlib
 import fcntl
 import fnmatch
+import getpass
 import json
 import os
 import re
@@ -127,7 +128,28 @@ def _jobsub_table_cluster_states(stdout):
     return clusters
 
 
-def live_clusters(user='mu2epro', runner=subprocess.run):
+def queue_owner():
+    """Whose grid queue this process's rows live in.
+
+    The submitting identity, not a fixed account: `submissions run` as
+    yourself submits as you, and under ksu the block exports
+    USER=mu2epro before running, so production keeps reading mu2epro's
+    queue exactly as before. Same generalization as
+    submission_ledger.ledger_for.
+
+    This was hardcoded to 'mu2epro'. Measured 2026-08-09: a self-run
+    tick queried mu2epro's queue, did not find the caller's own live
+    cluster in it, and cluster_queue_state read absent-from-snapshot as
+    'drained' — so a still-running row was verified, found 2/2 outputs
+    missing (of course: its jobs had not finished) and RECOVERED while
+    its jobs were running. Every self tick would duplicate the whole
+    campaign. The fail-closed drain signal is only fail-closed when it
+    is asked about the right account.
+    """
+    return os.environ.get('USER') or getpass.getuser()
+
+
+def live_clusters(user=None, runner=subprocess.run):
     """{cluster_id: [states]} for every cluster with jobs in `user`'s
     default `jobsub_q --user` table, or None when the query cannot be
     trusted (caller treats None as 'error' — never drained).
@@ -140,9 +162,13 @@ def live_clusters(user='mu2epro', runner=subprocess.run):
     the old queue_state fail-OPENED that to 'drained', prematurely
     recovering still-running rows. The --user table is the complete
     collector view (the same source total_queued trusts); cluster-id
-    membership in it is the reliable, fail-closed drain signal."""
+    membership in it is the reliable, fail-closed drain signal.
+
+    `user` defaults to the submitting identity (see queue_owner), NOT to
+    a fixed 'mu2epro' — asking the wrong account turns the fail-closed
+    signal into an unconditional 'drained'."""
     try:
-        res = runner(['jobsub_q', '--user', user],
+        res = runner(['jobsub_q', '--user', user or queue_owner()],
                      capture_output=True, text=True)
     except OSError:
         return None      # jobsub_q missing/unlaunchable → fail-closed
@@ -665,7 +691,7 @@ def resubmit_files(row, missing, db_path, dry_run=False,
     return res.returncode == 0
 
 
-def total_queued(user='mu2epro', runner=subprocess.run):
+def total_queued(user=None, runner=subprocess.run):
     """Total idle+running jobs for `user` — the top-up throttle gate —
     or None when the count cannot be trusted (caller skips the phase).
 
@@ -673,8 +699,13 @@ def total_queued(user='mu2epro', runner=subprocess.run):
     `jobsub_q --user` table (see _jobsub_table_states); held/removed/
     other states do not consume cap headroom. Covers ALL the user's
     jobs regardless of how they were launched, so the cap bounds the
-    account's whole farm footprint."""
-    res = runner(['jobsub_q', '--user', user],
+    account's whole farm footprint.
+
+    `user` defaults to the submitting identity (see queue_owner). A
+    fixed 'mu2epro' here throttled a self run against PRODUCTION's
+    footprint: the caller's own jobs never counted toward their cap,
+    and a busy production farm could block a self top-up outright."""
+    res = runner(['jobsub_q', '--user', user or queue_owner()],
                  capture_output=True, text=True)
     if res.returncode != 0:
         return None

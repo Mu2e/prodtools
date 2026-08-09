@@ -5475,7 +5475,11 @@ class TestRecoverCap(unittest.TestCase):
             self._row('4.0@jobsub02.fnal.gov', '|-WORKER_12', 'H'),
             self._row('5.0@jobsub02.fnal.gov', 'mu2epro', 'X'),
         ]) + '\n'
-        n = total_queued(runner=self._runner(table))
+        # USER pinned: the query follows the SUBMITTING identity now
+        # (see queue_owner), and the ksu block exports USER=mu2epro, so
+        # this is what production still asks for.
+        with patch.dict(os.environ, {'USER': 'mu2epro'}):
+            n = total_queued(runner=self._runner(table))
         self.assertEqual(n, 3)              # held / removed excluded
         self.assertEqual(self.cmd, ['jobsub_q', '--user', 'mu2epro'])
 
@@ -6463,6 +6467,44 @@ class TestRecoverLoop(unittest.TestCase):
         self.assertEqual(sorted(r['id'] for r in self.sl.open_rows(self.db)),
                          [self.rid, child])
 
+    def test_queue_is_read_for_the_submitting_identity(self):
+        # Measured 2026-08-09: live_clusters/total_queued defaulted to
+        # user='mu2epro'. A self run queried PRODUCTION's queue, its own
+        # live cluster was absent from that snapshot, and
+        # cluster_queue_state reads absent as 'drained' — so a running
+        # row was verified, found 2/2 outputs missing (its jobs had not
+        # finished) and recovered mid-flight. Every tick would duplicate.
+        from unittest import mock
+        from utils import submissions as subs
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append(cmd)
+            return types.SimpleNamespace(returncode=0, stdout='')
+
+        with mock.patch.dict(os.environ, {'USER': 'someuser'}):
+            subs.live_clusters(runner=fake_run)
+            subs.total_queued(runner=fake_run)
+        for cmd in seen:
+            self.assertEqual(cmd[cmd.index('--user') + 1], 'someuser')
+        # Under ksu the block exports USER=mu2epro, so production is
+        # unchanged by this generalization.
+        with mock.patch.dict(os.environ, {'USER': 'mu2epro'}):
+            self.assertEqual(subs.queue_owner(), 'mu2epro')
+
+    def test_explicit_user_still_wins(self):
+        from unittest import mock
+        from utils import submissions as subs
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append(cmd)
+            return types.SimpleNamespace(returncode=0, stdout='')
+
+        with mock.patch.dict(os.environ, {'USER': 'someuser'}):
+            subs.live_clusters(user='mu2epro', runner=fake_run)
+        self.assertEqual(seen[0][seen[0].index('--user') + 1], 'mu2epro')
+
     def test_reserved_child_blocks_the_resubmit(self):
         # Regression, measured 2026-08-09: killing `submissions run`
         # mid-recovery leaves the child in 'submitting'. open_rows()
@@ -6565,8 +6607,12 @@ class TestRecoverLoop(unittest.TestCase):
                 row('9.1@jobsub01.fnal.gov', 'mu2epro', 'I'),
                 row('12.0@jobsub02.fnal.gov', '|-WORKER_3', 'H'),
             ]) + '\n')
-        self.assertEqual(recover.live_clusters(runner=run),
-                         {'9': ['R', 'I'], '12': ['H']})
+        # USER pinned: the query follows the SUBMITTING identity now
+        # (see queue_owner); the ksu block exports USER=mu2epro, so
+        # production still asks for exactly this.
+        with patch.dict(os.environ, {'USER': 'mu2epro'}):
+            self.assertEqual(recover.live_clusters(runner=run),
+                             {'9': ['R', 'I'], '12': ['H']})
         self.assertEqual(cmd['argv'], ['jobsub_q', '--user', 'mu2epro'])
         # empty-but-valid table → {} (a real drained account), NOT None
         self.assertEqual(
