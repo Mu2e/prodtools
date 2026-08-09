@@ -8152,7 +8152,8 @@ class TestMcpCampaignStatus(unittest.TestCase):
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db,
                 clusters_fn=lambda owner: {'29308498': [running_job, running_job]},
-                count_fn=lambda ds: 412)
+                count_fn=lambda ds: 412,
+                job_pars_fn=lambda tb: _IndexedPars(tb))
         camp = result['campaigns'][0]
         self.assertEqual(camp['queue']['running'], 2)
         out = camp['outputs']['datasets'][0]
@@ -8171,11 +8172,61 @@ class TestMcpCampaignStatus(unittest.TestCase):
             submission_ledger.advance_campaign(db, camps[0]['id'], 500)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db, include_queue=False,
-                count_fn=lambda ds: 500)
+                count_fn=lambda ds: 500,
+                job_pars_fn=lambda tb: _IndexedPars(tb))
         out = result['campaigns'][0]['outputs']['datasets'][0]
         self.assertEqual(out['submitted'], 500)
         self.assertEqual(out['expected_at_completion'], 4000)
         self.assertEqual(out['produced'], 500)
+
+    def test_indexed_outputs_name_real_datasets_not_the_worker_glob(self):
+        """REGRESSION: an INDEXED entry's outputs[].dataset is a worker
+        filename glob ('*.art') exactly as a draining one's is — every
+        production map writes it (map_rmc_phasespace_au,
+        map_extracted_reco_au, map_pitargetstops_run1bap, and the three
+        Run1Bap campaigns of 2026-08-09 all do). Feeding it to a SAM
+        dimension raised 'Parse error ... dh.dataset *.art', so this
+        block had NEVER returned state='known' for any indexed campaign.
+        The draining branch learned this first; the indexed branch was
+        left behind."""
+        from prodtools_mcp.tools import status
+        asked = []
+
+        def count_fn(ds):
+            asked.append(ds)
+            return 9
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_queue=False,
+                count_fn=count_fn,
+                job_pars_fn=lambda tb: _IndexedPars(tb))
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'known')
+        self.assertNotIn('*.art', asked)
+        self.assertEqual([d['dataset'] for d in block['datasets']],
+                         ['dts.mu2e.CosmicCRY.MDC2025au.art'])
+        self.assertEqual(block['datasets'][0]['produced'], 9)
+
+    def test_indexed_outputs_unknown_when_the_cnf_is_unreadable(self):
+        """The names now come from the cnf, so an unreadable cnf must
+        report unknown — never an empty dataset list, which reads as
+        'this campaign produces nothing'."""
+        from prodtools_mcp.tools import status
+
+        def boom(tarball):
+            raise RuntimeError('tarball not locatable in SAM')
+
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_queue=False,
+                count_fn=lambda ds: 0, job_pars_fn=boom)
+        block = result['campaigns'][0]['outputs']
+        self.assertEqual(block['state'], 'unknown')
+        self.assertNotIn('datasets', block)
+        self.assertIn('not locatable', block['reason'])
 
     def test_draining_outputs_name_real_datasets_not_the_worker_glob(self):
         """REGRESSION: a draining entry's outputs[].dataset is the
@@ -11445,6 +11496,21 @@ def _mk_file(desc, i):
 
 def _mk_out(desc, i):
     return f'mcs.mu2e.{desc}.MDC2025au_best_v1_5.001202_{i:08d}.art'
+
+
+class _IndexedPars:
+    """Fake Mu2eJobPars for an INDEXED campaign.
+
+    job_outputs(0) with no overrides — the indexed form. The dataset name
+    is index-independent, so index 0 names every stream the campaign will
+    write; only the sequencer varies per job.
+    """
+
+    def __init__(self, path):
+        pass
+
+    def job_outputs(self, index, override_desc=None, override_seq=None):
+        return {'Output': f'dts.mu2e.CosmicCRY.MDC2025au.00{index}.art'}
 
 
 class _DrainPars:

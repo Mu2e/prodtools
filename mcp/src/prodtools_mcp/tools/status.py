@@ -92,6 +92,29 @@ def queue_block(cluster_ids, clusters, owner=condor.OWNER):
     return block
 
 
+def _dataset_of(fname):
+    """Dataset name for an output FILE name.
+
+    Mu2eName (the path-grammar owner), NOT utils.submissions._dataset_of:
+    importing the submission engine into a read-only server would drag in
+    the whole submit/recovery stack for a one-line name parse.
+    """
+    from utils.job_common import Mu2eName
+    return str(Mu2eName.parse(fname).dataset)
+
+
+def _cnf_output_datasets(tarball, job_pars_fn):
+    """Output dataset names for an INDEXED campaign, read from its cnf.
+
+    The dataset name is index-independent — only the sequencer varies per
+    job — so index 0 names every output stream the campaign will write.
+    This is the same cnf-owned `tbs.outfiles` substitution `verify_row`
+    checks against, so status and verification cannot drift.
+    """
+    job_pars = job_pars_fn(tarball)
+    return sorted({_dataset_of(f) for f in job_pars.job_outputs(0).values()})
+
+
 def _draining_outputs_block(rows, tarball, count_fn, job_pars_fn):
     """Produced-vs-dispatched per output dataset, for a DRAINING campaign.
 
@@ -113,13 +136,8 @@ def _draining_outputs_block(rows, tarball, count_fn, job_pars_fn):
     Cost: one SAM count per output dataset DISPATCHED SO FAR (3 early in
     a campaign, one per desc by the end). include_outputs=False skips it.
     """
-    # Mu2eName (the path-grammar owner), NOT utils.submissions._dataset_of:
-    # importing the submission engine into a read-only server would drag in
-    # the whole submit/recovery stack for a one-line name parse.
-    from utils.job_common import Mu2eName, expected_outputs_for
-
-    def dataset_of(fname):
-        return str(Mu2eName.parse(fname).dataset)
+    from utils.job_common import expected_outputs_for
+    dataset_of = _dataset_of
 
     dispatched = [f for row in (rows or []) for f in (row['indices'] or [])]
     if not dispatched:
@@ -171,11 +189,19 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
     Draining campaigns take a different path entirely — see
     _draining_outputs_block.
 
+    The dataset NAMES come from the cnf (_cnf_output_datasets), not from
+    the entry's `outputs[].dataset`. That field is a worker-side filename
+    glob for an indexed entry exactly as it is for a draining one — every
+    production map writes `*.art` — so feeding it to a SAM dimension
+    raised a parse error and this block read `state: unknown` for every
+    indexed campaign ever run. The draining branch already had to learn
+    this; the indexed branch was left behind (fixed 2026-08-09).
+
     Two denominators, because one is misleading on its own:
 
     - `expected_at_completion` is njobs — one output file per job per
-      stream. Derived this way deliberately, to avoid a /pnfs cnf read on
-      every status call.
+      stream. Taken from the entry rather than the cnf's own capacity, so
+      a windowed campaign is measured against its window.
     - `submitted` is the campaign cursor: how many indices have actually
       been handed to the grid. EVERY direct campaign is sliced, so at
       cursor 500 of njobs 4000 with all 500 landed, comparing produced
@@ -190,11 +216,16 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
         outputs = outputs_of(entry)
     except ValueError as exc:
         return {'state': 'unknown', 'reason': str(exc)}
+    if not outputs:
+        return {'state': 'known', 'datasets': []}
+    try:
+        names = _cnf_output_datasets(tarball, job_pars_fn or
+                                     _default_job_pars_fn)
+    except Exception as exc:
+        return {'state': 'unknown',
+                'reason': f'cannot name outputs from cnf {tarball}: {exc}'}
     datasets = []
-    for out in outputs:
-        dataset = out.get('dataset')
-        if not dataset:
-            continue
+    for dataset in names:
         try:
             produced = count_fn(dataset)
         except Exception as exc:
