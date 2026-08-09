@@ -9301,6 +9301,59 @@ class TestPushCnfTool(unittest.TestCase):
         self.assertEqual(index, 0)
         self.assertEqual(entry['tarball'], self.tarball)
 
+    # -- Task-9 fix round 1: index= mode direct coverage --
+
+    def test_read_map_entry_index_mode_returns_expected_entry(self):
+        # index= is enqueue_campaign's own use: submit_map's --entry N
+        # already names the entry unambiguously, so this reads it back
+        # by plain position, never through desc/dsconf disambiguation.
+        with open(self.jobdefs_map, 'w') as f:
+            json.dump([
+                {'tarball': 'cnf.mu2e.OTHER.C.0.tar'},
+                {'tarball': self.tarball,
+                 'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                              'location': 'tape'}]},
+            ], f)
+        index, entry = self.tools._read_map_entry(self.jobdefs_map, index=1)
+        self.assertEqual(index, 1)
+        self.assertEqual(entry['tarball'], self.tarball)
+
+    def test_read_map_entry_index_out_of_range_raises(self):
+        with open(self.jobdefs_map, 'w') as f:
+            json.dump([{'tarball': self.tarball}], f)
+        with self.assertRaises(RuntimeError) as ctx:
+            self.tools._read_map_entry(self.jobdefs_map, index=5)
+        self.assertIn('out of range', str(ctx.exception))
+
+    def test_read_map_entry_index_missing_file_raises_a_distinct_message(self):
+        # Index mode must not fold a missing/corrupt map into "0
+        # entries" the way the tolerant _read_entries would -- that's
+        # the same misleading-message class flagged for push_cnf.
+        missing = os.path.join(self._tmpdir, 'does_not_exist.json')
+        with self.assertRaises(RuntimeError) as ctx:
+            self.tools._read_map_entry(missing, index=0)
+        self.assertIn('not found', str(ctx.exception))
+        self.assertNotIn('0 entries', str(ctx.exception))
+
+    def test_read_map_entry_index_malformed_json_raises_a_distinct_message(self):
+        with open(self.jobdefs_map, 'w') as f:
+            f.write('{not valid json')
+        with self.assertRaises(RuntimeError) as ctx:
+            self.tools._read_map_entry(self.jobdefs_map, index=0)
+        self.assertIn('not valid JSON', str(ctx.exception))
+
+    def test_read_map_entry_index_and_desc_together_raises(self):
+        # Combining index= with tarball_desc/dsconf would otherwise
+        # silently take the index path and skip the before/after
+        # disambiguation without saying so -- reject the combination
+        # outright instead.
+        with open(self.jobdefs_map, 'w') as f:
+            json.dump([{'tarball': self.tarball}], f)
+        with self.assertRaises(ValueError) as ctx:
+            self.tools._read_map_entry(self.jobdefs_map, 'D', 'C', [],
+                                       index=0)
+        self.assertIn('mutually exclusive', str(ctx.exception))
+
     # -- Round-2 review fixes: reuse json2jobdef's own expansion/naming --
 
     def test_mixing_entry_with_no_raw_desc_resolves_end_to_end(self):
@@ -9564,12 +9617,9 @@ class TestEnqueueAndRunTools(unittest.TestCase):
                             map_path='/tmp/m.json', entry=2, slice_size=250,
                             run_as='self')
         argv = run.call_args[0][0]
-        self.assertEqual(argv[0], 'bin/submit_map')
-        self.assertIn('--entry', argv)
-        self.assertIn('2', argv)
-        self.assertIn('--enqueue', argv)
-        self.assertIn('--slice-size', argv)
-        self.assertIn('250', argv)
+        self.assertEqual(argv, ['bin/submit_map', '--map', '/tmp/m.json',
+                                '--entry', '2', '--enqueue',
+                                '--slice-size', '250'])
 
     def test_enqueue_nonzero_rc_raises_with_stderr(self):
         with patch('prodtools_mcp_write.runner.run_cli',
@@ -9592,41 +9642,91 @@ class TestEnqueueAndRunTools(unittest.TestCase):
                             run_as='self')
         self.assertIn('cnf.mu2e.NONE.C.0.tar', str(ctx.exception))
 
+    def _active_campaign(self, tarball='cnf.mu2e.X.Y.0.tar', njobs=10):
+        return self.sl.create_campaign(
+            self.db, tarball=tarball,
+            entry={'tarball': tarball, 'njobs': njobs}, slice_size=5)
+
     def test_run_submissions_refuses_mu2epro_without_confirm(self):
+        # require_confirmed gates before even the ledger lookup.
         with patch('prodtools_mcp_write.runner.run_cli') as run:
             with self.assertRaises(PermissionError):
                 self.tools.run_submissions(campaign_id=1, run_as='mu2epro')
         run.assert_not_called()
 
     def test_run_submissions_builds_the_expected_argv(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
-            self.tools.run_submissions(campaign_id=42, run_as='self')
+        cid = self._active_campaign()
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli',
+                       return_value={'rc': 0, 'stdout': '',
+                                     'stderr': ''}) as run:
+                self.tools.run_submissions(campaign_id=cid, run_as='self')
         argv = run.call_args[0][0]
-        self.assertEqual(argv, ['bin/submissions', 'run', '--campaign', '42'])
+        self.assertEqual(argv,
+                         ['bin/submissions', 'run', '--campaign', str(cid)])
 
     def test_run_submissions_reports_attention_keys(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 2, 'stdout': '', 'stderr': ''}):
-            out = self.tools.run_submissions(campaign_id=1, run_as='self')
+        cid = self._active_campaign()
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli',
+                       return_value={'rc': 2, 'stdout': '', 'stderr': ''}):
+                out = self.tools.run_submissions(campaign_id=cid,
+                                                  run_as='self')
         # rc=2 is the documented "needs attention" exit, not a crash.
         self.assertTrue(out['needs_attention'])
         self.assertEqual(out['rc'], 2)
-        self.assertEqual(out['campaign_id'], 1)
+        self.assertEqual(out['campaign_id'], cid)
 
     def test_run_submissions_rc_zero_is_not_needs_attention(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': 'ok', 'stderr': ''}):
-            out = self.tools.run_submissions(campaign_id=1, run_as='self')
+        cid = self._active_campaign()
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli',
+                       return_value={'rc': 0, 'stdout': 'ok', 'stderr': ''}):
+                out = self.tools.run_submissions(campaign_id=cid,
+                                                  run_as='self')
         self.assertFalse(out['needs_attention'])
         self.assertEqual(out['rc'], 0)
 
     def test_run_submissions_other_rc_raises(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 1, 'stdout': '', 'stderr': 'boom'}):
-            with self.assertRaises(RuntimeError) as ctx:
-                self.tools.run_submissions(campaign_id=1, run_as='self')
+        cid = self._active_campaign()
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli',
+                       return_value={'rc': 1, 'stdout': '',
+                                     'stderr': 'boom'}):
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.tools.run_submissions(campaign_id=cid, run_as='self')
         self.assertIn('boom', str(ctx.exception))
+
+    def test_run_submissions_unknown_campaign_raises_before_run_cli(self):
+        # A typo'd id must not filter top_up's campaign list to empty
+        # and report a no-op tick as a success (rc=0, no attention).
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli') as run:
+                with self.assertRaises(ValueError) as ctx:
+                    self.tools.run_submissions(campaign_id=999, run_as='self')
+        run.assert_not_called()
+        self.assertIn('no campaign 999', str(ctx.exception))
+
+    def test_run_submissions_non_active_campaign_raises_before_run_cli(self):
+        cid = self._active_campaign()
+        self.sl.set_campaign_state(self.db, cid, 'paused', note='x')
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli') as run:
+                with self.assertRaises(ValueError) as ctx:
+                    self.tools.run_submissions(campaign_id=cid, run_as='self')
+        run.assert_not_called()
+        msg = str(ctx.exception)
+        self.assertIn('paused', msg)
+        # Distinct wording from the "unknown id" case -- a paused
+        # campaign needs `submissions resume`, a typo'd id needs a
+        # different fix, and an operator needs to tell them apart.
+        self.assertNotIn('no campaign', msg)
 
     def test_ledger_path_for_mu2epro_is_production(self):
         from utils import submission_ledger

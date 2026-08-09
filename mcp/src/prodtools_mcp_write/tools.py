@@ -109,6 +109,30 @@ def _canon(entry):
     return _json.dumps(entry, sort_keys=True)
 
 
+def _read_entries_strict(map_path):
+    """Same shape as `_read_entries`, but a missing file or malformed
+    JSON is a real problem here, not "0 entries".
+
+    Used only by `_read_map_entry`'s `index=` mode: by the time
+    `enqueue_campaign` reaches it, `submit_map --entry N` has already
+    read this same map successfully to find the entry it enqueued, so
+    a map that turns out missing or corrupt when read back is worth a
+    distinct error -- not silently folded into "entry N out of range
+    for 0 entries", the same misleading-message shape flagged for
+    `_read_entries` itself (see its own docstring)."""
+    path = Path(map_path)
+    if not path.is_file():
+        raise RuntimeError(f"map file not found: {map_path}")
+    text = path.read_text()
+    if not text.strip():
+        raise RuntimeError(f"map file is empty: {map_path}")
+    try:
+        entries = _json.loads(text)
+    except _json.JSONDecodeError as e:
+        raise RuntimeError(f"{map_path} is not valid JSON: {e}")
+    return entries if isinstance(entries, list) else [entries]
+
+
 def _tarball_matches(tarball, tarball_desc, dsconf):
     if not tarball:
         return False
@@ -129,7 +153,11 @@ def _read_map_entry(map_path, tarball_desc=None, dsconf=None,
     enqueue_campaign uses this mode to read it back by plain position
     rather than by desc+dsconf disambiguation -- there is nothing to
     disambiguate when the index was already known before the command
-    ran.
+    ran. `index` and `tarball_desc`/`dsconf` are mutually exclusive:
+    passing both would otherwise silently take the index path and
+    ignore the desc/dsconf disambiguation without saying so, which is
+    exactly the kind of accidental weak-path selection this project
+    exists to prevent -- so combining them raises instead.
 
     Without `index` (push_cnf's use): selected by parsing tarball_desc+dsconf
     out of each candidate
@@ -159,7 +187,11 @@ def _read_map_entry(map_path, tarball_desc=None, dsconf=None,
     hand -- there is no "last entry" fallback.
     """
     if index is not None:
-        entries = _read_entries(map_path)
+        if tarball_desc is not None or dsconf is not None:
+            raise ValueError(
+                "_read_map_entry: index and tarball_desc/dsconf are "
+                "mutually exclusive -- pass one or the other, not both")
+        entries = _read_entries_strict(map_path)
         if not (0 <= index < len(entries)):
             raise RuntimeError(
                 f"entry {index} out of range for {map_path} "
@@ -308,14 +340,49 @@ def enqueue_campaign(map_path, entry, slice_size, run_as, confirm=False):
 
 
 def run_submissions(campaign_id, run_as, confirm=False):
-    """Tick ONE campaign: top-up plus the recovery pass.
+    """Tick `submissions run`, scoped to one campaign's index top-up.
+
+    `--campaign` only narrows the top-up phase: the recovery pass still
+    processes every open ledger row, and `drain_tick` still feeds every
+    draining campaign, exactly as a bare `submissions run` does. Only
+    the slice-feeding for THIS campaign id is what's being scoped here.
 
     `campaign_id` is required. `submissions run` with no filter ticks
     every active campaign -- that is the cron's job, not an
     interactive call from this tool, so there is no default that means
     "everything".
+
+    The id is validated against the ledger THIS identity writes
+    (_ledger_path_for) BEFORE run_cli: a nonexistent or non-active id
+    would otherwise filter top_up's campaign list down to empty, and
+    an empty-but-successful tick (rc=0, no attention keys) is
+    indistinguishable from a real one -- a typo would silently report
+    success for a campaign that was never touched. Absent and
+    not-active are different operator problems (a typo/wrong ledger vs.
+    a campaign that needs `submissions resume` first), so they raise
+    with different messages.
     """
     runner.require_confirmed(run_as, confirm)
+
+    from utils import submission_ledger
+    db = _ledger_path_for(run_as)
+    campaigns = {c['id']: c for c in submission_ledger.all_campaigns(db)}
+    campaign = campaigns.get(campaign_id)
+    if campaign is None:
+        raise ValueError(
+            f"no campaign {campaign_id} in {db} -- check the id (and "
+            f"that run_as={run_as!r} is looking at the right ledger); "
+            f"a typo'd id would otherwise filter top_up's campaign list "
+            f"to empty and report a no-op tick as success")
+    if campaign['state'] != 'active':
+        raise ValueError(
+            f"campaign {campaign_id} is {campaign['state']!r}, not "
+            f"active, in {db} -- top_up only feeds active campaigns, "
+            f"so this id would tick nothing; "
+            + (f"`submissions resume {campaign_id}` first"
+               if campaign['state'] == 'paused' else
+               "nothing left to submit for it"))
+
     argv = ['bin/submissions', 'run', '--campaign', str(campaign_id)]
     result = runner.run_cli(argv, run_as)
     # rc=2 is the documented "something needs attention" exit -- held
