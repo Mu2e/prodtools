@@ -1186,10 +1186,24 @@ def require_confirmed(run_as, confirm):
             "confirm=true to proceed.")
 
 
+# Entry points this server may ever run as mu2epro. Defence in depth:
+# quoting alone makes injection impossible, but an allowlist also stops a
+# caller invoking an arbitrary repo script as the production account.
+ENTRY_POINTS = ('bin/json2jobdef', 'bin/submit_map', 'bin/submissions')
+
+
 def ksu_wrapper(argv):
-    """Wrap a repo-relative argv in the full working ksu block."""
+    """Wrap a repo-relative argv in the full working ksu block.
+
+    EVERY interpolated word is quoted, argv[0] included. An earlier draft
+    of this plan quoted only argv[1:] and interpolated the executable
+    raw — `argv[0] = 'bin/x; id #'` then executed as mu2epro. The one
+    argument that names what runs is the one that most needs quoting.
+    """
+    if argv[0] not in ENTRY_POINTS:
+        raise ValueError(f"not a permitted entry point: {argv[0]!r}")
     command = ' '.join(
-        [f'bash {REPO_ROOT}/{argv[0]}'] +
+        ['bash', _quote(f'{REPO_ROOT}/{argv[0]}')] +
         [_quote(a) for a in argv[1:]])
     return ['ksu', 'mu2epro', '-e', '/bin/bash', '-c',
             _KSU_TEMPLATE.format(command=command)]
