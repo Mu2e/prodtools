@@ -8996,6 +8996,70 @@ class TestWriteRunnerGate(unittest.TestCase):
             self.runner.run_cli(['bin/submit_map'], 'mu2epro',
                                 cwd='/tmp/somewhere')
 
+    # -- Round-2 review fixes: no Musing on either identity's env chain --
+
+    def test_ksu_wrapper_sources_the_musing_setup_before_the_command(self):
+        # setupmu2e-art.sh + muse setup ops + setup OfflineOps alone
+        # leaves MUSE_DIR set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH
+        # empty -- bin/json2jobdef hard-exits in that state. The
+        # Musing must be sourced from the entry's own simjob_setup.
+        setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh'
+        cmd = self.runner.ksu_wrapper(['bin/json2jobdef'], simjob_setup=setup)
+        script = cmd[-1]
+        quoted = self.runner._quote(setup)
+        self.assertIn(
+            f"setup OfflineOps > /dev/null 2>&1 \\\n  && source {quoted}"
+            f" > /dev/null 2>&1 \\\n  && bash",
+            script)
+
+    def test_ksu_wrapper_without_simjob_setup_is_unchanged(self):
+        # No Musing given (e.g. bin/submit_map, which needs none) must
+        # not grow a stray `source` clause.
+        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        self.assertNotIn('source /cvmfs/mu2e.opensciencegrid.org/Musings',
+                         cmd[-1])
+
+    def test_self_path_was_a_bare_subprocess_with_no_env_setup_now_fixed(self):
+        # Critical: run_as='self' used to be a bare subprocess with NO
+        # environment setup at all -- no setupmu2e-art.sh, no muse
+        # setup ops, no Musing -- and failed for the same reason as the
+        # ksu path. It must now run the identical setup chain, wrapped
+        # in `bash -c` instead of ksu.
+        setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh'
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout='', stderr='')
+            self.runner.run_cli(['bin/json2jobdef'], 'self', simjob_setup=setup)
+        argv = run.call_args[0][0]
+        self.assertEqual(argv[0], 'bash')
+        self.assertEqual(argv[1], '-c')
+        script = argv[2]
+        self.assertIn('setupmu2e-art.sh', script)
+        self.assertIn('muse setup ops', script)
+        self.assertIn('setup OfflineOps', script)
+        self.assertIn(f"source {self.runner._quote(setup)}", script)
+        self.assertFalse(any(os.path.basename(a) == 'ksu' for a in argv))
+
+    def test_self_without_a_musing_still_gets_the_base_setup_chain(self):
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout='', stderr='')
+            self.runner.run_cli(['bin/submit_map'], 'self')
+        script = run.call_args[0][0][2]
+        self.assertIn('setupmu2e-art.sh', script)
+        self.assertIn('muse setup ops', script)
+        self.assertIn('setup OfflineOps', script)
+
+    def test_hostile_simjob_setup_cannot_escape_its_quoting(self):
+        hostile = "/tmp/x'; id #/setup.sh"
+        cmd = self.runner.ksu_wrapper(['bin/json2jobdef'], simjob_setup=hostile)
+        script = cmd[-1]
+        expected_quoted = self.runner._quote(hostile)
+        self.assertIn(expected_quoted, script)
+        # Outside of its one properly-escaped, quoted occurrence, the
+        # injected text must not appear as a bare shell word.
+        remainder = script.replace(expected_quoted, '', 1)
+        self.assertNotIn(' id ', remainder)
+        self.assertNotIn(' id\n', remainder)
+
 
 # ---------------------------------------------------------------------------
 # push_cnf tool
@@ -9005,31 +9069,52 @@ class TestPushCnfTool(unittest.TestCase):
     def setUp(self):
         from prodtools_mcp_write import tools
         self.tools = tools
+        tmpdir_ctx = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir_ctx.cleanup)
+        self._tmpdir = tmpdir_ctx.name
+        self.simjob_setup = (
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/C/setup.sh')
+        self.json_path = os.path.join(self._tmpdir, 'entries.json')
+        with open(self.json_path, 'w') as f:
+            json.dump([{
+                'desc': 'D', 'dsconf': 'C', 'owner': 'mu2e',
+                'simjob_setup': self.simjob_setup,
+                'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
+            }], f)
+        # The tarball utils.config_utils.cnf_name derives for that entry.
+        self.tarball = 'cnf.mu2e.D.C.0.tar'
+        self.jobdefs_map = os.path.join(self._tmpdir, 'm.json')
 
     def test_mu2epro_without_confirm_refused_before_running_anything(self):
         with patch('prodtools_mcp_write.runner.run_cli') as run:
             with self.assertRaises(PermissionError):
-                self.tools.push_cnf(json='data/Run1B/resampler_beam.json',
-                                    desc='PhysicalPionStops', dsconf='Run1Bap',
-                                    jobdefs_map='/tmp/m.json',
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
+                                    jobdefs_map=self.jobdefs_map,
                                     run_as='mu2epro')
         run.assert_not_called()
 
-    def test_builds_the_expected_argv(self):
+    def test_builds_the_expected_argv_and_derives_the_musing(self):
         with patch('prodtools_mcp_write.runner.run_cli',
                    return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
             with patch('prodtools_mcp_write.tools._read_map_entry',
-                       return_value=(3, {'tarball': 'cnf.mu2e.D.C.0.tar'})):
-                self.tools.push_cnf(json='data/Run1B/resampler_beam.json',
-                                    desc='PhysicalPionStops', dsconf='Run1Bap',
-                                    jobdefs_map='/tmp/m.json',
+                       return_value=(3, {'tarball': self.tarball})):
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
+                                    jobdefs_map=self.jobdefs_map,
                                     run_as='mu2epro', confirm=True)
-        argv = run.call_args[0][0]
+        args, kwargs = run.call_args
+        argv = args[0]
         self.assertEqual(argv[0], 'bin/json2jobdef')
         self.assertIn('--prod', argv)
         self.assertIn('--jobdefs', argv)
-        self.assertIn('/tmp/m.json', argv)
-        self.assertIn('PhysicalPionStops', argv)
+        self.assertIn(self.jobdefs_map, argv)
+        self.assertIn('D', argv)
+        # Dropped: it only added stdout this tool never reads across a
+        # ksu boundary.
+        self.assertNotIn('--verbose', argv)
+        # The Musing comes from the entry's own simjob_setup -- push_cnf
+        # takes no Musing/version argument at all, so a caller can never
+        # pass one that disagrees with the entry.
+        self.assertEqual(kwargs.get('simjob_setup'), self.simjob_setup)
 
     def test_result_is_read_from_the_map_not_stdout(self):
         noisy = 'Added JSON entry for cnf.mu2e.WRONG.tar to jobdefs_list.json'
@@ -9037,8 +9122,9 @@ class TestPushCnfTool(unittest.TestCase):
                    return_value={'rc': 0, 'stdout': noisy, 'stderr': ''}):
             with patch('prodtools_mcp_write.tools._read_map_entry',
                        return_value=(0, {'tarball': 'cnf.mu2e.RIGHT.C.0.tar'})):
-                out = self.tools.push_cnf(json='j.json', desc='D', dsconf='C',
-                                          jobdefs_map='/tmp/m.json',
+                out = self.tools.push_cnf(json=self.json_path, desc='D',
+                                          dsconf='C',
+                                          jobdefs_map=self.jobdefs_map,
                                           run_as='self')
         self.assertEqual(out['tarball'], 'cnf.mu2e.RIGHT.C.0.tar')
         self.assertEqual(out['entry_index'], 0)
@@ -9047,9 +9133,83 @@ class TestPushCnfTool(unittest.TestCase):
         with patch('prodtools_mcp_write.runner.run_cli',
                    return_value={'rc': 2, 'stdout': '', 'stderr': 'boom'}):
             with self.assertRaises(RuntimeError) as ctx:
-                self.tools.push_cnf(json='j.json', desc='D', dsconf='C',
-                                    jobdefs_map='/tmp/m.json', run_as='self')
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
+                                    jobdefs_map=self.jobdefs_map, run_as='self')
         self.assertIn('boom', str(ctx.exception))
+
+    def test_relative_jobdefs_map_is_refused_before_running_anything(self):
+        # Under run_as='mu2epro' the ksu block cd's into its own mktemp
+        # workdir, so a relative path would be written THERE while
+        # _read_map_entry reads it back relative to the server's own
+        # cwd -- silent divergence, no error, unless this is guarded.
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
+                                    jobdefs_map='relative/m.json',
+                                    run_as='self')
+        self.assertIn('absolute', str(ctx.exception).lower())
+        run.assert_not_called()
+
+    def test_no_matching_json_entry_raises_without_guessing(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.tools.push_cnf(json=self.json_path, desc='NOPE', dsconf='C',
+                                jobdefs_map=self.jobdefs_map, run_as='self')
+        self.assertIn('no entry', str(ctx.exception).lower())
+
+    def test_entry_missing_simjob_setup_raises_without_guessing(self):
+        path = os.path.join(self._tmpdir, 'no_simjob.json')
+        with open(path, 'w') as f:
+            json.dump([{'desc': 'D', 'dsconf': 'C', 'owner': 'mu2e'}], f)
+        with self.assertRaises(ValueError) as ctx:
+            self.tools.push_cnf(json=path, desc='D', dsconf='C',
+                                jobdefs_map=self.jobdefs_map, run_as='self')
+        self.assertIn('simjob_setup', str(ctx.exception))
+
+    def test_rerun_with_no_append_still_returns_this_pushs_entry(self):
+        # _write_jobdef_json_entry dedupes on (tarball, firstjob) and
+        # returns WITHOUT appending when the entry already exists --
+        # re-running --prod is the documented way to finish a partial
+        # push. entries[-1] would silently return some OTHER campaign's
+        # tarball and index as if it were this push's result.
+        with open(self.jobdefs_map, 'w') as f:
+            json.dump([
+                {'tarball': 'cnf.mu2e.SomeOtherCampaign.X.0.tar',
+                 'outputs': [{'dataset': 'other', 'location': 'tape'}]},
+                {'tarball': self.tarball,
+                 'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                              'location': 'disk'}]},
+            ], f)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': 'Entry already exists',
+                                  'stderr': ''}):
+            out = self.tools.push_cnf(json=self.json_path, desc='D',
+                                      dsconf='C',
+                                      jobdefs_map=self.jobdefs_map,
+                                      run_as='self')
+        self.assertEqual(out['tarball'], self.tarball)
+        self.assertEqual(out['entry_index'], 1)
+        self.assertEqual(out['datasets'], ['dig.mu2e.D.C.art'])
+
+    def test_read_map_entry_against_a_real_file_empty_map_raises(self):
+        # Exercised through mocks in every test above; this one hits the
+        # real function so the empty-map RuntimeError path and the
+        # datasets mapping are not both left untested.
+        with open(self.jobdefs_map, 'w') as f:
+            json.dump([], f)
+        with self.assertRaises(RuntimeError):
+            self.tools._read_map_entry(self.jobdefs_map, self.tarball)
+
+    def test_read_map_entry_against_a_real_file_returns_datasets(self):
+        with open(self.jobdefs_map, 'w') as f:
+            json.dump([{
+                'tarball': self.tarball,
+                'outputs': [{'dataset': 'dig.mu2e.D.C.art', 'location': 'disk'},
+                            {'dataset': 'rec.mu2e.D.C.art', 'location': 'tape'}],
+            }], f)
+        index, entry = self.tools._read_map_entry(self.jobdefs_map,
+                                                   self.tarball)
+        self.assertEqual(index, 0)
+        self.assertEqual(entry['tarball'], self.tarball)
 
 
 # ---------------------------------------------------------------------------

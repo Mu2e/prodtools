@@ -41,17 +41,52 @@ ALLOWED_ENTRY_POINTS = frozenset({
 #   - the setup lines are chained with && (not run as separate
 #     statements): a failed CVMFS source or `muse setup ops` must abort
 #     the command, not silently run it in a broken environment
+#
+# `setupmu2e-art.sh && muse setup ops && setup OfflineOps` alone leaves
+# MUSE_DIR set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH empty:
+# `bin/json2jobdef` hard-exits without a Musing on top (see its own
+# `command -v mu2e` guard). `{musing_clause}` sources the entry's own
+# `simjob_setup` — the same "source the full setup.sh path" mechanism
+# .claude/commands/mu2e-run.md uses for any Musing, SimJob or not — so
+# the caller derives the release from the JSON config instead of
+# passing a tag that could silently disagree with it.
+_SETUP_CHAIN = """source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \\
+  && muse setup ops > /dev/null 2>&1 \\
+  && setup OfflineOps > /dev/null 2>&1 \\
+  && {musing_clause}{command}"""
+
 _KSU_TEMPLATE = """
 unset MUSE_WORK_DIR
 export USER=mu2epro LOGNAME=mu2epro HOME=/exp/mu2e/app/home/mu2epro
 WORKDIR=$(mktemp -d /tmp/mu2epro_mcp.XXXXXX) || exit 1
 export XDG_RUNTIME_DIR="$WORKDIR"
 cd "$WORKDIR"
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \\
-  && muse setup ops > /dev/null 2>&1 \\
-  && setup OfflineOps > /dev/null 2>&1 \\
-  && {command}
+{chain}
 """
+
+# The identity-specific header above (mktemp workdir, USER/LOGNAME/HOME,
+# XDG_RUNTIME_DIR) exists only to work around ksu quirks (see the
+# bullet list above); running as yourself needs none of it — cwd,
+# USER and XDG_RUNTIME_DIR are already correct. `unset MUSE_WORK_DIR`
+# is kept because it clears calling-environment state, not a ksu
+# quirk. The setup chain itself — CVMFS source, muse setup ops,
+# OfflineOps, the Musing — is identical between the two identities;
+# the only difference is the ksu wrapping.
+_SELF_TEMPLATE = """
+unset MUSE_WORK_DIR
+{chain}
+"""
+
+
+def _musing_clause(simjob_setup):
+    """`&&`-chained `source <simjob_setup>` step, or '' when not given.
+
+    Quoted with `_quote` like every other interpolated word — a
+    hostile `simjob_setup` value must not be able to escape it.
+    """
+    if not simjob_setup:
+        return ''
+    return f"source {_quote(simjob_setup)} > /dev/null 2>&1 \\\n  && "
 
 
 def require_confirmed(run_as, confirm):
@@ -86,22 +121,43 @@ def _validate_entry_point(argv0):
             f"must be one of {sorted(ALLOWED_ENTRY_POINTS)}")
 
 
-def ksu_wrapper(argv):
-    """Wrap a repo-relative argv in the full working ksu block."""
+def _command_of(argv):
+    """`bash '<repo-relative path>' 'arg' ...`, every word quoted."""
     _validate_entry_point(argv[0])
-    command = ' '.join(
+    return ' '.join(
         ['bash', _quote(os.path.join(REPO_ROOT, argv[0]))] +
         [_quote(a) for a in argv[1:]])
+
+
+def ksu_wrapper(argv, simjob_setup=None):
+    """Wrap a repo-relative argv in the full working ksu block."""
+    chain = _SETUP_CHAIN.format(
+        musing_clause=_musing_clause(simjob_setup), command=_command_of(argv))
     return ['ksu', 'mu2epro', '-e', '/bin/bash', '-c',
-            _KSU_TEMPLATE.format(command=command)]
+            _KSU_TEMPLATE.format(chain=chain)]
+
+
+def _self_wrapper(argv, simjob_setup=None):
+    """Wrap a repo-relative argv in the same setup chain as ksu_wrapper,
+    minus the ksu-only identity header (see _SELF_TEMPLATE)."""
+    chain = _SETUP_CHAIN.format(
+        musing_clause=_musing_clause(simjob_setup), command=_command_of(argv))
+    return ['bash', '-c', _SELF_TEMPLATE.format(chain=chain)]
 
 
 def _quote(arg):
     return "'" + str(arg).replace("'", "'\\''") + "'"
 
 
-def run_cli(argv, run_as, cwd=None):
+def run_cli(argv, run_as, cwd=None, simjob_setup=None):
     """Run a prodtools command under the requested identity.
+
+    `simjob_setup` is the full path to a Musing's `setup.sh` (the
+    `simjob_setup` field of a json2jobdef JSON entry). Without it,
+    `MUSE_DIR` ends up set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH
+    empty — `bin/json2jobdef` hard-exits in that state — so any caller
+    driving json2jobdef must derive and pass this from the entry it is
+    pushing, never guess a default.
 
     Credentials are NEVER remediated. A missing mu2epro token comes back
     as a non-zero rc with its stderr intact; no refresh is attempted,
@@ -116,11 +172,10 @@ def run_cli(argv, run_as, cwd=None):
             raise ValueError(
                 "cwd has no effect under run_as='mu2epro': the ksu block "
                 "always cd's into its own mktemp workdir. Pass cwd=None.")
-        cmd = ksu_wrapper(argv)
+        cmd = ksu_wrapper(argv, simjob_setup)
         run_cwd = REPO_ROOT
     else:
-        cmd = ['bash', os.path.join(REPO_ROOT, argv[0])] + \
-            [str(a) for a in argv[1:]]
+        cmd = _self_wrapper(argv, simjob_setup)
         run_cwd = cwd or REPO_ROOT
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=run_cwd)
     return {'rc': proc.returncode, 'stdout': proc.stdout,
