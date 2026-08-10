@@ -8075,6 +8075,75 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(result)
         self.assertLess(elapsed, 2.0)
 
+    def test_parse_version_reads_the_condor_banner(self):
+        from prodtools_mcp import condor
+        banner = ('$CondorVersion: 25.0.12 2026-07-07 BuildID: 930047 '
+                  'PackageID: 25.0.12-1 $')
+        self.assertEqual(condor.parse_version(banner), '25.0.12')
+        self.assertEqual(condor.series(condor.parse_version(banner)), '25.0')
+
+    def test_parse_version_returns_none_rather_than_guessing(self):
+        """No fallbacks: an unparseable banner is unknown, not a
+        plausible default. A wrong-but-plausible version is exactly how
+        the stale pin went unnoticed."""
+        from prodtools_mcp import condor
+        self.assertIsNone(condor.parse_version('not a banner'))
+        self.assertIsNone(condor.parse_version(''))
+        self.assertIsNone(condor.parse_version(None))
+        self.assertIsNone(condor.series(None))
+
+    def test_version_report_matching_series_has_no_reason(self):
+        from prodtools_mcp import condor
+        report = condor.version_report(
+            client_fn=lambda: '$CondorVersion: 25.0.9 2026-01-01 $',
+            node_fn=lambda: '$CondorVersion: 25.0.12 2026-07-07 $')
+        self.assertEqual(report['client'], '25.0.9')
+        self.assertEqual(report['node'], '25.0.12')
+        self.assertIs(report['series_match'], True)
+        self.assertIsNone(report['reason'])
+
+    def test_version_report_names_both_versions_on_mismatch(self):
+        """The reason must carry BOTH numbers: this exact mismatch
+        (client 23.0.28, node 25.0.12) surfaced as an authentication
+        failure at the collector and cost a full diagnosis session."""
+        from prodtools_mcp import condor
+        report = condor.version_report(
+            client_fn=lambda: '$CondorVersion: 23.0.28 2025-08-21 $',
+            node_fn=lambda: '$CondorVersion: 25.0.12 2026-07-07 $')
+        self.assertIs(report['series_match'], False)
+        self.assertIn('23.0.28', report['reason'])
+        self.assertIn('25.0.12', report['reason'])
+
+    def test_version_report_unknown_side_is_none_not_a_match(self):
+        """series_match must be None, never True, when a side is
+        unreadable — claiming agreement we cannot verify is the failure
+        this whole change exists to prevent."""
+        from prodtools_mcp import condor
+
+        def boom():
+            raise RuntimeError('condor_version not found')
+
+        report = condor.version_report(
+            client_fn=lambda: '$CondorVersion: 25.0.12 2026-07-07 $',
+            node_fn=boom)
+        self.assertEqual(report['client'], '25.0.12')
+        self.assertIsNone(report['node'])
+        self.assertIsNone(report['series_match'])
+        self.assertIn('condor_version not found', report['reason'])
+
+    def test_version_report_client_import_failure_is_reported(self):
+        from prodtools_mcp import condor
+
+        def boom():
+            raise ModuleNotFoundError("No module named 'htcondor2'")
+
+        report = condor.version_report(
+            client_fn=boom,
+            node_fn=lambda: '$CondorVersion: 25.0.12 2026-07-07 $')
+        self.assertIsNone(report['client'])
+        self.assertIsNone(report['series_match'])
+        self.assertIn('htcondor2', report['reason'])
+
 
 class TestMcpCampaignStatus(unittest.TestCase):
     DRAIN_TARBALL = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'

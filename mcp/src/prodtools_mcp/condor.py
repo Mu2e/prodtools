@@ -21,6 +21,8 @@ fully testable via injected fakes, on interpreters that never see the
 real htcondor package (e.g. the plain-python3.9 unit-test run).
 """
 import concurrent.futures
+import re
+import subprocess
 
 OWNER = 'mu2epro'
 
@@ -161,3 +163,99 @@ def hold_reasons(jobs):
             if reason:
                 entry['example'] = reason[:200]
     return sorted(by_code.values(), key=lambda e: e['count'], reverse=True)
+
+
+CONDOR_VERSION_BIN = '/usr/bin/condor_version'
+
+_VERSION_RE = re.compile(r'\$CondorVersion:\s*(\d+\.\d+\.\d+)')
+
+
+def parse_version(text):
+    """'25.0.12' out of a `$CondorVersion: ... $` banner, or None.
+
+    None rather than a guess: an unreadable version must stay unknown.
+    A plausible default is what let a stale pin sit undetected."""
+    if not text:
+        return None
+    match = _VERSION_RE.search(text)
+    return match.group(1) if match else None
+
+
+def series(version):
+    """'25.0' out of '25.0.12' — the major.minor the wheel pin uses.
+    None in, None out."""
+    if not version:
+        return None
+    return '.'.join(version.split('.')[:2])
+
+
+def _client_version_banner():
+    """The bindings' own version banner. Imported lazily like every
+    other htcondor use in this module, so the unit suite still runs
+    where no wheel is installed."""
+    import htcondor2
+    return htcondor2.version()
+
+
+def _node_version_banner():
+    """condor_version(1) from its ABSOLUTE path.
+
+    Absolute because `muse setup ops` rewrites PATH, and the version
+    that matters is the node's own client RPM — the one jobsub_lite
+    uses and the best local proxy for what the pool will accept.
+
+    stdin=DEVNULL is mandatory, not tidiness: this can run inside an
+    MCP server whose stdin IS the JSON-RPC channel, and a child that
+    inherits it can consume protocol bytes."""
+    completed = subprocess.run(
+        [CONDOR_VERSION_BIN], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        timeout=10, check=True)
+    return completed.stdout.decode('utf-8', 'replace')
+
+
+def _read_version(fn, label):
+    """(version or None, error text or None) for one side."""
+    try:
+        banner = fn()
+    except Exception as exc:
+        return None, f'{label}: {type(exc).__name__}: {exc}'
+    version = parse_version(banner)
+    if version is None:
+        return None, f'{label}: unparseable version banner {banner!r}'
+    return version, None
+
+
+def version_report(client_fn=_client_version_banner,
+                   node_fn=_node_version_banner):
+    """{'client', 'node', 'series_match', 'reason'} comparing the
+    installed bindings against this node's condor client.
+
+    `series_match` is True/False only when BOTH versions are known;
+    when either side is unreadable it is None — never True. Claiming an
+    agreement that was not verified is the exact failure this reporting
+    exists to prevent.
+
+    `reason` is None when both are known and the series agree; otherwise
+    human-readable text naming what is wrong. It is diagnostic output,
+    never a control-flow signal."""
+    client, client_err = _read_version(client_fn, 'client bindings')
+    node, node_err = _read_version(node_fn, CONDOR_VERSION_BIN)
+
+    if client is None or node is None:
+        errs = [e for e in (client_err, node_err) if e]
+        return {'client': client, 'node': node, 'series_match': None,
+                'reason': 'cannot compare HTCondor versions — '
+                          + '; '.join(errs)}
+
+    if series(client) == series(node):
+        return {'client': client, 'node': node, 'series_match': True,
+                'reason': None}
+
+    return {
+        'client': client, 'node': node, 'series_match': False,
+        'reason': (f'HTCondor client bindings {client} do not match this '
+                   f'node\'s condor {node}; the pool rejects the older '
+                   f'client\'s authentication. Rerun mcp/scripts/install.sh '
+                   f'to reinstall the matching wheel series.'),
+    }
