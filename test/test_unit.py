@@ -8245,6 +8245,26 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(clusters)
         self.assertIn('no jobsub schedds', reason)
 
+    def test_get_server_info_reports_the_condor_versions(self):
+        """A reader must be able to see the client/node agreement in one
+        cheap call, without having to provoke a failure first."""
+        from prodtools_mcp import condor, server
+        fake = {'client': '25.0.12', 'node': '25.0.12',
+                'series_match': True, 'reason': None}
+        with patch.object(condor, 'version_report', return_value=fake):
+            info = server.get_server_info()
+        self.assertEqual(info['condor'], fake)
+
+    def test_get_server_info_survives_an_unreadable_version(self):
+        """get_server_info must not raise just because condor_version is
+        missing — it is the tool a reader calls when things are broken."""
+        from prodtools_mcp import condor, server
+        with patch.object(condor, 'version_report',
+                          side_effect=RuntimeError('no such file')):
+            info = server.get_server_info()
+        self.assertIsNone(info['condor']['series_match'])
+        self.assertIn('no such file', info['condor']['reason'])
+
 
 class TestMcpCampaignStatus(unittest.TestCase):
     DRAIN_TARBALL = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'

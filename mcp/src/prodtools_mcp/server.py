@@ -9,6 +9,7 @@ import os
 import sys
 from typing import Optional
 
+from prodtools_mcp import condor
 from prodtools_mcp.adapters import safe_tool
 from prodtools_mcp.tools import discovery, lineage, status
 
@@ -39,13 +40,17 @@ READING THE RESULTS:
   NOT read a missing count as zero: the query failed, and the campaign
   may well be running. Never start a recovery pass on an "unknown".
 - The queue block comes from live HTCondor ClassAd queries (in-process,
-  via the htcondor Python bindings — no jobsub_q table parsing), so held
+  via the htcondor2 Python bindings — no jobsub_q table parsing), so held
   jobs carry a reason, not just a count. When held > 0 the block also
   has `hold_reasons`: entries {code, count, example}, grouped by
   HoldReasonCode and sorted by count descending. `example` is ONE
   representative HoldReason string (truncated) — never sum/average
   against it, and never group by the HoldReason text yourself, since
   that text embeds the slot and host and is unique per job.
+  When the queue block is "unknown" its `reason` names what actually
+  failed; `get_server_info` reports the client and node HTCondor
+  versions, and a `series_match: false` there is the cause to fix
+  first.
 - find_datasets reports a samweb DEFINITION listing (see its `basis`
   field): zero-file definitions appear and -LH/-CH variants do not. Pass
   require_files=True when you need existence.
@@ -89,6 +94,20 @@ TOOL_FUNCTIONS = {
 TOOL_NAMES = sorted(list(TOOL_FUNCTIONS) + ['get_server_info'])
 
 
+def _condor_block():
+    """Client/node HTCondor versions for get_server_info.
+
+    Never raises: this is the tool a reader reaches for when something
+    is already broken, and a version probe that takes the whole call
+    down with it would be worse than useless."""
+    try:
+        return condor.version_report()
+    except Exception as exc:
+        return {'client': None, 'node': None, 'series_match': None,
+                'reason': f'version probe failed: '
+                          f'{type(exc).__name__}: {exc}'}
+
+
 def get_server_info():
     """Capabilities and safe-usage guidance for this server."""
     return {
@@ -97,6 +116,7 @@ def get_server_info():
                        'status and dataset discovery.',
         'writes': False,
         'tools': TOOL_NAMES,
+        'condor': _condor_block(),
         'ledger_db': os.environ.get(
             'MU2E_SUBMISSION_DB',
             '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'),
