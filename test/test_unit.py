@@ -7950,7 +7950,7 @@ class TestMcpCondor(unittest.TestCase):
     backs the live production cron and is not touched here)."""
 
     def test_only_jobsub_schedds_are_kept(self):
-        """The pool advertises 8 daemons; only the ~5 whose Name starts
+        """The pool advertises 8 daemons; only the ~6 whose Name starts
         with 'jobsub' are the schedds that carry mu2epro's jobs."""
         from prodtools_mcp import condor
         ads = [{'Name': 'jobsub01.fnal.gov'}, {'Name': 'jobsub04.fnal.gov'},
@@ -7975,7 +7975,7 @@ class TestMcpCondor(unittest.TestCase):
                 return []
 
         fake_htcondor = types.SimpleNamespace(Schedd=FakeSchedd)
-        with patch.dict(sys.modules, {'htcondor': fake_htcondor}):
+        with patch.dict(sys.modules, {'htcondor2': fake_htcondor}):
             result = condor._query_schedd('sched-a.fnal.gov', 'mu2epro')
 
         self.assertEqual(result, [])

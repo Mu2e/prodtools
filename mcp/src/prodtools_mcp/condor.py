@@ -10,15 +10,23 @@ live_clusters parses) has the one-letter state but never the hold
 reason.
 
 Why this is possible now: the system RPM htcondor is py3.9-only, but
-PyPI ships a cp310 manylinux wheel, and htcondor==23.0.28 matches the
-pool's running version (verified 2026-07-26). mcp/pyproject.toml pins
-htcondor==23.0.* as a venv dependency for exactly this reason.
+PyPI ships a cp310 manylinux wheel. The wheel version is NOT pinned to
+a literal here or in pyproject.toml — mcp/scripts/install.sh reads
+/usr/bin/condor_version and installs the matching major.minor series,
+and start_mcp.sh --check fails when the two disagree. A literal pin
+lived here once (23.0.*), went stale against a 25.0.12 pool upgrade,
+and the collector rejected the old client's SCITOKENS authentication —
+which surfaced as "could not reach every schedd" and cost a full
+diagnosis session.
 
-htcondor itself is imported lazily, inside the two functions that talk
-to the real pool (_locate_jobsub_schedds, _query_schedd) — never at
-module level. That keeps this module importable, and its query logic
-fully testable via injected fakes, on interpreters that never see the
-real htcondor package (e.g. the plain-python3.9 unit-test run).
+Condor 25 ships the v2 bindings: the module is `htcondor2` and the
+enum is DaemonType, not DaemonTypes. htcondor2 is imported lazily,
+inside the three functions that talk to the real pool
+(_locate_jobsub_schedds, _query_schedd, _client_version_banner) —
+never at module level. That keeps this module importable, and its
+query logic fully testable via injected fakes, on interpreters that
+never see the real htcondor package (e.g. the plain-python3.9 unit-test
+run).
 """
 import concurrent.futures
 import re
@@ -53,8 +61,8 @@ _CONSTRAINT_TEMPLATE = (
 def _is_jobsub_schedd(ad):
     """True for a schedd ClassAd whose Name starts with 'jobsub' — the
     pool advertises 8 daemons total (collector, negotiator, other
-    schedds, ...); only ~5 are the jobsub_lite schedds that actually
-    carry mu2epro's jobs (verified 2026-07-26). A pure predicate, split
+    schedds, ...); only ~6 are the jobsub_lite schedds that actually
+    carry mu2epro's jobs (verified 2026-08-09). A pure predicate, split
     out from _locate_jobsub_schedds so the filter is testable without a
     real htcondor.Collector."""
     return str(ad.get('Name', '')).startswith('jobsub')
@@ -63,9 +71,9 @@ def _is_jobsub_schedd(ad):
 def _locate_jobsub_schedds():
     """Schedd location ClassAds for the pool's jobsub_lite schedds
     (see _is_jobsub_schedd)."""
-    import htcondor
+    import htcondor2 as htcondor
     coll = htcondor.Collector()
-    ads = coll.locateAll(htcondor.DaemonTypes.Schedd)
+    ads = coll.locateAll(htcondor.DaemonType.Schedd)
     return [ad for ad in ads if _is_jobsub_schedd(ad)]
 
 
@@ -74,7 +82,7 @@ def _query_schedd(schedd_ad, owner):
     dicts (never htcondor ClassAd objects — those don't belong outside
     this module). Filtering happens SERVER-SIDE in the constraint, not
     by fetching everything and filtering in Python."""
-    import htcondor
+    import htcondor2 as htcondor
     schedd = htcondor.Schedd(schedd_ad)
     constraint = _CONSTRAINT_TEMPLATE.format(
         owner=owner, idle=IDLE, running=RUNNING, held=HELD)
