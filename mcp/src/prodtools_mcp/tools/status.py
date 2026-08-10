@@ -39,7 +39,7 @@ def _resolve_identity(mine):
     return submission_ledger.ledger_for(), getpass.getuser()
 
 
-def queue_block(cluster_ids, clusters, owner=condor.OWNER):
+def queue_block(cluster_ids, clusters, owner=condor.OWNER, reason=None):
     """Queue counts for a campaign's clusters from a
     condor.query_owner_jobs() snapshot: {cluster_id: [{'JobStatus',
     'HoldReasonCode', 'HoldReason'}, ...]}.
@@ -51,6 +51,12 @@ def queue_block(cluster_ids, clusters, owner=condor.OWNER):
     from a failed query reads as 'drained' and could trigger a recovery
     pass against live jobs. condor.query_owner_jobs() preserves this same
     fail-closed contract (timeout or any unreachable schedd -> None).
+
+    `reason` is that query's own account of what went wrong, passed
+    through unchanged. The fixed fallback text below is only for callers
+    that supply none — it once blamed the schedds for a failure that
+    happened at the collector, before any schedd was contacted, and sent
+    an investigation to the wrong layer.
 
     When held > 0, adds `hold_reasons`: the held jobs' HoldReasonCode
     breakdown (see condor.hold_reasons — grouped by CODE, never by the
@@ -64,8 +70,9 @@ def queue_block(cluster_ids, clusters, owner=condor.OWNER):
     if clusters is None:
         return {'state': 'unknown',
                 'owner': owner,
-                'reason': 'HTCondor queue query failed, timed out, or '
-                          'could not reach every schedd'}
+                'reason': reason or (
+                    'HTCondor queue query failed, timed out, or could '
+                    'not reach every schedd')}
     running = idle = held = 0
     seen = []
     held_jobs = []
@@ -243,12 +250,23 @@ def _default_clusters_fn(owner=None):
     ClassAd queries, independent of utils.submissions.live_clusters()
     (which backs the live production cron and stays untouched). Already
     bounded and already fail-closed to None on any timeout or
-    unreachable schedd; nothing to add here.
+    unreachable schedd.
+
+    Returns (clusters, reason). On failure the reason is enriched here,
+    once per request, with a client/node version mismatch when there is
+    one: that mismatch is the cause that looks least like itself — it
+    surfaces as an authentication failure at the collector — and this is
+    the single place a per-request subprocess for it is affordable.
 
     `owner` is threaded rather than left to condor.OWNER so the queue is
     always read for the SAME account as the ledger (see
     _resolve_identity)."""
-    return condor.query_owner_jobs(owner or condor.OWNER)
+    clusters, reason = condor.query_owner_jobs(owner or condor.OWNER)
+    if reason is not None:
+        report = condor.version_report()
+        if report['series_match'] is False:
+            reason = f'{reason} [{report["reason"]}]'
+    return clusters, reason
 
 
 def _default_count_fn(dataset):
@@ -336,8 +354,9 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     want_outputs = named and include_outputs
 
     clusters = None
+    queue_reason = None
     if want_queue:
-        clusters = (clusters_fn or _default_clusters_fn)(owner)
+        clusters, queue_reason = (clusters_fn or _default_clusters_fn)(owner)
 
     tarball_counts = {}
     for camp in all_camps:
@@ -370,7 +389,8 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
             rec['rows'] = _row_counts(camp_rows)
             cluster_ids = [r['cluster_id'] for r in camp_rows
                            if r['cluster_id']]
-            rec['queue'] = queue_block(cluster_ids, clusters, owner)
+            rec['queue'] = queue_block(cluster_ids, clusters, owner,
+                                       reason=queue_reason)
         if want_outputs:
             rec['outputs'] = _outputs_block(
                 camp['entry'], njobs, camp['cursor'],

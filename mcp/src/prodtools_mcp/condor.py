@@ -96,9 +96,20 @@ def _query_schedd(schedd_ad, owner):
 def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
                      schedds_fn=_locate_jobsub_schedds,
                      query_fn=_query_schedd):
-    """{cluster_id: [{'JobStatus', 'HoldReasonCode', 'HoldReason'}, ...]}
-    for every idle/running/held job `owner` has across the pool's
-    jobsub* schedds, or None when the result cannot be trusted.
+    """((clusters, reason)) for every idle/running/held job `owner` has
+    across the pool's jobsub* schedds.
+
+    `clusters` is {cluster_id: [{'JobStatus', 'HoldReasonCode',
+    'HoldReason'}, ...]} on success, or None when the result cannot be
+    trusted. `reason` is None on success, else human-readable text
+    naming what actually failed.
+
+    `clusters is None` is the ONLY signal a caller may branch on. The
+    reason exists because the previous bare `return None` threw away
+    every clue — a client/pool version mismatch surfaced as an
+    authentication failure at the collector, and the fixed text the
+    caller printed blamed the schedds instead. It is diagnostic output
+    for a human reader and must never become control flow.
 
     Trust rules, matching the convention queue_block already
     understands (None -> 'unknown', never a zero):
@@ -119,13 +130,14 @@ def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
     """
     try:
         schedds = schedds_fn()
-    except Exception:
-        return None
+    except Exception as exc:
+        return None, (f'schedd discovery failed: '
+                      f'{type(exc).__name__}: {exc}')
     if not schedds:
-        return None
+        return None, 'the collector advertised no jobsub schedds'
 
     clusters = {}
-    untrustworthy = False
+    errors = []
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=len(schedds))
     try:
@@ -137,19 +149,20 @@ def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
                     for ad in fut.result():
                         cid = str(ad.get('ClusterId'))
                         clusters.setdefault(cid, []).append(ad)
-                except Exception:
-                    untrustworthy = True
+                except Exception as exc:
+                    errors.append(f'{futures[fut]}: '
+                                  f'{type(exc).__name__}: {exc}')
         except concurrent.futures.TimeoutError:
-            untrustworthy = True
+            errors.append(f'the query timed out after {timeout}s')
     finally:
         # wait=False: don't block server shutdown-of-this-call on a
         # straggler thread stuck inside a slow/hung schedd query — the
         # timeout above already decided the result is untrustworthy.
         executor.shutdown(wait=False)
 
-    if untrustworthy:
-        return None
-    return clusters
+    if errors:
+        return None, '; '.join(errors)
+    return clusters, None
 
 
 def hold_reasons(jobs):

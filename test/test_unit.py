@@ -7938,10 +7938,10 @@ class TestMcpQueueBlock(unittest.TestCase):
         from prodtools_mcp.tools import status
         from prodtools_mcp import condor
         with patch.object(condor, 'query_owner_jobs',
-                          return_value={'1': [_job(2)]}) as mock:
+                          return_value=({'1': [_job(2)]}, None)) as mock:
             result = status._default_clusters_fn()
         mock.assert_called_once_with(condor.OWNER)
-        self.assertEqual(result, {'1': [_job(2)]})
+        self.assertEqual(result, ({'1': [_job(2)]}, None))
 
 
 class TestMcpCondor(unittest.TestCase):
@@ -8021,8 +8021,9 @@ class TestMcpCondor(unittest.TestCase):
             return [{'ClusterId': 1, 'JobStatus': 5,
                     'HoldReasonCode': 34, 'HoldReason': 'oom'}]
 
-        result = condor.query_owner_jobs(schedds_fn=schedds, query_fn=query)
-        self.assertEqual(len(result['1']), 2)
+        clusters, reason = condor.query_owner_jobs(schedds_fn=schedds,
+                                                   query_fn=query)
+        self.assertEqual(len(clusters['1']), 2)
 
     def test_schedd_discovery_failure_is_unknown(self):
         from prodtools_mcp import condor
@@ -8030,8 +8031,9 @@ class TestMcpCondor(unittest.TestCase):
         def boom():
             raise RuntimeError('collector unreachable')
 
-        result = condor.query_owner_jobs(schedds_fn=boom, query_fn=None)
-        self.assertIsNone(result)
+        clusters, reason = condor.query_owner_jobs(schedds_fn=boom,
+                                                   query_fn=None)
+        self.assertIsNone(clusters)
 
     def test_one_unreachable_schedd_makes_the_whole_result_unknown(self):
         """A per-schedd failure must not silently drop that schedd's
@@ -8050,8 +8052,9 @@ class TestMcpCondor(unittest.TestCase):
             return [{'ClusterId': 1, 'JobStatus': 2,
                     'HoldReasonCode': None, 'HoldReason': None}]
 
-        result = condor.query_owner_jobs(schedds_fn=schedds, query_fn=query)
-        self.assertIsNone(result)
+        clusters, reason = condor.query_owner_jobs(schedds_fn=schedds,
+                                                   query_fn=query)
+        self.assertIsNone(clusters)
 
     def test_query_owner_jobs_bounds_wall_clock(self):
         """FastMCP runs sync tools inline on the event loop — a hung
@@ -8069,10 +8072,10 @@ class TestMcpCondor(unittest.TestCase):
             return []
 
         start = time.monotonic()
-        result = condor.query_owner_jobs(timeout=0.2, schedds_fn=schedds,
-                                         query_fn=hang)
+        clusters, reason = condor.query_owner_jobs(
+            timeout=0.2, schedds_fn=schedds, query_fn=hang)
         elapsed = time.monotonic() - start
-        self.assertIsNone(result)
+        self.assertIsNone(clusters)
         self.assertLess(elapsed, 2.0)
 
     def test_parse_version_reads_the_condor_banner(self):
@@ -8143,6 +8146,75 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(report['client'])
         self.assertIsNone(report['series_match'])
         self.assertIn('htcondor2', report['reason'])
+
+    def test_query_owner_jobs_returns_a_reason_for_discovery_failure(self):
+        """The bare `return None` threw away the only evidence of what
+        went wrong. A collector authentication failure must not be
+        reported as a schedd problem."""
+        from prodtools_mcp import condor
+
+        def boom():
+            raise RuntimeError('Failed communication with collector')
+
+        clusters, reason = condor.query_owner_jobs(schedds_fn=boom,
+                                                   query_fn=None)
+        self.assertIsNone(clusters)
+        self.assertIn('Failed communication with collector', reason)
+
+    def test_query_owner_jobs_reason_for_a_failing_schedd(self):
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a', 'sched-b']
+
+        def query(sd, owner):
+            if sd == 'sched-a':
+                raise RuntimeError('timed out talking to sched-a')
+            return [{'ClusterId': 1, 'JobStatus': 2,
+                     'HoldReasonCode': None, 'HoldReason': None}]
+
+        clusters, reason = condor.query_owner_jobs(schedds_fn=schedds,
+                                                   query_fn=query)
+        self.assertIsNone(clusters)
+        self.assertIn('timed out talking to sched-a', reason)
+
+    def test_query_owner_jobs_reason_for_a_timeout(self):
+        import time
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a']
+
+        def hang(sd, owner):
+            time.sleep(5)
+            return []
+
+        clusters, reason = condor.query_owner_jobs(
+            timeout=0.2, schedds_fn=schedds, query_fn=hang)
+        self.assertIsNone(clusters)
+        self.assertIn('timed out', reason.lower())
+
+    def test_query_owner_jobs_success_has_no_reason(self):
+        from prodtools_mcp import condor
+
+        def schedds():
+            return ['sched-a']
+
+        def query(sd, owner):
+            return [{'ClusterId': 1, 'JobStatus': 2,
+                     'HoldReasonCode': None, 'HoldReason': None}]
+
+        clusters, reason = condor.query_owner_jobs(schedds_fn=schedds,
+                                                   query_fn=query)
+        self.assertEqual(len(clusters['1']), 1)
+        self.assertIsNone(reason)
+
+    def test_no_schedds_found_is_untrusted_with_a_reason(self):
+        from prodtools_mcp import condor
+        clusters, reason = condor.query_owner_jobs(
+            schedds_fn=lambda: [], query_fn=None)
+        self.assertIsNone(clusters)
+        self.assertIn('no jobsub schedds', reason)
 
 
 class TestMcpCampaignStatus(unittest.TestCase):
@@ -8220,7 +8292,8 @@ class TestMcpCampaignStatus(unittest.TestCase):
             db = self._make_db(td)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db,
-                clusters_fn=lambda owner: {'29308498': [running_job, running_job]},
+                clusters_fn=lambda owner: (
+                    {'29308498': [running_job, running_job]}, None),
                 count_fn=lambda ds: 412,
                 job_pars_fn=lambda tb: _IndexedPars(tb))
         camp = result['campaigns'][0]
@@ -8408,7 +8481,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
                 submission_ledger.close_row(db, rid, state)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db, include_outputs=False,
-                clusters_fn=lambda owner: None)
+                clusters_fn=lambda owner: (None, None))
         rows = result['campaigns'][0]['rows']
         self.assertEqual(rows['exhausted'], 2)
         self.assertEqual(rows['complete'], 1)
@@ -8450,7 +8523,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
             db = self._make_db(td)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db,
-                clusters_fn=lambda owner: None, count_fn=boom)
+                clusters_fn=lambda owner: (None, None), count_fn=boom)
         camp = result['campaigns'][0]
         self.assertEqual(camp['outputs']['state'], 'unknown')
         self.assertNotIn('datasets', camp['outputs'])
@@ -8479,6 +8552,29 @@ class TestMcpCampaignStatus(unittest.TestCase):
                 entry={'njobs': 4000, 'outputs': []}, slice_size=500)
             result = status.campaign_status(db_path=db)
         self.assertTrue(any('note' in c for c in result['campaigns']))
+
+    def test_queue_block_carries_the_supplied_reason(self):
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['1'], None, 'mu2epro',
+                            reason='collector rejected our token')
+        self.assertEqual(block['state'], 'unknown')
+        self.assertEqual(block['reason'], 'collector rejected our token')
+
+    def test_queue_block_unknown_still_omits_every_count(self):
+        """An unknown block must have no zero to misread as drained."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['1'], None, 'mu2epro', reason='anything')
+        for key in ('running', 'idle', 'held', 'clusters'):
+            self.assertNotIn(key, block)
+
+    def test_queue_block_ignores_a_reason_on_success(self):
+        """A reason belongs only to an untrusted result; a known block
+        that carried one would invite branching on it."""
+        from prodtools_mcp.tools.status import queue_block
+        block = queue_block(['1'], {'1': [{'JobStatus': 2}]}, 'mu2epro',
+                            reason='stale text')
+        self.assertEqual(block['state'], 'known')
+        self.assertNotIn('reason', block)
 
 
 class TestMcpReadIdentity(unittest.TestCase):
@@ -8543,12 +8639,14 @@ class TestMcpReadIdentity(unittest.TestCase):
         self.assertEqual(block['owner'], 'alice')
 
     def test_default_clusters_fn_passes_the_owner_to_condor(self):
-        with patch.object(self.condor, 'query_owner_jobs') as q:
+        with patch.object(self.condor, 'query_owner_jobs',
+                          return_value=(None, None)) as q:
             self.status._default_clusters_fn('alice')
         self.assertEqual(q.call_args.args[0], 'alice')
 
     def test_default_clusters_fn_without_an_owner_asks_for_production(self):
-        with patch.object(self.condor, 'query_owner_jobs') as q:
+        with patch.object(self.condor, 'query_owner_jobs',
+                          return_value=(None, None)) as q:
             self.status._default_clusters_fn()
         self.assertEqual(q.call_args.args[0], self.condor.OWNER)
 
@@ -8559,7 +8657,7 @@ class TestMcpReadIdentity(unittest.TestCase):
 
         def fake_clusters(owner):
             seen['owner'] = owner
-            return {}
+            return {}, None
 
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
@@ -8581,7 +8679,7 @@ class TestMcpReadIdentity(unittest.TestCase):
 
         def fake_clusters(owner):
             seen['owner'] = owner
-            return {}
+            return {}, None
 
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
