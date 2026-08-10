@@ -8265,6 +8265,28 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(info['condor']['series_match'])
         self.assertIn('no such file', info['condor']['reason'])
 
+    def test_module_imports_with_no_htcondor_wheel_anywhere(self):
+        """condor.py must import cleanly even when neither htcondor nor
+        htcondor2 is importable, i.e. no `import htcondor[2]` may sit at
+        module scope.
+
+        This node cannot exercise that by just running the suite: it has
+        the python3-condor-25.0.12 RPM installed, which puts htcondor2 on
+        system python3.9's path, so `import prodtools_mcp.condor` would
+        succeed here even if someone hoisted the import to module level.
+        The guard has to be explicit, forcing both import names to fail
+        and confirming the module still loads."""
+        import importlib
+        from prodtools_mcp import condor
+        try:
+            with patch.dict(sys.modules, {'htcondor': None,
+                                          'htcondor2': None}):
+                importlib.reload(condor)
+        finally:
+            # Leave a clean, non-mocked module behind for the rest of
+            # the suite regardless of whether the reload above raised.
+            importlib.reload(condor)
+
 
 class TestMcpCampaignStatus(unittest.TestCase):
     DRAIN_TARBALL = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
