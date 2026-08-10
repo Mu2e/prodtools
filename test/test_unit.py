@@ -8178,6 +8178,35 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(clusters)
         self.assertIn('timed out talking to sched-a', reason)
 
+    def test_query_owner_jobs_reason_names_the_schedd_not_the_whole_ad(self):
+        """schedds_fn() returns real htcondor2 location ClassAds in
+        production, whose str() dumps the ENTIRE ad (Name, MyAddress,
+        CondorVersion, ...) — hundreds of bytes that must not land in
+        `reason`. A ClassAd-like double (dict-shaped, has .get) must
+        contribute only its Name."""
+        from prodtools_mcp import condor
+
+        class FakeAd(dict):
+            def __str__(self):
+                return ('[ Name = "jobsub01.fnal.gov"; MyAddress = '
+                       '"<127.0.0.1:9618>"; CondorVersion = "..."; '
+                       'DaemonStartTime = 1234567890 ]')
+
+        sched_a = FakeAd(Name='jobsub01.fnal.gov')
+
+        def schedds():
+            return [sched_a]
+
+        def query(sd, owner):
+            raise RuntimeError('timed out')
+
+        clusters, reason = condor.query_owner_jobs(schedds_fn=schedds,
+                                                   query_fn=query)
+        self.assertIsNone(clusters)
+        self.assertIn('jobsub01.fnal.gov', reason)
+        self.assertNotIn('MyAddress', reason)
+        self.assertNotIn('CondorVersion', reason)
+
     def test_query_owner_jobs_reason_for_a_timeout(self):
         import time
         from prodtools_mcp import condor
@@ -8649,6 +8678,53 @@ class TestMcpReadIdentity(unittest.TestCase):
                           return_value=(None, None)) as q:
             self.status._default_clusters_fn()
         self.assertEqual(q.call_args.args[0], self.condor.OWNER)
+
+    def test_default_clusters_fn_appends_version_note_on_mismatch(self):
+        """A failed query plus a known client/pool version mismatch must
+        surface BOTH the original failure text and the version report's
+        own reason — the mismatch is the cause that looks least like
+        itself (an auth failure at the collector), so it must not
+        silently replace or drop the original text."""
+        with patch.object(self.condor, 'query_owner_jobs',
+                          return_value=(None, 'could not reach schedd')), \
+             patch.object(self.condor, 'version_report',
+                          return_value={'client': '23.0.28', 'node': '25.0.12',
+                                       'series_match': False,
+                                       'reason': 'client 23.0.28 vs node '
+                                                 '25.0.12'}):
+            clusters, reason = self.status._default_clusters_fn()
+        self.assertIsNone(clusters)
+        self.assertIn('could not reach schedd', reason)
+        self.assertIn('client 23.0.28 vs node 25.0.12', reason)
+
+    def test_default_clusters_fn_leaves_reason_alone_on_matching_series(self):
+        """series_match True must not append a spurious note — the
+        version report was consulted and cleared the client/pool
+        mismatch as the cause, so the original reason stands alone."""
+        with patch.object(self.condor, 'query_owner_jobs',
+                          return_value=(None, 'timed out')), \
+             patch.object(self.condor, 'version_report',
+                          return_value={'client': '25.0.12', 'node': '25.0.12',
+                                       'series_match': True, 'reason': None}):
+            clusters, reason = self.status._default_clusters_fn()
+        self.assertIsNone(clusters)
+        self.assertEqual(reason, 'timed out')
+
+    def test_default_clusters_fn_leaves_reason_alone_when_match_unknown(self):
+        """series_match None (a version was unreadable) must NOT be
+        treated as a mismatch any more than as a match — appending a
+        note here would claim a comparison that was never actually
+        made."""
+        with patch.object(self.condor, 'query_owner_jobs',
+                          return_value=(None, 'timed out')), \
+             patch.object(self.condor, 'version_report',
+                          return_value={'client': None, 'node': '25.0.12',
+                                       'series_match': None,
+                                       'reason': 'cannot compare HTCondor '
+                                                 'versions'}):
+            clusters, reason = self.status._default_clusters_fn()
+        self.assertIsNone(clusters)
+        self.assertEqual(reason, 'timed out')
 
     def test_campaign_status_threads_the_owner_into_the_queue_seam(self):
         # Asserted through the seam, not by reading the constant: a test

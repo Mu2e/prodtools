@@ -93,6 +93,20 @@ def _query_schedd(schedd_ad, owner):
              'HoldReason': ad.get('HoldReason')} for ad in ads]
 
 
+def _schedd_label(sd):
+    """Best-effort display name for a schedd handle, for error text.
+
+    `schedds_fn()` returns plain strings under the test fakes, but
+    `_locate_jobsub_schedds()` returns real htcondor2 location ClassAds
+    in production, whose str() dumps the WHOLE ad (Name, MyAddress,
+    CondorVersion, ...) — hundreds of bytes that would otherwise land in
+    `reason` and get serialized straight into the MCP payload instead of
+    a short 'sched-b: TimeoutError: ...' line. ClassAds support `.get`;
+    plain strings don't, so that's the dispatch."""
+    get = getattr(sd, 'get', None)
+    return get('Name', sd) if get else sd
+
+
 def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
                      schedds_fn=_locate_jobsub_schedds,
                      query_fn=_query_schedd):
@@ -150,7 +164,7 @@ def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
                         cid = str(ad.get('ClusterId'))
                         clusters.setdefault(cid, []).append(ad)
                 except Exception as exc:
-                    errors.append(f'{futures[fut]}: '
+                    errors.append(f'{_schedd_label(futures[fut])}: '
                                   f'{type(exc).__name__}: {exc}')
         except concurrent.futures.TimeoutError:
             errors.append(f'the query timed out after {timeout}s')
