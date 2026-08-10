@@ -35,6 +35,17 @@ if registered != sorted(TOOL_NAMES):
 print("OK: interpreter", sys.executable)
 print("OK: tools", ", ".join(registered))
 PY
+  echo "== part 3: HTCondor client matches this node ==" 1>&2
+  "$PYTHON_BIN" - <<'PY'
+from prodtools_mcp import condor
+report = condor.version_report()
+if report['series_match'] is not True:
+    raise SystemExit(
+        f"FATAL: {report['reason']}\n"
+        f"  client={report['client']} node={report['node']}")
+print(f"OK: htcondor client {report['client']} matches node "
+      f"condor {report['node']}")
+PY
   exit 0
 fi
 

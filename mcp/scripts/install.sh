@@ -31,6 +31,28 @@ python3 -m venv .venv
 # and skips installing them into .venv — leaving exactly the
 # non-self-contained venv that part 1 of the check then fails on.
 env -u PYTHONPATH ./.venv/bin/pip install --upgrade pip 1>&2
+
+# Pin the bindings to THIS NODE's condor client series. Absolute path:
+# `muse setup ops` rewrites PATH. No fallback on failure — a
+# wrong-but-plausible default is how the previous literal pin went
+# stale unnoticed.
+CONDOR_VERSION_BIN=/usr/bin/condor_version
+if [[ ! -x "$CONDOR_VERSION_BIN" ]]; then
+  echo "FATAL: $CONDOR_VERSION_BIN not found; cannot determine which" 1>&2
+  echo "       htcondor wheel series to install." 1>&2
+  exit 1
+fi
+CONDOR_FULL="$("$CONDOR_VERSION_BIN" | sed -n 's/.*\$CondorVersion: \([0-9.]*\).*/\1/p' | head -1)"
+if [[ -z "$CONDOR_FULL" ]]; then
+  echo "FATAL: could not parse a version from $CONDOR_VERSION_BIN" 1>&2
+  exit 1
+fi
+CONDOR_SERIES="$(echo "$CONDOR_FULL" | cut -d. -f1,2)"
+echo "node condor $CONDOR_FULL -> installing htcondor==${CONDOR_SERIES}.*" 1>&2
+# BEFORE `pip install -e .`: with a satisfying version already present,
+# the editable install cannot resolve the >=23 floor to something newer.
+env -u PYTHONPATH ./.venv/bin/pip install "htcondor==${CONDOR_SERIES}.*" 1>&2
+
 env -u PYTHONPATH ./.venv/bin/pip install -e . 1>&2
 
 echo "== verifying read-only server =="
