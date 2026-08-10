@@ -7989,6 +7989,37 @@ class TestMcpCondor(unittest.TestCase):
                          {'ClusterId', 'JobStatus', 'HoldReasonCode',
                           'HoldReason'})
 
+    def test_locate_jobsub_schedds_uses_v2_collector_and_filters(self):
+        """_locate_jobsub_schedds must call htcondor2.Collector().locateAll
+        with the v2 enum spelling DaemonType (not the v1 DaemonTypes --
+        one character, and the exact bug that caused the incident: it
+        would import fine and only fail against the real 25.0.12 pool).
+        The fake below defines ONLY DaemonType, so `htcondor.DaemonTypes`
+        raises AttributeError and a regression to the v1 spelling fails
+        this test instead of only failing in production."""
+        from prodtools_mcp import condor
+
+        schedd_sentinel = object()
+        locate_calls = []
+
+        class FakeCollector:
+            def locateAll(self, daemon_type):
+                locate_calls.append(daemon_type)
+                return [{'Name': 'jobsub01.fnal.gov'},
+                       {'Name': 'jobsub04.fnal.gov'},
+                       {'Name': 'collector01.fnal.gov'},
+                       {'Name': 'negotiator.fnal.gov'}]
+
+        fake_daemon_type = types.SimpleNamespace(Schedd=schedd_sentinel)
+        fake_htcondor = types.SimpleNamespace(
+            Collector=FakeCollector, DaemonType=fake_daemon_type)
+        with patch.dict(sys.modules, {'htcondor2': fake_htcondor}):
+            result = condor._locate_jobsub_schedds()
+
+        self.assertEqual([ad['Name'] for ad in result],
+                         ['jobsub01.fnal.gov', 'jobsub04.fnal.gov'])
+        self.assertEqual(locate_calls, [schedd_sentinel])
+
     def test_hold_reasons_groups_by_code_not_text(self):
         from prodtools_mcp import condor
         jobs = [
@@ -8094,6 +8125,27 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(condor.parse_version(''))
         self.assertIsNone(condor.parse_version(None))
         self.assertIsNone(condor.series(None))
+
+    def test_node_version_banner_never_inherits_stdin(self):
+        """_node_version_banner shells to condor_version(1) INSIDE the MCP
+        server, whose own stdin IS the JSON-RPC channel -- a child that
+        inherits it can consume protocol bytes and hang the server. This
+        is the same trap the write server's runner.run_cli pins near
+        test/test_unit.py:10189 (`push_cnf`'s `cat $BEARER_TOKEN_FILE`
+        hung on inherited stdin for 30 minutes). Also pins the absolute
+        path: `muse setup ops` rewrites PATH, so a bare 'condor_version'
+        would resolve to nothing or the wrong binary."""
+        from prodtools_mcp import condor
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(
+                returncode=0,
+                stdout=b'$CondorVersion: 25.0.12 2026-07-07 $')
+            condor._node_version_banner()
+        self.assertEqual(run.call_args.args[0], [condor.CONDOR_VERSION_BIN])
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/condor_version'])
+        self.assertEqual(run.call_args.kwargs.get('stdin'),
+                         subprocess.DEVNULL,
+                         'child stdin must be DEVNULL, never inherited')
 
     def test_version_report_matching_series_has_no_reason(self):
         from prodtools_mcp import condor
@@ -8646,6 +8698,25 @@ class TestMcpCampaignStatus(unittest.TestCase):
                             reason='stale text')
         self.assertEqual(block['state'], 'known')
         self.assertNotIn('reason', block)
+
+    def test_campaign_status_wires_the_clusters_fn_reason_into_queue_block(self):
+        """The queue_reason bound from clusters_fn() at the campaign_status
+        seam must reach queue_block()'s `reason` unchanged. Every other
+        clusters_fn double in this suite returns (something, None), so a
+        dropped `reason=queue_reason` at the call site is invisible to
+        them -- an `unknown` block would silently fall back to
+        queue_block's fixed 'could not reach every schedd' text, which
+        blames the wrong layer (see queue_block's docstring)."""
+        from prodtools_mcp.tools import status
+        distinctive = 'collector rejected SCITOKENS auth for client 23.0.28'
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=lambda owner: (None, distinctive))
+        camp = result['campaigns'][0]
+        self.assertEqual(camp['queue']['state'], 'unknown')
+        self.assertEqual(camp['queue']['reason'], distinctive)
 
 
 class TestMcpReadIdentity(unittest.TestCase):
