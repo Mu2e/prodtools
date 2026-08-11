@@ -13452,6 +13452,253 @@ class TestOriginColumnMigration(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Task 7 fix round 1 (2026-08-11): the read-only MCP path never runs the
+# migration (mcp/src/prodtools_mcp/ledger_ro.py opens mode=ro and issues
+# no DDL by design), so status.py's unconditional camp['origin'] used to
+# raise KeyError on a ledger no WRITE connection has touched since the
+# rename shipped. Reproduced by the reviewer against a hand-built legacy
+# DB, never through submission_ledger's own writer (which would migrate
+# it on connect).
+# ---------------------------------------------------------------------------
+
+class TestLedgerRoOriginShimOnLegacyLedger(unittest.TestCase):
+    """ledger_ro must tolerate a ledger still keyed map_path — the
+    normalizing shim in _shape_campaign/_shape_row is a transition
+    measure, deletable once every ledger has been touched by a writer at
+    least once post-rename."""
+
+    def _make_legacy_db(self, td):
+        db = os.path.join(td, 'submissions.db')
+        con = sqlite3.connect(db)
+        con.executescript("""
+            CREATE TABLE submissions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_utc TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'active',
+              attempt INTEGER NOT NULL DEFAULT 1,
+              parent_id INTEGER,
+              map_path TEXT, tarball TEXT NOT NULL,
+              entry_json TEXT NOT NULL, indices_json TEXT NOT NULL,
+              jobsub_id TEXT, cluster_id TEXT, closed_utc TEXT, note TEXT);
+            CREATE TABLE campaigns (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_utc TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'active',
+              map_path TEXT, tarball TEXT NOT NULL,
+              entry_json TEXT NOT NULL, cursor INTEGER NOT NULL DEFAULT 0,
+              slice_size INTEGER NOT NULL, closed_utc TEXT, note TEXT);
+            INSERT INTO submissions
+              (created_utc, map_path, tarball, entry_json, indices_json)
+              VALUES ('2026-01-01T00:00:00Z', '/tmp/legacy-row.json',
+                      'cnf.mu2e.X.C.0.tar', '{}', '[]');
+            INSERT INTO campaigns
+              (created_utc, map_path, tarball, entry_json, slice_size)
+              VALUES ('2026-01-01T00:00:00Z', '/tmp/legacy-map.json',
+                      'cnf.mu2e.X.C.0.tar', '{"njobs": 4}', 4);
+        """)
+        con.commit()
+        con.close()
+        return db
+
+    def test_ledger_ro_campaigns_normalizes_map_path_to_origin(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_db(td)
+            camps = ledger_ro.campaigns(db)
+        self.assertEqual(len(camps), 1)
+        self.assertEqual(camps[0]['origin'], '/tmp/legacy-map.json')
+        self.assertNotIn('map_path', camps[0])
+
+    def test_ledger_ro_rows_normalizes_map_path_to_origin(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_db(td)
+            rows = ledger_ro.rows(db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['origin'], '/tmp/legacy-row.json')
+        self.assertNotIn('map_path', rows[0])
+
+    def test_ledger_ro_snapshot_normalizes_both_tables(self):
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_db(td)
+            camps, rows = ledger_ro.snapshot(db)
+        self.assertEqual(camps[0]['origin'], '/tmp/legacy-map.json')
+        self.assertEqual(rows[0]['origin'], '/tmp/legacy-row.json')
+
+    def test_campaign_status_does_not_raise_on_unmigrated_ledger(self):
+        """REGRESSION: this is the exact failure the reviewer reproduced
+        — status.py's dict construction does camp['origin']
+        unconditionally, which raised KeyError (caught by safe_tool and
+        surfaced as a generic 'internal' error) against a ledger no
+        writer had reconnected to since the rename."""
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_db(td)
+            result = status.campaign_status(db_path=db)
+        self.assertEqual(len(result['campaigns']), 1)
+        self.assertEqual(result['campaigns'][0]['origin'],
+                         '/tmp/legacy-map.json')
+
+    def test_list_campaigns_does_not_raise_on_unmigrated_ledger(self):
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_db(td)
+            result = status.list_campaigns(db_path=db)
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['campaigns'][0]['origin'],
+                         '/tmp/legacy-map.json')
+
+    def test_readonly_path_still_issues_no_ddl(self):
+        """The whole point of the shim is to avoid needing the write
+        connection the migration requires — confirm the DB on disk is
+        STILL legacy (map_path, not origin) after every read above."""
+        from prodtools_mcp import ledger_ro
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_db(td)
+            ledger_ro.campaigns(db)
+            ledger_ro.rows(db)
+            ledger_ro.snapshot(db)
+            con = sqlite3.connect(db)
+            try:
+                cols = [r[1] for r in
+                       con.execute('PRAGMA table_info(submissions)')]
+            finally:
+                con.close()
+        self.assertIn('map_path', cols)
+        self.assertNotIn('origin', cols)
+
+
+# ---------------------------------------------------------------------------
+# Task 7 fix round 1 (2026-08-11): the migration's check-then-act
+# (PRAGMA table_info, then ALTER TABLE) is not atomic across processes.
+# Reviewer raced 6 OS processes against a never-migrated legacy DB and
+# hit "no such column: map_path" in 2/15 trials: process A's PRAGMA saw
+# map_path, process B committed the rename first, A's own ALTER then
+# failed. A real multi-process race is nondeterministic by nature — these
+# tests instead deterministically FORCE the exact failure mode by
+# injecting the concurrent winner's rename in between our own PRAGMA
+# check and our own ALTER attempt, via a thin delegating wrapper around
+# the connection _connect creates (sqlite3.Connection is a built-in type
+# and cannot be patched directly — "can't set attributes of
+# built-in/extension type").
+# ---------------------------------------------------------------------------
+
+class TestOriginMigrationRace(unittest.TestCase):
+    def _make_legacy_submissions_only_db(self, td, origin_value):
+        db = os.path.join(td, 'submissions.db')
+        con = sqlite3.connect(db)
+        con.executescript(f"""
+            CREATE TABLE submissions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_utc TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'active',
+              attempt INTEGER NOT NULL DEFAULT 1,
+              parent_id INTEGER,
+              map_path TEXT, tarball TEXT NOT NULL,
+              entry_json TEXT NOT NULL, indices_json TEXT NOT NULL,
+              jobsub_id TEXT, cluster_id TEXT, closed_utc TEXT, note TEXT);
+            INSERT INTO submissions
+              (created_utc, map_path, tarball, entry_json, indices_json)
+              VALUES ('2026-01-01T00:00:00Z', '{origin_value}',
+                      'x.tar', '{{}}', '[]');
+        """)
+        con.commit()
+        con.close()
+        return db
+
+    def test_migration_survives_a_concurrent_winner(self):
+        """Deterministic reproduction: our OWN ALTER TABLE is made to
+        fail with sqlite3's real "no such column: map_path" by having a
+        SEPARATE, genuine connection win the rename first — exactly the
+        race the reviewer hit, forced instead of timed."""
+        from utils import submission_ledger as sl
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_submissions_only_db(
+                td, '/tmp/race-winner.json')
+
+            real_connect = sqlite3.connect
+            fired = {'done': False}
+            target_sql = ('ALTER TABLE submissions RENAME COLUMN '
+                         'map_path TO origin')
+
+            class _RacyConn:
+                def __init__(self, real):
+                    object.__setattr__(self, '_real', real)
+
+                def __getattr__(self, name):
+                    return getattr(self._real, name)
+
+                def __setattr__(self, name, value):
+                    setattr(self._real, name, value)
+
+                def execute(self, sql, *a, **kw):
+                    if not fired['done'] and sql == target_sql:
+                        fired['done'] = True
+                        # The "other process" — a genuine second
+                        # connection — wins the rename BEFORE our own
+                        # ALTER (below) gets to run.
+                        winner = real_connect(db)
+                        try:
+                            winner.execute(target_sql)
+                            winner.commit()
+                        finally:
+                            winner.close()
+                    return self._real.execute(sql, *a, **kw)
+
+            def fake_connect(*a, **kw):
+                return _RacyConn(real_connect(*a, **kw))
+
+            with patch.object(sl.sqlite3, 'connect',
+                              side_effect=fake_connect):
+                rows = sl.all_rows(db)
+
+            self.assertTrue(fired['done'], "race hook never fired")
+            self.assertEqual(rows[0]['origin'], '/tmp/race-winner.json')
+
+    def test_unrelated_operational_error_still_raises(self):
+        """The except clause must not swallow a genuinely different
+        failure — only the specific 'someone else already migrated it
+        first' case. Force the ALTER to fail for an UNRELATED reason
+        (origin never gets created); the re-check must find no origin
+        column and re-raise rather than silently continuing."""
+        from utils import submission_ledger as sl
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_submissions_only_db(
+                td, '/tmp/unrelated-failure.json')
+
+            real_connect = sqlite3.connect
+            target_sql = ('ALTER TABLE submissions RENAME COLUMN '
+                         'map_path TO origin')
+
+            class _BrokenConn:
+                def __init__(self, real):
+                    object.__setattr__(self, '_real', real)
+
+                def __getattr__(self, name):
+                    return getattr(self._real, name)
+
+                def __setattr__(self, name, value):
+                    setattr(self._real, name, value)
+
+                def execute(self, sql, *a, **kw):
+                    if sql == target_sql:
+                        raise sqlite3.OperationalError(
+                            'disk I/O error (simulated, unrelated to '
+                            'the migration race)')
+                    return self._real.execute(sql, *a, **kw)
+
+            def fake_connect(*a, **kw):
+                return _BrokenConn(real_connect(*a, **kw))
+
+            with patch.object(sl.sqlite3, 'connect',
+                              side_effect=fake_connect):
+                with self.assertRaises(sqlite3.OperationalError) as ctx:
+                    sl.all_rows(db)
+            self.assertIn('disk I/O error', str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

@@ -57,15 +57,34 @@ def _query(db_path, sql, params=()):
         con.close()
 
 
+def _normalize_origin(row):
+    """TRANSITION SHIM (2026-08-11, delete once every ledger has been
+    touched by a writer at least once post-rename): the map_path->origin
+    column rename (utils/submission_ledger.py) migrates on a WRITE
+    connection only (_connect's PRAGMA-guarded ALTER TABLE) — this module
+    deliberately opens mode=ro and issues no DDL (see module docstring),
+    so it can be handed a ledger no writer has reconnected to since the
+    rename shipped. Without this, status.py's unconditional
+    camp['origin'] raises KeyError on such a ledger until the next cron
+    tick / CLI invocation / write-server call happens to touch it — which
+    may be never, for a personal or idle ledger. Normalize here so every
+    caller downstream of ledger_ro always sees 'origin', regardless of
+    which side of the migration the ledger is on.
+    """
+    if 'origin' not in row and 'map_path' in row:
+        row['origin'] = row.pop('map_path')
+    return row
+
+
 def _shape_campaign(row):
     row['entry'] = json.loads(row.pop('entry_json'))
-    return row
+    return _normalize_origin(row)
 
 
 def _shape_row(row):
     row['entry'] = json.loads(row.pop('entry_json'))
     row['indices'] = json.loads(row.pop('indices_json'))
-    return row
+    return _normalize_origin(row)
 
 
 def campaigns(db_path=None, state=None):

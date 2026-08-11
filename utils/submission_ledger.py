@@ -164,8 +164,28 @@ def _connect(db_path):
     for table in ('submissions', 'campaigns'):
         cols = [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
         if 'map_path' in cols and 'origin' not in cols:
-            con.execute(
-                f'ALTER TABLE {table} RENAME COLUMN map_path TO origin')
+            try:
+                con.execute(
+                    f'ALTER TABLE {table} RENAME COLUMN map_path TO origin')
+            except sqlite3.OperationalError:
+                # Two _connect calls can race the check-then-act above: a
+                # cron tick, a manual `submissions` command, and the
+                # write MCP server can all touch the same never-migrated
+                # ledger in the same minute. Both PRAGMA checks can see
+                # map_path before either ALTER commits; whichever commits
+                # first wins, and the loser's own ALTER then fails with
+                # "no such column: map_path" — this is not SQLITE_BUSY,
+                # so the connection's timeout=30 busy-retry does not
+                # cover it. Re-check: if origin exists now, the other
+                # side already finished the migration for us and there
+                # is nothing left to do here. Any OTHER OperationalError
+                # (a genuinely broken schema, a locked/corrupt DB) must
+                # still surface — re-raise unless this specific race is
+                # what happened.
+                cols_now = [r[1] for r in
+                           con.execute(f'PRAGMA table_info({table})')]
+                if 'origin' not in cols_now:
+                    raise
     con.commit()
     return con
 
