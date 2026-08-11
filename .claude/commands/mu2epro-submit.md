@@ -1,10 +1,10 @@
 ---
-description: Submit a prodtools POMS map to the grid via the direct backend as mu2epro (ksu env fix + dry-run + jobsub_q verify)
+description: Submit a prodtools submission map to the grid via the direct backend as mu2epro (ksu env fix + dry-run + jobsub_q verify)
 argument-hint: <map.json> [--entry N] [--first N --num M] [extra submit_map flags]
 allowed-tools: Bash
 ---
 
-# Submit a POMS map as mu2epro (direct backend)
+# Submit a submission map as mu2epro (direct backend)
 
 Runs `submit_map` as the `mu2epro` production account via
 `ksu`, with the environment fixes the direct backend needs but that plain
@@ -45,18 +45,14 @@ See `reference_ksu_jobsub_env` for the incident history.
 /mu2epro-submit <map.json> [--entry N] [--first N --num M] [extra submit_map flags]
 ```
 
-- `<map.json>` — absolute path to the submission map. Two valid homes,
-  depending on how the campaign was created:
-  - **Direct campaign** (`--enqueue` + `submissions run`): a throwaway
-    `/tmp` map, one per campaign, e.g. `/tmp/map_noprimary_au.json`.
-    This is the normal case. Pass the SAME path that was given to
-    `json2jobdef --prod --jobdefs`.
-  - **POMS-driven**: the numbered map under
-    `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/`.
+- `<map.json>` — absolute path to the submission map: a throwaway
+  `/tmp` map, one per campaign, e.g. `/tmp/map_noprimary_au.json`.
+  Pass the SAME path that was given to `json2jobdef --prod --jobdefs`.
 
-  Despite the directory name, `poms_map/` is not where direct-campaign
-  maps belong — do not create files there for a direct campaign. See
-  the backend-routing rule in `/mu2epro-run`.
+  Do not create map files under
+  `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/` or
+  `direct_maps/`. Both are historical; the direct workflow neither reads
+  nor wants a persistent file there.
 - `--entry N` — submit only entry index N (default: ALL entries in the map).
   Use this when the map has entries that must NOT be resubmitted.
 - `--first N --num M` — submit only the jobset slice `[N, N+M)` (recovery /
@@ -68,13 +64,13 @@ See `reference_ksu_jobsub_env` for the incident history.
 
 ```
 # Firstjob expansion (map already windowed to firstjob/njobs)
-/mu2epro-submit /exp/mu2e/app/users/mu2epro/production_manager/poms_map/Run1Ban-pileupext.json
+/mu2epro-submit /tmp/map_run1ban_pileupext.json
 
 # One entry of a multi-entry map (do not touch the others)
-/mu2epro-submit /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-033.json --entry 1
+/mu2epro-submit /tmp/map_mdc2025_033.json --entry 1
 
 # Recovery: resubmit indices 4000..4099 only
-/mu2epro-submit /exp/mu2e/app/users/mu2epro/production_manager/poms_map/Run1Ban-pileupext.json --first 4000 --num 100
+/mu2epro-submit /tmp/map_run1ban_pileupext.json --first 4000 --num 100
 ```
 
 ## Instructions
@@ -146,7 +142,7 @@ intend — a completed window left in the map would re-run it (or use
 
 ```bash
 ksu mu2epro -e /bin/bash -c '
-MAP=/exp/mu2e/app/users/mu2epro/production_manager/poms_map/Run1Ban-pileupext.json
+MAP=/tmp/map_run1ban_pileupext.json
 cp "$MAP" "$MAP.bak-$(date +%Y%m%d_%H%M%S)"
 jq "[.[0] | .firstjob=<F> | .njobs=<N>]" "$MAP" > "$MAP.tmp" && mv "$MAP.tmp" "$MAP"
 cat "$MAP"

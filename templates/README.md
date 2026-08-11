@@ -1,7 +1,7 @@
 # Per-family chain templates
 
 Templates consumed by `latestDatasets --emit <stage> --campaign <C>` to
-synthesize a `json2jobdef` config for one POMS-free chain hop
+synthesize a `json2jobdef` config for one chain hop
 (`dts → digi → reco → ntuple`).
 
 Layout: `templates/<family>/<stage>.json`, where `<family>` is the campaign

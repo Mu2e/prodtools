@@ -1,5 +1,5 @@
 ---
-description: Submit art jobs via upstream mu2ejobsub (mu2egrid v8) with sensible 2026 defaults — useful for smoke tests, recoveries, and ad-hoc JIT-cnf submissions outside the POMS-map / submit_map flow
+description: Submit art jobs via upstream mu2ejobsub (mu2egrid v8) with sensible 2026 defaults — useful for smoke tests, recoveries, and ad-hoc JIT-cnf submissions outside the submit_map flow
 argument-hint: <cnf-tarball> [--all | --firstjob N --njobs M | --jobs i,j,...] [--inloc tape|disk|...] [--proto root|ifdh] [extra mu2ejobsub flags]
 allowed-tools: Bash
 ---
@@ -14,7 +14,7 @@ materialize per-index fcl via `mu2ejobfcl` and run `mu2e -c`.
 
 This skill is for **direct, one-off invocations** — smoke tests, single
 recoveries, ad-hoc JIT-fcl submissions — where the full
-POMS-map → `submit_map` workflow is overkill. For production-style runs
+`submit_map` workflow is overkill. For production-style runs
 of many cnfs at once, use `submit_map` (or `/mu2epro-run submit_map …`).
 
 ## ⚠️ Important caveat: no SAM registration
@@ -179,7 +179,7 @@ You are given `$ARGUMENTS`. Follow these steps:
   list referencing basenames present in that dir.
 - This skill submits as the **current user**. For production runs as
   `mu2epro`, do not use this skill — use `/mu2epro-run` + the
-  POMS-map / `submit_map` chain.
+  `submit_map` chain.
 - If the cnf was built with the prodtools chain, the
   `services.DbService.{purpose,version}` overrides are already in
   jobpars.json (per memory `reference_reco_dbservice_overrides.md`).

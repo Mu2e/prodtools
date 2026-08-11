@@ -84,7 +84,7 @@ json2jobdef --json data/Run1B/primary_muon.json --index 0
 # Production push: registers the cnf in SAM and prints the map summary
 json2jobdef --json data/mdc2025/evntuple.json --desc EventNtupleFromMCS \
     --dsconf MDC2025-002 --prod \
-    --jobdefs /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-032.json
+    --jobdefs /tmp/map_evntuple_mdc2025.json
 ```
 
 Flags: `--json` (required), `--desc`, `--dsconf`, `--index`, `--pushout`,

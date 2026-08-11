@@ -28,14 +28,6 @@ from typing import Optional
 
 from utils.job_common import Mu2eName
 
-# Documents the external map convention; intentionally unreferenced.
-# The production map files live at this path and match this basename
-# pattern by convention (mu2epro area), but nothing in-repo reads these
-# constants — their former consumers (DB builder, staleness check,
-# dashboards) were removed with the POMS backend.
-DEFAULT_POMS_DIR = "/exp/mu2e/app/users/mu2epro/production_manager/poms_map"
-POMS_MAP_PATTERN = "MDC202*"
-
 
 def tarball_of(entry: dict) -> str:
     """Return the cnf tarball name. Fail loud if missing or not a cnf tarball."""

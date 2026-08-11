@@ -181,6 +181,11 @@ reading the code:
   runner modes were deleted with the POMS backend (2026-08, tag
   `pre-poms-removal`); g4bl and HPC submission go through the upstream
   `mu2ejobsub`/`mu2eg4bl` CLIs, which never pass through `submit_map`.
+- The `json2jobdef --prod --jobdefs` example must use a throwaway `/tmp`
+  map path. Never show
+  `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-NNN.json`
+  — POMS is retired, and that path teaches a map-numbering convention
+  that no longer has a consumer.
 - Optional per-entry resource keys `"memory"` / `"disk"` /
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
   `48h`) live in the POMS-map entry itself, or in the jobdef JSON config
