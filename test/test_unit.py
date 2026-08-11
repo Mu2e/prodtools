@@ -4074,7 +4074,7 @@ class TestParseIndices(unittest.TestCase):
 
 
 class TestIndicesOpsEntryContract(unittest.TestCase):
-    """The worker-side half of --indices: submit_entry_direct ships
+    """The worker-side half of --indices: submit_entry ships
     `{**entry, firstjob: 0, njobs: max+1}`, which must make resolve_map_index
     an identity (local == the absolute cnf index) for every submitted index."""
 
@@ -5265,25 +5265,21 @@ class TestEntryResources(unittest.TestCase):
         self.assertNotIn('prestage', entry)
 
 
-class TestSubmitEntryDirectResourceWiring(unittest.TestCase):
-    """submit_entry_direct must actually pass the EFFECTIVE resources
+class TestSubmitEntryResourceWiring(unittest.TestCase):
+    """submit_entry must actually pass the EFFECTIVE resources
     (entry key, no CLI flag) into build_jobsub_argv — the precedence
     logic itself is covered above (_effective_resources), this closes
-    the gap that nothing proved submit_entry_direct wires it through."""
+    the gap that nothing proved submit_entry wires it through."""
 
     def test_entry_memory_reaches_build_jobsub_argv(self):
-        import argparse
-        from utils.submit import submit_entry_direct
+        from utils.submit import submit_entry, SubmitOptions
 
         entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
                  'njobs': 5, 'inloc': 'tape',
                  'outputs': [{'location': 'tape'}], 'memory': '4000MB'}
-        opts = argparse.Namespace(
-            dry_run=True, indices=None, first=None, num=None,
-            prodtools_tar=None, role=None, wftop=None, wfproject=None,
-            disk=None, memory=None, expected_lifetime=None,
-            no_ledger=True, ledger_db='/tmp/unused-resource-wiring.db',
-            ledger_parent=None, map='/tmp/m.json', verbose=False)
+        options = SubmitOptions(
+            ledger_db='/tmp/unused-resource-wiring.db',
+            dry_run=True, origin='/tmp/m.json')
 
         captured = {}
 
@@ -5295,7 +5291,7 @@ class TestSubmitEntryDirectResourceWiring(unittest.TestCase):
                    side_effect=fake_build_jobsub_argv), \
              patch('utils.submit._bundle_prodtools',
                    return_value=Path('/tmp/fake-prodtools.tar')):
-            result = submit_entry_direct(entry, 0, opts)
+            result = submit_entry(entry, 0, options)
 
         self.assertEqual(result['status'], 'dry_run')
         # entry key, no CLI flag -> _effective_resources picks the entry
@@ -5470,10 +5466,9 @@ class TestSubmissionLog(unittest.TestCase):
         self.dbdir = tempfile.mkdtemp()
         self.db = os.path.join(self.dbdir, 'submissions.db')
 
-    def _opts(self, no_ledger=False):
-        import argparse
-        return argparse.Namespace(ledger_db=self.db, no_ledger=no_ledger,
-                                  map='/tmp/m.json')
+    def _opts(self):
+        from utils.submit import SubmitOptions
+        return SubmitOptions(ledger_db=self.db, origin='/tmp/m.json')
 
     def _result(self, status='submitted'):
         return {'tarball': 'cnf.mu2e.T.C.0.tar', 'cluster_id': '123',
@@ -5507,11 +5502,10 @@ class TestSubmissionLog(unittest.TestCase):
         self.assertEqual(self._read_log().count('=== end'), 2)
 
     def test_write_failure_never_raises(self):
-        from utils.submit import _log_submission
-        import argparse
-        opts = argparse.Namespace(
+        from utils.submit import _log_submission, SubmitOptions
+        opts = SubmitOptions(
             ledger_db='/nonexistent-dir-submitlog-test/s.db',
-            no_ledger=False, map='/tmp/m.json')
+            origin='/tmp/m.json')
         _log_submission(0, [0], self._result(), opts)  # must not raise
 
     def test_run_submit_carries_raw_output(self):
@@ -6182,9 +6176,9 @@ class TestSubmitLedgerHook(unittest.TestCase):
         self.assertEqual(r['jobsub_id'], '12345678.0@jobsub03.fnal.gov')
 
     def _opts(self, db, parent=None):
-        import argparse
-        return argparse.Namespace(ledger_db=db, ledger_parent=parent,
-                                  no_ledger=False, map='/tmp/m.json')
+        from utils.submit import SubmitOptions
+        return SubmitOptions(ledger_db=db, ledger_parent=parent,
+                             origin='/tmp/m.json')
 
     def test_reserve_then_attach_absolute_indices(self):
         import tempfile
@@ -6260,14 +6254,15 @@ class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
 
     def setUp(self):
         from utils import submit, submission_ledger as sl
+        from utils.submit import SubmitOptions
         self.submit = submit
         self.sl = sl
         self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
         self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
-        self.opts = SimpleNamespace(ledger_db=self.db, map='/tmp/map.json',
-                                    ledger_parent=None)
+        self.opts = SubmitOptions(ledger_db=self.db, origin='/tmp/map.json',
+                                  ledger_parent=None)
 
     def test_row_exists_and_is_reserved_during_submit(self):
         seen = {}
@@ -6297,7 +6292,7 @@ class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
         self.assertEqual(self.sl.all_rows(self.db)[0]['state'], 'failed')
 
     def test_unwritable_ledger_raises_before_any_submit(self):
-        self.opts.ledger_db = '/proc/nope/submissions.db'
+        self.opts = self.opts._replace(ledger_db='/proc/nope/submissions.db')
         with self.assertRaises(Exception):
             self.submit._reserve_in_ledger(self.entry, 0, [0, 1, 2], self.opts)
 
@@ -11520,7 +11515,7 @@ class TestBuildOpsJsonFiles(unittest.TestCase):
         self.assertNotIn('files', ops2)
 
 
-class TestSubmitEntryDirectFiles(unittest.TestCase):
+class TestSubmitEntryFiles(unittest.TestCase):
     """Files mode: jobset = positions, ledger row stores filenames,
     scopes derive from the mapped outputs of the batch."""
 
@@ -11540,14 +11535,11 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
                               f'MDC2025au_best_v1_5.{override_seq}.art'}
 
     def _opts(self, **over):
-        from argparse import Namespace
-        base = dict(dry_run=False, files=list(self.FILES), indices=None,
-                    first=None, num=None, memory=None, disk=None,
-                    expected_lifetime=None, role=None, wftop=None,
-                    wfproject=None, prodtools_tar=None, no_ledger=False,
-                    ledger_db='/x.db', ledger_parent=None, map='/m.json')
+        from utils.submit import SubmitOptions
+        base = dict(ledger_db='/x.db', dry_run=False,
+                    files=list(self.FILES), origin='/m.json')
         base.update(over)
-        return Namespace(**base)
+        return SubmitOptions(**base)
 
     def test_files_submission_records_filenames_in_ledger(self):
         from utils import submit
@@ -11573,8 +11565,8 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
              patch.object(submit.submission_ledger, 'reserve_submission',
                           fake_reserve), \
              patch.object(submit.submission_ledger, 'attach_cluster'):
-            result = submit.submit_entry_direct(dict(self.ENTRY), 0,
-                                                self._opts())
+            result = submit.submit_entry(dict(self.ENTRY), 0,
+                                         self._opts())
         self.assertEqual(result['status'], 'submitted')
         self.assertEqual(reserved['indices'], self.FILES)
         # the jobsub argv references an ops JSON (shipped via dropbox)
@@ -11588,8 +11580,8 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
                           return_value=Path('/tmp/t.tar')), \
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
              patch.object(submit, '_run_submit') as rs:
-            result = submit.submit_entry_direct(dict(self.ENTRY), 0,
-                                                self._opts(dry_run=True))
+            result = submit.submit_entry(dict(self.ENTRY), 0,
+                                         self._opts(dry_run=True))
         self.assertEqual(result['status'], 'dry_run')
         self.assertEqual(result['njobs'], 2)
         rs.assert_not_called()
@@ -11600,7 +11592,7 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
         Mu2eJobPars/expected_outputs_for). The nonexistent-stand-in
         shortcut is for index mode only. ENTRY['tarball'] does not
         exist relative to cwd, so the old buggy guard (gated on
-        `opts.dry_run` alone) would have taken the stand-in branch
+        `options.dry_run` alone) would have taken the stand-in branch
         and never called `_ensure_local_tarball` at all."""
         from utils import submit
         self.assertFalse(Path(self.ENTRY['tarball']).resolve().is_file())
@@ -11608,8 +11600,8 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
                           return_value=Path('/tmp/t.tar')) as elt, \
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
              patch.object(submit, '_run_submit') as rs:
-            submit.submit_entry_direct(dict(self.ENTRY), 0,
-                                       self._opts(dry_run=True))
+            submit.submit_entry(dict(self.ENTRY), 0,
+                                self._opts(dry_run=True))
         elt.assert_called_once_with(self.ENTRY['tarball'])
         rs.assert_not_called()
 
@@ -11638,7 +11630,7 @@ class TestSubmitEntryDirectFiles(unittest.TestCase):
              patch.object(submit.submission_ledger, 'reserve_submission',
                           lambda *a, **k: 99), \
              patch.object(submit.submission_ledger, 'attach_cluster'):
-            submit.submit_entry_direct(entry, 0, self._opts())
+            submit.submit_entry(entry, 0, self._opts())
         cmd = rs.call_args[0][0]
         scopes = [cmd[i + 1] for i, c in enumerate(cmd)
                  if c == '--need-storage-modify']
@@ -13014,6 +13006,57 @@ class TestEnqueueDoorClosed(unittest.TestCase):
     def test_mcp_enqueue_campaign_tool_is_gone(self):
         import prodtools_mcp_write.tools as tools
         self.assertFalse(hasattr(tools, 'enqueue_campaign'))
+
+
+class TestSubmitOptions(unittest.TestCase):
+    """SubmitOptions replaces the argparse namespace the engine used to
+    reach into, so submissions.py can call submit_entry without building
+    a fake CLI object."""
+
+    def test_defaults_allow_a_minimal_construction(self):
+        from utils.submit import SubmitOptions
+        o = SubmitOptions(ledger_db='/tmp/x.db')
+        self.assertEqual(o.ledger_db, '/tmp/x.db')
+        self.assertFalse(o.dry_run)
+        self.assertIsNone(o.indices)
+        self.assertIsNone(o.files)
+        self.assertIsNone(o.origin)
+
+    def test_carries_first_and_num(self):
+        """TRAP 1: submit_slice feeds EVERY campaign slice through these.
+        They are not the retired operator flags."""
+        from utils.submit import SubmitOptions
+        o = SubmitOptions(ledger_db='/tmp/x.db', first=100, num=50)
+        self.assertEqual((o.first, o.num), (100, 50))
+
+    def test_is_immutable(self):
+        from utils.submit import SubmitOptions
+        o = SubmitOptions(ledger_db='/tmp/x.db')
+        with self.assertRaises(AttributeError):
+            o.dry_run = True
+
+
+class TestSubmitEntryRenamed(unittest.TestCase):
+    """The `direct` suffix named a backend distinction retired
+    2026-07-19; utils/submit.py:3 already says 'single backend'."""
+
+    def test_submit_entry_exists(self):
+        import utils.submit as submit
+        self.assertTrue(callable(submit.submit_entry))
+
+    def test_old_name_is_gone(self):
+        import utils.submit as submit
+        self.assertFalse(hasattr(submit, 'submit_entry_direct'))
+
+    def test_live_direct_input_sense_is_untouched(self):
+        """TRAP 3: `direct input` is a DIFFERENT, living concept — one
+        named input file per job. A blanket rename would break draining."""
+        import utils.runmu2e as runmu2e
+        for name in ('_is_direct_mode', '_load_direct_ops',
+                     '_resolve_direct_index', '_synthesize_direct_fname',
+                     '_direct_dispatch', '_direct_main'):
+            self.assertTrue(hasattr(runmu2e, name),
+                            f"runmu2e.{name} was renamed — TRAP 3 violated")
 
 
 # ---------------------------------------------------------------------------

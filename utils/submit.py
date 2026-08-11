@@ -27,6 +27,7 @@ import sys
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -43,6 +44,41 @@ from utils.check_inputs import check_inputs, format_report, Problem
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RUNJOB_SH = REPO_ROOT / 'bin' / 'runjob.sh'
 DEFAULT_PRODTOOLS_TAR = Path('/tmp') / f'prodtools-{getpass.getuser()}.tar'
+
+
+class SubmitOptions(NamedTuple):
+    """Everything submit_entry needs beyond the entry itself.
+
+    Replaces the argparse namespace the engine used to reach into, so
+    utils/submissions.py can call it directly instead of serialising an
+    entry to a temp file and spawning bin/submit_map.
+
+    One object rather than loose keyword arguments because the value is
+    threaded on to _reserve_in_ledger, _attach_cluster, _fail_reservation
+    and _log_submission — re-expanding it at every hop would be worse
+    than the namespace it replaces.
+
+    `first`/`num` are NOT the retired operator flags: submit_slice feeds
+    every campaign slice through them (see _compute_jobset).
+
+    `origin` is free-text provenance recorded on the ledger row. Nothing
+    dispatches from it; only the MCP status tools echo it back.
+    """
+    ledger_db: str
+    dry_run: bool = False
+    first: Optional[int] = None
+    num: Optional[int] = None
+    indices: Optional[list] = None
+    files: Optional[list] = None
+    origin: Optional[str] = None
+    ledger_parent: Optional[int] = None
+    prodtools_tar: Optional[str] = None
+    role: Optional[str] = None
+    wftop: Optional[str] = None
+    wfproject: Optional[str] = None
+    memory: Optional[str] = None
+    disk: Optional[str] = None
+    expected_lifetime: Optional[str] = None
 
 
 def _ensure_local_tarball(tarball_name):
@@ -143,7 +179,7 @@ def _ledger_payload(firstjob, jobset, files=None):
             else [firstjob + i for i in jobset])
 
 
-def _reserve_in_ledger(entry, firstjob, jobset, opts, files=None):
+def _reserve_in_ledger(entry, firstjob, jobset, options, files=None):
     """Claim this window BEFORE jobsub_submit. Returns the row id.
 
     RAISES on failure, deliberately: an unrecordable window must not be
@@ -152,7 +188,7 @@ def _reserve_in_ledger(entry, firstjob, jobset, opts, files=None):
     self-submission fail fast rather than launching jobs and only then
     discovering it cannot write the ledger.
 
-    opts.ledger_db is expected already resolved (see
+    options.ledger_db is expected already resolved (see
     _resolve_ledger_db, called once in main()): a DERIVED path arrives
     with its directory already created, an explicit --ledger-db arrives
     exactly as given. Creating it again here would defeat the point of
@@ -160,15 +196,15 @@ def _reserve_in_ledger(entry, firstjob, jobset, opts, files=None):
     must fail here, not get silently mkdir'd.
     """
     return submission_ledger.reserve_submission(
-        opts.ledger_db,
+        options.ledger_db,
         tarball=entry['tarball'],
         entry=entry,
         indices=_ledger_payload(firstjob, jobset, files),
-        map_path=opts.map,
-        parent_id=opts.ledger_parent)
+        map_path=options.origin,
+        parent_id=options.ledger_parent)
 
 
-def _attach_cluster(row_id, result, opts):
+def _attach_cluster(row_id, result, options):
     """Fill in the cluster on a reserved row. Never raises: the
     submission already happened, so a ledger failure is reported with
     everything needed to fix the row by hand."""
@@ -176,32 +212,32 @@ def _attach_cluster(row_id, result, opts):
         return
     try:
         submission_ledger.attach_cluster(
-            opts.ledger_db, row_id,
+            options.ledger_db, row_id,
             jobsub_id=result.get('jobsub_id'),
             cluster_id=result['cluster_id'])
         print(f"Ledger: row {row_id} attached to cluster "
-              f"{result['cluster_id']} in {opts.ledger_db}")
+              f"{result['cluster_id']} in {options.ledger_db}")
     except Exception as e:
         print(f"WARNING: ledger attach failed ({e}) — the submission DID "
               f"go through (cluster {result['cluster_id']}). Row {row_id} "
               f"is still 'submitting'; set it active by hand: "
-              f"jobsub_id={result.get('jobsub_id')} db={opts.ledger_db}")
+              f"jobsub_id={result.get('jobsub_id')} db={options.ledger_db}")
 
 
-def _fail_reservation(row_id, result, opts):
+def _fail_reservation(row_id, result, options):
     """Close a reserved row after a definitively failed submit. Never
     raises."""
     if row_id is None:
         return
     try:
         submission_ledger.fail_reservation(
-            opts.ledger_db, row_id,
+            options.ledger_db, row_id,
             f"submit failed (status={result.get('status')}); window NOT "
             f"proven free — check jobsub_q before reusing these indices")
-        print(f"Ledger: row {row_id} marked failed in {opts.ledger_db}")
+        print(f"Ledger: row {row_id} marked failed in {options.ledger_db}")
     except Exception as e:
         print(f"WARNING: could not mark row {row_id} failed ({e}); it "
-              f"remains 'submitting' in {opts.ledger_db}")
+              f"remains 'submitting' in {options.ledger_db}")
 
 
 def _submission_log_path(ledger_db):
@@ -212,12 +248,12 @@ def _submission_log_path(ledger_db):
                         f'submit-{stamp}.log')
 
 
-def _log_submission(firstjob, jobset, result, opts, files=None):
-    """Append a human-readable record of a direct-backend submission
-    attempt — success AND failure (failures are exactly what gets
-    debugged). Covers every origin (manual, cron slice, recovery
-    resubmit): they all pass through here. Never raises: the attempt
-    already happened; a log problem must not crash the submit."""
+def _log_submission(firstjob, jobset, result, options, files=None):
+    """Append a human-readable record of a submission attempt — success
+    AND failure (failures are exactly what gets debugged). Covers every
+    origin (manual, cron slice, recovery resubmit): they all pass
+    through here. Never raises: the attempt already happened; a log
+    problem must not crash the submit."""
     try:
         if files is not None:
             idx_line = (f"files: {len(files)} "
@@ -230,7 +266,7 @@ def _log_submission(firstjob, jobset, result, opts, files=None):
         block = '\n'.join([
             f"=== {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
             f"user={getpass.getuser()} status={result['status']}",
-            f"map={opts.map} tarball={result['tarball']}",
+            f"origin={options.origin} tarball={result['tarball']}",
             idx_line,
             f"cluster={result['cluster_id']} "
             f"jobsub_id={result.get('jobsub_id')}",
@@ -239,21 +275,21 @@ def _log_submission(firstjob, jobset, result, opts, files=None):
             "=== end",
             "",
         ])
-        with open(_submission_log_path(opts.ledger_db), 'a') as fh:
+        with open(_submission_log_path(options.ledger_db), 'a') as fh:
             fh.write(block + '\n')
     except Exception as e:
         print(f"WARNING: submit-log write failed ({e}) — submission "
               f"outcome unaffected (status={result['status']})")
 
 
-def _effective_resources(entry, opts):
+def _effective_resources(entry, options):
     """Resource precedence: CLI flag > entry key > None (None lets
     jobsub_argv apply its built-in defaults)."""
     res = resources_of(entry)
     return {
-        'memory': opts.memory or res.get('memory'),
-        'disk': opts.disk or res.get('disk'),
-        'expected_lifetime': (opts.expected_lifetime
+        'memory': options.memory or res.get('memory'),
+        'disk': options.disk or res.get('disk'),
+        'expected_lifetime': (options.expected_lifetime
                               or res.get('expected_lifetime')),
     }
 
@@ -432,7 +468,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
 def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
     """Tar `utils/` + `bin/` from this repo into a worker-shippable bundle.
 
-    Used by the direct backend: the worker bootstraps `runjob.sh`, which
+    Used by submit_entry: the worker bootstraps `runjob.sh`, which
     extracts this tarball under `$_CONDOR_SCRATCH_DIR/prodtools/` and execs
     `utils/runmu2e.py` from there. Avoids depending on a cvmfs-published
     prodtools version that might not yet contain our changes.
@@ -528,7 +564,7 @@ def _parse_files(path):
     return sorted(names)
 
 
-def _compute_jobset(opts, njobs_total, firstjob=0, entry_njobs=None):
+def _compute_jobset(options, njobs_total, firstjob=0, entry_njobs=None):
     """Resolve --first/--num/--indices into the list of job indices to submit.
 
     Indices are entry-relative (PROCESS space, starting at 0) — a windowed
@@ -545,29 +581,29 @@ def _compute_jobset(opts, njobs_total, firstjob=0, entry_njobs=None):
       (the caller ships firstjob=0 so worker-side `local == global`); a
       contiguous window cannot express a scattered set.
     """
-    if opts.indices is not None:
+    if options.indices is not None:
         if firstjob:
             raise ValueError(
                 "--indices takes absolute cnf indices and cannot be combined "
                 f"with a windowed entry (firstjob={firstjob}); drop firstjob "
                 "from the recovery map entry")
-        if opts.first is not None or opts.num is not None:
+        if options.first is not None or options.num is not None:
             raise ValueError("--indices cannot be combined with --first/--num")
-        if opts.indices[0] < 0:
-            raise ValueError(f"--indices: negative index {opts.indices[0]}")
-        if njobs_total and opts.indices[-1] >= njobs_total:
+        if options.indices[0] < 0:
+            raise ValueError(f"--indices: negative index {options.indices[0]}")
+        if njobs_total and options.indices[-1] >= njobs_total:
             raise ValueError(
-                f"--indices: {opts.indices[-1]} >= cnf capacity {njobs_total}")
-        return list(opts.indices)
+                f"--indices: {options.indices[-1]} >= cnf capacity {njobs_total}")
+        return list(options.indices)
     if firstjob:
         validate_window(firstjob, entry_njobs, njobs_total)
         size = entry_njobs
     else:
         size = njobs_total
-    if opts.first is None and opts.num is None:
+    if options.first is None and options.num is None:
         return list(range(size))
-    first = opts.first or 0
-    num = opts.num if opts.num is not None else 1
+    first = options.first or 0
+    num = options.num if options.num is not None else 1
     end = min(first + num, size)
     if first < 0 or first >= size or end <= first:
         raise ValueError(
@@ -591,22 +627,21 @@ def _preflight_inputs(entry, tarball_path):
     return check_inputs(str(tarball_path), inloc_of(entry))
 
 
-def submit_entry_direct(entry, idx, opts):
-    """Direct-backend submission: build jobsub_submit argv from scratch
-    via utils.jobsub_argv, ship our prodtools as a dropbox tarball, run
-    `runjob.sh` on the worker. No `mu2ejobsub` involved.
+def submit_entry(entry, idx, options):
+    """Submit one entry: build jobsub_submit argv via utils.jobsub_argv,
+    ship prodtools as a dropbox tarball, run `runjob.sh` on the worker.
 
     Returns the same dict shape (tarball/cluster_id/njobs/status).
     """
     tarball_name = tarball_of(entry)
     desc = _jobsub_argv.description_from_tarball(tarball_name)
-    files = getattr(opts, 'files', None)
+    files = options.files
 
     # Tarball must be locally accessible to ship via -f dropbox://.
     # Files mode always needs the REAL cnf (even on a dry run): the
     # output-name mapping (expected_outputs_for) comes from parsing it,
     # so the nonexistent-stand-in shortcut below must not apply.
-    if opts.dry_run and files is None and not Path(tarball_name).resolve().is_file():
+    if options.dry_run and files is None and not Path(tarball_name).resolve().is_file():
         tarball_path = Path('/tmp') / tarball_name
     else:
         tarball_path = _ensure_local_tarball(tarball_name)
@@ -639,24 +674,24 @@ def submit_entry_direct(entry, idx, opts):
             output_filenames.extend(expected_outputs_for(f, jp))
         firstjob = 0
         jobset = list(range(len(files)))
-    elif opts.dry_run and not tarball_path.is_file():
+    elif options.dry_run and not tarball_path.is_file():
         # Capacity stand-in when the cnf isn't inspectable: the window end
         # (== njobs for plain entries), so validate_window never spuriously
         # fails a dry run. --indices addresses cnf indices far past the
         # recovery entry's own njobs, so widen the stand-in to cover them —
         # otherwise the real capacity check below rejects a valid dry run.
         njobs_total = firstjob_of(entry) + njobs_of(entry, default=1)
-        if opts.indices is not None:
-            njobs_total = max(njobs_total, opts.indices[-1] + 1)
+        if options.indices is not None:
+            njobs_total = max(njobs_total, options.indices[-1] + 1)
         input_datasets = []
         output_filenames = []
         firstjob = firstjob_of(entry)
-        jobset = _compute_jobset(opts, njobs_total, firstjob=firstjob,
+        jobset = _compute_jobset(options, njobs_total, firstjob=firstjob,
                                  entry_njobs=njobs_of(entry))
     else:
         njobs_total, input_datasets, output_filenames = _read_cnf_facts(tarball_path)
         firstjob = firstjob_of(entry)
-        jobset = _compute_jobset(opts, njobs_total, firstjob=firstjob,
+        jobset = _compute_jobset(options, njobs_total, firstjob=firstjob,
                                  entry_njobs=njobs_of(entry))
 
     print(f"\n{'='*60}")
@@ -671,7 +706,7 @@ def submit_entry_direct(entry, idx, opts):
         print(f"  inloc:   {inloc_of(entry)}")
         if firstjob and jobset:
             print(f"  window:  cnf indices {firstjob + jobset[0]}..{firstjob + jobset[-1]} (firstjob={firstjob})")
-        if opts.indices is not None and jobset:
+        if options.indices is not None and jobset:
             print(f"  indices: {len(jobset)} absolute cnf indices (recovery), "
                   f"{jobset[0]}..{jobset[-1]}")
         print(f"  jobset:  {jobset if len(jobset) <= 10 else f'[{jobset[0]}..{jobset[-1]}] ({len(jobset)} indices)'}")
@@ -684,7 +719,7 @@ def submit_entry_direct(entry, idx, opts):
     # rewritten — the on-disk map keeps its own njobs, so a recovery map
     # never has to store the "bare submit re-runs everything" njobs.
     ops_entry = entry
-    if opts.indices is not None:
+    if options.indices is not None:
         ops_entry = {**entry, 'firstjob': 0, 'njobs': jobset[-1] + 1}
 
     # Synthesize ops JSON (jobs[] + inspec + jobdesc) and write to /tmp.
@@ -701,10 +736,10 @@ def submit_entry_direct(entry, idx, opts):
     print(f"Wrote ops JSON: {ops_path}")
 
     # Bundle prodtools so the worker has our patched runmu2e.py.
-    prodtools_tar = _bundle_prodtools(opts.prodtools_tar or DEFAULT_PRODTOOLS_TAR)
+    prodtools_tar = _bundle_prodtools(options.prodtools_tar or DEFAULT_PRODTOOLS_TAR)
 
     # Compute effective resources (CLI flag > entry key > None/builtin).
-    resources = _effective_resources(entry, opts)
+    resources = _effective_resources(entry, options)
 
     # Build the jobsub_submit argv. submitter is the effective UNIX user;
     # role auto-defaults to Production for mu2epro per jobsub_argv.role_for_user.
@@ -737,9 +772,9 @@ def submit_entry_direct(entry, idx, opts):
         worker_script_path=str(DEFAULT_RUNJOB_SH),
         submitter=submitter,
         extra_storage_modify=extra_scopes,
-        role=opts.role,
-        wftop=opts.wftop,
-        wfproject=opts.wfproject,
+        role=options.role,
+        wftop=options.wftop,
+        wfproject=options.wfproject,
         disk=resources['disk'],
         memory=resources['memory'],
         expected_lifetime=resources['expected_lifetime'],
@@ -748,7 +783,7 @@ def submit_entry_direct(entry, idx, opts):
     cmd = ['jobsub_submit'] + argv
     print(f"\nCommand: {' '.join(cmd)}")
 
-    if opts.dry_run:
+    if options.dry_run:
         print("[DRY RUN] Not submitting.")
         ops_path.unlink(missing_ok=True)
         return {
@@ -766,13 +801,13 @@ def submit_entry_direct(entry, idx, opts):
             f"submit. Fix the inputs (or stage them) and retry.")
 
     row_id = _reserve_in_ledger(_snapshot_entry(entry, resources), firstjob,
-                                jobset, opts, files=files)
+                                jobset, options, files=files)
     result = _run_submit(cmd, tarball_name, len(jobset))
-    _log_submission(firstjob, jobset, result, opts, files=files)
+    _log_submission(firstjob, jobset, result, options, files=files)
     if result['status'] == 'submitted':
-        _attach_cluster(row_id, result, opts)
+        _attach_cluster(row_id, result, options)
     else:
-        _fail_reservation(row_id, result, opts)
+        _fail_reservation(row_id, result, options)
     return result
 
 
@@ -793,16 +828,16 @@ def _check_token():
         return True
 
 
-def submit_map(map_path, opts):
+def submit_map(map_path, options):
     """Submit all (or selected) entries from a submission-map JSON.
 
     Args:
         map_path: path to the submission-map JSON
-        opts: argparse namespace
+        options: a SubmitOptions
 
     Returns:
         list of result dicts (tarball/cluster_id/njobs/status) from
-        submit_entry_direct
+        submit_entry
     """
     with open(map_path) as f:
         entries = json.load(f)
@@ -825,15 +860,15 @@ def submit_map(map_path, opts):
     # A draining entry has no index space — it cannot be submitted via the
     # ordinary indexed path. --files lets a caller hand it a concrete batch;
     # without it, refuse loudly rather than silently drop into
-    # submit_entry_direct with a missing njobs.
+    # submit_entry with a missing njobs.
     for idx, entry in entries_to_submit:
-        if is_draining(entry) and getattr(opts, 'files', None) is None:
+        if is_draining(entry) and options.files is None:
             print(f"Error: entry {idx} is a draining entry "
                   f"(input_pattern) — use json2jobdef --enqueue "
                   f"(tick-fed) or --files <list>")
             sys.exit(1)
 
-    if getattr(opts, 'files', None) is not None:
+    if options.files is not None:
         if not is_draining(entries_to_submit[0][1]):
             print("Error: --files requires a draining (input_pattern) "
                   "entry")
@@ -844,7 +879,7 @@ def submit_map(map_path, opts):
     print(f"Total jobs: {sum(njobs_of(e, default=0) for _, e in entries_to_submit)}")
 
     # Pre-flight token check
-    if not opts.dry_run:
+    if not options.dry_run:
         _check_token()
 
     submitter = getpass.getuser()
@@ -852,7 +887,7 @@ def submit_map(map_path, opts):
 
     results = []
     for idx, entry in entries_to_submit:
-        result = submit_entry_direct(entry, idx, opts)
+        result = submit_entry(entry, idx, options)
         results.append(result)
 
     # Summary
@@ -976,7 +1011,24 @@ def main():
         print(f"Error: map file not found: {args.map}")
         sys.exit(1)
 
-    results = submit_map(args.map, args)
+    options = SubmitOptions(
+        ledger_db=args.ledger_db,
+        dry_run=args.dry_run,
+        first=args.first,
+        num=args.num,
+        indices=args.indices,
+        files=args.files,
+        origin=args.map,
+        ledger_parent=args.ledger_parent,
+        prodtools_tar=args.prodtools_tar,
+        role=args.role,
+        wftop=args.wftop,
+        wfproject=args.wfproject,
+        memory=args.memory,
+        disk=args.disk,
+        expected_lifetime=args.expected_lifetime,
+    )
+    results = submit_map(args.map, options)
 
     failed = [r for r in results if r['status'] == 'failed']
     if failed:
