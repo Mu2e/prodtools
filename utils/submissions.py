@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import submission_ledger
+from utils import submit
 from utils.check_inputs import _default_locality, _LOC_TO_MDH
 from utils.file_resolver import infer_dataset_location, sam_physical_path_or_none
 from utils.job_common import Mu2eName, expected_outputs_for
@@ -715,23 +716,45 @@ def total_queued(user=None, runner=subprocess.run):
     return sum(1 for s in states if s in ('I', 'R'))
 
 
-def submit_slice(camp, n, db_path, runner=subprocess.run):
-    """Submit the campaign's next slice through the submit_map CLI —
-    the same battle-tested path as manual submissions (token check,
-    argv build, ledger row, submit log). The snapshot entry ships
-    VERBATIM: firstjob is preserved because cursor and --first/--num
+def _guarded_submit(what, fn):
+    """Run one in-process submission; return True on success, False on
+    any failure, never propagating.
+
+    This replaces the process boundary bin/submit_map used to provide.
+    A subprocess that died gave the tick a nonzero return code and the
+    loop moved on to the next campaign; an in-process call that raises
+    would end the tick for every campaign.
+
+    SystemExit is caught EXPLICITLY. submit_entry raises it on an input
+    pre-flight failure, and SystemExit derives from BaseException, so a
+    bare `except Exception` would let it escape — the exact regression
+    this helper exists to prevent. KeyboardInterrupt is deliberately NOT
+    caught: Ctrl-C must still stop the tick.
+    """
+    try:
+        fn()
+        return True
+    except (Exception, SystemExit) as e:
+        print(f"  {what}: submit FAILED ({type(e).__name__}: {e})")
+        return False
+
+
+def submit_slice(camp, n, db_path, submit_fn=None):
+    """Submit the campaign's next slice in-process. The snapshot entry
+    ships VERBATIM: firstjob is preserved because cursor and first/num
     are entry-relative, exactly like a manual windowed submission.
     Returns True on submit success."""
-    with _scratch_map_dir('campaign-') as tmpdir:
-        map_path = tmpdir / 'campaign-map.json'
-        map_path.write_text(json.dumps([camp['entry']], indent=2) + '\n')
-        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
-               '--first', str(camp['cursor']),
-               '--num', str(n), '--ledger-db', str(db_path)]
-        print(f"  campaign {camp['id']}: slice first={camp['cursor']} "
-              f"num={n}: {' '.join(cmd)}")
-        res = runner(cmd)
-    return res.returncode == 0
+    submit_fn = submit_fn or submit.submit_entry
+    options = submit.SubmitOptions(
+        ledger_db=str(db_path),
+        first=camp['cursor'],
+        num=n,
+        origin=f"campaign {camp['id']}",
+    )
+    print(f"  campaign {camp['id']}: slice first={camp['cursor']} num={n}")
+    return _guarded_submit(
+        f"campaign {camp['id']}",
+        lambda: submit_fn(camp['entry'], 0, options))
 
 
 def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
@@ -934,21 +957,19 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
     return summary
 
 
-def submit_drain_batch(camp, files, db_path, runner=subprocess.run):
-    """Submit one draining batch through the submit_map CLI — the same
-    battle-tested path as index slices (token check, argv build, ledger
-    row, submit log). The snapshot entry ships VERBATIM."""
-    with _scratch_map_dir('drain-') as tmpdir:
-        map_path = tmpdir / 'drain-map.json'
-        map_path.write_text(json.dumps([camp['entry']], indent=2) + '\n')
-        files_path = tmpdir / 'files.txt'
-        files_path.write_text('\n'.join(files) + '\n')
-        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
-               '--files', str(files_path), '--ledger-db', str(db_path)]
-        print(f"  campaign {camp['id']}: batch of {len(files)}: "
-              f"{' '.join(cmd)}")
-        res = runner(cmd)
-    return res.returncode == 0
+def submit_drain_batch(camp, files, db_path, submit_fn=None):
+    """Submit one draining batch in-process. The snapshot entry ships
+    VERBATIM. Returns True on submit success."""
+    submit_fn = submit_fn or submit.submit_entry
+    options = submit.SubmitOptions(
+        ledger_db=str(db_path),
+        files=list(files),
+        origin=f"campaign {camp['id']} drain",
+    )
+    print(f"  campaign {camp['id']}: batch of {len(files)}")
+    return _guarded_submit(
+        f"campaign {camp['id']}",
+        lambda: submit_fn(camp['entry'], 0, options))
 
 
 def drain_tick(db_path, cap, dry_run=False, count_fn=total_queued,

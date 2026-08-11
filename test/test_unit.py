@@ -5860,46 +5860,54 @@ class TestTopUp(unittest.TestCase):
 
 
 class TestSubmitSlice(unittest.TestCase):
-    """submit_slice shells out through the submit_map CLI."""
+    """submit_slice calls submit_entry in-process via SubmitOptions."""
 
-    def test_argv_and_map_content(self):
-        import tempfile
+    def test_options_and_entry_content(self):
         from utils import submissions as recover
+        from utils import submit
         entry = {'tarball': 'cnf.mu2e.W.C.0.tar', 'njobs': 50,
                  'firstjob': 100, 'inloc': 'tape', 'outputs': [],
                  'memory': '4000MB'}
         camp = {'id': 7, 'cursor': 10, 'slice_size': 5, 'entry': entry,
                 'tarball': entry['tarball']}
         captured = {}
-        def runner(cmd, **kw):
-            captured['cmd'] = cmd
-            # Read the map file content during the runner call (before cleanup)
-            map_path = cmd[cmd.index('--map') + 1]
-            with open(map_path) as f:
-                captured['map_content'] = json.load(f)
-            return MagicMock(returncode=0)
-        ok = recover.submit_slice(camp, 5, '/tmp/led.db', runner=runner)
+        def submit_fn(e, idx, options):
+            captured['entry'] = e
+            captured['idx'] = idx
+            captured['options'] = options
+        ok = recover.submit_slice(camp, 5, '/tmp/led.db',
+                                  submit_fn=submit_fn)
         self.assertTrue(ok)
-        cmd = captured['cmd']
-        self.assertEqual(cmd[cmd.index('--first') + 1], '10')
-        self.assertEqual(cmd[cmd.index('--num') + 1], '5')
-        self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
-        self.assertEqual(captured['map_content'], [entry])  # firstjob PRESERVED
+        options = captured['options']
+        self.assertIsInstance(options, submit.SubmitOptions)
+        self.assertEqual(options.first, 10)
+        self.assertEqual(options.num, 5)
+        self.assertEqual(options.ledger_db, '/tmp/led.db')
+        self.assertEqual(options.origin, 'campaign 7')
+        self.assertEqual(captured['idx'], 0)
+        # entry ships VERBATIM — firstjob preserved, exactly like a
+        # manual windowed submission.
+        self.assertEqual(captured['entry'], entry)
 
-    def test_nonzero_exit_is_failure(self):
+    def test_raising_submit_fn_is_failure(self):
         from utils import submissions as recover
         camp = {'id': 1, 'cursor': 0, 'slice_size': 2, 'tarball': 't',
                 'entry': {'tarball': 't', 'njobs': 2}}
-        ok = recover.submit_slice(
-            camp, 2, '/tmp/led.db',
-            runner=lambda cmd, **kw: MagicMock(returncode=1))
+        def boom(entry, idx, options):
+            raise RuntimeError('jobsub exploded')
+        ok = recover.submit_slice(camp, 2, '/tmp/led.db', submit_fn=boom)
         self.assertFalse(ok)
 
 
 class TestScratchDirCleanup(unittest.TestCase):
     """Hourly cron must not accumulate /tmp scratch dirs: the child
     submit_map's map/indices files are removed after it returns,
-    success or failure."""
+    success or failure.
+
+    submit_slice no longer spawns bin/submit_map (it calls submit_entry
+    in-process — see TestSubmitSlice), so it no longer creates a scratch
+    dir at all; there is nothing left to pin here for it. resubmit still
+    goes through the subprocess path — Task 4 converts it."""
 
     def setUp(self):
         self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
@@ -5925,20 +5933,6 @@ class TestScratchDirCleanup(unittest.TestCase):
         with patch.object(submissions.tempfile, 'mkdtemp', spy_mkdtemp):
             fn(runner)
         return seen['dir']
-
-    def test_submit_slice_cleans_up_on_success(self):
-        from utils import submissions
-        d = self._run_and_capture_dir(
-            lambda r: submissions.submit_slice(self.camp, 5, self.db,
-                                               runner=r), 0)
-        self.assertFalse(os.path.exists(d))
-
-    def test_submit_slice_cleans_up_on_failure(self):
-        from utils import submissions
-        d = self._run_and_capture_dir(
-            lambda r: submissions.submit_slice(self.camp, 5, self.db,
-                                               runner=r), 1)
-        self.assertFalse(os.path.exists(d))
 
     def test_resubmit_cleans_up(self):
         from utils import submissions
@@ -13057,6 +13051,76 @@ class TestSubmitEntryRenamed(unittest.TestCase):
                      '_direct_dispatch', '_direct_main'):
             self.assertTrue(hasattr(runmu2e, name),
                             f"runmu2e.{name} was renamed — TRAP 3 violated")
+
+
+class TestSubmitContainment(unittest.TestCase):
+    """The process boundary bin/submit_map provided is what stopped one
+    bad campaign from killing the whole tick. Calling in-process removes
+    it; _guarded_submit puts it back."""
+
+    def test_exception_is_contained_and_reported_false(self):
+        from utils import submissions
+        def boom():
+            raise RuntimeError('jobsub exploded')
+        self.assertFalse(submissions._guarded_submit('campaign 7', boom))
+
+    def test_system_exit_is_contained(self):
+        """TRAP 2: submit_entry RAISES SystemExit on a pre-flight failure,
+        and SystemExit derives from BaseException — `except Exception`
+        lets it through and ends the tick."""
+        from utils import submissions
+        def preflight_fail():
+            raise SystemExit('input pre-flight FAILED')
+        self.assertFalse(
+            submissions._guarded_submit('campaign 7', preflight_fail))
+
+    def test_keyboard_interrupt_is_NOT_contained(self):
+        """Ctrl-C must still stop the tick — swallowing it would make the
+        process unkillable from the terminal."""
+        from utils import submissions
+        def interrupted():
+            raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            submissions._guarded_submit('campaign 7', interrupted)
+
+    def test_success_returns_true(self):
+        from utils import submissions
+        self.assertTrue(submissions._guarded_submit('campaign 7',
+                                                    lambda: None))
+
+
+class TestCallSitesContainFailures(unittest.TestCase):
+    """Containment must live INSIDE submit_slice/submit_drain_batch.
+
+    top_up already handles a False return by pausing the campaign and
+    continuing, so the only new failure mode is an exception escaping the
+    call site. Test that boundary directly — wrapping _guarded_submit by
+    hand in the test would prove nothing about the real code path.
+    """
+
+    def test_submit_slice_contains_a_raising_engine(self):
+        from utils import submissions
+
+        def preflight_fail(entry, idx, options):
+            raise SystemExit('input pre-flight FAILED')
+
+        camp = {'id': 1, 'cursor': 0,
+                'entry': {'tarball': 'a.tar', 'njobs': 10}}
+        self.assertFalse(
+            submissions.submit_slice(camp, 5, '/tmp/x.db',
+                                     submit_fn=preflight_fail))
+
+    def test_submit_drain_batch_contains_a_raising_engine(self):
+        from utils import submissions
+
+        def boom(entry, idx, options):
+            raise RuntimeError('jobsub exploded')
+
+        camp = {'id': 2,
+                'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
+        self.assertFalse(
+            submissions.submit_drain_batch(camp, ['dts.mu2e.a.v.art'],
+                                           '/tmp/x.db', submit_fn=boom))
 
 
 # ---------------------------------------------------------------------------
