@@ -12940,48 +12940,54 @@ class TestSubmissionsDbResolution(unittest.TestCase):
 
 
 class TestJson2JobdefEnqueueFlags(unittest.TestCase):
-    """argparse-level refusals for `json2jobdef --enqueue`. These never
-    reach cnf building, so they need no Mu2e environment — but they must
-    run from the repo root."""
+    """argparse-level refusals for `json2jobdef --enqueue`, exercised
+    IN-PROCESS via `json2jobdef.main()` with a patched `sys.argv`.
 
-    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    Not subprocesses: `utils/json2jobdef.py` unconditionally imports
+    `utils.prod_utils` -> `utils.samweb_wrapper` -> `samweb_client` at
+    module level. This suite stubs `samweb_client`/`ifdh` into
+    `sys.modules` before any `utils` import (see the header comment,
+    ~line 38) so it runs standalone on bare python3 with no Mu2e
+    environment sourced — but that stub lives only in THIS process's
+    memory. A `subprocess.run` child inherits none of it and dies with
+    `ModuleNotFoundError` before argparse ever runs, which would silently
+    turn these into "it failed for some reason" tests. Running in-process
+    lets the refusals fail for the reason under test."""
+
+    def _run_main(self, argv_tail):
+        with patch.object(sys, 'argv', ['json2jobdef.py'] + argv_tail):
+            with self.assertRaises(SystemExit) as cm:
+                self.json2jobdef.main()
+        return str(cm.exception)
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.json2jobdef = json2jobdef
 
     def test_enqueue_requires_prod(self):
         """A campaign whose cnf is not in SAM is broken from birth:
         enqueue_entry resolves the tarball from SAM."""
-        proc = subprocess.run(
-            [sys.executable, 'utils/json2jobdef.py',
-             '--json', 'data/Run1B/resampler_beam.json',
+        msg = self._run_main(
+            ['--json', 'data/Run1B/resampler_beam.json',
              '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
-             '--enqueue'],
-            capture_output=True, text=True, cwd=self._REPO_ROOT)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('--enqueue requires --prod',
-                      proc.stdout + proc.stderr)
+             '--enqueue'])
+        self.assertIn('--enqueue requires --prod', msg)
 
     def test_slice_size_requires_enqueue(self):
-        proc = subprocess.run(
-            [sys.executable, 'utils/json2jobdef.py',
-             '--json', 'data/Run1B/resampler_beam.json',
+        msg = self._run_main(
+            ['--json', 'data/Run1B/resampler_beam.json',
              '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
-             '--slice-size', '500'],
-            capture_output=True, text=True, cwd=self._REPO_ROOT)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('--slice-size requires --enqueue',
-                      proc.stdout + proc.stderr)
+             '--slice-size', '500'])
+        self.assertIn('--slice-size requires --enqueue', msg)
 
     def test_prod_requires_jobdefs_or_enqueue(self):
         """A bare --prod would silently write jobdefs_list.json into the
         current directory."""
-        proc = subprocess.run(
-            [sys.executable, 'utils/json2jobdef.py',
-             '--json', 'data/Run1B/resampler_beam.json',
+        msg = self._run_main(
+            ['--json', 'data/Run1B/resampler_beam.json',
              '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
-             '--prod'],
-            capture_output=True, text=True, cwd=self._REPO_ROOT)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('--prod requires --jobdefs or --enqueue',
-                      proc.stdout + proc.stderr)
+             '--prod'])
+        self.assertIn('--prod requires --jobdefs or --enqueue', msg)
 
     def test_provenance_string_format(self):
         from utils.json2jobdef import _provenance
