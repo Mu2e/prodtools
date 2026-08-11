@@ -575,6 +575,13 @@ def main():
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.json)')
+    p.add_argument('--enqueue', action='store_true',
+                   help='After pushing the cnf, register the entry as a '
+                        'sliced campaign in the ledger (no map file '
+                        'written). Requires --prod.')
+    p.add_argument('--slice-size', type=int, default=1000,
+                   help='Jobs per slice for --enqueue (default 1000; '
+                        'frozen into the campaign).')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
                         'Auto-increments tarball version.')
@@ -584,7 +591,17 @@ def main():
     p.add_argument('--ignore-empty', action='store_true',
                    help='Skip entries whose input datasets have no files instead of failing')
     args = p.parse_args()
-    
+
+    if args.enqueue and not args.prod:
+        sys.exit("json2jobdef: --enqueue requires --prod (a campaign "
+                 "needs the cnf in SAM)")
+    if args.slice_size != 1000 and not args.enqueue:
+        sys.exit("json2jobdef: --slice-size requires --enqueue")
+    if args.prod and not (args.jobdefs or args.enqueue):
+        sys.exit("json2jobdef: --prod requires --jobdefs or --enqueue "
+                 "(a bare --prod would write jobdefs_list.json into the "
+                 "current directory)")
+
     # If --prod is specified, enable pushout
     if args.prod:
         args.pushout = True
@@ -613,12 +630,14 @@ def main():
             jobdefs_list=args.jobdefs,
             extend=args.extend,
             ignore_empty=args.ignore_empty,
+            enqueue=args.enqueue,
+            slice_size=args.slice_size,
+            json_path=args.json,
         )
-    
-    # If --prod mode, print the submission-map summary after generation
-    if args.prod:
 
-        jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.json'
+    # If --prod mode, print the submission-map summary after generation
+    if args.prod and args.jobdefs:
+        jobdefs_file = args.jobdefs
         print(f"\n{'='*60}")
         print(f"Submission-map summary: {jobdefs_file}")
         print(f"{'='*60}")
@@ -702,8 +721,18 @@ def _cleanup_temp_files():
             print(f"Cleanup: {temp_file}")
 
 
+def _provenance(json_path, config):
+    """Free-text origin recorded as the campaign's map_path. The column
+    is never dispatched from — only the MCP status tools echo it — so it
+    records where the entry CAME FROM rather than a filename that no
+    longer exists."""
+    return (f"{json_path}#{config.get('desc', '?')}"
+            f"@{config.get('dsconf', '?')}")
+
+
 def process_single_entry(config, pushout=False, no_cleanup=True,
-                         jobdefs_list=None, extend=False, ignore_empty=False):
+                         jobdefs_list=None, extend=False, ignore_empty=False,
+                         enqueue=False, slice_size=1000, json_path=None):
     """Process a single configuration entry (original behavior)"""
     validate_required_fields(config)
     config['owner'] = config.get('owner', default_owner())
@@ -750,6 +779,19 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
 
     if pushout:
         _pushout_to_sam(parfile_name, config['owner'])
+
+    # AFTER pushout, always: enqueue_entry resolves the tarball from SAM
+    # and check_inputs reads it, so a campaign created before the push
+    # would be broken from birth.
+    if enqueue:
+        from types import SimpleNamespace
+        from utils.submit import enqueue_entry, _resolve_ledger_db
+        entry = build_jobdesc(config)
+        enqueue_entry(
+            entry,
+            ledger_db=_resolve_ledger_db(SimpleNamespace(ledger_db=None)),
+            slice_size=slice_size,
+            provenance=_provenance(json_path, config))
 
     if no_cleanup:
         print("Temporary files kept (--no-cleanup specified)")
@@ -838,6 +880,9 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             no_cleanup=True,
             jobdefs_list=args.jobdefs,
             ignore_empty=args.ignore_empty,
+            enqueue=args.enqueue,
+            slice_size=args.slice_size,
+            json_path=args.json,
         )
         
         # Clean up template.fcl for next iteration (since process_single_entry cleans up)

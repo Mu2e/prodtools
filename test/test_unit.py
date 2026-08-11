@@ -12939,6 +12939,58 @@ class TestSubmissionsDbResolution(unittest.TestCase):
         self.assertFalse(os.path.isdir(os.path.dirname(explicit)))
 
 
+class TestJson2JobdefEnqueueFlags(unittest.TestCase):
+    """argparse-level refusals for `json2jobdef --enqueue`. These never
+    reach cnf building, so they need no Mu2e environment — but they must
+    run from the repo root."""
+
+    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_enqueue_requires_prod(self):
+        """A campaign whose cnf is not in SAM is broken from birth:
+        enqueue_entry resolves the tarball from SAM."""
+        proc = subprocess.run(
+            [sys.executable, 'utils/json2jobdef.py',
+             '--json', 'data/Run1B/resampler_beam.json',
+             '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
+             '--enqueue'],
+            capture_output=True, text=True, cwd=self._REPO_ROOT)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('--enqueue requires --prod',
+                      proc.stdout + proc.stderr)
+
+    def test_slice_size_requires_enqueue(self):
+        proc = subprocess.run(
+            [sys.executable, 'utils/json2jobdef.py',
+             '--json', 'data/Run1B/resampler_beam.json',
+             '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
+             '--slice-size', '500'],
+            capture_output=True, text=True, cwd=self._REPO_ROOT)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('--slice-size requires --enqueue',
+                      proc.stdout + proc.stderr)
+
+    def test_prod_requires_jobdefs_or_enqueue(self):
+        """A bare --prod would silently write jobdefs_list.json into the
+        current directory."""
+        proc = subprocess.run(
+            [sys.executable, 'utils/json2jobdef.py',
+             '--json', 'data/Run1B/resampler_beam.json',
+             '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
+             '--prod'],
+            capture_output=True, text=True, cwd=self._REPO_ROOT)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('--prod requires --jobdefs or --enqueue',
+                      proc.stdout + proc.stderr)
+
+    def test_provenance_string_format(self):
+        from utils.json2jobdef import _provenance
+        self.assertEqual(
+            _provenance('data/Run1B/resampler_beam.json',
+                        {'desc': 'PhysicalPionStops', 'dsconf': 'Run1Bap'}),
+            'data/Run1B/resampler_beam.json#PhysicalPionStops@Run1Bap')
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
