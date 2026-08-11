@@ -34,7 +34,7 @@ through unchanged.
 ```
 /mu2epro-run json2jobdef --json data/Run1B/stage1.json --index 0 --verbose
 /mu2epro-run MDC2025af json2jobdef --json data/mdc2025/mix.json --dsconf MDC2025af_best_v1_1 --prod --enqueue --slice-size 1000
-/mu2epro-run AnalysisMDC2025/v02_00_00 json2jobdef --json data/mdc2025/evntuple.json --dsconf MDC2025-003 --prod --jobdefs /tmp/map_evntuple_003.json
+/mu2epro-run AnalysisMDC2025/v02_00_00 json2jobdef --json data/mdc2025/evntuple.json --desc evnt --dsconf MDC2025-003 --prod --enqueue
 ```
 
 ## Instructions
@@ -62,11 +62,13 @@ You are given `$ARGUMENTS`. Follow these steps:
    Then ask the user to confirm (reply "yes" to proceed). Do not run
    until they confirm. If they decline, stop.
 
-   **HARD RULE for `json2jobdef --prod`:** at least one of `--jobdefs`
-   or `--enqueue` is mandatory, and `argparse` now enforces it. Prefer
-   `--enqueue`: it creates the campaign directly with no map file. Use
-   `--jobdefs` only when you also want the file as a handle for a
-   manual `submit_map --map <file> --first N --num M` re-dispatch.
+   **HARD RULE for `json2jobdef --prod`:** `--prod` REQUIRES `--enqueue`
+   (and `--enqueue` requires `--prod`), and `argparse` now enforces it.
+   There is no `--jobdefs` flag — `json2jobdef` writes no file
+   recording the campaign; `--enqueue` pushes the cnf to SAM and
+   registers the sliced-submission campaign directly in the submission
+   ledger. A bare `--prod` with no `--enqueue` would push the cnf and
+   register nothing, so it is refused up front.
 
    **Known limitation, bulk `--dsconf X --prod --enqueue` (no `--desc`,
    line 36 above):** this processes every matching entry in one loop,
@@ -145,11 +147,15 @@ You are given `$ARGUMENTS`. Follow these steps:
 
 ## Notes
 
-- **For grid submission (`submit_map`), use
-  `/mu2epro-submit` instead** — this skill does NOT set
+- **For hand re-firing specific work (`submissions resubmit`) or a
+  manual campaign tick (`submissions run`), use `/mu2epro-submit`
+  instead** — this skill does NOT set
   `USER`/`LOGNAME`/`HOME`/`XDG_RUNTIME_DIR`, which the direct backend
   requires (else `condor_vault_storer` fails / wrong submitter). `/mu2epro-submit`
-  bakes in that env fix plus dry-run + jobsub_q verification.
+  bakes in that env fix plus dry-run + jobsub_q verification. New
+  campaigns (including firstjob-window statistics expansions) go
+  through `json2jobdef --prod --enqueue` here instead — there is no
+  separate submit step.
 - `ksu` requires that `oksuzian@FNAL.GOV` is listed in
   `~mu2epro/.k5users` for `/bin/bash`. If auth fails, report the error
   verbatim — do not retry automatically.

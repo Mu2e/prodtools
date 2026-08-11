@@ -1,40 +1,55 @@
 ---
-description: Submit a prodtools submission map to the grid via the direct backend as mu2epro (ksu env fix + dry-run + jobsub_q verify)
-argument-hint: <map.json> [--entry N] [--first N --num M] [extra submit_map flags]
+description: Hand re-fire specific work (`submissions resubmit`) or run a manual campaign tick (`submissions run`) as mu2epro (ksu env fix + dry-run + jobsub_q verify)
+argument-hint: resubmit <row-id> (--indices SPEC | --indices-file F | --files F) [--dry-run]  |  run [--campaign ID] [--row ID] [--dry-run] [extra submissions flags]
 allowed-tools: Bash
 ---
 
-# Submit a submission map as mu2epro (direct backend)
+# Grid-submitting `submissions` verbs as mu2epro
 
-Runs `submit_map` as the `mu2epro` production account via
-`ksu`, with the environment fixes the direct backend needs but that plain
-`ksu` does not provide. Always dry-runs first, pauses for confirmation (grid
-production is not easily reversible), then submits and verifies the cluster
-with `jobsub_q`.
+Runs `submissions resubmit` or `submissions run` as the `mu2epro`
+production account via `ksu`, with the environment fixes that
+`jobsub_submit` needs but that plain `ksu` does not provide. Always
+dry-runs first, pauses for confirmation (grid production is not easily
+reversible), then submits and verifies the cluster with `jobsub_q`.
 
-Use this for prodtools direct-backend submissions that need an actual
-map file: firstjob statistics expansions and manual `--first N --num M`
-re-dispatch. For upstream `mu2ejobsub` smoke tests use
-`/mu2ejobsub-submit`; for building/pushing a cnf use `/mu2epro-run
-json2jobdef --prod`.
+Both verbs act on the production submission ledger
+(`/exp/mu2e/data/users/mu2epro/prodtools/submissions.db` — this is
+mu2epro's own ledger, which the CLI's "your own ledger" default
+resolves to when run as mu2epro, so no `--db` flag is needed here):
 
-For creating a NEW production campaign, prefer `/mu2epro-run json2jobdef
---prod --enqueue --slice-size N` instead of this skill — it builds the
-cnf, pushes it to SAM, and registers the campaign in one command, with
-no map file to hand off here. Reach for `/mu2epro-submit` only when a
-map file already exists (e.g. `--jobdefs` was used deliberately as a
-re-dispatch handle) or the job isn't campaign-shaped (firstjob
-expansions).
+- `resubmit ROW_ID` — re-fire a named set of indices (`--indices`/
+  `--indices-file`) or input files (`--files`, draining rows only) from
+  an *existing* ledger row, as a child submission (attempt+1). The
+  entry comes from the row itself, so there is nothing to hand-edit.
+  Use this for manual recovery of specific work — e.g. re-dispatching
+  files parked by an exhausted draining row, or re-firing indices a
+  human has confirmed are genuinely missing outside the normal
+  `submissions run` cadence.
+- `run [--campaign ID]` — one tick of the recovery pass + campaign
+  top-up (the same thing the hourly cron does). `--campaign ID`
+  restricts top-up to one campaign (the recovery pass still runs over
+  every active row); omit it to tick everything, matching cron
+  behaviour. Use this to force a tick out-of-band, e.g. right after
+  fixing an `inloc` that was pausing a campaign.
+
+For a **new** production campaign (including a firstjob-window
+statistics expansion — set `firstjob`/`njobs` in the JSON config),
+use `/mu2epro-run json2jobdef --prod --enqueue --slice-size N` instead
+of this skill: it builds the cnf, pushes it to SAM, and registers the
+campaign in the ledger in one command. There is no map file anywhere
+in this workflow, so there is nothing to hand off to a separate submit
+step for that case. Reach for `/mu2epro-submit` only once a campaign
+already exists and you need to touch its ledger rows by hand.
 
 ## Why a dedicated skill (the gotchas it encodes)
 
 `ksu mu2epro` does NOT reset `USER`/`LOGNAME`/`HOME`, and it inherits the
-caller's `XDG_RUNTIME_DIR`. The direct backend breaks on both:
+caller's `XDG_RUNTIME_DIR`. `jobsub_submit` breaks on both:
 
-- `getpass.getuser()` returns the CALLER (e.g. `oksuzian`), so `submit_map`
-  tries to write `/tmp/prodtools-<caller>.tar` (not writable by mu2epro) and
-  picks the wrong submitter/role. Symptom: `PermissionError:
-  /tmp/prodtools-oksuzian.tar` even on `--dry-run`.
+- `getpass.getuser()` returns the CALLER (e.g. `oksuzian`), so the
+  direct backend tries to write `/tmp/prodtools-<caller>.tar` (not
+  writable by mu2epro) and picks the wrong submitter/role. Symptom:
+  `PermissionError: /tmp/prodtools-oksuzian.tar` even on `--dry-run`.
 - `condor_vault_storer` mktemp's under `XDG_RUNTIME_DIR`; the caller's
   `/run/user/<uid>` is not writable by mu2epro → the vault step fails, and
   `jobsub_submit` can **exit 0 while `condor_submit` failed, leaving NO
@@ -51,56 +66,58 @@ See `reference_ksu_jobsub_env` for the incident history.
 ## Usage
 
 ```
-/mu2epro-submit <map.json> [--entry N] [--first N --num M] [extra submit_map flags]
+/mu2epro-submit resubmit <row-id> (--indices SPEC | --indices-file F | --files F) [--dry-run]
+/mu2epro-submit run [--campaign ID] [--row ID] [--dry-run] [--max-attempts N] [--max-queued N]
 ```
 
-- `<map.json>` — absolute path to the submission map: a throwaway
-  `/tmp` map, one per campaign, e.g. `/tmp/map_noprimary_au.json`.
-  Pass the SAME path that was given to `json2jobdef --prod --jobdefs`.
-
-  Do not create map files under
-  `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/` or
-  `direct_maps/`. Both are historical; the direct workflow neither reads
-  nor wants a persistent file there.
-- `--entry N` — submit only entry index N (default: ALL entries in the map).
-  Use this when the map has entries that must NOT be resubmitted.
-- `--first N --num M` — submit only the jobset slice `[N, N+M)` (recovery /
-  partial). Default: the whole window.
-- Any other flags pass through to `submit_map` (`--memory`,
-  `--expected-lifetime`, `--disk`, …).
+- `<row-id>` — a ledger row id from `submissions status` (or the MCP
+  `campaign_status`/`mine=true` view). `--files` only works against a
+  draining (file-keyed) row; `--indices`/`--indices-file` only against
+  an index row — the CLI refuses the mismatch by name.
+- `resubmit` REFUSES when any named index/file is still covered by an
+  unsettled row for the same tarball (duplicate-physics guard for
+  deterministic payloads). It names the blocking row; check `jobsub_q`
+  and clear it with `submissions reconcile <blocking-row-id>` first if
+  the window is genuinely free (that verb is ledger-only — no
+  `jobsub_submit` call — so it does not need this skill; run it via
+  `/mu2epro-run submissions reconcile <row-id>`).
 
 ## Examples
 
 ```
-# Firstjob expansion (map already windowed to firstjob/njobs)
-/mu2epro-submit /tmp/map_run1ban_pileupext.json
+# Recovery: resubmit specific missing indices from a stuck row
+/mu2epro-submit resubmit 4231 --indices 4000,4001,4055-4062
 
-# One entry of a multi-entry map (do not touch the others)
-/mu2epro-submit /tmp/map_mdc2025_033.json --entry 1
+# Re-dispatch parked draining files from an exhausted row
+/mu2epro-submit resubmit 4198 --files /tmp/parked_ceendpoint.txt
 
-# Recovery: resubmit indices 4000..4099 only
-/mu2epro-submit /tmp/map_run1ban_pileupext.json --first 4000 --num 100
+# Force a tick for one paused-then-resumed campaign
+/mu2epro-submit run --campaign 17
+
+# Dry-run a full tick (recovery pass + top-up over every active campaign)
+/mu2epro-submit run --dry-run
 ```
 
 ## Instructions
 
-You are given `<map.json> [args...]`. Follow these steps:
+You are given `$ARGUMENTS` (the verb and its args, e.g.
+`resubmit 4231 --indices 4000-4010` or `run --campaign 17`). Follow
+these steps:
 
-1. Resolve the repo root (cwd at invocation) → `REPO`. The map path is
-   absolute; treat the map path as `MAP` and everything else as `EXTRA`
-   (passed through to `submit_map`).
+1. Resolve the repo root (cwd at invocation) → `REPO`.
 
 2. **HARD RULE — token:** never run, suggest, or mention any mu2epro
    token-refresh. If the submit fails for lack of a token, STOP and report
    the absence; do not remediate.
 
 3. **DRY-RUN first** (no submission): run the ksu block below with
-   `--dry-run` appended to the `submit_map` command. Show the user: `Total
-   jobs`, the `Entry N: ... window: cnf indices A..B` line, the jobset size,
-   and the `jobsub_submit` argv. If the dry-run errors (e.g. window
-   validation, missing tarball), STOP and report — do NOT submit.
+   `--dry-run` appended. Show the user the would-* output — for
+   `resubmit`, the reconstructed jobset size and any refusal; for
+   `run`, what each active row/campaign would do. If the dry-run errors
+   (e.g. `no ledger row N`, a blocking-row refusal), STOP and report —
+   do NOT submit.
 
-4. **WARN + confirm:** print `WARNING: this submits <N> grid jobs to the
+4. **WARN + confirm:** print `WARNING: this submits grid jobs to the
    production pool as mu2epro; the cluster is not easily reversible.` and ask
    for an explicit "yes". Do not proceed until confirmed. (The `.claude/`
    mu2epro guard hook also prompts on `ksu mu2epro`, but confirm here
@@ -117,8 +134,9 @@ You are given `<map.json> [args...]`. Follow these steps:
    report and do NOT resubmit until you have confirmed via jobsub_q that no
    cluster exists (avoid double-submission).
 
-7. **Report:** cluster ID, job count, the window (cnf indices A..B), and next
-   steps (drain → completeness → downstream Cat/stage).
+7. **Report:** cluster ID, job count, and — for `resubmit` — the new
+   child row id (`submissions status` shows it parented on the row you
+   resubmitted).
 
 ### ksu block (dry-run and real submit share this shape)
 
@@ -129,38 +147,19 @@ export USER=mu2epro LOGNAME=mu2epro HOME=/exp/mu2e/app/home/mu2epro
 WORKDIR=$(mktemp -d /tmp/mu2epro_submit.XXXXXX)
 export XDG_RUNTIME_DIR="$WORKDIR"
 cd "$WORKDIR"
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \
-  && muse setup ops > /dev/null 2>&1 \
-  && bash <REPO>/bin/submit_map --map <MAP> <EXTRA> 2>&1
+bash <REPO>/bin/submissions <VERB> <ARGS> 2>&1
 RC=${PIPESTATUS[0]}
 echo "=== submit RC=$RC ==="
 exit $RC
 '
 ```
-(Append `--dry-run` to the `submit_map` line for step 3.) A big submission
-(tens of thousands of jobs) may exceed the 590s timeout during RCDS publish;
-raise it if needed, and if it times out go to step 6 (jobsub_q) BEFORE any
-retry.
-
-## Window prep (pre-step for firstjob expansions)
-
-To advance a firstjob window before submitting, edit the map entry FIRST (as
-mu2epro, with a backup). The submitted map must contain ONLY the window you
-intend — a completed window left in the map would re-run it (or use
-`--entry` to isolate one). For a single-entry expansion map:
-
-```bash
-ksu mu2epro -e /bin/bash -c '
-MAP=/tmp/map_run1ban_pileupext.json
-cp "$MAP" "$MAP.bak-$(date +%Y%m%d_%H%M%S)"
-jq "[.[0] | .firstjob=<F> | .njobs=<N>]" "$MAP" > "$MAP.tmp" && mv "$MAP.tmp" "$MAP"
-cat "$MAP"
-'
-```
-`baseSeed = 1 + cnf index` and `firstSubRun = cnf index`, so a fresh window
-gives fresh seeds/sequencers on the SAME tarball — no rebuild/retire (see
-`reference_resampler_expansion_seed_mechanics` and
-`reference_firstjob` / the firstjob wiki page).
+(`bin/submissions` sources the Mu2e ops environment itself, so nothing
+extra is needed before it in this block.) A big `run` tick (many
+campaigns) may exceed the 590s timeout; raise it if needed, and if it
+times out go to step 6 (jobsub_q) BEFORE any retry — **never wrap
+`submissions run` in `timeout` and let it silently kill the process
+mid-tick; if you raise the timeout, raise it generously instead of
+retrying blind.**
 
 ## Notes
 
@@ -168,9 +167,9 @@ gives fresh seeds/sequencers on the SAME tarball — no rebuild/retire (see
   `/tmp/prodtools-mu2epro.tar` and runs `runjob.sh` on the worker, so the
   worker executes THIS checkout's `runmu2e.py` (firstjob-aware). Submit from a
   repo whose code you trust.
-- Capacity vs window: the cnf's `tbs.njobs` is authoritative for capacity
-  (0 = open-ended); the map entry's `njobs` (+ optional `firstjob`) is the
-  window. `submit_map` validates the window against cnf capacity.
+- `resubmit`'s reconstructed entry drops any `firstjob` window — the
+  `--indices`/`--files` you pass are absolute (cnf index or input
+  filename), not relative to the original entry's window.
 - Outputs push per-job from the worker (pushOutput) to each entry's
   `outputs[].location`; the direct backend does not use SAM index
   definitions separately.
