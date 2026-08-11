@@ -5396,7 +5396,7 @@ class TestEnqueue(unittest.TestCase):
 
 class TestEnqueueErrorStyle(unittest.TestCase):
     """Operator-reachable enqueue_entry failures are one-line
-    submit_map: messages, not tracebacks."""
+    json2jobdef: messages, not tracebacks."""
 
     def setUp(self):
         import tempfile
@@ -5423,7 +5423,7 @@ class TestEnqueueErrorStyle(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             enqueue_entry(self._entry(), ledger_db=self.db, slice_size=10)
         msg = str(cm.exception.code)
-        self.assertTrue(msg.startswith('submit_map: '), msg)
+        self.assertTrue(msg.startswith('json2jobdef: '), msg)
         self.assertNotIn('\n', msg)
         self.assertNotIn('Traceback', msg)
 
@@ -5432,7 +5432,7 @@ class TestEnqueueErrorStyle(unittest.TestCase):
         bad_db = os.path.join(self.tmp, 'no', 'such', 'dir', 'sub.db')
         with self.assertRaises(SystemExit) as cm:
             enqueue_entry(self._entry(), ledger_db=bad_db, slice_size=10)
-        self.assertTrue(str(cm.exception.code).startswith('submit_map: '))
+        self.assertTrue(str(cm.exception.code).startswith('json2jobdef: '))
 
 
 # ---------------------------------------------------------------------------

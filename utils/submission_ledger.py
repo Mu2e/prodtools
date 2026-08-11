@@ -1,8 +1,9 @@
 """Submission ledger for the direct backend (recovery loop state).
 
-One row per `submit_map` submission, including the
-recovery loop's own resubmissions (chained via parent_id, attempt+1).
-Only submit_map writes rows here (the retired POMS backend never did),
+One row per direct-backend submission (`json2jobdef --enqueue`, a
+cron-fed slice, or a `submissions resubmit`), including the recovery
+loop's own resubmissions (chained via parent_id, attempt+1). Only the
+direct backend writes rows here (the retired POMS backend never did),
 so the recovery loop races nothing by construction.
 
 Stdlib sqlite3 ONLY — this module is imported by the submit path, which
@@ -539,14 +540,14 @@ def set_campaign_entry_key(db_path, camp_id, key, value,
     future slices and nothing else — rows already dispatched keep the
     entry they were submitted with. That default is deliberate, and it
     is what `memory` depends on: an UNSET memory is exactly what earns a
-    recovery the 4000MB floor (submissions.recovery_resource_argv), so
+    recovery the 4000MB floor (submissions.recovery_resource_kwargs), so
     cascading a memory value would silently forfeit the better failure
     mode.
 
     include_open_rows=True additionally rewrites the entry snapshot of
     every not-yet-closed row on this campaign's tarball, which is what
-    makes RECOVERIES pick the change up (submissions.resubmit rebuilds
-    its map from row['entry'], not from the campaign). Rows match by
+    makes RECOVERIES pick the change up (submissions.resubmit builds its
+    SubmitOptions from row['entry'], not from the campaign). Rows match by
     tarball because the two tables carry no campaign_id; the partial
     unique index campaigns_live_tarball keeps that unambiguous for a
     live campaign, but a cancelled predecessor could have left an open

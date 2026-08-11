@@ -8,7 +8,7 @@ dropbox tarball. Worker bootstraps `bin/runjob.sh` →
 mu2ejobsub backend was retired 2026-07-19 (spec
 2026-07-19-workflow-hardening-design.md): template/direct_input/g4bl
 entries and HPC submission run via the upstream mu2ejobsub/mu2eg4bl
-CLIs, never through submit_map.
+CLIs, never through this module.
 
 Plans:
 - wiki/pages/2026-04-29-remove-poms-from-submit-loop.md (Phase 1, POMS removal)
@@ -48,9 +48,10 @@ DEFAULT_PRODTOOLS_TAR = Path('/tmp') / f'prodtools-{getpass.getuser()}.tar'
 class SubmitOptions(NamedTuple):
     """Everything submit_entry needs beyond the entry itself.
 
-    Replaces the argparse namespace the engine used to reach into, so
-    utils/submissions.py can call it directly instead of serialising an
-    entry to a temp file and spawning bin/submit_map.
+    Replaces the argparse namespace the old single-purpose submission
+    CLI used to reach into, so utils/submissions.py can call
+    submit_entry directly instead of serialising an entry to a temp
+    file and spawning a subprocess for it.
 
     One object rather than loose keyword arguments because the value is
     threaded on to _reserve_in_ledger, _attach_cluster, _fail_reservation
@@ -380,7 +381,7 @@ def _validate_entry_values(entry):
             try:
                 validate_entry_value(key, entry[key])
             except ValueError as e:
-                sys.exit(f"submit_map: {e}")
+                sys.exit(f"json2jobdef: {e}")
 
 
 def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
@@ -388,10 +389,10 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     """Register ONE entry as a sliced-submission campaign (cursor 0);
     submit nothing. Returns the new campaign id, or None under dry_run.
 
-    Single owner of the enqueue preflight, shared by `submit_map
-    --enqueue` and `json2jobdef --enqueue`: inputs are checked before
-    any ledger row is written, so a campaign is never created for a
-    tarball with unreadable inputs.
+    Single owner of the enqueue preflight; `json2jobdef --enqueue` is
+    the only caller: inputs are checked before any ledger row is
+    written, so a campaign is never created for a tarball with
+    unreadable inputs.
 
     Nothing has been submitted when this fails, so failures are hard
     errors — but operator-reachable ones (duplicate live campaign, bad
@@ -410,7 +411,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     if is_draining(entry):
         err = _validate_draining_entry(entry)
         if err:
-            sys.exit(f"submit_map: {err}")
+            sys.exit(f"json2jobdef: {err}")
         _ensure_local_tarball(tarball_of(entry))
         # No check_inputs: a generic cnf bakes no inputs — the tick
         # gates every batch (residency + settling age) at dispatch.
@@ -426,7 +427,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
                 ledger_db, tarball=tarball_of(entry), entry=snap,
                 slice_size=slice_size, origin=provenance)
         except (ValueError, sqlite3.Error) as e:
-            sys.exit(f"submit_map: {e}")
+            sys.exit(f"json2jobdef: {e}")
         print(f"Enqueued draining campaign {camp_id}: "
               f"{tarball_of(entry)} pattern={entry['input_pattern']} "
               f"slice={slice_size} (db {ledger_db})")
@@ -436,16 +437,16 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     ok, problems = check_inputs(str(tarball_path), inloc_of(entry))
     if not ok:
         print(format_report(str(tarball_path), problems))
-        print(f"submit_map: inputs not ready "
+        print(f"json2jobdef: inputs not ready "
               f"({len(problems)} problem(s)) — fix and re-run; "
               f"no campaign created")
         sys.exit(2)
     njobs = njobs_of(entry)
     if njobs is None:
-        sys.exit("submit_map: entry has no njobs (generic tarball) — "
+        sys.exit("json2jobdef: entry has no njobs (generic tarball) — "
                  "a campaign needs a job count to slice")
     if njobs < 1:
-        sys.exit(f"submit_map: entry has njobs={njobs} — "
+        sys.exit(f"json2jobdef: entry has njobs={njobs} — "
                  f"a campaign needs a positive job count")
     snap = _snapshot_entry(entry, resources)
     if dry_run:
@@ -458,7 +459,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
             ledger_db, tarball=tarball_of(entry), entry=snap,
             slice_size=slice_size, origin=provenance)
     except (ValueError, sqlite3.Error) as e:
-        sys.exit(f"submit_map: {e}")
+        sys.exit(f"json2jobdef: {e}")
     print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
           f"njobs={njobs} slice={slice_size} (db {ledger_db})")
     return camp_id

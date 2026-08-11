@@ -32,7 +32,7 @@ DEFAULT_DISK = "30GB"
 # peaks while staying low enough not to distort slot matching. Raising an
 # entry above this is still an entry-key decision; note that naming the
 # key forfeits the 4000MB recovery floor (see submissions.RECOVERY_MEMORY
-# and recovery_resource_argv, which apply only when the key is absent).
+# and recovery_resource_kwargs, which apply only when the key is absent).
 DEFAULT_MEMORY = "2500MB"
 DEFAULT_LIFETIME = "24h"
 DEFAULT_RESOURCE = "usage_model=OPPORTUNISTIC,DEDICATED"

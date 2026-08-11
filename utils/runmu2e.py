@@ -658,7 +658,7 @@ def _direct_dispatch(args, ops, index):
         if mode != False:  # noqa: E712 — validate_jobdesc returns False for normal
             print(f"ERROR: direct mode supports normal-mode jobdescs "
                   f"only, got '{mode}'. direct_input entries run as "
-                  f"draining batches (submit_map --files).")
+                  f"draining batches (submissions resubmit --files).")
             sys.exit(1)
         fname = _synthesize_direct_fname(index)
         fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(

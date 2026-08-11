@@ -3,7 +3,7 @@
 the verify-and-resubmit + sliced-campaign top-up tick (`run`), and
 campaign management verbs.
 
-Processes ledger rows written by `submit_map`
+Processes ledger rows written by the direct backend
 (utils/submission_ledger.py). Per active row: skip while jobs are still
 in the queue (held jobs are reported, never touched), SAM-verify the
 row's indices via the cnf's expected output names, then close the row
@@ -680,7 +680,8 @@ def _guarded_submit(what, fn):
     """Run one in-process submission; return True on success, False on
     any failure, never propagating.
 
-    This replaces the process boundary bin/submit_map used to provide.
+    This replaces the process boundary a standalone submission CLI used
+    to provide back when the engine ran out-of-process.
     A subprocess that died gave the tick a nonzero return code and the
     loop moved on to the next campaign; an in-process call that raises
     would end the tick for every campaign.

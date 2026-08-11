@@ -2,8 +2,9 @@
 
 Exposes `push_cnf` and `run_submissions`. Campaign creation is
 `push_cnf` (one call, mirroring `json2jobdef --prod --enqueue`) --
-there is no map-based `enqueue_campaign`; that tool was retired with
-`submit_map --enqueue`.
+there is no separate `enqueue_campaign` tool; that would have paired
+with a map file to enqueue, and no map file exists anywhere in this
+codebase.
 
 Thin by design: validate, delegate to runner, read the result back
 from the artifact the CLI wrote -- never from its stdout.

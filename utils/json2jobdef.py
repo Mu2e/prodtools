@@ -536,7 +536,7 @@ def main():
     p.add_argument('--dsconf', type=str, help='Dataset configuration')
     p.add_argument('--index', type=int, help='Entry index in JSON list')
     p.add_argument('--pushout', action='store_true', help='Enable SAM pushOutput')
-    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and print the submission-map summary after generation')
+    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout (SAM registration). Requires --enqueue, which registers a sliced-submission campaign in the ledger and prints its campaign id.')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--enqueue', action='store_true',
