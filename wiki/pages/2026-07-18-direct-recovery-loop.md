@@ -154,21 +154,37 @@ table (`campaigns`, same sqlite3 DB) and one new phase inside
 `submissions run` — no new daemons, no new cron entries, no worker-side
 changes.
 
-**Enqueue workflow.** An operator registers a campaign instead of
-submitting directly:
+**Enqueue workflow.** The one-command path — build the cnf, push it to
+SAM, and register the campaign, all in one invocation, no map file
+involved:
+
+```bash
+json2jobdef --json <config>.json --desc <D> --dsconf <C> \
+    --prod --enqueue --slice-size 1000
+```
+
+`--enqueue` requires `--prod` (the cnf must land in SAM first —
+enqueue resolves the tarball from there, not from a file on disk).
+Under `--prod`, at least one of `--jobdefs` or `--enqueue` is now
+required; `argparse` enforces it. The campaign's `map_path` records
+provenance as `<config>.json#<desc>@<dsconf>` instead of a filename.
+
+An operator can still register a campaign from an existing map file
+built with `--jobdefs` (e.g. to enqueue a hand-edited entry, or one
+entry out of a multi-entry map via `--entry N`):
 
 ```bash
 submit_map --map MDC2025-032.json --enqueue --slice-size 2000
 ```
 
-This snapshots the selected entries (all, or `--entry N`) into the
-`campaigns` table at `cursor=0` and **submits nothing** — same
-"hard error, not a fallback" discipline as the ledger write in the
-normal submit path, but inverted: here nothing has gone to the grid
-yet, so a DB failure at enqueue time is a hard error rather than a
-warn-and-continue. `--slice-size` (default 1000) is frozen into the
-row. `submit_map` is single-backend (direct) — no `--backend` flag
-exists. Mutually exclusive with
+Both paths snapshot the selected entry/entries into the `campaigns`
+table at `cursor=0` and **submit nothing** — same "hard error, not a
+fallback" discipline as the ledger write in the normal submit path,
+but inverted: here nothing has gone to the grid yet, so a DB failure
+at enqueue time is a hard error rather than a warn-and-continue.
+`--slice-size` (default 1000) is frozen into the row. `submit_map` is
+single-backend (direct) — no `--backend` flag exists. Mutually
+exclusive with
 `--first`/`--num`/`--indices`/`--indices-file`. An entry with no fixed
 `njobs`, or `njobs < 1`, (`generic_tarball`, or `njobs: 0`) can't be
 enqueued — a campaign needs a positive job count to slice against. A
@@ -566,6 +582,39 @@ would this pass) leave something needing a human. One line per cause:
   this tick ran, not just the tick that paused it — the signal repeats
   every hour until a human runs `submissions resume <ID>` or
   `submissions cancel <ID>`.
+
+### 5. Fixing a live campaign's settings
+
+```bash
+submissions set-entry <CAMP_ID> <key> <value> [--include-open-rows]
+```
+
+`set-entry` edits one of `inloc`, `memory`, `disk`, or
+`expected_lifetime` on a live campaign's entry. Without
+`--include-open-rows` the change reaches future slices only —
+`resubmit()` rebuilds a recovery from the row's own frozen snapshot,
+not the campaign's current entry, so a row already submitted keeps
+whatever it was submitted with. With `--include-open-rows`, every
+not-yet-closed row on that campaign's tarball is rewritten too, which
+is what makes an in-flight RECOVERY actually pick up the new value.
+
+The flag defaults off because an *unset* `memory` is what earns a
+recovery the `4000MB` floor (see the resource-key caveat above); pushing
+a memory value onto every open row would forfeit that floor for indices
+that hadn't needed it yet. An `inloc` fix, by contrast, normally wants
+the flag on — a bad `inloc` (e.g. a resilient copy that was never
+staged) breaks every open row identically, and there is no floor to
+lose by cascading it.
+
+Worked example — campaign 54 (`sim.mu2e.PiTargetStops.Run1Bap.art`
+input, 500 files, 14.95 GB, needed staging to resilient first):
+
+```bash
+submissions set-entry 54 inloc resilient --include-open-rows
+```
+
+prints the changed row ids; confirm the new value stuck with
+`campaign_status` (MCP) or `submissions status`.
 
 ## Semantics and limits
 

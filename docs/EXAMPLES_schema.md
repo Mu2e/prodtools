@@ -55,7 +55,11 @@ When regenerating, read in this order:
    verbatim, and cross-reference the `submit_map` subsection for the
    precedence rule. State plainly that `submit_map` (single-backend
    direct — no other backend exists) always honors these keys: CLI flag
-   > entry key > built-in default.
+   > entry key > built-in default. Cover `--enqueue` and `--slice-size N`
+   (default 1000): `--enqueue` pushes the cnf to SAM and registers a
+   sliced-submission campaign directly, no map file involved; requires
+   `--prod`. Under `--prod`, at least one of `--jobdefs` or `--enqueue`
+   is required.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -101,8 +105,12 @@ When regenerating, read in this order:
       TEXT]`; `resume CAMP_ID`; `cancel CAMP_ID`; `complete CAMP_ID
       [--note TEXT]` — the operator close-out for a draining campaign;
       `set-slice CAMP_ID N` and `set-memory CAMP_ID MEM` — retune a live
-      campaign's slice size / memory request for its remaining slices),
-      the global `--db` flag, the read-only guarantees (`status` and
+      campaign's slice size / memory request for its remaining slices;
+      `set-entry CAMP_ID KEY VALUE [--include-open-rows]` — set one of
+      inloc/memory/disk/expected_lifetime on a live campaign. Without
+      the flag it reaches future slices only; with it, also the
+      not-yet-closed rows, which is what makes RECOVERIES use the new
+      value), the global `--db` flag, the read-only guarantees (`status` and
       `run --dry-run` take no lock and submit nothing), and the
       extended exit-2 list for `run`: held,
       exhausted, child-missing, campaign paused (submit failure),
@@ -186,6 +194,14 @@ reading the code:
   `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-NNN.json`
   — POMS is retired, and that path teaches a map-numbering convention
   that no longer has a consumer.
+- Under `--prod`, at least one of `--jobdefs` or `--enqueue` is
+  required. `--enqueue` also requires `--prod`: the campaign's cnf must
+  be in SAM, because enqueue resolves the tarball from there.
+- `--enqueue` writes no map file. The campaign's `map_path` records the
+  config provenance (`<config>.json#<desc>@<dsconf>`) instead.
+- `set-entry --include-open-rows` is OFF by default because an UNSET
+  `memory` is what earns a recovery the 4000MB floor; cascading a memory
+  value forfeits it. An `inloc` fix normally wants the flag ON.
 - Optional per-entry resource keys `"memory"` / `"disk"` /
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
   `48h`) live in the POMS-map entry itself, or in the jobdef JSON config

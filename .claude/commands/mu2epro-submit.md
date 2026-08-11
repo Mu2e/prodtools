@@ -12,10 +12,19 @@ Runs `submit_map` as the `mu2epro` production account via
 production is not easily reversible), then submits and verifies the cluster
 with `jobsub_q`.
 
-Use this for prodtools direct-backend submissions: firstjob statistics
-expansions and per-job-pushOutput map submissions. For upstream `mu2ejobsub`
-smoke tests use `/mu2ejobsub-submit`; for building/pushing a cnf use
-`/mu2epro-run json2jobdef --prod`.
+Use this for prodtools direct-backend submissions that need an actual
+map file: firstjob statistics expansions and manual `--first N --num M`
+re-dispatch. For upstream `mu2ejobsub` smoke tests use
+`/mu2ejobsub-submit`; for building/pushing a cnf use `/mu2epro-run
+json2jobdef --prod`.
+
+For creating a NEW production campaign, prefer `/mu2epro-run json2jobdef
+--prod --enqueue --slice-size N` instead of this skill — it builds the
+cnf, pushes it to SAM, and registers the campaign in one command, with
+no map file to hand off here. Reach for `/mu2epro-submit` only when a
+map file already exists (e.g. `--jobdefs` was used deliberately as a
+re-dispatch handle) or the job isn't campaign-shaped (firstjob
+expansions).
 
 ## Why a dedicated skill (the gotchas it encodes)
 

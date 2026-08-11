@@ -34,6 +34,13 @@ before proceeding.
   production account. The skill warns before executing such flags and
   asks for explicit confirmation.
 
+Production campaigns are created in one command:
+`json2jobdef --prod --enqueue --slice-size N` builds the cnf, pushes it
+to SAM, and registers the campaign. No map file is involved. A wrong
+setting on a live campaign is fixed with
+`submissions set-entry <ID> <key> <value> [--include-open-rows]` — the
+flag is what reaches recoveries.
+
 ## MCP server
 
 A read-only MCP server at `mcp/` exposes campaign status and dataset

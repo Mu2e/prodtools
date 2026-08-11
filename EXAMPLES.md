@@ -85,11 +85,16 @@ json2jobdef --json data/Run1B/primary_muon.json --index 0
 json2jobdef --json data/mdc2025/evntuple.json --desc EventNtupleFromMCS \
     --dsconf MDC2025-002 --prod \
     --jobdefs /tmp/map_evntuple_mdc2025.json
+
+# Production push + direct campaign registration: no map file written
+json2jobdef --json data/mdc2025/evntuple.json --desc EventNtupleFromMCS \
+    --dsconf MDC2025-002 --prod --enqueue --slice-size 1000
 ```
 
 Flags: `--json` (required), `--desc`, `--dsconf`, `--index`, `--pushout`,
-`--prod`, `--jobdefs FILE`, `--extend`, `--ignore-empty`,
-`--event-count-positive`, `--no-cleanup`, `--verbose`.
+`--prod`, `--jobdefs FILE`, `--enqueue`, `--slice-size N` (default 1000),
+`--extend`, `--ignore-empty`, `--event-count-positive`, `--no-cleanup`,
+`--verbose`.
 
 Notes:
 
@@ -97,12 +102,29 @@ Notes:
   the JSON array position. Prefer `--dsconf` (bulk) or `--desc --dsconf`.
 - `--prod` implies `--pushout` and prints the per-entry summary of the
   jobdefs file it just wrote (tarball, job count, inloc, outputs, and the
-  cnf window for a `firstjob` entry). Re-running `--prod` is idempotent —
-  use it to finish a partially-failed push.
-- `--jobdefs` names the submission-map file entries are appended to
-  (default `jobdefs_list.json`). Give it an **absolute** path when
-  running as another account, or the append lands in a fresh file beside
-  the working directory.
+  cnf window for a `firstjob` entry) — only when `--jobdefs` was given;
+  `--enqueue`-only pushes write no such file, so there is nothing to
+  summarize. Re-running `--prod` is idempotent — use it to finish a
+  partially-failed push.
+- `--jobdefs` names the submission-map file entries are appended to.
+  There is no default filename any more: omit `--jobdefs` and no map
+  file is written at all. Give it an **absolute** path when running as
+  another account, or the append lands in a fresh file beside the
+  working directory.
+- Under `--prod`, at least one of `--jobdefs` or `--enqueue` is
+  required — `argparse` refuses a bare `--prod` (`json2jobdef: --prod
+  requires --jobdefs or --enqueue`), since otherwise the cnf would push
+  to SAM but register no campaign and write no map, a silent no-op.
+- `--enqueue` pushes the cnf to SAM, then registers the entry directly
+  as a sliced-submission campaign in the ledger (the same registration
+  `submit_map --enqueue`, section 11, performs from a map file) — no
+  map file is written or needed. `--enqueue` requires `--prod` (a
+  campaign needs the cnf in SAM to resolve the tarball from). The
+  campaign's `map_path` records provenance as
+  `<json path>#<desc>@<dsconf>` instead of a filename — that column is
+  never dispatched from, only echoed back by status tooling.
+  `--slice-size` (default 1000, only meaningful with `--enqueue`) is
+  frozen into the campaign row.
 - `--extend` excludes input files already consumed by the previous version
   of the same jobdef and auto-increments the tarball version.
 - List-valued fields expand combinatorially: an entry with two `dsconf`
@@ -790,6 +812,7 @@ submissions cancel 7               # close; already-submitted rows still recover
 submissions complete 7 --note "upstream production finished"
 submissions set-slice 7 500        # retune the batch size from the next tick
 submissions set-memory 7 3000MB    # retune the memory request from the next tick
+submissions set-entry 7 inloc resilient --include-open-rows  # also fix open rows' recoveries
 ```
 
 Global flag: `--db PATH` (default: the submission-ledger path above,
@@ -828,6 +851,19 @@ Verbs:
 - `set-slice CAMP_ID N` / `set-memory CAMP_ID MEM` — retune a live
   campaign's slice size or memory request. Both take effect on the next
   tick and reach only future slices, never already-submitted rows.
+- `set-entry CAMP_ID KEY VALUE [--include-open-rows]` — the general form
+  of the two retune verbs above: set one of `inloc`/`memory`/`disk`/
+  `expected_lifetime` on a live campaign's entry. Without
+  `--include-open-rows` the change reaches future slices only (same as
+  `set-slice`/`set-memory`) — `resubmit()` rebuilds a recovery from the
+  row's own frozen entry snapshot, not the campaign's current one, so an
+  already-submitted row keeps what it was submitted with. With the flag,
+  every not-yet-closed row on the campaign's tarball is rewritten too,
+  which is what makes an in-flight RECOVERY pick up the new value. The
+  flag defaults off because an *unset* `memory` is what earns a recovery
+  the `4000MB` floor (section 3) — cascading a memory value would
+  forfeit it; an `inloc` fix, which has no floor to lose, normally wants
+  the flag on.
 
 Notes:
 
@@ -926,6 +962,16 @@ step (section 11 `submissions`, wiki page
   `simjob_setup`, `fcl`, `dsconf`, `outloc`.
 - `Please specify either --desc AND --dsconf, --dsconf only, or --index only`
   — json2jobdef entry selection is exactly one of those three forms.
+- `json2jobdef: --prod requires --jobdefs or --enqueue (otherwise a bare
+  --prod pushes the cnf to SAM but writes no map file and registers no
+  campaign -- a silent no-op)` — pass at least one; `--enqueue` is the
+  no-map-file path, `--jobdefs FILE` builds a map for manual
+  `submit_map` dispatch.
+- `json2jobdef: --enqueue requires --prod (a campaign needs the cnf in
+  SAM)` — `--enqueue` resolves the tarball from SAM, so the cnf must
+  have been pushed first.
+- `json2jobdef: --slice-size requires --enqueue` — `--slice-size` only
+  has meaning for the campaign `--enqueue` registers.
 - `njobs=N exceeds the M jobs supported by the input file list` — the
   declared `njobs` is larger than `ceil(nfiles / merge_factor)`; fix
   `njobs` or the input selection.
