@@ -420,42 +420,47 @@ def build_jobdef(config, job_args):
         ]
     }
 
-def append_jobdef(config, jobdefs_file=None):
-    """
-    Append job information to a jobdefs file in JSON format.
-    Handles both simple and complex outloc structures.
+def build_jobdesc(config):
+    """Project a build config onto the submission entry (the `jobdesc`).
+
+    Pure: no filesystem writes. The one impure part is the `njobs: -1`
+    branch, which asks the freshly-built cnf for its job count.
+
+    Raises ValueError if `outloc` is not a dict — see append_jobdef for
+    why that stays a warning on the file-writing path and is fatal on
+    the enqueue path.
     """
     parfile_name = get_parfile_name(config)
     is_generic = config.get('generic_tarball', False)
 
-    # Create JSON structure for the job definition
     jobdef_entry = {
         "tarball": parfile_name,
         "inloc": config['inloc'],
         "outputs": []
     }
 
-    # Optional per-entry resource requests pass through to the map entry;
+    # Optional per-entry resource requests pass through to the entry;
     # the submit path reads them via map_entry.resources_of
     # (CLI flag > entry key > built-in default).
     for key in ('memory', 'disk', 'expected_lifetime'):
         if key in config:
             jobdef_entry[key] = config[key]
 
-    # Draining configuration passes through too, so a draining map comes out
-    # of --jobdefs ready to enqueue instead of needing a hand-edit: the
-    # submit path reads `input_pattern` (map_entry.is_draining, the kind
-    # discriminator) and `prestage` (submit._validate_draining_entry, and
-    # the tape-residency gate in submissions.drain_tick) off the MAP entry,
-    # so a value left behind in the JSON config would silently do nothing.
+    # Draining configuration passes through too, so a draining map comes
+    # out of --jobdefs ready to enqueue instead of needing a hand-edit:
+    # the submit path reads `input_pattern` (map_entry.is_draining, the
+    # kind discriminator) and `prestage` (submit._validate_draining_entry,
+    # and the tape-residency gate in submissions.drain_tick) off the
+    # ENTRY, so a value left behind in the JSON config would silently do
+    # nothing.
     for key in ('input_pattern', 'prestage'):
         if key in config:
             jobdef_entry[key] = config[key]
 
     # A draining entry is defined by having an input_pattern and NO index
-    # space. Emitting both would leave the map self-contradictory --
-    # is_draining() would say draining while njobs claimed a fixed window --
-    # so refuse rather than write it.
+    # space. Emitting both would leave the entry self-contradictory --
+    # is_draining() would say draining while njobs claimed a fixed window
+    # -- so refuse rather than write it.
     if 'input_pattern' in config and not is_generic:
         fail("Error: input_pattern requires generic_tarball: true "
              "(a draining entry has no fixed job count)")
@@ -489,22 +494,34 @@ def append_jobdef(config, jobdefs_file=None):
                 fail(f"Error: {e} for {parfile_name}")
             jobdef_entry["firstjob"] = firstjob
             print(f"Windowed entry: cnf indices {firstjob}..{firstjob + njobs - 1}")
-    
-    # Handle outloc - must be dict with dataset-specific locations
+
     outloc = config['outloc']
-    
     if not isinstance(outloc, dict):
-        print(f"Warning: outloc must be a dictionary with dataset-specific locations for {config.get('desc', 'unknown')}")
-        return
-    
-    # Add each dataset with its location
+        raise ValueError(
+            f"outloc must be a dictionary with dataset-specific "
+            f"locations for {config.get('desc', 'unknown')}")
     for dataset_name, location in outloc.items():
         jobdef_entry["outputs"].append({
             "dataset": dataset_name,
             "location": location
         })
-    
-    # Write JSON entry to file
+    return jobdef_entry
+
+
+def append_jobdef(config, jobdefs_file=None):
+    """Append the config's entry to a jobdefs file in JSON format.
+
+    A non-dict outloc warns and skips rather than failing, preserving
+    long-standing behaviour on this path. The enqueue path (json2jobdef
+    --enqueue) deliberately does NOT swallow it: skipping there would
+    push a cnf to SAM and create no campaign, a half-done production
+    push that reports success.
+    """
+    try:
+        jobdef_entry = build_jobdesc(config)
+    except ValueError as e:
+        print(f"Warning: {e}")
+        return
     _write_jobdef_json_entry(jobdef_entry, jobdefs_file)
 
 def _write_jobdef_json_entry(jobdef_entry, jobdefs_file=None):

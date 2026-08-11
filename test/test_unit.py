@@ -5226,6 +5226,45 @@ class TestEntryResources(unittest.TestCase):
         self.assertNotIn('disk', snap)
         self.assertNotIn('memory', entry)         # original untouched
 
+    def test_build_jobdesc_projects_core_keys(self):
+        from utils.json2jobdef import build_jobdesc
+        config = {'desc': 'D', 'dsconf': 'C', 'owner': 'mu2e',
+                  'inloc': 'tape', 'njobs': 7,
+                  'outloc': {'*.art': 'tape'},
+                  'simjob_setup': '/cvmfs/x/setup.sh'}
+        with patch('utils.json2jobdef.get_parfile_name',
+                   return_value='cnf.mu2e.D.C.0.tar'):
+            entry = build_jobdesc(config)
+        self.assertEqual(entry['tarball'], 'cnf.mu2e.D.C.0.tar')
+        self.assertEqual(entry['inloc'], 'tape')
+        self.assertEqual(entry['njobs'], 7)
+        self.assertEqual(entry['outputs'],
+                         [{'dataset': '*.art', 'location': 'tape'}])
+
+    def test_build_jobdesc_omits_njobs_for_generic(self):
+        """Absence of njobs is what makes runmu2e pick direct-input
+        mode, so a generic tarball must not carry one."""
+        from utils.json2jobdef import build_jobdesc
+        config = {'desc': 'D', 'dsconf': 'C', 'owner': 'mu2e',
+                  'inloc': 'tape', 'njobs': 7, 'generic_tarball': True,
+                  'outloc': {'*.art': 'tape'},
+                  'simjob_setup': '/cvmfs/x/setup.sh'}
+        with patch('utils.json2jobdef.get_parfile_name',
+                   return_value='cnf.mu2e.D.C.0.tar'):
+            entry = build_jobdesc(config)
+        self.assertNotIn('njobs', entry)
+
+    def test_build_jobdesc_rejects_non_dict_outloc(self):
+        from utils.json2jobdef import build_jobdesc
+        config = {'desc': 'D', 'dsconf': 'C', 'owner': 'mu2e',
+                  'inloc': 'tape', 'njobs': 7,
+                  'outloc': [{'*.art': 'tape'}],
+                  'simjob_setup': '/cvmfs/x/setup.sh'}
+        with patch('utils.json2jobdef.get_parfile_name',
+                   return_value='cnf.mu2e.D.C.0.tar'):
+            with self.assertRaises(ValueError):
+                build_jobdesc(config)
+
     def test_append_jobdef_passes_resource_keys(self):
         import tempfile
         from utils import json2jobdef
