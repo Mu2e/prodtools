@@ -15,9 +15,24 @@ Four things, all of them POMS residue:
 4. Retire the POMS-era operator surface that still documents a workflow which
    no longer exists.
 
-Four independent changes. Each can land and be verified on its own. Change 4
-is doc-and-delete only and should land first, so the misleading surface is
-gone before the new flags arrive to document.
+Four independent changes. Each can land and be verified on its own.
+
+**Order: Change 2 first** (decided 2026-08-10). It unblocks a live
+operational need: campaign 54 (`PhysicalPionStops.Run1Bap`) lost 239 of 500
+jobs to the 24 h wall clock because its `inloc` is `disk`, and
+`set-entry --include-open-rows` is the only thing that reaches the held rows'
+frozen snapshots. Change 4 follows, being doc-and-delete only, so the
+misleading surface is gone before the new flags arrive to document. Changes 1
+and 3 come last, in either order.
+
+**Implementation constraint: work in a git worktree.** There is no build or
+deploy step — `submissions run` and `submit_map` execute straight out of the
+working checkout, so a half-applied edit in `utils/` would break the next
+hand-tick. A worktree keeps this checkout on stable code while the work
+proceeds, and each change merges only with the suite green. Running grid jobs
+are not a constraint: `_bundle_prodtools` ships `utils/` with every submission,
+so a job in flight runs the copy it was launched with, and a campaign's next
+slice submits new worker and new submitter together.
 
 ## Background — what the map actually is
 
