@@ -24,6 +24,7 @@ bare `entry[...]` or `entry.get(...)` so a malformed jobdesc is caught
 at the boundary, not as a downstream crash.
 """
 
+import re
 from typing import Optional
 
 from utils.job_common import Mu2eName
@@ -123,3 +124,57 @@ def resources_of(entry: dict) -> dict:
                     f"(jobsub format), got {entry[key]!r}")
             res[key] = entry[key]
     return res
+
+
+# jobsub_submit's --memory grammar, as the house format uses it
+# ('2500MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
+# submissions.RECOVERY_MEMORY). Anchored: 'lots' and '3000 MB' are
+# rejected rather than passed through to fail at submit time.
+# Shared by the memory and disk keys — both take a jobsub size string.
+_SIZE_RE = re.compile(r'^\d+(MB|GB)$')
+_LIFETIME_RE = re.compile(r'^\d+[smhd]$')
+
+# inloc forms utils/file_resolver.py actually accepts. 'scratch' is one
+# of them: FileResolver.locate falls through to a SAM locate preferring
+# location_type == inloc, and jobsub_argv._LOCATION_DEFAULT_PROTOCOL
+# carries a protocol for it. EXAMPLES.md has always documented it.
+INLOC_SIMPLE = ('tape', 'disk', 'scratch', 'resilient', 'stash', 'none')
+
+
+def validate_entry_value(key, value):
+    """Reject a malformed entry value at the boundary.
+
+    Single owner of the value grammar, called from BOTH boundaries where
+    an entry value enters the system: `json2jobdef.validate_required_fields`
+    (where a campaign is born, from the build config) and
+    `submission_ledger.set_campaign_entry_key` (where a live campaign is
+    edited). Two validators would let an operator enqueue a spelling that
+    `set-entry` refuses.
+
+    Written here rather than at submit time because an unparseable value
+    would otherwise sit in the entry looking applied and only surface a
+    tick later — as a jobsub_submit rejection for the resource keys, or,
+    worse, as a SILENT SAM fallback for a misspelled inloc, which reads
+    as a working campaign with the wrong provenance.
+
+    Keys other than the four it knows are ignored, not rejected: an
+    entry legitimately carries tarball, outputs, njobs and friends.
+    """
+    if key not in ('inloc',) + RESOURCE_KEYS:
+        return
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string, got {value!r}")
+    if key in ('memory', 'disk'):
+        if not _SIZE_RE.match(value):
+            raise ValueError(
+                f"{key} must look like '3000MB' or '4GB', got {value!r}")
+    elif key == 'expected_lifetime':
+        if not _LIFETIME_RE.match(value):
+            raise ValueError(
+                f"expected_lifetime must look like '48h' or '3600s', "
+                f"got {value!r}")
+    elif key == 'inloc':
+        if value not in INLOC_SIMPLE and not value.startswith('dir:/'):
+            raise ValueError(
+                f"inloc must be one of {', '.join(INLOC_SIMPLE)} or "
+                f"'dir:/<absolute path>', got {value!r}")

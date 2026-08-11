@@ -18,7 +18,8 @@ from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
-from utils.jobdesc import firstjob_of, validate_window
+from utils.jobdesc import (
+    RESOURCE_KEYS, firstjob_of, validate_entry_value, validate_window)
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -318,10 +319,29 @@ def get_parfile_name(config):
     return cnf_name(config, 'tar')
 
 def validate_required_fields(config):
-    """Validate that config has all required fields."""
+    """Validate that config has all required fields, and that the entry
+    values it supplies are well formed.
+
+    The value check shares utils/jobdesc.validate_entry_value with
+    `submissions set-entry`, so a spelling the operator cannot set on a
+    live campaign is also one they cannot enqueue. Unconditional, not
+    gated on --enqueue: a misspelled inloc makes file_resolver fall
+    through to SAM without complaint, which is just as wrong on a local
+    smoke and far harder to notice there.
+
+    Keys are validated only when present — inloc is optional
+    (process_single_entry defaults it to 'none'), and the resource keys
+    usually come from CLI flags instead.
+    """
     for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
         if not config.get(req):
             sys.exit(f"Missing required field: {req}")
+    for key in ('inloc',) + RESOURCE_KEYS:
+        if key in config:
+            try:
+                validate_entry_value(key, config[key])
+            except ValueError as exc:
+                sys.exit(f"Invalid {key}: {exc}")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
@@ -442,7 +462,7 @@ def build_jobdesc(config):
     # Optional per-entry resource requests pass through to the entry;
     # the submit path reads them via jobdesc.resources_of
     # (CLI flag > entry key > built-in default).
-    for key in ('memory', 'disk', 'expected_lifetime'):
+    for key in RESOURCE_KEYS:
         if key in config:
             jobdef_entry[key] = config[key]
 

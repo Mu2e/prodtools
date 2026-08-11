@@ -20,52 +20,23 @@ cannot be a typo.
 import getpass
 import json
 import os
-import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-# jobsub_submit's --memory grammar, as the house format uses it
-# ('2500MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
-# submissions.RECOVERY_MEMORY). Anchored: 'lots' and '3000 MB' are
-# rejected rather than passed through to fail at submit time.
-# Shared by the memory and disk keys — both take a jobsub size string.
-_SIZE_RE = re.compile(r'^\d+(MB|GB)$')
-_LIFETIME_RE = re.compile(r'^\d+[smhd]$')
+from utils.jobdesc import validate_entry_value
 
 # Entry keys `submissions set-entry` may edit on a live campaign.
 # Deliberately excludes tarball/njobs/firstjob/input_pattern: those
 # define the campaign's identity and index space, so changing one in
 # place corrupts a live campaign instead of fixing it. The correct
 # operation there is cancel + re-enqueue.
+#
+# This is ledger policy — WHICH keys are safe to edit mid-flight. What
+# a valid VALUE looks like is entry-format knowledge, owned by
+# utils/jobdesc.validate_entry_value and shared with the json2jobdef
+# boundary so the two cannot drift.
 EDITABLE_ENTRY_KEYS = ('inloc', 'memory', 'disk', 'expected_lifetime')
-
-# inloc forms utils/file_resolver.py actually accepts.
-_INLOC_SIMPLE = ('tape', 'disk', 'resilient', 'stash', 'none')
-
-
-def _validate_entry_value(key, value):
-    """Reject a malformed value at the boundary. Written here rather
-    than at submit time because an unparseable value would otherwise sit
-    in the ledger looking applied and only surface a tick later — as a
-    jobsub_submit rejection for the resource keys, or, worse, as a
-    SILENT SAM fallback for a misspelled inloc."""
-    if not isinstance(value, str):
-        raise ValueError(f"{key} must be a string, got {value!r}")
-    if key in ('memory', 'disk'):
-        if not _SIZE_RE.match(value):
-            raise ValueError(
-                f"{key} must look like '3000MB' or '4GB', got {value!r}")
-    elif key == 'expected_lifetime':
-        if not _LIFETIME_RE.match(value):
-            raise ValueError(
-                f"expected_lifetime must look like '48h' or '3600s', "
-                f"got {value!r}")
-    elif key == 'inloc':
-        if value not in _INLOC_SIMPLE and not value.startswith('dir:/'):
-            raise ValueError(
-                f"inloc must be one of {', '.join(_INLOC_SIMPLE)} or "
-                f"'dir:/<absolute path>', got {value!r}")
 
 
 PRODUCTION_DB = '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'
@@ -547,7 +518,7 @@ def set_campaign_entry_key(db_path, camp_id, key, value,
             f"{', '.join(EDITABLE_ENTRY_KEYS)}. Identity and index-space "
             f"keys (tarball, njobs, firstjob, input_pattern) define the "
             f"campaign — cancel and re-enqueue instead")
-    _validate_entry_value(key, value)
+    validate_entry_value(key, value)
     con = _connect(db_path)
     try:
         row = con.execute(

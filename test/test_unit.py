@@ -13078,6 +13078,119 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         self.assertEqual(camp['map_path'], 'data/x.json#IntegDesc@IntegConf')
 
 
+class TestJson2JobdefEntryValueValidation(unittest.TestCase):
+    """The entry values a build config supplies are validated where the
+    config is READ, not only by `submissions set-entry`.
+
+    A misspelled inloc is the expensive typo. `file_resolver.locate`
+    finds no such location and falls through to `_locate_via_sam`, so
+    the campaign runs to completion reading from SAM while the operator
+    believes it reads from resilient -- no error, wrong provenance,
+    wrong wall-clock. `set-entry` rejected that spelling; json2jobdef,
+    which is how every campaign is BORN, did not.
+
+    Validation is unconditional, not gated on --enqueue: a typo is
+    equally wrong on a local smoke, and the whole point is to catch it
+    before it becomes invisible."""
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.json2jobdef = json2jobdef
+
+    def _cfg(self, **over):
+        """Minimal config satisfying the required-field check, so each
+        test fails (or passes) only on the value under test."""
+        cfg = {'simjob_setup': '/cvmfs/mu2e.opensciencegrid.org/x/setup.sh',
+               'fcl': 'a.fcl', 'dsconf': 'Run1Bap',
+               'outloc': {'dts': 'tape'}}
+        cfg.update(over)
+        return cfg
+
+    def test_misspelled_inloc_rejected(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.json2jobdef.validate_required_fields(
+                self._cfg(inloc='resiliant'))
+        msg = str(cm.exception)
+        self.assertIn('inloc', msg)
+        self.assertIn('resiliant', msg)
+
+    def test_valid_inloc_forms_accepted(self):
+        for good in ('tape', 'disk', 'scratch', 'resilient', 'stash', 'none',
+                     'dir:/pnfs/mu2e/tape/phy-sim'):
+            with self.subTest(inloc=good):
+                self.json2jobdef.validate_required_fields(self._cfg(inloc=good))
+
+    def test_scratch_is_a_legal_inloc(self):
+        """Regression pin. 'scratch' was missing from the accepted set
+        when the validator was first written, so `set-entry N inloc
+        scratch` refused a location the resolver handles
+        (jobsub_argv._LOCATION_DEFAULT_PROTOCOL carries a protocol for
+        it, and EXAMPLES.md documents it)."""
+        from utils import jobdesc
+        self.assertIn('scratch', jobdesc.INLOC_SIMPLE)
+        jobdesc.validate_entry_value('inloc', 'scratch')
+
+    def test_list_valued_inloc_is_expanded_before_validation(self):
+        """The mixing config shape wraps every value in a list
+        (`"inloc": ["resilient"]`, `"pbeam": ["Mix1BB"]`, ...). That
+        shape is a cross-product template: load_json expands it to
+        scalar-valued configs BEFORE process_single_entry validates.
+
+        Pinned because validating a raw, unexpanded config would reject
+        49 production entries across data/Run1B, data/mdc2025 and
+        data/mdc2030 -- so this ordering is what makes the value check
+        safe to run unconditionally."""
+        import json as _json
+        import tempfile
+        raw = [{
+            'simjob_setup': ['/cvmfs/mu2e.opensciencegrid.org/x/setup.sh'],
+            'fcl': ['Production/JobConfig/mixing/Mix.fcl'],
+            'dsconf': ['Run1Ban_best_v1_5-000'],
+            'inloc': ['resilient'],
+            'outloc': [{'dig.mu2e.*.art': 'tape'}],
+            'desc': ['Thing'],
+        }]
+        with tempfile.NamedTemporaryFile('w', suffix='.json',
+                                         delete=False) as fh:
+            _json.dump(raw, fh)
+            path = fh.name
+        try:
+            configs = self.json2jobdef.load_json(Path(path))
+        finally:
+            os.unlink(path)
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(configs[0]['inloc'], 'resilient')
+        self.json2jobdef.validate_required_fields(configs[0])
+
+    def test_absent_inloc_accepted(self):
+        """inloc is optional -- process_single_entry defaults it to
+        'none'. Validating a key that isn't there would reject every
+        config in data/ that omits it."""
+        self.json2jobdef.validate_required_fields(self._cfg())
+
+    def test_malformed_resource_values_rejected(self):
+        for key, bad in (('memory', '3000 MB'),
+                         ('disk', 'lots'),
+                         ('expected_lifetime', '48 hours')):
+            with self.subTest(key=key):
+                with self.assertRaises(SystemExit) as cm:
+                    self.json2jobdef.validate_required_fields(
+                        self._cfg(**{key: bad}))
+                self.assertIn(key, str(cm.exception))
+
+    def test_wellformed_resource_values_accepted(self):
+        self.json2jobdef.validate_required_fields(
+            self._cfg(memory='4000MB', disk='50GB', expected_lifetime='48h'))
+
+    def test_same_validator_as_set_entry(self):
+        """One definition, two callers. If these drift, an operator can
+        enqueue a value that `set-entry` would refuse -- the asymmetry
+        this change exists to remove."""
+        from utils import jobdesc, submission_ledger
+        self.assertIs(submission_ledger.validate_entry_value,
+                      jobdesc.validate_entry_value)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
