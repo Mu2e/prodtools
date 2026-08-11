@@ -1460,6 +1460,8 @@ EOF
 
 In `docs/EXAMPLES_schema.md`: delete the `submit_map` section (section 11) and its entry from the tools list; add a `submissions resubmit` subsection under the submissions verbs; renumber so section numbering stays contiguous with no gaps.
 
+Also fix `docs/EXAMPLES_schema.md:203`, which still says "The campaign's `map_path` records provenance as…" — the column is `origin` since Task 7. The derived `EXAMPLES.md:120` carries the same text and is fixed by the Step 2 regeneration. Task 7's own sweep missed both because it grepped `--include="*.py"`.
+
 New error strings to document:
 - `submissions: no ledger row <N> in <db>`
 - `submissions: refusing — row <N> (state=...) already covers part of this selection`
