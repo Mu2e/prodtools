@@ -12981,8 +12981,9 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         self.assertIn('--slice-size requires --enqueue', msg)
 
     def test_prod_requires_jobdefs_or_enqueue(self):
-        """A bare --prod would silently write jobdefs_list.json into the
-        current directory."""
+        """A bare --prod (neither --jobdefs nor --enqueue) would push the
+        cnf to SAM and then register nothing -- no map file, no campaign
+        -- a silent no-op that reports success."""
         msg = self._run_main(
             ['--json', 'data/Run1B/resampler_beam.json',
              '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
@@ -12995,6 +12996,42 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
             _provenance('data/Run1B/resampler_beam.json',
                         {'desc': 'PhysicalPionStops', 'dsconf': 'Run1Bap'}),
             'data/Run1B/resampler_beam.json#PhysicalPionStops@Run1Bap')
+
+    def test_enqueue_without_jobdefs_writes_no_map_file(self):
+        """--jobdefs is optional: supply it and the map file is still
+        written (unchanged behaviour); omit it -- even under --enqueue --
+        and nothing is written. Regression pin: append_jobdef used to run
+        unconditionally, so a bare `--prod --enqueue` (no --jobdefs) fell
+        back to the default filename and wrote ./jobdefs_list.json anyway,
+        contradicting the --enqueue help text's "no map file written"
+        claim. Runs from a scratch cwd so a stray file left by another
+        test/run cannot fool the assertion; the SAM- and ledger-facing
+        calls are mocked since this pins a file-write decision, not a
+        submission."""
+        from utils import json2jobdef
+        config = {
+            'desc': 'PhysicalPionStops', 'dsconf': 'Run1Bap',
+            'simjob_setup': 's', 'fcl': 'f.fcl',
+            'outloc': {'*.art': 'tape'}, 'inloc': 'none',
+            'njobs': 1, 'owner': 'mu2e',
+        }
+        tmpdir = tempfile.mkdtemp()
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            with patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+                 patch.object(json2jobdef, 'build_jobdef', return_value=None), \
+                 patch.object(json2jobdef, 'get_parfile_name',
+                              return_value='cnf.mu2e.PhysicalPionStops.Run1Bap.0.tar'), \
+                 patch('utils.submit._resolve_ledger_db', return_value=':memory:'), \
+                 patch('utils.submit.enqueue_entry', return_value=1):
+                json2jobdef.process_single_entry(
+                    dict(config), pushout=False, no_cleanup=True,
+                    jobdefs_list=None, enqueue=True, slice_size=1000,
+                    json_path='data/Run1B/resampler_beam.json')
+            self.assertFalse(os.path.exists('jobdefs_list.json'))
+        finally:
+            os.chdir(cwd)
 
 
 # ---------------------------------------------------------------------------

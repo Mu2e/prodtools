@@ -599,8 +599,9 @@ def main():
         sys.exit("json2jobdef: --slice-size requires --enqueue")
     if args.prod and not (args.jobdefs or args.enqueue):
         sys.exit("json2jobdef: --prod requires --jobdefs or --enqueue "
-                 "(a bare --prod would write jobdefs_list.json into the "
-                 "current directory)")
+                 "(otherwise a bare --prod pushes the cnf to SAM but "
+                 "writes no map file and registers no campaign -- a "
+                 "silent no-op)")
 
     # If --prod is specified, enable pushout
     if args.prod:
@@ -774,7 +775,12 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     # build_jobdef handles FCL template creation for non-mixing jobs
     result = build_jobdef(config, job_args)
 
-    append_jobdef(config, jobdefs_list)
+    # Only write the map file when a --jobdefs path was actually
+    # supplied. --enqueue's promise ("no map file written") is only
+    # true if a bare --prod --enqueue (no --jobdefs) doesn't fall back
+    # to the default jobdefs_list.json filename.
+    if jobdefs_list:
+        append_jobdef(config, jobdefs_list)
     parfile_name = get_parfile_name(config)
 
     if pushout:
