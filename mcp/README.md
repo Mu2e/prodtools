@@ -18,6 +18,20 @@ Health check: `bash mcp/scripts/start_mcp.sh --check`.
 ## `prodtools-write`
 
 Exposes submission: `push_cnf`, `enqueue_campaign`, `run_submissions`.
+
+A production campaign takes two calls: `push_cnf(..., slice_size=N)`
+builds the cnf, registers it in SAM and creates the campaign, returning
+a `campaign_id` for `run_submissions`. No map file is involved — that
+call mirrors `json2jobdef --prod --enqueue`.
+
+`push_cnf`'s other mode, `jobdefs_map=<abs path>`, writes a map file
+instead and creates NO campaign, so it still needs a separate
+`enqueue_campaign`. It exists for the rare case that wants the file on
+disk. Exactly one of the two must be given: a bare `--prod` pushes the
+cnf to SAM and then registers nothing, which the CLI refuses too.
+
+`enqueue_campaign` remains the tool for a map that already exists.
+
 Every tool takes a required `run_as`:
 
 - `run_as="self"` needs no privilege and writes only your own scratch,

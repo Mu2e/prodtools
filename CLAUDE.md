@@ -68,7 +68,11 @@ Setup: `bash mcp/scripts/install.sh`. Health check:
 `bash mcp/scripts/start_mcp.sh --check`.
 
 A second, write-capable server (`prodtools-write`) exposes submission:
-`push_cnf`, `enqueue_campaign`, `run_submissions`. Every tool takes a
+`push_cnf`, `enqueue_campaign`, `run_submissions`. A campaign takes two
+calls — `push_cnf(..., slice_size=N)` (builds the cnf, registers it,
+creates the campaign, returns `campaign_id`; no map file) then
+`run_submissions`. `push_cnf`'s `jobdefs_map` mode writes a map file
+and creates no campaign; it is the legacy path. Every tool takes a
 required `run_as`:
 
 - `run_as="self"` needs no privilege and writes only your own scratch,

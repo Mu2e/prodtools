@@ -30,6 +30,7 @@ instantiation, which this module never does.
 import json as _json
 from collections import Counter
 from pathlib import Path
+from typing import Optional
 
 from prodtools_mcp_write import runner
 from utils.config_utils import get_tarball_desc
@@ -249,20 +250,36 @@ def _read_map_entry(map_path, tarball_desc=None, dsconf=None,
         f"candidates: {listing}")
 
 
-def push_cnf(json: str, desc: str, dsconf: str, jobdefs_map: str,
-             run_as: str, confirm: bool = False):
-    """Build a cnf tarball and register it.
+def push_cnf(json: str, desc: str, dsconf: str, run_as: str,
+             confirm: bool = False, slice_size: Optional[int] = None,
+             jobdefs_map: Optional[str] = None):
+    """Build a cnf tarball, register it in SAM, and (normally) create
+    its campaign -- the one-command flow, mirroring
+    `json2jobdef --prod --enqueue`.
 
     run_as="self" registers under your own dataset owner and scratch
     outstage. run_as="mu2epro" registers in PRODUCTION SAM and is not
     reversible; it requires confirm=true.
 
-    jobdefs_map must be an absolute path you can write:
+    Pass EXACTLY ONE of:
+
+    - `slice_size` -- the normal path. Creates the campaign directly in
+      the ledger; no map file is written or needed. Returns
+      `campaign_id`, ready for `run_submissions`.
+    - `jobdefs_map` -- the legacy path, for the rare case that wants a
+      map file on disk (hand inspection, or feeding `bin/submit_map`).
+      Returns `map_path`/`entry_index` and creates NO campaign, so it
+      still needs an `enqueue_campaign` call to become submittable.
+
+    Neither is a default: a bare `--prod` pushes the cnf to SAM and
+    then registers nothing, a silent no-op the CLI itself refuses.
+
+    `jobdefs_map` must be an absolute path you can write --
     production_manager/direct_maps/ is mu2epro-owned, and this tool
-    never invents a path. It must be absolute because, under
-    run_as="mu2epro", the ksu block cd's into its own mktemp workdir --
-    a relative path would be written there while the result is read
-    back relative to this server's own cwd.
+    never invents a path. Absolute because, under run_as="mu2epro", the
+    ksu block cd's into its own mktemp workdir: a relative path would be
+    written there while the result is read back relative to this
+    server's own cwd.
 
     The Musing (simjob_setup) is never taken as an argument: it is
     derived from the `--json` config's own entry for desc+dsconf, so a
@@ -270,11 +287,23 @@ def push_cnf(json: str, desc: str, dsconf: str, jobdefs_map: str,
     """
     runner.require_confirmed(run_as, confirm)
 
+    if (slice_size is None) == (jobdefs_map is None):
+        raise ValueError(
+            "push_cnf takes exactly one of slice_size (create the "
+            "campaign directly -- the normal path) or jobdefs_map "
+            "(write a map file instead, which still needs a separate "
+            "enqueue_campaign call); "
+            f"got slice_size={slice_size!r} jobdefs_map={jobdefs_map!r}")
+
+    simjob_setup, tarball_desc = _select_push_params(json, desc, dsconf)
+
+    if slice_size is not None:
+        return _push_and_enqueue(json, desc, dsconf, slice_size, run_as,
+                                 simjob_setup, tarball_desc)
+
     if not Path(jobdefs_map).is_absolute():
         raise ValueError(
             f"jobdefs_map must be an absolute path (got {jobdefs_map!r})")
-
-    simjob_setup, tarball_desc = _select_push_params(json, desc, dsconf)
 
     before_entries = _read_entries(jobdefs_map)
 
@@ -293,6 +322,84 @@ def push_cnf(json: str, desc: str, dsconf: str, jobdefs_map: str,
         'map_path': jobdefs_map,
         'entry_index': index,
     }
+
+
+def _push_and_enqueue(json, desc, dsconf, slice_size, run_as,
+                      simjob_setup, tarball_desc):
+    """`json2jobdef --prod --enqueue`: the campaign row IS the artifact.
+
+    With no map file to read back, the ledger row is what this call
+    produced, and it is identified the same way the map path identifies
+    its entry -- by desc+dsconf, preferring a campaign that was not
+    there before the command ran. Never scraped from stdout.
+    """
+    db = _ledger_path_for(run_as)
+    try:
+        before_ids = {c['id'] for c in _all_campaigns(db)}
+    except RuntimeError:
+        # No ledger yet: a first-ever push creates the directory and the
+        # DB as it enqueues. An unreadable ledger BEFORE the write is
+        # not an error -- it is the empty snapshot. It stays fatal after
+        # the write, where _all_campaigns is called without this guard.
+        before_ids = set()
+
+    argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
+            '--dsconf', dsconf, '--prod', '--enqueue',
+            '--slice-size', str(slice_size)]
+    result = runner.run_cli(argv, run_as, simjob_setup=simjob_setup)
+    if result['rc'] != 0:
+        raise RuntimeError(
+            f"json2jobdef --prod --enqueue failed (rc={result['rc']}): "
+            f"{_both_streams(result)}")
+
+    matches = [c for c in _all_campaigns(db)
+               if c['state'] in _LIVE_CAMPAIGN_STATES
+               and _tarball_matches(c['tarball'], tarball_desc, dsconf)]
+    campaign = _sole_live_campaign(
+        db, matches, f"desc={desc!r} dsconf={dsconf!r}",
+        'json2jobdef --prod --enqueue', before_ids)
+    entry = campaign.get('entry') or {}
+    return {
+        'tarball': campaign['tarball'],
+        'datasets': [o.get('dataset') for o in entry.get('outputs', [])],
+        'campaign_id': campaign['id'],
+        'njobs': entry.get('njobs'),
+    }
+
+
+def _sole_live_campaign(db, matches, subject, what, before_ids=None):
+    """The one live campaign `what` just created, or raise.
+
+    `before_ids`, when given, is the set of campaign ids that existed
+    before the command ran; a campaign absent from it is unambiguously
+    this call's, which is what lets a desc+dsconf match disambiguate
+    itself against the campaigns that tarball has accumulated over its
+    life. Without it (enqueue_campaign, which already matched an exact
+    tarball) a single live match is required outright.
+
+    Never falls back to "the newest one": the ledger's own
+    campaigns_live_tarball index forbids two live campaigns per
+    tarball, so more than one live match means that invariant is
+    broken and a human has to resolve it.
+    """
+    if not matches:
+        raise RuntimeError(
+            f"{what} reported success but no live campaign for "
+            f"{subject} is in {db} -- reconcile before retrying")
+    if before_ids is not None:
+        fresh = [c for c in matches if c['id'] not in before_ids]
+        if len(fresh) == 1:
+            return fresh[0]
+        if fresh:
+            matches = fresh
+    if len(matches) == 1:
+        return matches[0]
+    ids = ', '.join(f"{c['id']} ({c['state']}, {c['tarball']})"
+                    for c in matches)
+    raise RuntimeError(
+        f"{db} holds {len(matches)} live campaigns matching {subject} "
+        f"({ids}) -- the ledger's own uniqueness invariant is broken; "
+        f"resolve by hand rather than guessing which one {what} created")
 
 
 def _ledger_path_for(run_as):
@@ -393,21 +500,11 @@ def enqueue_campaign(map_path: str, entry: int, slice_size: int,
     _, map_entry = _read_map_entry(map_path, index=entry)
     tarball = map_entry.get('tarball')
     db = _ledger_path_for(run_as)
-    match = [c for c in _all_campaigns(db)
-             if c['tarball'] == tarball
-             and c['state'] in _LIVE_CAMPAIGN_STATES]
-    if not match:
-        raise RuntimeError(
-            f"submit_map --enqueue reported success but no live campaign "
-            f"for {tarball!r} is in {db} -- reconcile before retrying")
-    if len(match) > 1:
-        ids = ', '.join(f"{c['id']} ({c['state']})" for c in match)
-        raise RuntimeError(
-            f"{db} holds {len(match)} live campaigns for {tarball!r} "
-            f"({ids}) -- the ledger's own uniqueness invariant is broken; "
-            f"resolve by hand rather than guessing which one this "
-            f"enqueue created")
-    campaign = match[0]
+    matches = [c for c in _all_campaigns(db)
+               if c['tarball'] == tarball
+               and c['state'] in _LIVE_CAMPAIGN_STATES]
+    campaign = _sole_live_campaign(db, matches, repr(tarball),
+                                   'submit_map --enqueue')
     return {'campaign_id': campaign['id'],
             'njobs': (campaign.get('entry') or {}).get('njobs'),
             'tarball': tarball}

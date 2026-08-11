@@ -9907,16 +9907,31 @@ class TestWriteToolParameterTypes(unittest.TestCase):
 
     def test_numeric_and_confirm_parameters_have_the_right_types(self):
         import inspect
+        from typing import Optional
         from prodtools_mcp_write.server import TOOL_FUNCTIONS
         seen = set()
         for name, fn in TOOL_FUNCTIONS.items():
             for pname, param in inspect.signature(fn).parameters.items():
                 if pname in self.NUMERIC:
                     seen.add(pname)
-                    self.assertIs(
-                        param.annotation, int,
-                        f'{name}({pname}) must be int: it indexes or is '
+                    # Optional[int] is equally acceptable, and REQUIRED
+                    # where the parameter genuinely defaults to None
+                    # (push_cnf's slice_size selects the enqueue mode).
+                    # A bare `int = None` would pass a naive identity
+                    # check while advertising a schema that disagrees
+                    # with the default -- the same class of lying
+                    # signature this test exists to catch. What matters
+                    # is only that the model is never told "string".
+                    self.assertIn(
+                        param.annotation, (int, Optional[int]),
+                        f'{name}({pname}) must be int (or Optional[int] '
+                        f'when it defaults to None): it indexes or is '
                         f'compared against ints')
+                    if param.default is None:
+                        self.assertIs(
+                            param.annotation, Optional[int],
+                            f'{name}({pname}) defaults to None, so a bare '
+                            f'`int` annotation is a lie')
                 elif pname == 'confirm':
                     seen.add(pname)
                     self.assertIs(
@@ -10583,6 +10598,111 @@ class TestPushCnfTool(unittest.TestCase):
                 self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
                                     jobdefs_map=self.jobdefs_map, run_as='self')
         self.assertIn('boom', str(ctx.exception))
+
+    def _campaign(self, cid=7, tarball=None, state='active', njobs=100):
+        return {'id': cid, 'tarball': tarball or self.tarball,
+                'state': state,
+                'entry': {'njobs': njobs,
+                          'outputs': [{'dataset': 'dig.mu2e.D.C.art'}]}}
+
+    def test_enqueue_mode_builds_the_one_command_argv(self):
+        """slice_size selects `--prod --enqueue`: no map file is
+        written, and no separate enqueue_campaign call is needed."""
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
+            with patch('prodtools_mcp_write.tools._ledger_path_for',
+                       return_value='/db'):
+                with patch('prodtools_mcp_write.tools._all_campaigns',
+                           side_effect=[[], [self._campaign()]]):
+                    out = self.tools.push_cnf(
+                        json=self.json_path, desc='D', dsconf='C',
+                        slice_size=500, run_as='mu2epro', confirm=True)
+        argv = run.call_args[0][0]
+        self.assertIn('--enqueue', argv)
+        self.assertIn('--slice-size', argv)
+        self.assertIn('500', argv)
+        self.assertNotIn('--jobdefs', argv)
+        self.assertEqual(out['campaign_id'], 7)
+        self.assertEqual(out['njobs'], 100)
+        self.assertEqual(out['datasets'], ['dig.mu2e.D.C.art'])
+        # No map file exists on this path, so claiming one would be a lie.
+        self.assertNotIn('map_path', out)
+
+    def test_enqueue_mode_prefers_the_campaign_this_call_created(self):
+        """A tarball accumulates campaigns over its life. The one this
+        push created is the one absent from the before-snapshot --
+        never "the last row"."""
+        stale = self._campaign(cid=3, njobs=10)
+        fresh = self._campaign(cid=9, njobs=20)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
+            with patch('prodtools_mcp_write.tools._ledger_path_for',
+                       return_value='/db'):
+                with patch('prodtools_mcp_write.tools._all_campaigns',
+                           side_effect=[[stale], [stale, fresh]]):
+                    out = self.tools.push_cnf(
+                        json=self.json_path, desc='D', dsconf='C',
+                        slice_size=500, run_as='self')
+        self.assertEqual(out['campaign_id'], 9)
+
+    def test_enqueue_mode_survives_a_ledger_that_does_not_exist_yet(self):
+        """A first-ever push creates the ledger as it enqueues. Reading
+        the before-snapshot must not turn that into a failure -- but the
+        read AFTER the write stays fatal."""
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
+            with patch('prodtools_mcp_write.tools._ledger_path_for',
+                       return_value='/db'):
+                with patch('prodtools_mcp_write.tools._all_campaigns',
+                           side_effect=[RuntimeError('cannot read ledger'),
+                                        [self._campaign()]]):
+                    out = self.tools.push_cnf(
+                        json=self.json_path, desc='D', dsconf='C',
+                        slice_size=500, run_as='self')
+        self.assertEqual(out['campaign_id'], 7)
+
+    def test_enqueue_mode_raises_when_no_campaign_appeared(self):
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': 'looks fine',
+                                 'stderr': ''}):
+            with patch('prodtools_mcp_write.tools._ledger_path_for',
+                       return_value='/db'):
+                with patch('prodtools_mcp_write.tools._all_campaigns',
+                           side_effect=[[], []]):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        self.tools.push_cnf(
+                            json=self.json_path, desc='D', dsconf='C',
+                            slice_size=500, run_as='self')
+        self.assertIn('no live campaign', str(ctx.exception))
+
+    def test_neither_mode_is_refused_before_running_anything(self):
+        """A bare --prod pushes the cnf to SAM and registers nothing.
+        The CLI refuses it; so must this."""
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.push_cnf(json=self.json_path, desc='D',
+                                    dsconf='C', run_as='self')
+        self.assertIn('exactly one', str(ctx.exception))
+        run.assert_not_called()
+
+    def test_both_modes_is_refused_before_running_anything(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.push_cnf(json=self.json_path, desc='D',
+                                    dsconf='C', slice_size=500,
+                                    jobdefs_map=self.jobdefs_map,
+                                    run_as='self')
+        self.assertIn('exactly one', str(ctx.exception))
+        run.assert_not_called()
+
+    def test_mode_check_runs_after_the_production_gate(self):
+        """An unconfirmed mu2epro call must be refused as a permission
+        problem, not reported as a malformed-arguments one."""
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(PermissionError):
+                self.tools.push_cnf(json=self.json_path, desc='D',
+                                    dsconf='C', run_as='mu2epro')
+        run.assert_not_called()
 
     def test_relative_jobdefs_map_is_refused_before_running_anything(self):
         # Under run_as='mu2epro' the ksu block cd's into its own mktemp
