@@ -1493,6 +1493,21 @@ grep -n "submit_map\|--jobdefs\|map file\|map_path\|--no-ledger" EXAMPLES.md
 
 Expected: no matches.
 
+- [ ] **Step 3b: Sweep stale in-code references to deleted symbols**
+
+Task 4's review found live comments naming a function that no longer exists. Fix each:
+
+- `utils/submission_ledger.py:501` — says `(submissions.recovery_resource_argv)`; the function is now `recovery_resource_kwargs`. The same docstring also says `resubmit` "rebuilds its map from `row['entry']`" — there is no map; it builds `SubmitOptions`.
+- `utils/jobsub_argv.py:35` — comment names `recovery_resource_argv`.
+
+Then confirm nothing else dangles:
+
+```bash
+grep -rn "recovery_resource_argv\|_scratch_map_dir\|SUBMIT_MAP\|submit_entry_direct" utils/ bin/ mcp/src/ test/
+```
+
+Expected: no matches.
+
 - [ ] **Step 4: Update `CLAUDE.md` and `mcp/README.md`**
 
 In `CLAUDE.md`: drop `enqueue_campaign` from the write-server tool list (leaving `push_cnf` and `run_submissions`), and remove the "No map file is involved" phrasing — with no map anywhere, the disclaimer is itself a reference to a dead concept.
