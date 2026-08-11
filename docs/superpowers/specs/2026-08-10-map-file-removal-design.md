@@ -5,12 +5,19 @@
 
 ## Goal
 
-Remove the persistent intermediate map file (`direct_maps/*.json`) from the
-normal direct-submission workflow, make a wrong submission setting fixable
-after a campaign is enqueued, and delete the multi-entry `jobdesc` machinery
-that nothing has produced since the POMS backend was retired.
+Four things, all of them POMS residue:
 
-Three independent changes. Each can land and be verified on its own.
+1. Remove the persistent intermediate map file (`direct_maps/*.json`) from the
+   normal direct-submission workflow.
+2. Make a wrong submission setting fixable after a campaign is enqueued.
+3. Delete the multi-entry `jobdesc` machinery, which has had no producer since
+   the POMS backend was retired.
+4. Retire the POMS-era operator surface that still documents a workflow which
+   no longer exists.
+
+Four independent changes. Each can land and be verified on its own. Change 4
+is doc-and-delete only and should land first, so the misleading surface is
+gone before the new flags arrive to document.
 
 ## Background — what the map actually is
 
@@ -55,7 +62,8 @@ today changes nothing about campaign 54, and neither does editing
 ledger tables, and it crosses the grid boundary — `jobsub_argv.py:178` puts it
 into `ops["jobdesc"]` and `runmu2e.py` consumes it on the worker node to
 resolve indices and route outputs. `map_entry.py` is its typed accessor layer,
-imported by eight modules including both MCP servers. The entry stays.
+imported by eight modules including both MCP servers. The entry stays; only
+its module name changes (Change 3).
 
 ## Change 1 — `json2jobdef --enqueue`
 
@@ -104,13 +112,21 @@ Enqueue must be last. Steps 2 and 3 keep their current order and behaviour.
 
 Two extractions, so each thing keeps exactly one implementation:
 
-**`build_map_entry(config) -> dict`** in `utils/json2jobdef.py`. The pure
+**`build_jobdesc(config) -> dict`** in `utils/json2jobdef.py`. The pure
 config-to-entry projection, extracted from `append_jobdef`. `append_jobdef`
-becomes `_write_jobdef_json_entry(build_map_entry(config), jobdefs_file)`; the
-`--enqueue` path calls `build_map_entry` and passes the result to
+becomes `_write_jobdef_json_entry(build_jobdesc(config), jobdefs_file)`; the
+`--enqueue` path calls `build_jobdesc` and passes the result to
 `enqueue_entry`. The projection — including the `njobs: -1` cnf query, the
 windowed-entry validation, and the draining-key passthrough — becomes testable
 without touching the filesystem.
+
+The name is `build_jobdesc`, not `build_map_entry`, because `jobdesc` is what
+this dict is already called on the far side of the wire — `ops["jobdesc"]`,
+`validate_jobdesc`, and the `jobdesc` parameter threaded through `runmu2e.py`
+and `resolve_map_index`. Today the same object carries two names depending on
+which side it sits on, a split inherited from POMS owning the submit side. The
+builder takes the consumer's name; Change 3 renames the accessor module to
+match.
 
 **`enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False, resources=None, provenance=None) -> int | None`**
 in `utils/submit.py`. Returns the new campaign id, or `None` under `dry_run`.
@@ -235,6 +251,25 @@ recovery path is unaffected: `submit.py:654-656` rewrites the shipped copy to
 `firstjob: 0, njobs: jobset[-1] + 1` so that `local == global`, and that
 rewrite is independent of the list wrapper.
 
+### Module rename
+
+`utils/map_entry.py` becomes `utils/jobdesc.py`. Its accessors (`tarball_of`,
+`outputs_of`, `njobs_of`, `inloc_of`, `firstjob_of`, `is_draining`,
+`validate_window`, `resources_of`) all operate on this dict, so leaving the
+module named after the file we are deleting would relocate the naming split
+rather than close it. Function names inside it are unchanged; only the module
+name and its eight import sites move. This is a pure rename with no behaviour
+change.
+
+The module was already renamed once this month (`poms_entry` → `map_entry`,
+POMS-RM Task 4). That pass removed "poms" and landed on "map" — which named
+the file this spec deletes. `jobdesc` is the name that stays true afterwards.
+
+The two dead constants at `map_entry.py:36-37` — `DEFAULT_POMS_DIR` and
+`POMS_MAP_PATTERN`, whose own comment records that they are "intentionally
+unreferenced" because their consumers went out with the POMS backend — are
+deleted rather than carried across.
+
 ### Why this is safe to do now
 
 There is no version skew to manage. `_bundle_prodtools` (`utils/submit.py:400`)
@@ -249,11 +284,63 @@ The real cost is test churn: 34 references to `resolve_map_index` /
 `validate_jobdesc` in `test/test_unit.py` need updating, and the multi-entry
 cases among them are deleted rather than ported.
 
+## Change 4 — retire the POMS-era operator surface
+
+A sweep for POMS remnants found live operator-facing surface that documents a
+workflow which no longer exists. This change is delete-and-edit only, no
+behaviour, so it lands first and independently of the other three.
+
+### Delete
+
+**`.claude/commands/poms-push.md`** — an invocable `/poms-push` skill that
+plans a production POMS push: pick the map number, extend
+`poms_map/MDC2025-NNN.json` in place versus allocating a new one, keep the
+running total under 100k jobs. Every step describes machinery that is gone. It
+also cites `feedback_extend_existing_poms_map.md` as its authority, and that
+memory does not exist — so the skill would walk an operator through a dead
+workflow citing a dangling source. Deleted outright; there is no direct-backend
+equivalent to port it to, because Change 1 removes the map-number problem
+entirely.
+
+### Fix
+
+- **`docs/EXAMPLES_schema.md`**, then regenerate `EXAMPLES.md` via
+  `/refresh-examples`: the canonical `--jobdefs` example (`EXAMPLES.md:87`)
+  points at `poms_map/MDC2025-032.json`, teaching POMS map-numbering as
+  current practice. It becomes a `--prod --enqueue` example.
+- **`.claude/commands/mu2epro-submit.md:54-57`** — drops the "**POMS-driven**:
+  the numbered map under `poms_map/`" alternative from its two-valid-homes
+  section. With Change 1 there is one home and usually no file at all.
+- **`.claude/commands/jit-cnf-build.md:227,232`** — remove the "a POMS
+  campaign if you've added a corresponding POMS-map entry" outcome.
+- **`templates/README.md:4`** — "one POMS-free chain hop" loses the
+  qualifier; every hop is POMS-free now.
+- **`.claude/commands/mu2ejobsub-submit.md`** — description only. The skill
+  itself stays: it wraps the *upstream* mu2egrid `mu2ejobsub` CLI, which still
+  exists and is still the right tool for smoke tests and one-offs. Only its
+  "POMS-map / submit_map flow" phrasing is trimmed.
+
+### Deliberately kept
+
+The past-tense why-comments stay, because each explains why current behaviour
+is what it is: `runmu2e.py:240-241` and `751-755` (streaming is the default
+because the POMS launch template never passed `--copy-input` — delete this and
+the default is stranded without a rationale), `file_resolver.py:132`,
+`submission_ledger.py:5`, `submissions.py:424,487`, `job_common.py:197`, and
+the explanatory test docstrings. The `wiki/` pages are a deliberate historical
+record and are not touched.
+
+`runmu2e.py:772`'s error message — "the POMS `--jobdesc` mode was removed
+(recover it from the pre-poms-removal git tag)" — also stays. It fires only
+when `MU2EGRID_JOBDEF` is unset, which means someone is running `runmu2e` by
+hand, and the git-tag pointer is the most useful thing to tell them.
+
 ## Non-goals
 
 - **The map format is not removed.** `submit_map --map` stays as the manual
-  and recovery dispatch path, `map_entry.py` stays as the entry's accessor
-  layer, and `submissions.py` keeps synthesizing one-entry maps internally.
+  and recovery dispatch path, the accessor layer stays (renamed to
+  `utils/jobdesc.py`), and `submissions.py` keeps synthesizing one-entry maps
+  internally.
 - **`direct_maps/` files are not deleted.** Writing there stops; the six
   existing files are mu2epro-owned and inert, since every campaign they
   describe is already enqueued. Removing another account's files is a separate
@@ -285,7 +372,7 @@ Suite is `python3 -u test/test_unit.py`, baseline 988 OK (skipped=1) as of
 2026-08-10, and it must keep running on plain python3.9 with no wheel
 installed.
 
-**Change 1.** `build_map_entry` gets direct projection tests: resource-key
+**Change 1.** `build_jobdesc` gets direct projection tests: resource-key
 passthrough, draining-key passthrough, `njobs: -1` resolving from the cnf,
 windowed entries, and the generic-tarball `njobs` omission. The existing
 `test_append_jobdef_passes_resource_keys` / `..._draining_keys`
@@ -308,6 +395,13 @@ cascade is off by default, since that default protects the recovery floor.
 **Change 3.** Multi-entry `validate_jobdesc` and `resolve_map_index` tests are
 deleted; single-entry tests assert `local == firstjob + global`, out-of-range
 returning `None`, and the `--indices` rewrite still yielding `local == global`.
+The module rename is mechanical: the suite must import `utils.jobdesc` and
+pass with no `map_entry` import remaining anywhere in the tree.
+
+**Change 4.** No unit tests — it touches no code paths. Verification is a
+grep: no `poms` match outside `wiki/`, the deliberately-kept why-comments
+listed above, and `runmu2e.py:772`. Plus `/poms-push` no longer resolving as
+a slash command.
 
 **Live acceptance.** One `json2jobdef --prod --enqueue` run as mu2epro
 producing a campaign visible to `campaign_status`, with no file written to
@@ -315,6 +409,11 @@ producing a campaign visible to `campaign_status`, with no file written to
 campaign's first slice would dispatch.
 
 ## Migration and docs
+
+Change 4 lands first and removes the POMS-era text from these same files;
+what follows is the additive pass for the new surface, so
+`docs/EXAMPLES_schema.md` and `.claude/commands/mu2epro-submit.md` are each
+edited twice, once per change, rather than once with mixed intent.
 
 - `docs/EXAMPLES_schema.md` gains the `--enqueue` / `--slice-size` flags, the
   widened `--prod` rule, and the `set-entry` verb; `EXAMPLES.md` is then
