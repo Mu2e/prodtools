@@ -18,19 +18,15 @@ round — `exhausted` is where a human takes over.
 Design: docs/superpowers/specs/2026-07-18-direct-recovery-design.md
 """
 import argparse
-import contextlib
 import fcntl
 import fnmatch
 import getpass
-import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,8 +42,6 @@ from utils.samweb_wrapper import (files_in_dataset, definitions_matching,
                                   dataset_file_count, metadata_for_files,
                                   _parse_sam_datetime)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SUBMIT_MAP = REPO_ROOT / 'bin' / 'submit_map'
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_MAX_QUEUED = 5000
 
@@ -562,22 +556,6 @@ def _request_prestage(files, runner=subprocess.run):
                 pass
 
 
-@contextlib.contextmanager
-def _scratch_map_dir(prefix):
-    """Scratch dir for a child submit_map's map/indices files; removed
-    after the child completes (success or failure — the child reads
-    them before returning). Cleanup failure warns, never raises
-    (post-submission never-raise rule)."""
-    tmpdir = tempfile.mkdtemp(prefix=prefix)
-    try:
-        yield Path(tmpdir)
-    finally:
-        try:
-            shutil.rmtree(tmpdir)
-        except OSError as e:
-            print(f"WARNING: could not remove scratch dir {tmpdir}: {e}")
-
-
 # Recoveries get resource headroom by default. A recovery is the tail of
 # a population that already succeeded at the default (typically 1-3 jobs
 # out of hundreds), so the prior that it needs more is high and the blast
@@ -590,52 +568,41 @@ RECOVERY_MEMORY = '4000MB'
 RECOVERY_LIFETIME = '48h'
 
 
-def recovery_resource_argv(entry):
-    """Extra submit_map flags giving a recovery more memory/lifetime.
+def recovery_resource_kwargs(entry):
+    """Recovery resource FLOOR as SubmitOptions kwargs.
 
-    A FLOOR, not an override. submit_map's precedence is CLI > entry >
-    built-in default, so passing a flag unconditionally would silently
-    DOWNGRADE an entry that already asks for more than the floor — the
-    same hazard _snapshot_entry exists to prevent. An entry that names a
-    resource had it chosen deliberately; leave it alone.
+    Applies RECOVERY_MEMORY / RECOVERY_LIFETIME only where the row's own
+    snapshot entry names nothing — an unset value is what earns a
+    recovery the floor, so a row that already carries a value keeps it.
     """
-    argv = []
-    for flag, key, floor in (
-            ('--memory', 'memory', RECOVERY_MEMORY),
-            ('--expected-lifetime', 'expected_lifetime', RECOVERY_LIFETIME)):
+    kwargs = {}
+    for key, floor in (('memory', RECOVERY_MEMORY),
+                       ('expected_lifetime', RECOVERY_LIFETIME)):
         if not entry.get(key):
-            argv += [flag, floor]
-    return argv
+            kwargs[key] = floor
+    return kwargs
 
 
-def resubmit(row, missing, db_path, dry_run=False, runner=subprocess.run):
-    """Resubmit missing indices through the submit_map CLI — one
-    battle-tested submit path (token check, argv build, child ledger row
-    via --ledger-parent). Returns True on submit success.
+def resubmit(row, missing, db_path, dry_run=False, submit_fn=None):
+    """Resubmit missing indices in-process. Returns True on success.
 
-    The reconstructed entry DROPS firstjob: --indices values are
-    absolute cnf indices, and submit_map rejects --indices on windowed
-    entries (the worker-side firstjob+index resolution must degenerate
-    to the identity). The original windowed entry stays in the parent
-    row's snapshot.
+    The reconstructed entry DROPS firstjob: --indices values are absolute
+    cnf indices, and the worker-side firstjob+index resolution must
+    degenerate to the identity. The original windowed entry stays in the
+    parent row's snapshot.
     """
+    submit_fn = submit_fn or submit.submit_entry
     entry = {k: v for k, v in row['entry'].items() if k != 'firstjob'}
-    with _scratch_map_dir('recover-') as tmpdir:
-        map_path = tmpdir / 'recovery-map.json'
-        map_path.write_text(json.dumps([entry], indent=2) + '\n')
-        idx_path = tmpdir / 'indices.txt'
-        idx_path.write_text(f"# {row['tarball']}\n"
-                            + '\n'.join(str(i) for i in missing) + '\n')
-        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
-               '--indices-file', str(idx_path),
-               '--ledger-parent', str(row['id']),
-               '--ledger-db', str(db_path)]
-        cmd += recovery_resource_argv(entry)
-        if dry_run:
-            cmd.append('--dry-run')
-        print(f"  resubmit: {' '.join(cmd)}")
-        res = runner(cmd)
-    return res.returncode == 0
+    options = submit.SubmitOptions(
+        ledger_db=str(db_path),
+        indices=list(missing),
+        ledger_parent=row['id'],
+        dry_run=dry_run,
+        origin=f"recovery of row {row['id']}",
+        **recovery_resource_kwargs(entry))
+    print(f"  resubmit row {row['id']}: {len(missing)} indices")
+    return _guarded_submit(f"row {row['id']}",
+                           lambda: submit_fn(entry, 0, options))
 
 
 def verify_files_row(row, sam_lister=files_in_dataset):
@@ -668,28 +635,21 @@ def verify_files_row(row, sam_lister=files_in_dataset):
     return missing, partial
 
 
-def resubmit_files(row, missing, db_path, dry_run=False,
-                   runner=subprocess.run):
+def resubmit_files(row, missing, db_path, dry_run=False, submit_fn=None):
     """Draining analog of resubmit(): child submission of exactly the
-    missing input files via `submit_map --files` (child ledger row via
-    --ledger-parent, attempt+1; the recovery resource floor applies)."""
+    missing input files. Returns True on success."""
+    submit_fn = submit_fn or submit.submit_entry
     entry = row['entry']
-    with _scratch_map_dir('recover-') as tmpdir:
-        map_path = tmpdir / 'recovery-map.json'
-        map_path.write_text(json.dumps([entry], indent=2) + '\n')
-        files_path = tmpdir / 'files.txt'
-        files_path.write_text(f"# {row['tarball']}\n"
-                              + '\n'.join(missing) + '\n')
-        cmd = [str(SUBMIT_MAP), '--map', str(map_path),
-               '--files', str(files_path),
-               '--ledger-parent', str(row['id']),
-               '--ledger-db', str(db_path)]
-        cmd += recovery_resource_argv(entry)
-        if dry_run:
-            cmd.append('--dry-run')
-        print(f"  resubmit: {' '.join(cmd)}")
-        res = runner(cmd)
-    return res.returncode == 0
+    options = submit.SubmitOptions(
+        ledger_db=str(db_path),
+        files=list(missing),
+        ledger_parent=row['id'],
+        dry_run=dry_run,
+        origin=f"recovery of row {row['id']}",
+        **recovery_resource_kwargs(entry))
+    print(f"  resubmit row {row['id']}: {len(missing)} files")
+    return _guarded_submit(f"row {row['id']}",
+                           lambda: submit_fn(entry, 0, options))
 
 
 def total_queued(user=None, runner=subprocess.run):

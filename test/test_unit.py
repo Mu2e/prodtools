@@ -5899,49 +5899,6 @@ class TestSubmitSlice(unittest.TestCase):
         self.assertFalse(ok)
 
 
-class TestScratchDirCleanup(unittest.TestCase):
-    """Hourly cron must not accumulate /tmp scratch dirs: the child
-    submit_map's map/indices files are removed after it returns,
-    success or failure.
-
-    submit_slice no longer spawns bin/submit_map (it calls submit_entry
-    in-process — see TestSubmitSlice), so it no longer creates a scratch
-    dir at all; there is nothing left to pin here for it. resubmit still
-    goes through the subprocess path — Task 4 converts it."""
-
-    def setUp(self):
-        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
-        self.camp = {'id': 1, 'cursor': 0, 'slice_size': 5,
-                     'tarball': 'cnf.mu2e.S.C.0.tar',
-                     'entry': {'tarball': 'cnf.mu2e.S.C.0.tar',
-                               'njobs': 10}}
-        self.row = {'id': 7, 'tarball': 'cnf.mu2e.S.C.0.tar',
-                    'entry': {'tarball': 'cnf.mu2e.S.C.0.tar',
-                              'njobs': 10}}
-
-    def _run_and_capture_dir(self, fn, rc):
-        from utils import submissions
-        import types
-        seen = {}
-        real_mkdtemp = tempfile.mkdtemp
-
-        def spy_mkdtemp(*a, **k):
-            seen['dir'] = real_mkdtemp(*a, **k)
-            return seen['dir']
-
-        runner = lambda cmd, **k: types.SimpleNamespace(returncode=rc)
-        with patch.object(submissions.tempfile, 'mkdtemp', spy_mkdtemp):
-            fn(runner)
-        return seen['dir']
-
-    def test_resubmit_cleans_up(self):
-        from utils import submissions
-        d = self._run_and_capture_dir(
-            lambda r: submissions.resubmit(self.row, [2, 4], self.db,
-                                           runner=r), 0)
-        self.assertFalse(os.path.exists(d))
-
-
 class TestManageCampaign(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -6748,7 +6705,7 @@ class TestRecoverLoop(unittest.TestCase):
         finally:
             os.unlink(tar)
 
-    def test_resubmit_drops_firstjob_and_writes_indices(self):
+    def test_resubmit_drops_firstjob_and_ships_options(self):
         from utils import submissions as recover
         row = {'id': 7, 'tarball': 'cnf.mu2e.T.C.0.tar',
                'entry': {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 5,
@@ -6756,30 +6713,28 @@ class TestRecoverLoop(unittest.TestCase):
                'indices': [100, 102], 'attempt': 1, 'jobsub_id': '1.0@js'}
         captured = {}
 
-        def fake_runner(cmd, **kwargs):
-            captured['cmd'] = cmd
-            # Read file contents during the runner call (before cleanup)
-            map_path = cmd[cmd.index('--map') + 1]
-            captured['map_entry'] = json.loads(Path(map_path).read_text())[0]
-            idx_path = cmd[cmd.index('--indices-file') + 1]
-            captured['idx_lines'] = Path(idx_path).read_text().splitlines()
-            return MagicMock(returncode=0)
+        def fake_submit(entry, idx, options):
+            captured['entry'] = entry
+            captured['idx'] = idx
+            captured['options'] = options
+            return {'status': 'submitted'}
 
         ok = recover.resubmit(row, [100, 102], '/tmp/led.db',
-                              runner=fake_runner)
+                              submit_fn=fake_submit)
         self.assertTrue(ok)
-        cmd = captured['cmd']
-        self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
-        self.assertEqual(cmd[cmd.index('--ledger-db') + 1], '/tmp/led.db')
-        entry = captured['map_entry']
+        self.assertEqual(captured['idx'], 0)
+        options = captured['options']
+        self.assertEqual(options.ledger_parent, 7)
+        self.assertEqual(options.ledger_db, '/tmp/led.db')
+        self.assertEqual(options.indices, [100, 102])
+        self.assertFalse(options.dry_run)
+        entry = captured['entry']
         self.assertNotIn('firstjob', entry)
         self.assertEqual(entry['njobs'], 5)
-        lines = captured['idx_lines']
-        self.assertEqual(lines[0], '# cnf.mu2e.T.C.0.tar')
-        self.assertEqual(lines[1:], ['100', '102'])
         recover.resubmit(row, [100], '/tmp/led.db', dry_run=True,
-                         runner=fake_runner)
-        self.assertIn('--dry-run', captured['cmd'])
+                         submit_fn=fake_submit)
+        self.assertTrue(captured['options'].dry_run)
+
 
 class TestRecoverCLI(unittest.TestCase):
     def setUp(self):
@@ -10942,61 +10897,6 @@ class TestRunSubmissionsTool(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Recovery resource headroom
-# ---------------------------------------------------------------------------
-
-class TestRecoveryResourceArgv(unittest.TestCase):
-    """Recoveries get more memory/lifetime by default: they are the tail of
-    a population that already succeeded at the default, so the prior that
-    they need headroom is high and only a handful of jobs are affected."""
-
-    def test_bare_entry_gets_both_floors(self):
-        from utils.submissions import (recovery_resource_argv,
-                                       RECOVERY_MEMORY, RECOVERY_LIFETIME)
-        self.assertEqual(recovery_resource_argv({}),
-                         ['--memory', RECOVERY_MEMORY,
-                          '--expected-lifetime', RECOVERY_LIFETIME])
-
-    def test_floor_never_downgrades_a_larger_request(self):
-        """submit_map precedence is CLI > entry, so passing --memory
-        unconditionally would SILENTLY DOWNGRADE an entry asking for more.
-        That is the hazard _snapshot_entry exists to prevent."""
-        from utils.submissions import recovery_resource_argv
-        argv = recovery_resource_argv({'memory': '8000MB'})
-        self.assertNotIn('--memory', argv)
-        self.assertIn('--expected-lifetime', argv)
-
-    def test_entry_choice_respected_even_when_smaller(self):
-        from utils.submissions import recovery_resource_argv
-        self.assertNotIn('--memory', recovery_resource_argv({'memory': '1000MB'}))
-
-    def test_entry_naming_both_gets_no_flags(self):
-        from utils.submissions import recovery_resource_argv
-        self.assertEqual(
-            recovery_resource_argv({'memory': '8000MB',
-                                    'expected_lifetime': '72h'}), [])
-
-    def test_resubmit_passes_the_floors_to_submit_map(self):
-        """End-to-end: the flags actually reach the submit_map argv."""
-        from utils import submissions
-        seen = {}
-
-        def fake_runner(cmd, *a, **kw):
-            seen['cmd'] = cmd
-            return types.SimpleNamespace(returncode=0)
-
-        row = {'id': 7, 'tarball': 'cnf.mu2e.X.Y.0.tar',
-               'entry': {'njobs': 10, 'outputs': []}}
-        with patch.object(submissions.submission_ledger, 'record_submission',
-                          return_value=1):
-            submissions.resubmit(row, [3], '/tmp/none.db', dry_run=True,
-                                 runner=fake_runner)
-        cmd = seen['cmd']
-        self.assertIn('--memory', cmd)
-        self.assertIn('--expected-lifetime', cmd)
-
-
-# ---------------------------------------------------------------------------
 # 41. ledger_expected (utils/submissions.py)
 # ---------------------------------------------------------------------------
 
@@ -12129,28 +12029,38 @@ class TestVerifyFilesRow(unittest.TestCase):
 
 
 class TestResubmitFiles(unittest.TestCase):
-    def test_child_submission_uses_files_flag_and_parent(self):
+    def test_child_submission_uses_files_and_ledger_parent(self):
         from utils import submissions
         row = dict(TestVerifyFilesRow.ROW)
         missing = [_mk_file('B', 2)]
-        seen = {}
+        captured = {}
 
-        def fake_run(cmd, **kw):
-            seen['cmd'] = list(cmd)
-            seen['files_text'] = Path(
-                cmd[cmd.index('--files') + 1]).read_text()
-            return SimpleNamespace(returncode=0)
+        def fake_submit(entry, idx, options):
+            captured['entry'] = entry
+            captured['options'] = options
+            return {'status': 'submitted'}
 
         ok = submissions.resubmit_files(row, missing, '/x.db',
-                                        runner=fake_run)
+                                        submit_fn=fake_submit)
         self.assertTrue(ok)
-        cmd = seen['cmd']
-        self.assertIn('--files', cmd)
-        self.assertIn('--ledger-parent', cmd)
-        self.assertEqual(cmd[cmd.index('--ledger-parent') + 1], '7')
-        self.assertIn(missing[0], seen['files_text'])
+        options = captured['options']
+        self.assertEqual(options.files, missing)
+        self.assertEqual(options.ledger_parent, row['id'])
+        self.assertEqual(options.ledger_db, '/x.db')
         # recovery resource floor applies (entry names no resources)
-        self.assertIn('--memory', cmd)
+        self.assertEqual(options.memory, submissions.RECOVERY_MEMORY)
+
+    def test_a_raising_submit_is_contained(self):
+        """TRAP 2 on the recovery path."""
+        from utils import submissions
+        row = dict(TestVerifyFilesRow.ROW)
+
+        def preflight_fail(entry, idx, options):
+            raise SystemExit('input pre-flight FAILED')
+
+        self.assertFalse(
+            submissions.resubmit_files(row, [_mk_file('B', 2)], '/x.db',
+                                       submit_fn=preflight_fail))
 
 
 class TestProcessRowKindDispatch(unittest.TestCase):
@@ -13121,6 +13031,117 @@ class TestCallSitesContainFailures(unittest.TestCase):
         self.assertFalse(
             submissions.submit_drain_batch(camp, ['dts.mu2e.a.v.art'],
                                            '/tmp/x.db', submit_fn=boom))
+
+
+class TestRecoveryResourceKwargs(unittest.TestCase):
+    """Recoveries get a 4000MB/48h FLOOR when the row's own entry names
+    no value — an unset memory is what earns the floor."""
+
+    def test_absent_keys_get_the_floor(self):
+        from utils.submissions import (recovery_resource_kwargs,
+                                       RECOVERY_MEMORY, RECOVERY_LIFETIME)
+        kw = recovery_resource_kwargs({'tarball': 'x.tar'})
+        self.assertEqual(kw['memory'], RECOVERY_MEMORY)
+        self.assertEqual(kw['expected_lifetime'], RECOVERY_LIFETIME)
+
+    def test_present_keys_are_left_alone(self):
+        from utils.submissions import recovery_resource_kwargs
+        kw = recovery_resource_kwargs(
+            {'tarball': 'x.tar', 'memory': '8000MB'})
+        self.assertNotIn('memory', kw)
+
+    def test_bare_entry_gets_both_floors(self):
+        from utils.submissions import (recovery_resource_kwargs,
+                                       RECOVERY_MEMORY, RECOVERY_LIFETIME)
+        self.assertEqual(recovery_resource_kwargs({}),
+                         {'memory': RECOVERY_MEMORY,
+                          'expected_lifetime': RECOVERY_LIFETIME})
+
+    def test_floor_never_downgrades_a_larger_request(self):
+        """submit_entry's SubmitOptions are built with **kwargs from this
+        function, so an unconditional key would SILENTLY DOWNGRADE an
+        entry asking for more. That is the hazard _snapshot_entry exists
+        to prevent."""
+        from utils.submissions import recovery_resource_kwargs
+        kw = recovery_resource_kwargs({'memory': '8000MB'})
+        self.assertNotIn('memory', kw)
+        self.assertIn('expected_lifetime', kw)
+
+    def test_entry_choice_respected_even_when_smaller(self):
+        from utils.submissions import recovery_resource_kwargs
+        self.assertNotIn(
+            'memory', recovery_resource_kwargs({'memory': '1000MB'}))
+
+    def test_entry_naming_both_gets_no_keys(self):
+        from utils.submissions import recovery_resource_kwargs
+        self.assertEqual(
+            recovery_resource_kwargs({'memory': '8000MB',
+                                      'expected_lifetime': '72h'}), {})
+
+    def test_resubmit_passes_the_floors_to_submit_options(self):
+        """End-to-end: the floors actually reach SubmitOptions."""
+        from utils import submissions
+        captured = {}
+
+        def fake_submit(entry, idx, options):
+            captured['options'] = options
+            return {'status': 'submitted'}
+
+        row = {'id': 7, 'tarball': 'cnf.mu2e.X.Y.0.tar',
+               'entry': {'njobs': 10, 'outputs': []}}
+        submissions.resubmit(row, [3], '/tmp/none.db',
+                             submit_fn=fake_submit)
+        options = captured['options']
+        self.assertEqual(options.memory, submissions.RECOVERY_MEMORY)
+        self.assertEqual(options.expected_lifetime,
+                         submissions.RECOVERY_LIFETIME)
+
+
+class TestResubmitDropsFirstjob(unittest.TestCase):
+    """--indices values are ABSOLUTE cnf indices, so the shipped entry
+    must sit at firstjob=0 for the worker's `local == global` to hold."""
+
+    def test_firstjob_is_stripped_from_the_shipped_entry(self):
+        from utils import submissions
+        captured = {}
+
+        def fake_submit(entry, idx, options):
+            captured['entry'] = entry
+            captured['options'] = options
+            return {'status': 'submitted', 'cluster_id': '1', 'njobs': 3,
+                    'tarball': 'x.tar'}
+
+        row = {'id': 9, 'tarball': 'x.tar',
+               'entry': {'tarball': 'x.tar', 'firstjob': 400, 'njobs': 100}}
+        ok = submissions.resubmit(row, [401, 402], '/tmp/x.db',
+                                  submit_fn=fake_submit)
+        self.assertTrue(ok)
+        self.assertNotIn('firstjob', captured['entry'])
+        self.assertEqual(captured['options'].indices, [401, 402])
+        self.assertEqual(captured['options'].ledger_parent, 9)
+
+    def test_a_raising_submit_is_contained(self):
+        """TRAP 2 on the recovery path."""
+        from utils import submissions
+
+        def preflight_fail(entry, idx, options):
+            raise SystemExit('input pre-flight FAILED')
+
+        row = {'id': 9, 'tarball': 'x.tar',
+               'entry': {'tarball': 'x.tar', 'njobs': 100}}
+        self.assertFalse(
+            submissions.resubmit(row, [1], '/tmp/x.db',
+                                 submit_fn=preflight_fail))
+
+
+class TestMapScratchDirIsGone(unittest.TestCase):
+    def test_no_scratch_map_dir(self):
+        from utils import submissions
+        self.assertFalse(hasattr(submissions, '_scratch_map_dir'))
+
+    def test_no_submit_map_constant(self):
+        from utils import submissions
+        self.assertFalse(hasattr(submissions, 'SUBMIT_MAP'))
 
 
 # ---------------------------------------------------------------------------
