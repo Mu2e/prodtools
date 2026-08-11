@@ -13699,6 +13699,70 @@ class TestOriginMigrationRace(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Whole-branch review fix wave (2026-08-11), FIX 1: the production ledger
+# is -rw-r--r-- owned by mu2epro, so a non-mu2epro reader's _connect hits
+# "attempt to write a readonly database" on the map_path->origin ALTER,
+# not the migration-race "no such column" seen above. Before this fix
+# that OperationalError re-raised (cols_now still lacked 'origin'),
+# killing `submissions status` — the DEFAULT verb, documented safe under
+# any account — for every collaborator until a writer happened to touch
+# the ledger first.
+# ---------------------------------------------------------------------------
+
+class TestOriginMigrationReadOnlyDb(unittest.TestCase):
+    def _make_legacy_db(self, td):
+        db = os.path.join(td, 'submissions.db')
+        con = sqlite3.connect(db)
+        con.executescript("""
+            CREATE TABLE submissions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_utc TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'active',
+              attempt INTEGER NOT NULL DEFAULT 1,
+              parent_id INTEGER,
+              map_path TEXT, tarball TEXT NOT NULL,
+              entry_json TEXT NOT NULL, indices_json TEXT NOT NULL,
+              jobsub_id TEXT, cluster_id TEXT, closed_utc TEXT, note TEXT);
+            CREATE TABLE campaigns (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_utc TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'active',
+              map_path TEXT, tarball TEXT NOT NULL,
+              entry_json TEXT NOT NULL, cursor INTEGER NOT NULL DEFAULT 0,
+              slice_size INTEGER NOT NULL, closed_utc TEXT, note TEXT);
+            CREATE UNIQUE INDEX campaigns_live_tarball
+              ON campaigns(tarball) WHERE state IN ('active','paused');
+            INSERT INTO submissions
+              (created_utc, map_path, tarball, entry_json, indices_json)
+              VALUES ('2026-01-01T00:00:00Z', '/tmp/ro-legacy.json',
+                      'x.tar', '{}', '[]');
+        """)
+        con.commit()
+        con.close()
+        return db
+
+    def test_readonly_legacy_db_is_readable_and_left_unmigrated(self):
+        from utils import submission_ledger as sl
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_legacy_db(td)
+            os.chmod(db, 0o444)
+            try:
+                rows = sl.all_rows(db)
+            finally:
+                # Allow TemporaryDirectory cleanup to remove the file.
+                os.chmod(db, 0o644)
+            self.assertEqual(rows[0]['map_path'], '/tmp/ro-legacy.json')
+            con = sqlite3.connect(db)
+            try:
+                cols = [r[1] for r in
+                       con.execute('PRAGMA table_info(submissions)')]
+            finally:
+                con.close()
+        self.assertIn('map_path', cols)
+        self.assertNotIn('origin', cols)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

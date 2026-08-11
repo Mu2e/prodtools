@@ -168,7 +168,7 @@ def _connect(db_path):
             try:
                 con.execute(
                     f'ALTER TABLE {table} RENAME COLUMN map_path TO origin')
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as exc:
                 # Two _connect calls can race the check-then-act above: a
                 # cron tick, a manual `submissions` command, and the
                 # write MCP server can all touch the same never-migrated
@@ -179,13 +179,26 @@ def _connect(db_path):
                 # so the connection's timeout=30 busy-retry does not
                 # cover it. Re-check: if origin exists now, the other
                 # side already finished the migration for us and there
-                # is nothing left to do here. Any OTHER OperationalError
-                # (a genuinely broken schema, a locked/corrupt DB) must
-                # still surface — re-raise unless this specific race is
-                # what happened.
+                # is nothing left to do here.
                 cols_now = [r[1] for r in
                            con.execute(f'PRAGMA table_info({table})')]
-                if 'origin' not in cols_now:
+                if 'origin' in cols_now:
+                    pass
+                elif 'readonly database' in str(exc):
+                    # The production ledger is world-readable but
+                    # mu2epro-owned (0444 to everyone else); a
+                    # non-mu2epro reader opening it hits this on the
+                    # ALTER even though every other statement above is a
+                    # no-op against an already-current schema. Reading is
+                    # still the whole point of a status/query command, so
+                    # leave the DB un-migrated and let ledger_ro's
+                    # map_path->origin shim carry read consumers across
+                    # the gap; a writer (which always has write access)
+                    # will migrate it on its own next connect.
+                    pass
+                else:
+                    # A genuinely broken schema, a locked/corrupt DB, or
+                    # any other unrelated failure must still surface.
                     raise
     con.commit()
     return con
