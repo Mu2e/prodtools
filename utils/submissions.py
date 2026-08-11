@@ -1377,6 +1377,21 @@ def build_parser():
     mem_p.add_argument('camp_id', type=int)
     mem_p.add_argument('memory', help="e.g. 3000MB")
 
+    entry_p = sub.add_parser(
+        'set-entry',
+        help='Set one key on a live campaign\'s entry (takes effect on '
+             'the next tick)')
+    entry_p.add_argument('camp_id', type=int)
+    entry_p.add_argument('key',
+                         choices=submission_ledger.EDITABLE_ENTRY_KEYS)
+    entry_p.add_argument('value', help='e.g. resilient, 3000MB, 48h')
+    entry_p.add_argument(
+        '--include-open-rows', action='store_true',
+        help='Also rewrite not-yet-closed rows on this campaign\'s '
+             'tarball, so their RECOVERIES use the new value. Off by '
+             'default because an unset memory is what earns a recovery '
+             f'the {RECOVERY_MEMORY} floor.')
+
     # Bare invocation (no verb) IS status — an explicit default, not a
     # hidden fallthrough (spec Change 1). Must come AFTER
     # add_subparsers(dest='verb'): the subparsers action sets its own
@@ -1499,6 +1514,24 @@ def main():
               f"{args.memory} (applies from the next tick; rows already "
               f"submitted keep their own entry, so their recoveries use "
               f"the {RECOVERY_MEMORY} floor)")
+        return
+
+    if verb == 'set-entry':
+        _acquire_lock(db)
+        try:
+            old, rows = submission_ledger.set_campaign_entry_key(
+                db, args.camp_id, args.key, args.value,
+                include_open_rows=args.include_open_rows)
+        except ValueError as e:
+            sys.exit(f"submissions: {e}")
+        print(f"campaign {args.camp_id}: {args.key} {old or 'unset'} -> "
+              f"{args.value} (applies from the next tick)")
+        if args.include_open_rows:
+            print(f"  rows updated: "
+                  f"{', '.join(str(r) for r in rows) if rows else 'none'}")
+        else:
+            print("  rows already submitted keep their own entry; pass "
+                  "--include-open-rows to reach their recoveries")
         return
 
     if verb == 'reconcile':

@@ -5072,6 +5072,72 @@ class TestCampaignLedger(unittest.TestCase):
             self.sl.set_campaign_entry_key(self.db, 999, 'inloc', 'tape')
         self.assertIn('999', str(cm.exception))
 
+    def _row(self, state='active', entry=None):
+        """One submissions row on this campaign's tarball."""
+        rid = self.sl.record_submission(
+            self.db, tarball=self.entry['tarball'],
+            entry=entry or dict(self.entry), indices=[0, 1],
+            jobsub_id='1.0@sched', cluster_id='1')
+        if state != 'active':
+            self.sl.close_row(self.db, rid, state)
+        return rid
+
+    def test_cascade_off_by_default_protects_recovery_floor(self):
+        """An UNSET memory is what earns a recovery the 4000MB floor, so
+        the default must not push a value into dispatched rows."""
+        cid = self._create()
+        rid = self._row()
+        self.sl.set_campaign_entry_key(self.db, cid, 'memory', '3000MB')
+        row = [r for r in self.sl.all_rows(self.db) if r['id'] == rid][0]
+        self.assertNotIn('memory', row['entry'])
+
+    def test_cascade_updates_open_rows_and_reports_ids(self):
+        cid = self._create()
+        rid = self._row()
+        previous, changed = self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient', include_open_rows=True)
+        self.assertEqual(previous, 'tape')
+        self.assertEqual(changed, [rid])
+        row = [r for r in self.sl.all_rows(self.db) if r['id'] == rid][0]
+        self.assertEqual(row['entry']['inloc'], 'resilient')
+
+    def test_cascade_skips_closed_rows(self):
+        cid = self._create()
+        closed = self._row(state='complete')
+        open_id = self._row()
+        _, changed = self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient', include_open_rows=True)
+        self.assertEqual(changed, [open_id])
+        by_id = {r['id']: r for r in self.sl.all_rows(self.db)}
+        self.assertEqual(by_id[closed]['entry']['inloc'], 'tape')
+        self.assertEqual(by_id[open_id]['entry']['inloc'], 'resilient')
+
+    def test_cascade_preserves_row_specific_keys(self):
+        """A recovery child's snapshot may differ from the campaign's
+        (e.g. firstjob dropped); the cascade must touch only its key."""
+        cid = self._create()
+        child = dict(self.entry)
+        child['memory'] = '4000MB'
+        rid = self._row(entry=child)
+        self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient', include_open_rows=True)
+        row = [r for r in self.sl.all_rows(self.db) if r['id'] == rid][0]
+        self.assertEqual(row['entry']['memory'], '4000MB')
+        self.assertEqual(row['entry']['inloc'], 'resilient')
+
+    def test_cascade_leaves_other_tarballs_alone(self):
+        cid = self._create()
+        other = self.sl.record_submission(
+            self.db, tarball='cnf.mu2e.Other.TestConf.0.tar',
+            entry={'tarball': 'cnf.mu2e.Other.TestConf.0.tar',
+                   'njobs': 3, 'inloc': 'tape', 'outputs': []},
+            indices=[0], jobsub_id='2.0@sched', cluster_id='2')
+        _, changed = self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient', include_open_rows=True)
+        self.assertNotIn(other, changed)
+        row = [r for r in self.sl.all_rows(self.db) if r['id'] == other][0]
+        self.assertEqual(row['entry']['inloc'], 'tape')
+
     def test_advance_cursor(self):
         cid = self._create()
         self.sl.advance_campaign(self.db, cid, 4)

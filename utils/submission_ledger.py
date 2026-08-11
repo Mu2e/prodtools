@@ -527,6 +527,19 @@ def set_campaign_entry_key(db_path, camp_id, key, value,
     recovery the 4000MB floor (submissions.recovery_resource_argv), so
     cascading a memory value would silently forfeit the better failure
     mode.
+
+    include_open_rows=True additionally rewrites the entry snapshot of
+    every not-yet-closed row on this campaign's tarball, which is what
+    makes RECOVERIES pick the change up (submissions.resubmit rebuilds
+    its map from row['entry'], not from the campaign). Rows match by
+    tarball because the two tables carry no campaign_id; the partial
+    unique index campaigns_live_tarball keeps that unambiguous for a
+    live campaign, but a cancelled predecessor could have left an open
+    row behind — so the changed ids are RETURNED, not just counted.
+
+    `closed_utc IS NULL` rather than state='active' on purpose: a
+    'submitting' row (reserved, cluster not yet attached) is still going
+    to be recovered, so it needs the new value too.
     """
     if key not in EDITABLE_ENTRY_KEYS:
         raise ValueError(
@@ -551,8 +564,21 @@ def set_campaign_entry_key(db_path, camp_id, key, value,
         entry[key] = value
         con.execute('UPDATE campaigns SET entry_json = ? WHERE id = ?',
                     (json.dumps(entry), camp_id))
+        changed = []
+        if include_open_rows:
+            open_ = con.execute(
+                'SELECT id, entry_json FROM submissions '
+                'WHERE tarball = ? AND closed_utc IS NULL ORDER BY id',
+                (row['tarball'],)).fetchall()
+            for r in open_:
+                r_entry = json.loads(r['entry_json'])
+                r_entry[key] = value
+                con.execute(
+                    'UPDATE submissions SET entry_json = ? WHERE id = ?',
+                    (json.dumps(r_entry), r['id']))
+                changed.append(r['id'])
         con.commit()
-        return previous, []
+        return previous, changed
     finally:
         con.close()
 
