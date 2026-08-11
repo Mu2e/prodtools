@@ -4992,6 +4992,86 @@ class TestCampaignLedger(unittest.TestCase):
             self.sl.set_campaign_memory(self.db, 999, '3000MB')
         self.assertIn('999', str(cm.exception))
 
+    def test_set_entry_key_sets_inloc(self):
+        cid = self._create()
+        previous, rows = self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient')
+        self.assertEqual(previous, 'tape')
+        self.assertEqual(rows, [])
+        self.assertEqual(
+            self.sl.active_campaigns(self.db)[0]['entry']['inloc'],
+            'resilient')
+
+    def test_set_entry_key_preserves_other_keys(self):
+        cid = self._create()
+        self.sl.set_campaign_entry_key(self.db, cid, 'inloc', 'resilient')
+        entry = self.sl.active_campaigns(self.db)[0]['entry']
+        self.assertEqual(entry['tarball'], self.entry['tarball'])
+        self.assertEqual(entry['njobs'], self.entry['njobs'])
+        self.assertEqual(entry['outputs'], self.entry['outputs'])
+
+    def test_set_entry_key_refuses_non_whitelisted_key(self):
+        """tarball/njobs/firstjob/input_pattern define the campaign's
+        identity and index space — editing them in place corrupts a live
+        campaign rather than fixing it."""
+        cid = self._create()
+        for bad in ('tarball', 'njobs', 'firstjob', 'input_pattern',
+                    'outputs', 'nonsense'):
+            with self.assertRaises(ValueError, msg=bad) as cm:
+                self.sl.set_campaign_entry_key(self.db, cid, bad, 'x')
+            self.assertIn('not editable', str(cm.exception))
+        self.assertEqual(
+            self.sl.active_campaigns(self.db)[0]['entry'], self.entry)
+
+    def test_set_entry_key_validates_inloc(self):
+        cid = self._create()
+        for good in ('tape', 'disk', 'resilient', 'stash', 'none',
+                     'dir:/pnfs/mu2e/persistent/x'):
+            self.sl.set_campaign_entry_key(self.db, cid, 'inloc', good)
+        for bad in ('Resilient', 'dir:relative/path', 'dir:', 'nfs', ''):
+            with self.assertRaises(ValueError, msg=bad):
+                self.sl.set_campaign_entry_key(self.db, cid, 'inloc', bad)
+        # last good value survived every rejected write
+        self.assertEqual(
+            self.sl.active_campaigns(self.db)[0]['entry']['inloc'],
+            'dir:/pnfs/mu2e/persistent/x')
+
+    def test_set_entry_key_validates_lifetime(self):
+        cid = self._create()
+        for good in ('48h', '3600s', '30m', '2d'):
+            self.sl.set_campaign_entry_key(
+                self.db, cid, 'expected_lifetime', good)
+        for bad in ('48', '48 h', '48hr', 'forever', ''):
+            with self.assertRaises(ValueError, msg=bad):
+                self.sl.set_campaign_entry_key(
+                    self.db, cid, 'expected_lifetime', bad)
+
+    def test_set_entry_key_validates_disk_like_memory(self):
+        cid = self._create()
+        self.sl.set_campaign_entry_key(self.db, cid, 'disk', '50GB')
+        with self.assertRaises(ValueError):
+            self.sl.set_campaign_entry_key(self.db, cid, 'disk', '50 GB')
+
+    def test_set_entry_key_refused_on_closed_campaign(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_entry_key(
+                self.db, cid, 'inloc', 'resilient')
+        self.assertIn('complete', str(cm.exception))
+
+    def test_set_entry_key_allowed_while_paused(self):
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'paused')
+        self.sl.set_campaign_entry_key(self.db, cid, 'inloc', 'resilient')
+        self.assertEqual(
+            self.sl.all_campaigns(self.db)[0]['entry']['inloc'], 'resilient')
+
+    def test_set_entry_key_unknown_campaign_raises(self):
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_entry_key(self.db, 999, 'inloc', 'tape')
+        self.assertIn('999', str(cm.exception))
+
     def test_advance_cursor(self):
         cid = self._create()
         self.sl.advance_campaign(self.db, cid, 4)

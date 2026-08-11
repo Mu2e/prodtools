@@ -29,7 +29,44 @@ from pathlib import Path
 # ('2500MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
 # submissions.RECOVERY_MEMORY). Anchored: 'lots' and '3000 MB' are
 # rejected rather than passed through to fail at submit time.
-_MEMORY_RE = re.compile(r'^\d+(MB|GB)$')
+# Shared by the memory and disk keys — both take a jobsub size string.
+_SIZE_RE = re.compile(r'^\d+(MB|GB)$')
+_LIFETIME_RE = re.compile(r'^\d+[smhd]$')
+
+# Entry keys `submissions set-entry` may edit on a live campaign.
+# Deliberately excludes tarball/njobs/firstjob/input_pattern: those
+# define the campaign's identity and index space, so changing one in
+# place corrupts a live campaign instead of fixing it. The correct
+# operation there is cancel + re-enqueue.
+EDITABLE_ENTRY_KEYS = ('inloc', 'memory', 'disk', 'expected_lifetime')
+
+# inloc forms utils/file_resolver.py actually accepts.
+_INLOC_SIMPLE = ('tape', 'disk', 'resilient', 'stash', 'none')
+
+
+def _validate_entry_value(key, value):
+    """Reject a malformed value at the boundary. Written here rather
+    than at submit time because an unparseable value would otherwise sit
+    in the ledger looking applied and only surface a tick later — as a
+    jobsub_submit rejection for the resource keys, or, worse, as a
+    SILENT SAM fallback for a misspelled inloc."""
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string, got {value!r}")
+    if key in ('memory', 'disk'):
+        if not _SIZE_RE.match(value):
+            raise ValueError(
+                f"{key} must look like '3000MB' or '4GB', got {value!r}")
+    elif key == 'expected_lifetime':
+        if not _LIFETIME_RE.match(value):
+            raise ValueError(
+                f"expected_lifetime must look like '48h' or '3600s', "
+                f"got {value!r}")
+    elif key == 'inloc':
+        if value not in _INLOC_SIMPLE and not value.startswith('dir:/'):
+            raise ValueError(
+                f"inloc must be one of {', '.join(_INLOC_SIMPLE)} or "
+                f"'dir:/<absolute path>', got {value!r}")
+
 
 PRODUCTION_DB = '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'
 
@@ -475,43 +512,57 @@ def set_campaign_slice(db_path, camp_id, slice_size):
         con.close()
 
 
-def set_campaign_memory(db_path, camp_id, memory):
-    """Set the memory request on a live campaign's entry; return the
-    previous value (None if the entry never named one).
+def set_campaign_entry_key(db_path, camp_id, key, value,
+                           include_open_rows=False):
+    """Set one whitelisted key on a live campaign's entry snapshot;
+    return (previous_value, changed_row_ids).
 
     Same live-retune contract as set_campaign_slice: active/paused only,
-    binds from the next tick. It edits the CAMPAIGN's entry snapshot, so
-    it reaches future slices only — ledger rows already dispatched keep
-    the entry they were submitted with, and their recoveries therefore
-    keep the recovery floor (see submissions.recovery_resource_argv).
+    binds from the next tick.
 
-    The format is validated here rather than at submit time: an
-    unparseable value would otherwise sit in the ledger looking applied
-    and only surface as a jobsub_submit rejection a tick later.
+    By default this edits the CAMPAIGN's snapshot only, so it reaches
+    future slices and nothing else — rows already dispatched keep the
+    entry they were submitted with. That default is deliberate, and it
+    is what `memory` depends on: an UNSET memory is exactly what earns a
+    recovery the 4000MB floor (submissions.recovery_resource_argv), so
+    cascading a memory value would silently forfeit the better failure
+    mode.
     """
-    if not _MEMORY_RE.match(str(memory)):
+    if key not in EDITABLE_ENTRY_KEYS:
         raise ValueError(
-            f"memory must look like '3000MB' or '4GB', got {memory!r}")
+            f"{key!r} is not editable; choose one of "
+            f"{', '.join(EDITABLE_ENTRY_KEYS)}. Identity and index-space "
+            f"keys (tarball, njobs, firstjob, input_pattern) define the "
+            f"campaign — cancel and re-enqueue instead")
+    _validate_entry_value(key, value)
     con = _connect(db_path)
     try:
         row = con.execute(
-            'SELECT state, entry_json FROM campaigns WHERE id = ?',
+            'SELECT state, tarball, entry_json FROM campaigns WHERE id = ?',
             (camp_id,)).fetchone()
         if row is None:
             raise ValueError(f"no campaign {camp_id}")
         if row['state'] not in ('active', 'paused'):
             raise ValueError(
-                f"campaign {camp_id} is {row['state']} — memory only "
+                f"campaign {camp_id} is {row['state']} — {key} only "
                 f"applies to an active or paused campaign")
         entry = json.loads(row['entry_json'])
-        previous = entry.get('memory')
-        entry['memory'] = memory
+        previous = entry.get(key)
+        entry[key] = value
         con.execute('UPDATE campaigns SET entry_json = ? WHERE id = ?',
                     (json.dumps(entry), camp_id))
         con.commit()
-        return previous
+        return previous, []
     finally:
         con.close()
+
+
+def set_campaign_memory(db_path, camp_id, memory):
+    """Back-compat alias for the 'memory' key; returns the previous
+    value. Never cascades to rows — see set_campaign_entry_key for why
+    that default is what protects the recovery floor."""
+    previous, _ = set_campaign_entry_key(db_path, camp_id, 'memory', memory)
+    return previous
 
 
 def set_campaign_state(db_path, camp_id, state, note=None):
