@@ -325,75 +325,100 @@ def _validate_draining_entry(entry):
     return None
 
 
-def _enqueue_entries(entries_to_submit, map_path, opts):
-    """Register entries as sliced-submission campaigns (cursor 0) —
-    submits NOTHING; the submissions cron feeds slices while the
-    mu2epro queue is under its cap. Before anything else, each entry's
-    inputs are pre-flight checked (utils.check_inputs) so a campaign is
-    never created for a tarball with unreadable inputs — a failing
-    entry exits 2 with a report, before any ledger row is written.
+def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
+                  resources=None, provenance=None):
+    """Register ONE entry as a sliced-submission campaign (cursor 0);
+    submit nothing. Returns the new campaign id, or None under dry_run.
+
+    Single owner of the enqueue preflight, shared by `submit_map
+    --enqueue` and `json2jobdef --enqueue`: inputs are checked before
+    any ledger row is written, so a campaign is never created for a
+    tarball with unreadable inputs.
+
     Nothing has been submitted when this fails, so failures are hard
     errors — but operator-reachable ones (duplicate live campaign, bad
-    njobs, DB trouble) exit with a ONE-LINE submit_map: message, never
-    a traceback. Returns new campaign ids."""
-    ids = []
-    for idx, entry in entries_to_submit:
-        if is_draining(entry):
-            err = _validate_draining_entry(entry)
-            if err:
-                sys.exit(f"submit_map: entry {idx} {err}")
-            _ensure_local_tarball(tarball_of(entry))
-            # No check_inputs: a generic cnf bakes no inputs — the tick
-            # gates every batch (residency + settling age) at dispatch.
-            snap = _snapshot_entry(entry, _effective_resources(entry, opts))
-            if opts.dry_run:
-                print(f"[DRY RUN] would enqueue draining campaign: "
-                      f"{tarball_of(entry)} "
-                      f"pattern={entry['input_pattern']} "
-                      f"slice={opts.slice_size}")
-                continue
-            try:
-                camp_id = submission_ledger.create_campaign(
-                    opts.ledger_db, tarball=tarball_of(entry), entry=snap,
-                    slice_size=opts.slice_size, map_path=map_path)
-            except (ValueError, sqlite3.Error) as e:
-                sys.exit(f"submit_map: {e}")
-            print(f"Enqueued draining campaign {camp_id}: "
-                  f"{tarball_of(entry)} pattern={entry['input_pattern']} "
-                  f"slice={opts.slice_size} (db {opts.ledger_db})")
-            ids.append(camp_id)
-            continue
-        tarball_path = _ensure_local_tarball(tarball_of(entry))
-        ok, problems = check_inputs(str(tarball_path), inloc_of(entry))
-        if not ok:
-            print(format_report(str(tarball_path), problems))
-            print(f"submit_map: entry {idx} inputs not ready "
-                  f"({len(problems)} problem(s)) — fix and re-run; "
-                  f"no campaign created")
-            sys.exit(2)
-        njobs = njobs_of(entry)
-        if njobs is None:
-            sys.exit(f"submit_map: entry {idx} has no njobs (generic "
-                     f"tarball) — a campaign needs a job count to slice")
-        if njobs < 1:
-            sys.exit(f"submit_map: entry {idx} has njobs={njobs} — "
-                     f"a campaign needs a positive job count")
-        snap = _snapshot_entry(entry, _effective_resources(entry, opts))
-        if opts.dry_run:
-            print(f"[DRY RUN] would enqueue entry {idx}: "
-                  f"{tarball_of(entry)} njobs={njobs_of(entry)} "
-                  f"slice={opts.slice_size}")
-            continue
+    njobs, DB trouble) exit with a ONE-LINE message, never a traceback.
+
+    sys.exit is retained deliberately: converting submit.py's error
+    protocol to exceptions restructures the path that launches every
+    production job and belongs in its own change. Both callers are CLIs,
+    so inheriting the exit codes is correct.
+
+    `provenance` is free-text recorded as the campaign's map_path. It is
+    never dispatched from — only the MCP status tools echo it back.
+    """
+    resources = resources or {}
+    if is_draining(entry):
+        err = _validate_draining_entry(entry)
+        if err:
+            sys.exit(f"submit_map: {err}")
+        _ensure_local_tarball(tarball_of(entry))
+        # No check_inputs: a generic cnf bakes no inputs — the tick
+        # gates every batch (residency + settling age) at dispatch.
+        snap = _snapshot_entry(entry, resources)
+        if dry_run:
+            print(f"[DRY RUN] would enqueue draining campaign: "
+                  f"{tarball_of(entry)} "
+                  f"pattern={entry['input_pattern']} "
+                  f"slice={slice_size}")
+            return None
         try:
             camp_id = submission_ledger.create_campaign(
-                opts.ledger_db, tarball=tarball_of(entry), entry=snap,
-                slice_size=opts.slice_size, map_path=map_path)
+                ledger_db, tarball=tarball_of(entry), entry=snap,
+                slice_size=slice_size, map_path=provenance)
         except (ValueError, sqlite3.Error) as e:
             sys.exit(f"submit_map: {e}")
-        print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
-              f"njobs={njobs_of(entry)} slice={opts.slice_size} "
-              f"(db {opts.ledger_db})")
-        ids.append(camp_id)
+        print(f"Enqueued draining campaign {camp_id}: "
+              f"{tarball_of(entry)} pattern={entry['input_pattern']} "
+              f"slice={slice_size} (db {ledger_db})")
+        return camp_id
+
+    tarball_path = _ensure_local_tarball(tarball_of(entry))
+    ok, problems = check_inputs(str(tarball_path), inloc_of(entry))
+    if not ok:
+        print(format_report(str(tarball_path), problems))
+        print(f"submit_map: inputs not ready "
+              f"({len(problems)} problem(s)) — fix and re-run; "
+              f"no campaign created")
+        sys.exit(2)
+    njobs = njobs_of(entry)
+    if njobs is None:
+        sys.exit("submit_map: entry has no njobs (generic tarball) — "
+                 "a campaign needs a job count to slice")
+    if njobs < 1:
+        sys.exit(f"submit_map: entry has njobs={njobs} — "
+                 f"a campaign needs a positive job count")
+    snap = _snapshot_entry(entry, resources)
+    if dry_run:
+        print(f"[DRY RUN] would enqueue entry: "
+              f"{tarball_of(entry)} njobs={njobs} "
+              f"slice={slice_size}")
+        return None
+    try:
+        camp_id = submission_ledger.create_campaign(
+            ledger_db, tarball=tarball_of(entry), entry=snap,
+            slice_size=slice_size, map_path=provenance)
+    except (ValueError, sqlite3.Error) as e:
+        sys.exit(f"submit_map: {e}")
+    print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
+          f"njobs={njobs} slice={slice_size} (db {ledger_db})")
+    return camp_id
+
+
+def _enqueue_entries(entries_to_submit, map_path, opts):
+    """Register each entry as a campaign. Returns new campaign ids.
+    Preflight and error handling live in enqueue_entry."""
+    ids = []
+    for idx, entry in entries_to_submit:
+        camp_id = enqueue_entry(
+            entry,
+            ledger_db=opts.ledger_db,
+            slice_size=opts.slice_size,
+            dry_run=opts.dry_run,
+            resources=_effective_resources(entry, opts),
+            provenance=map_path)
+        if camp_id is not None:
+            ids.append(camp_id)
     return ids
 
 

@@ -5467,6 +5467,30 @@ class TestEnqueue(unittest.TestCase):
         with self.assertRaises(SystemExit):
             _enqueue_entries([(0, self.entry)], '/tmp/m.json', opts)
 
+    def test_enqueue_entry_returns_campaign_id(self):
+        from utils.submit import enqueue_entry
+        camp_id = enqueue_entry(self.entry, ledger_db=self.db,
+                                slice_size=2)
+        camps = self.sl.active_campaigns(self.db)
+        self.assertEqual(len(camps), 1)
+        self.assertEqual(camps[0]['id'], camp_id)
+        self.assertEqual(camps[0]['slice_size'], 2)
+        self.assertEqual(camps[0]['entry'], self.entry)
+
+    def test_enqueue_entry_dry_run_returns_none(self):
+        from utils.submit import enqueue_entry
+        self.assertIsNone(enqueue_entry(
+            self.entry, ledger_db=self.db, slice_size=2, dry_run=True))
+        self.assertEqual(self.sl.all_campaigns(self.db), [])
+
+    def test_enqueue_entry_records_provenance(self):
+        from utils.submit import enqueue_entry
+        enqueue_entry(self.entry, ledger_db=self.db, slice_size=2,
+                      provenance='data/x.json#Desc@Conf')
+        self.assertEqual(
+            self.sl.active_campaigns(self.db)[0]['map_path'],
+            'data/x.json#Desc@Conf')
+
 
 class TestEnqueueErrorStyle(unittest.TestCase):
     """Operator-reachable enqueue failures are one-line submit_map:
