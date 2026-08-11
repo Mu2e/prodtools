@@ -52,14 +52,17 @@ When regenerating, read in this order:
    mixing shapes, and the optional per-entry resource keys `"memory"` /
    `"disk"` / `"expected_lifetime"` (jobsub-format strings) — mention that
    `json2jobdef` copies them from the JSON config into the submission
-   entry verbatim, and cross-reference the `submit_map` subsection for
-   the precedence rule. State plainly that `submit_map` (single-backend
-   direct — no other backend exists) always honors these keys: CLI flag
-   > entry key > built-in default. Cover `--enqueue` and `--slice-size N`
-   (default 1000): `--enqueue` pushes the cnf to SAM and registers a
-   sliced-submission campaign directly, no map file involved. `--prod`
-   REQUIRES `--enqueue`, and `--enqueue` requires `--prod`. There is no
-   `--jobdefs` flag: json2jobdef writes no map file at all.
+   entry verbatim, and cross-reference the `submissions` subsection for
+   how a live campaign's resource keys are retuned after creation
+   (`set-memory`, `set-entry`) and how an unset key earns a recovery a
+   floor. There is no operator-facing CLI flag for these keys — the
+   entry (JSON config, or a live-campaign edit) is the only way to set
+   them. Cover `--enqueue` and `--slice-size N` (default 1000):
+   `--enqueue` pushes the cnf to SAM and registers a sliced-submission
+   campaign directly in the submission ledger. `--prod` REQUIRES
+   `--enqueue`, and `--enqueue` requires `--prod`. There is no
+   `--jobdefs` flag: `json2jobdef` writes no file recording the
+   campaign at all.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -85,21 +88,16 @@ When regenerating, read in this order:
     user-facing CLI: `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `jobquery`,
-    `submit_map`, `submissions`, `check_inputs`, `copy_to_stash`. Ops scripts
+    `submissions`, `check_inputs`, `copy_to_stash`. Ops scripts
     (`install_prodtools.sh`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
     key flags. Enumerate from the current `bin/` directory — add any new
     script found there, remove any that no longer exist. (`runjob.sh` is
     a worker bootstrap, not user-facing — omit.)
 
-    - `submit_map` is single-backend (direct only — no `--backend` flag
-      exists). Must cover `--enqueue` and `--slice-size` (campaign
-      registration for the sliced-submission top-up phase; mutually
-      exclusive with `--first`/`--num`/`--indices`/`--indices-file`;
-      submits nothing) and the `--enqueue --no-ledger` refusal
-      (contradictory flags; one-line `submit_map:` error, no traceback).
     - `submissions` — name, one-line role ("direct-submission subsystem
-      CLI — status/run/pause/resume/cancel/complete"), the verb table
+      CLI — status/run/pause/resume/cancel/complete/reconcile/resubmit"),
+      the verb table
       (`status` is the default/read-only verb; `run` with `--dry-run`/
       `--row`/`--max-attempts`/`--max-queued`; `pause CAMP_ID [--note
       TEXT]`; `resume CAMP_ID`; `cancel CAMP_ID`; `complete CAMP_ID
@@ -110,7 +108,19 @@ When regenerating, read in this order:
       inloc/memory/disk/expected_lifetime on a live campaign. Without
       the flag it reaches future slices only; with it, also the
       not-yet-closed rows, which is what makes RECOVERIES use the new
-      value), the global `--db` flag, the read-only guarantees (`status` and
+      value; `reconcile ROW_ID [--note TEXT]` — close a ledger row stuck
+      in `failed`/`submitting` after the operator has checked jobsub_q
+      by hand and confirmed the window is genuinely free, so it stops
+      blocking a campaign slice; `resubmit ROW_ID (--indices SPEC |
+      --indices-file F | --files F) [--dry-run]` — hand re-fire a named
+      set of indices or input files from an existing ledger row as a
+      child submission (attempt+1); the entry comes from the row, so
+      there is nothing to hand-edit. REFUSES when an unsettled row for
+      the same tarball already covers part of the selection, naming the
+      blocking row and pointing at `reconcile`; `--files` is only valid
+      against a draining (file-keyed) row and `--indices`/
+      `--indices-file` only against an index row — using the wrong one
+      is refused by name), the global `--db` flag, the read-only guarantees (`status` and
       `run --dry-run` take no lock and submit nothing), and the
       extended exit-2 list for `run`: held,
       exhausted, child-missing, campaign paused (submit failure),
@@ -123,9 +133,10 @@ When regenerating, read in this order:
       not NEARLINE"). Cover: it is read-only and exits 2 on any problem
       (never remediates — points at `/prestage` for NEARLINE inputs);
       the `--inloc` flag (default `resilient`); accepts one or more cnf
-      tarballs; and that `submit_map --enqueue` runs it automatically as
-      a gate (a failing entry blocks with no campaign created). Note it
-      needs no mu2epro — it is a status check, safe to run as yourself.
+      tarballs; and that `json2jobdef --enqueue` runs it automatically
+      as a gate (a failing entry blocks with no campaign created). Note
+      it needs no mu2epro — it is a status check, safe to run as
+      yourself.
 12. **Troubleshooting** — only entries that correspond to real error
     messages produced by current code. Remove stale ones.
 
@@ -140,6 +151,16 @@ When regenerating, read in this order:
       memory of what the cancelled campaign already fed — so the
       operator should check `submissions status` / the ledger for that
       tarball first, to avoid re-submitting already-covered indices.
+
+    - `submissions resubmit` error catalog: `no ledger row <N> in
+      <db>` (bad row id); `refusing — row <N> (state=...) already
+      covers part of this selection` (an unsettled row for the same
+      tarball overlaps the requested indices/files — point at
+      `submissions reconcile <N>` after the operator confirms via
+      jobsub_q); `row <N> is a draining (file-keyed) row — use
+      --files, not --indices` and the inverse, `row <N> is an index
+      row — use --indices, not --files` (selector must match the
+      row's kind).
 
 ## Tribal knowledge to preserve (non-derivable from code)
 
@@ -163,8 +184,8 @@ reading the code:
   count, njobs)` — same inputs always produce the same file selection.
 - The per-job seed is `baseSeed = 1 + cnf index` (flat — no version, run,
   or dsconf term). To extend a dataset's statistics, reuse the existing
-  tarball at fresh indices via a `firstjob` window: a map entry with
-  `"firstjob": F, "njobs": M` runs cnf indices `[F, F+M)` (fresh seeds
+  tarball at fresh indices via a `firstjob` window: a JSON config entry
+  with `"firstjob": F, "njobs": M` runs cnf indices `[F, F+M)` (fresh seeds
   `F+1..`, fresh sequencers). Do NOT bump `version`/`run` for a
   same-input expansion — that restarts the cnf index at 0 and duplicates
   physics. Only open-ended cnfs (no `tbs.njobs` cap) can be windowed past
@@ -174,34 +195,37 @@ reading the code:
 - `genFilterEff` output is Proditions-compatible (`TABLE
   SimEfficiencies2`).
 - `famtree` auto-excludes `etc*.txt` files from diagrams.
-- Every successful `submit_map` submission is recorded in the submission
-  ledger (default `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`,
+- Every successful direct-backend submission (`json2jobdef --enqueue`,
+  a cron-fed slice, or a `submissions resubmit`) is recorded in the
+  submission ledger (default
+  `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`,
   env `MU2E_SUBMISSION_DB`); `submissions run` drain-checks via jobsub_q,
   verifies outputs against SAM, and resubmits only missing indices
   (attempt cap, then `exhausted` for a human). Legacy POMS-launched
-  entries are never in the ledger — `submit_map` is single-backend
-  direct, so a POMS-launched job (or one submitted via the upstream
-  `mu2ejobsub`/`mu2eg4bl` CLIs) simply never passed through it; the POMS
-  backend was removed 2026-08 (legacy stages recover from the
-  `pre-poms-removal` git tag).
+  entries are never in the ledger — a POMS-launched job (or one
+  submitted via the upstream `mu2ejobsub`/`mu2eg4bl` CLIs) simply never
+  passed through the direct backend; the POMS backend was removed
+  2026-08 (legacy stages recover from the `pre-poms-removal` git tag).
 - `direct_input` entries are not index-submittable — they run as
-  draining batches (`submit_map --files`). The `template` and `g4bl`
-  runner modes were deleted with the POMS backend (2026-08, tag
-  `pre-poms-removal`); g4bl and HPC submission go through the upstream
-  `mu2ejobsub`/`mu2eg4bl` CLIs, which never pass through `submit_map`.
-- `json2jobdef` writes NO map file and has no `--jobdefs` flag. Never
-  show one, and never show
+  draining batches (`submissions resubmit ROW_ID --files LIST.txt`). The
+  `template` and `g4bl` runner modes were deleted with the POMS backend
+  (2026-08, tag `pre-poms-removal`); g4bl and HPC submission go through
+  the upstream `mu2ejobsub`/`mu2eg4bl` CLIs, which never touch the
+  submission ledger.
+- `json2jobdef` writes NO file recording the campaign and has no
+  `--jobdefs` flag. Never show one, and never show
   `/exp/mu2e/app/users/mu2epro/production_manager/{poms_map,direct_maps}/`
   — those directories have no consumer. A production campaign is one
   command: `json2jobdef --prod --enqueue [--slice-size N]`.
 - `--prod` requires `--enqueue`, and `--enqueue` requires `--prod`: the
   campaign's cnf must be in SAM, because enqueue resolves the tarball
   from there. A bare `--prod` would push the cnf and register nothing.
-- `submit_map --map FILE --enqueue` still exists for a map that already
-  exists, but nothing in prodtools writes one for an operator. Its
-  entry values are validated on the way in (see the validation bullet).
-- `--enqueue` writes no map file. The campaign's `map_path` records the
-  config provenance (`<config>.json#<desc>@<dsconf>`) instead.
+- The campaign's `origin` column (ledger `campaigns` table) records
+  free-text provenance — for a `json2jobdef --enqueue` campaign, the
+  config path plus desc/dsconf (`<config>.json#<desc>@<dsconf>`); for a
+  `submissions resubmit`, `recovery of row <N>`. Nothing dispatches
+  from it; the MCP status tools and `submissions status` just echo it
+  back.
 - Bulk `json2jobdef --dsconf X --prod --enqueue` (no `--desc`) processes
   every matching entry in one loop, and every refusal inside
   `enqueue_entry` is a `sys.exit`, so a failure partway through leaves
@@ -217,14 +241,15 @@ reading the code:
   value forfeits it. An `inloc` fix normally wants the flag ON.
 - Optional per-entry resource keys `"memory"` / `"disk"` /
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
-  `48h`) live in the submission-map entry itself, or in the jobdef JSON config
-  that produces it — `json2jobdef` copies them into the entry verbatim.
-  `submit_map` always honors these keys. Precedence is CLI flag > entry
-  key > built-in default (`2500MB` / `30GB` / `24h`). The *effective*
+  `48h`) live in the jobdef JSON config entry — `json2jobdef` copies
+  them into the ledger entry verbatim on `--enqueue`. There is no
+  operator-facing CLI flag for these; the entry key (set in the JSON
+  config, or retuned on a live campaign via `submissions set-memory` /
+  `set-entry`) is the only way to set them, and it always wins over the
+  `2500MB` / `30GB` / `24h` built-in default. The *effective*
   values are frozen into the ledger row / campaign row snapshot at
   submission time, so a later recovery or cron-fed slice reproduces
-  exactly what the jobs originally ran with — a CLI `--memory` no longer
-  silently downgrades to the built-in default on resubmit.
+  exactly what the jobs originally ran with.
   The memory default sits above mu2egrid's `2000MB` on purpose: Mu2e
   primaries measure just over that line (VmHWM 2266 MB for
   `PiTargetStops`, 2377 MB for the RPC primaries), so entries that named
@@ -233,9 +258,9 @@ reading the code:
   is absent — so prefer leaving it unset unless the entry genuinely
   needs more than the default.
 - `inloc` and the resource keys are validated at EVERY door into the
-  ledger — `json2jobdef` (where a campaign is born), `submit_map
-  --enqueue` (a foreign map), and `submissions set-entry` (editing a
-  live campaign) — by one shared validator, `jobdesc.validate_entry_value`.
+  ledger — `json2jobdef --enqueue` (where a campaign is born) and
+  `submissions set-entry` (editing a live campaign) — by one shared
+  validator, `jobdesc.validate_entry_value`.
   Document the refusals in the troubleshooting catalog: a misspelled
   `inloc` does NOT fail at runtime, it silently falls through to SAM,
   which is why it is refused at the boundary instead.
@@ -243,7 +268,7 @@ reading the code:
   (invalid value, missing required field) exits 2 and lists what was
   skipped. Entries that already processed are left alone — they are in
   SAM and in the ledger.
-- Sliced campaigns: `submit_map --enqueue` snapshots map entries into
+- Sliced campaigns: `json2jobdef --enqueue` snapshots the entry into
   the campaigns table and submits nothing; `submissions run`'s top-up
   phase (runs after its recovery pass, inside the same hourly cron tick)
   then feeds whole slices to active campaigns, round-robin oldest-first,
@@ -264,19 +289,25 @@ reading the code:
 - Every submission attempt — manual, cron-fed slice, or recovery
   resubmit — appends a block to `submit-YYYYMMDD.log` beside the ledger
   DB (one file per UTC day, plain appends, no rotation).
-- Draining campaigns: a map entry with `input_pattern` (a 5-field
-  dataset pattern, `%` wildcards) and NO `njobs` drains a growing
-  dataset 1:1 through a generic cnf, rather than a fixed index range;
-  enqueue with `submit_map --map M --enqueue --slice-size N`. Optional
-  entry keys: `exclude_desc` (exact desc matches to skip),
+- Draining campaigns: a JSON config entry with `input_pattern` (a
+  5-field dataset pattern, `%` wildcards) and NO `njobs` drains a
+  growing dataset 1:1 through a generic cnf, rather than a fixed index
+  range; enqueue with the same `json2jobdef --desc D --dsconf C --prod
+  --enqueue --slice-size N` path as an indexed campaign —
+  `enqueue_entry` detects the draining shape from `input_pattern` and
+  registers a file-keyed campaign instead of an index-keyed one.
+  Optional entry keys: `exclude_desc` (exact desc matches to skip),
   `min_age_minutes` (default 60, SAM `create_date` age gate before
   a file is eligible), `prestage` (default false, opt-in tape recall
   for tape-only candidates).
-- `submit_map --files LIST.txt` submits one direct-input job per
-  filename listed against a draining entry — the file is written by
-  the `submissions run` tick (parked files) and this is the operator
-  path for re-dispatching them. Mutually exclusive with `--first`/
-  `--num`/`--indices`/`--indices-file`/`--enqueue`.
+- `submissions resubmit ROW_ID --files LIST.txt` submits one
+  direct-input job per filename listed against a draining ROW (pick a
+  row id for the campaign's tarball from `submissions status`, e.g. an
+  `exhausted` one) — the file is written by the `submissions run` tick
+  (parked files) and this is the operator path for re-dispatching them.
+  Mutually exclusive with `--indices`/`--indices-file`, and refused
+  against an index-keyed row (row kind — index vs draining — is fixed
+  by whether the row's entry carries `input_pattern`).
 - `submissions complete <id>` is the operator close-out for a draining
   campaign — it never auto-completes, because the input set keeps
   growing until the upstream production finishes, and only the
@@ -292,8 +323,8 @@ reading the code:
   pushOutput then tries to delete the production input at its own
   dataset path (2026-08-02 smoke incident; the worker also excludes
   its inputs as the authoritative defense).
-- Workers stream inputs via xroot by default (POMS-era parity). A map
-  entry sets `"copy_input": true` to stage inputs locally via mdh
+- Workers stream inputs via xroot by default (POMS-era parity). A JSON
+  config entry sets `"copy_input": true` to stage inputs locally via mdh
   instead — worth it only for descs with fat runtime tails, where a
   mid-job xroot drop wastes the most CPU. The entry key wins over the
   worker's `--copy-input` CLI flag; `stash`/`resilient`/`dir:` inlocs

@@ -36,7 +36,7 @@ before proceeding.
 
 Production campaigns are created in one command:
 `json2jobdef --prod --enqueue --slice-size N` builds the cnf, pushes it
-to SAM, and registers the campaign. No map file is involved. A wrong
+to SAM, and registers the campaign in the submission ledger. A wrong
 setting on a live campaign is fixed with
 `submissions set-entry <ID> <key> <value> [--include-open-rows]` — the
 flag is what reaches recoveries.
@@ -68,11 +68,10 @@ Setup: `bash mcp/scripts/install.sh`. Health check:
 `bash mcp/scripts/start_mcp.sh --check`.
 
 A second, write-capable server (`prodtools-write`) exposes submission:
-`push_cnf`, `enqueue_campaign`, `run_submissions`. A campaign takes two
+`push_cnf`, `run_submissions`. A campaign takes two
 calls — `push_cnf(..., slice_size=N)` (builds the cnf, registers it,
 creates the campaign, returns `campaign_id`) then `run_submissions`.
-No map file is involved. `enqueue_campaign` is for a map that already
-exists; nothing writes one. Every tool takes a required `run_as`:
+Every tool takes a required `run_as`:
 
 - `run_as="self"` needs no privilege and writes only your own scratch,
   datasets and ledger (`/exp/mu2e/data/users/$USER/prodtools/`). No
