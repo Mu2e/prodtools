@@ -199,7 +199,7 @@ def _reserve_in_ledger(entry, firstjob, jobset, options, files=None):
         tarball=entry['tarball'],
         entry=entry,
         indices=_ledger_payload(firstjob, jobset, files),
-        map_path=options.origin,
+        origin=options.origin,
         parent_id=options.ledger_parent)
 
 
@@ -402,7 +402,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     production job and belongs in its own change. Both callers are CLIs,
     so inheriting the exit codes is correct.
 
-    `provenance` is free-text recorded as the campaign's map_path. It is
+    `provenance` is free-text recorded as the campaign's origin. It is
     never dispatched from — only the MCP status tools echo it back.
     """
     resources = resources or {}
@@ -424,7 +424,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
         try:
             camp_id = submission_ledger.create_campaign(
                 ledger_db, tarball=tarball_of(entry), entry=snap,
-                slice_size=slice_size, map_path=provenance)
+                slice_size=slice_size, origin=provenance)
         except (ValueError, sqlite3.Error) as e:
             sys.exit(f"submit_map: {e}")
         print(f"Enqueued draining campaign {camp_id}: "
@@ -456,7 +456,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     try:
         camp_id = submission_ledger.create_campaign(
             ledger_db, tarball=tarball_of(entry), entry=snap,
-            slice_size=slice_size, map_path=provenance)
+            slice_size=slice_size, origin=provenance)
     except (ValueError, sqlite3.Error) as e:
         sys.exit(f"submit_map: {e}")
     print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "

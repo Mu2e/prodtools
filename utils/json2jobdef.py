@@ -678,8 +678,8 @@ def _cleanup_temp_files():
 
 
 def _provenance(json_path, config):
-    """Free-text origin recorded as the campaign's map_path. The column
-    is never dispatched from — only the MCP status tools echo it — so it
+    """Free-text origin recorded as the campaign's origin column. It is
+    never dispatched from — only the MCP status tools echo it — so it
     records where the entry CAME FROM rather than a filename that no
     longer exists."""
     return (f"{json_path}#{config.get('desc', '?')}"

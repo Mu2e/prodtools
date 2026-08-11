@@ -4560,7 +4560,7 @@ class TestSubmissionLedger(unittest.TestCase):
         return self.sl.record_submission(
             self.db, tarball=self.entry['tarball'], entry=self.entry,
             indices=list(indices), jobsub_id='12345678.0@jobsub03.fnal.gov',
-            cluster_id='12345678', map_path='/tmp/map.json', parent_id=parent)
+            cluster_id='12345678', origin='/tmp/map.json', parent_id=parent)
 
     def test_record_and_read_roundtrip(self):
         rid = self._record()
@@ -4644,7 +4644,7 @@ class TestTwoPhaseLedgerWrite(unittest.TestCase):
     def _reserve(self, indices=(0, 1, 2)):
         return self.sl.reserve_submission(
             self.db, tarball=self.entry['tarball'], entry=self.entry,
-            indices=list(indices), map_path='/tmp/map.json')
+            indices=list(indices), origin='/tmp/map.json')
 
     def test_reserved_row_records_indices_before_any_cluster_exists(self):
         rid = self._reserve()
@@ -4791,7 +4791,7 @@ class TestCampaignLedger(unittest.TestCase):
         return self.sl.create_campaign(
             self.db, tarball=tarball or self.entry['tarball'],
             entry=self.entry, slice_size=slice_size,
-            map_path='/tmp/map.json')
+            origin='/tmp/map.json')
 
     def test_create_and_read_roundtrip(self):
         cid = self._create()
@@ -4803,7 +4803,7 @@ class TestCampaignLedger(unittest.TestCase):
         self.assertEqual(c['cursor'], 0)
         self.assertEqual(c['slice_size'], 4)
         self.assertEqual(c['entry'], self.entry)
-        self.assertEqual(c['map_path'], '/tmp/map.json')
+        self.assertEqual(c['origin'], '/tmp/map.json')
         self.assertIsNone(c['closed_utc'])
 
     def test_duplicate_active_tarball_refused(self):
@@ -5320,7 +5320,7 @@ class TestEnqueue(unittest.TestCase):
         self.assertEqual(c['tarball'], self.entry['tarball'])
         self.assertEqual(c['slice_size'], 100)
         self.assertEqual(c['cursor'], 0)
-        self.assertEqual(c['map_path'], '/tmp/m.json')
+        self.assertEqual(c['origin'], '/tmp/m.json')
         self.assertEqual(c['entry'], self.entry)
         # nothing submitted: the submissions table stays empty
         self.assertEqual(self.sl.open_rows(self.db), [])
@@ -5390,7 +5390,7 @@ class TestEnqueue(unittest.TestCase):
         enqueue_entry(self.entry, ledger_db=self.db, slice_size=2,
                       provenance='data/x.json#Desc@Conf')
         self.assertEqual(
-            self.sl.active_campaigns(self.db)[0]['map_path'],
+            self.sl.active_campaigns(self.db)[0]['origin'],
             'data/x.json#Desc@Conf')
 
 
@@ -5767,7 +5767,7 @@ class TestTopUp(unittest.TestCase):
         tarball = 'cnf.mu2e.A.C.0.tar'
         rid = self.sl.reserve_submission(
             self.db, tarball=tarball, entry={}, indices=[1],
-            map_path='m.json')
+            origin='m.json')
         self.sl.fail_reservation(self.db, rid, 'submit failed')
         self._campaign(tarball=tarball, njobs=10, slice=4)
         top_up(self.db, cap=100, count_fn=lambda: 0,
@@ -5926,7 +5926,7 @@ class TestSubmissionsVerbs(unittest.TestCase):
         return self.sl.create_campaign(
             self.db, tarball=tarball,
             entry={'tarball': tarball, 'njobs': njobs},
-            slice_size=2, map_path='m.json')
+            slice_size=2, origin='m.json')
 
     def test_bare_invocation_is_status(self):
         from utils import submissions
@@ -6017,7 +6017,7 @@ class TestSubmissionsVerbs(unittest.TestCase):
         rid = self.sl.reserve_submission(
             self.db, tarball='cnf.mu2e.V.C.0.tar',
             entry={'tarball': 'cnf.mu2e.V.C.0.tar', 'njobs': 4},
-            indices=[0, 1], map_path='m.json')
+            indices=[0, 1], origin='m.json')
         self.sl.fail_reservation(self.db, rid, 'jobsub_submit returned 1')
         self.assertTrue(submissions._slice_overlaps_ledger(
             self.db, 'cnf.mu2e.V.C.0.tar', 0, 0, 2))
@@ -6127,7 +6127,7 @@ class TestSubmitLedgerHook(unittest.TestCase):
         self.assertEqual(row['indices'], [100, 101, 102])
         self.assertEqual(row['entry'], entry)
         self.assertEqual(row['jobsub_id'], '1.0@js.fnal.gov')
-        self.assertEqual(row['map_path'], '/tmp/m.json')
+        self.assertEqual(row['origin'], '/tmp/m.json')
 
     def test_reserve_then_attach_parent_chains(self):
         import tempfile
@@ -7662,11 +7662,11 @@ class TestMcpLedgerRo(unittest.TestCase):
              'location': 'tape'}]}
         cid = submission_ledger.create_campaign(
             db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
-            entry=entry, slice_size=500, map_path='/tmp/map_au.json')
+            entry=entry, slice_size=500, origin='/tmp/map_au.json')
         submission_ledger.record_submission(
             db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
             entry=entry, indices=[0, 1, 2], jobsub_id='29308498.0@sched',
-            cluster_id='29308498', map_path='/tmp/map_au.json')
+            cluster_id='29308498', origin='/tmp/map_au.json')
         return db, cid
 
     def test_campaigns_returns_parsed_entry(self):
@@ -8350,13 +8350,13 @@ class TestMcpCampaignStatus(unittest.TestCase):
         db = os.path.join(tmpdir, 'ledger.db')
         submission_ledger.create_campaign(
             db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
-            slice_size=500, map_path='/tmp/map_drain.json')
+            slice_size=500, origin='/tmp/map_drain.json')
         submission_ledger.record_submission(
             db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
             indices=[_mk_file('AAA', 1), _mk_file('AAA', 2),
                      _mk_file('BBB', 1)],
             jobsub_id='29448530.0@sched', cluster_id='29448530',
-            map_path='/tmp/map_drain.json')
+            origin='/tmp/map_drain.json')
         return db
 
     def _make_db(self, tmpdir):
@@ -8367,11 +8367,11 @@ class TestMcpCampaignStatus(unittest.TestCase):
              'location': 'tape'}]}
         submission_ledger.create_campaign(
             db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
-            entry=entry, slice_size=500, map_path='/tmp/map_au.json')
+            entry=entry, slice_size=500, origin='/tmp/map_au.json')
         submission_ledger.record_submission(
             db, tarball='cnf.mu2e.FlatGamma.MDC2025au_best_v1_3.0.tar',
             entry=entry, indices=[0, 1], jobsub_id='29308498.0@sched',
-            cluster_id='29308498', map_path='/tmp/map_au.json')
+            cluster_id='29308498', origin='/tmp/map_au.json')
         return db
 
     def test_ledger_only_when_no_campaign_named(self):
@@ -8574,7 +8574,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
             db = os.path.join(td, 'ledger.db')
             submission_ledger.create_campaign(
                 db, tarball=self.DRAIN_TARBALL, entry=self.DRAIN_ENTRY,
-                slice_size=500, map_path='/tmp/map_drain.json')
+                slice_size=500, origin='/tmp/map_drain.json')
             result = status.campaign_status(
                 campaign_id=1, db_path=db, include_queue=False,
                 count_fn=lambda ds: 0,
@@ -8595,7 +8595,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
             for state in ('complete', 'exhausted', 'exhausted'):
                 rid = submission_ledger.record_submission(
                     db, tarball=tarball, entry=entry, indices=[9],
-                    jobsub_id='1.0@s', cluster_id='1', map_path='/tmp/m')
+                    jobsub_id='1.0@s', cluster_id='1', origin='/tmp/m')
                 submission_ledger.close_row(db, rid, state)
             result = status.campaign_status(
                 campaign='MDC2025au', db_path=db, include_outputs=False,
@@ -11288,7 +11288,7 @@ class TestEnqueueDraining(unittest.TestCase):
         from utils import submit
         created = {}
 
-        def fake_create(db, *, tarball, entry, slice_size, map_path):
+        def fake_create(db, *, tarball, entry, slice_size, origin):
             created.update(tarball=tarball, entry=entry,
                            slice_size=slice_size)
             return 48
@@ -11420,7 +11420,7 @@ class TestSubmitEntryFiles(unittest.TestCase):
         from utils import submit
         reserved = {}
 
-        def fake_reserve(db, *, tarball, entry, indices, map_path=None,
+        def fake_reserve(db, *, tarball, entry, indices, origin=None,
                          parent_id=None):
             reserved['indices'] = indices
             return 99
@@ -12356,7 +12356,7 @@ class TestStatusDrainingLine(unittest.TestCase):
                'indices': [_mk_file('A', 1), _mk_file('A', 2)],
                'created_utc': '2026-08-01T00:00:00+00:00',
                'cluster_id': '123', 'jobsub_id': '1.0@s',
-               'map_path': None, 'closed_utc': None, 'note': None}
+               'origin': None, 'closed_utc': None, 'note': None}
         buf = io.StringIO()
         with patch.object(submissions.submission_ledger, 'all_rows',
                           return_value=[row]), \
@@ -12702,7 +12702,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         camp = camps[0]
         self.assertEqual(camp['entry'], expected_entry)
         self.assertEqual(camp['slice_size'], 7)
-        self.assertEqual(camp['map_path'], 'data/x.json#IntegDesc@IntegConf')
+        self.assertEqual(camp['origin'], 'data/x.json#IntegDesc@IntegConf')
 
 
 class TestJson2JobdefEntryValueValidation(unittest.TestCase):
@@ -13387,6 +13387,68 @@ class TestSubmitMapCommandRetired(unittest.TestCase):
         self.assertNotIn('bin/submit_map', ALLOWED_ENTRY_POINTS)
         self.assertIn('bin/submissions', ALLOWED_ENTRY_POINTS)
         self.assertIn('bin/json2jobdef', ALLOWED_ENTRY_POINTS)
+
+
+# ---------------------------------------------------------------------------
+# Ledger map_path -> origin column migration (Task 7)
+# ---------------------------------------------------------------------------
+
+class TestOriginColumnMigration(unittest.TestCase):
+    """map_path named a file that no longer exists. The column is free-text
+    provenance; nothing dispatches from it."""
+
+    def _columns(self, db, table):
+        con = sqlite3.connect(db)
+        try:
+            return [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
+        finally:
+            con.close()
+
+    def test_fresh_db_has_origin_not_map_path(self):
+        from utils import submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            submission_ledger.all_rows(db)
+            for table in ('submissions', 'campaigns'):
+                cols = self._columns(db, table)
+                self.assertIn('origin', cols, table)
+                self.assertNotIn('map_path', cols, table)
+
+    def test_legacy_db_is_migrated_preserving_values(self):
+        from utils import submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            con = sqlite3.connect(db)
+            con.executescript("""
+                CREATE TABLE submissions (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  created_utc TEXT NOT NULL,
+                  state TEXT NOT NULL DEFAULT 'active',
+                  attempt INTEGER NOT NULL DEFAULT 1,
+                  parent_id INTEGER,
+                  map_path TEXT, tarball TEXT NOT NULL,
+                  entry_json TEXT NOT NULL, indices_json TEXT NOT NULL,
+                  jobsub_id TEXT, cluster_id TEXT, closed_utc TEXT, note TEXT);
+                INSERT INTO submissions
+                  (created_utc, map_path, tarball, entry_json, indices_json)
+                  VALUES ('2026-01-01T00:00:00Z', '/tmp/legacy.json',
+                          'x.tar', '{}', '[]');
+            """)
+            con.commit()
+            con.close()
+            rows = submission_ledger.all_rows(db)
+            self.assertIn('origin', self._columns(db, 'submissions'))
+            self.assertEqual(rows[0]['origin'], '/tmp/legacy.json')
+
+    def test_migration_is_idempotent(self):
+        from utils import submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            for _ in range(3):
+                submission_ledger.all_rows(db)
+            self.assertIn('origin', self._columns(db, 'submissions'))
 
 
 # ---------------------------------------------------------------------------

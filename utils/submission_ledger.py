@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS submissions (
   state        TEXT NOT NULL DEFAULT 'active',
   attempt      INTEGER NOT NULL DEFAULT 1,
   parent_id    INTEGER REFERENCES submissions(id),
-  map_path     TEXT,
+  origin       TEXT,
   tarball      TEXT NOT NULL,
   entry_json   TEXT NOT NULL,
   indices_json TEXT NOT NULL,
@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   created_utc  TEXT NOT NULL,
   state        TEXT NOT NULL DEFAULT 'active',
-  map_path     TEXT,
+  origin       TEXT,
   tarball      TEXT NOT NULL,
   entry_json   TEXT NOT NULL,
   cursor       INTEGER NOT NULL DEFAULT 0,
@@ -157,6 +157,16 @@ def _connect(db_path):
     con.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS campaigns_live_tarball "
         "ON campaigns(tarball) WHERE state IN ('active','paused')")
+    # map_path -> origin (2026-08-11). The column is free-text provenance;
+    # the map file it used to name no longer exists. RENAME COLUMN needs
+    # sqlite >= 3.25 (deployed: 3.34.1). Idempotent: PRAGMA-guarded, so a
+    # DB created fresh from _SCHEMA is left alone.
+    for table in ('submissions', 'campaigns'):
+        cols = [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
+        if 'map_path' in cols and 'origin' not in cols:
+            con.execute(
+                f'ALTER TABLE {table} RENAME COLUMN map_path TO origin')
+    con.commit()
     return con
 
 
@@ -178,7 +188,7 @@ def _next_attempt(con, parent_id):
 
 
 def record_submission(db_path, *, tarball, entry, indices, jobsub_id,
-                      cluster_id, map_path=None, parent_id=None):
+                      cluster_id, origin=None, parent_id=None):
     """Append one submission row; return its id.
 
     entry is snapshotted verbatim (recovery must survive map edits and
@@ -191,10 +201,10 @@ def record_submission(db_path, *, tarball, entry, indices, jobsub_id,
         attempt = _next_attempt(con, parent_id)
         cur = con.execute(
             'INSERT INTO submissions '
-            '(created_utc, state, attempt, parent_id, map_path, tarball, '
+            '(created_utc, state, attempt, parent_id, origin, tarball, '
             ' entry_json, indices_json, jobsub_id, cluster_id) '
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (_now(), 'active', attempt, parent_id, map_path, tarball,
+            (_now(), 'active', attempt, parent_id, origin, tarball,
              json.dumps(entry), json.dumps(sorted(indices)),
              jobsub_id, cluster_id))
         con.commit()
@@ -203,7 +213,7 @@ def record_submission(db_path, *, tarball, entry, indices, jobsub_id,
         con.close()
 
 
-def reserve_submission(db_path, *, tarball, entry, indices, map_path=None,
+def reserve_submission(db_path, *, tarball, entry, indices, origin=None,
                        parent_id=None):
     """Claim an index window BEFORE jobsub_submit runs; return the row id.
 
@@ -221,10 +231,10 @@ def reserve_submission(db_path, *, tarball, entry, indices, map_path=None,
         attempt = _next_attempt(con, parent_id)
         cur = con.execute(
             'INSERT INTO submissions '
-            '(created_utc, state, attempt, parent_id, map_path, tarball, '
+            '(created_utc, state, attempt, parent_id, origin, tarball, '
             ' entry_json, indices_json, jobsub_id, cluster_id) '
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)',
-            (_now(), 'submitting', attempt, parent_id, map_path, tarball,
+            (_now(), 'submitting', attempt, parent_id, origin, tarball,
              json.dumps(entry), json.dumps(sorted(indices))))
         con.commit()
         return cur.lastrowid
@@ -387,7 +397,7 @@ def close_row(db_path, row_id, state, note=None):
         con.close()
 
 
-def create_campaign(db_path, *, tarball, entry, slice_size, map_path=None):
+def create_campaign(db_path, *, tarball, entry, slice_size, origin=None):
     """Register a sliced-submission campaign (cursor 0); return its id.
 
     entry is snapshotted verbatim — the caller has already merged any
@@ -413,9 +423,9 @@ def create_campaign(db_path, *, tarball, entry, slice_size, map_path=None):
                 f"{tarball}")
         cur = con.execute(
             'INSERT INTO campaigns '
-            '(created_utc, state, map_path, tarball, entry_json, cursor, '
+            '(created_utc, state, origin, tarball, entry_json, cursor, '
             ' slice_size) VALUES (?, ?, ?, ?, ?, 0, ?)',
-            (_now(), 'active', map_path, tarball, json.dumps(entry),
+            (_now(), 'active', origin, tarball, json.dumps(entry),
              slice_size))
         con.commit()
         return cur.lastrowid
