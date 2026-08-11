@@ -4479,25 +4479,6 @@ class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
                          '/mu2e/persistent/datasets/phy-etc/log/mu2e')
 
 
-class TestSingleBackend(unittest.TestCase):
-    """submit_map is single-backend (direct): --backend is gone and
-    rejected loudly as an unknown argument."""
-
-    def test_backend_flag_rejected(self):
-        from utils import submit
-        with patch.object(sys, 'argv',
-                          ['submit_map', '--map', 'x.json',
-                           '--backend', 'direct']):
-            with self.assertRaises(SystemExit) as cm:
-                submit.main()
-        self.assertEqual(cm.exception.code, 2)  # argparse usage error
-
-    def test_mu2ejobsub_helpers_gone(self):
-        from utils import submit
-        self.assertFalse(hasattr(submit, 'build_mu2ejobsub_argv'))
-        self.assertFalse(hasattr(submit, '_submit_entry_mu2ejobsub'))
-
-
 class TestRunSubmitClusterVerification(unittest.TestCase):
     """_run_submit must not report 'submitted' without a parsed cluster ID —
     jobsub_lite can exit 0 while its internal condor_submit failed (the
@@ -9842,7 +9823,7 @@ class TestTokenClauseIsSelfOnly(unittest.TestCase):
         self.runner = runner
 
     def test_self_chain_refreshes_the_token(self):
-        script = self.runner._self_wrapper(['bin/submit_map'])[-1]
+        script = self.runner._self_wrapper(['bin/submissions'])[-1]
         self.assertIn('getToken', script)
         # Before `muse setup ops`, as .claude/commands/mu2e-run.md has it
         # (getToken is on PATH straight after setupmu2e-art.sh).
@@ -9850,13 +9831,13 @@ class TestTokenClauseIsSelfOnly(unittest.TestCase):
                         script.index('muse setup ops'))
 
     def test_ksu_chain_never_refreshes_a_token(self):
-        script = self.runner.ksu_wrapper(['bin/submit_map'])[-1]
+        script = self.runner.ksu_wrapper(['bin/submissions'])[-1]
         self.assertNotIn('getToken', script)
         self.assertNotIn('htgettoken', script)
 
     def test_both_chains_are_valid_bash(self):
-        for argv in (self.runner._self_wrapper(['bin/submit_map']),
-                     self.runner.ksu_wrapper(['bin/submit_map'])):
+        for argv in (self.runner._self_wrapper(['bin/submissions']),
+                     self.runner.ksu_wrapper(['bin/submissions'])):
             proc = subprocess.run(['bash', '-n', '-c', argv[-1]],
                                   capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -9905,7 +9886,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         # a caller-owned workdir breaks condor_vault_storer, an
         # unreset USER picks the wrong submitter and tarball, and
         # without the CVMFS sourcing jobsub_submit is not on PATH.
-        cmd = ' '.join(self.runner.ksu_wrapper(['bin/submit_map', '--map', '/tmp/m.json']))
+        cmd = ' '.join(self.runner.ksu_wrapper(['bin/submissions', '--map', '/tmp/m.json']))
         self.assertIn('ksu mu2epro', cmd)
         self.assertIn('unset MUSE_WORK_DIR', cmd)
         self.assertIn('USER=mu2epro', cmd)
@@ -9919,7 +9900,7 @@ class TestWriteRunnerGate(unittest.TestCase):
     def test_self_does_not_use_ksu(self):
         with patch('subprocess.run') as run:
             run.return_value = SimpleNamespace(returncode=0, stdout='', stderr='')
-            self.runner.run_cli(['bin/submit_map', '--map', '/tmp/m.json'], 'self')
+            self.runner.run_cli(['bin/submissions', '--map', '/tmp/m.json'], 'self')
         argv = run.call_args[0][0]
         # Token-exact, not a substring check: this checkout's own path
         # (.../oksuzian/...) contains the substring "ksu", so a naive
@@ -9935,7 +9916,7 @@ class TestWriteRunnerGate(unittest.TestCase):
             run.return_value = SimpleNamespace(
                 returncode=1, stdout='',
                 stderr='kx509: no credentials cache found')
-            out = self.runner.run_cli(['bin/submit_map'], 'mu2epro')
+            out = self.runner.run_cli(['bin/submissions'], 'mu2epro')
         self.assertEqual(out['rc'], 1)
         # Nothing in the runner may attempt a refresh.
         joined = ' '.join(' '.join(c[0][0]) for c in run.call_args_list)
@@ -9949,10 +9930,10 @@ class TestWriteRunnerGate(unittest.TestCase):
         # the `bash -c` string, so a hostile argv[0] could break out of
         # the intended command and execute arbitrary code as mu2epro.
         # argv[0] must now be quoted exactly like every argv[1:] element.
-        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        cmd = self.runner.ksu_wrapper(['bin/submissions'])
         script = cmd[-1]
         expected = self.runner._quote(
-            os.path.join(self.runner.REPO_ROOT, 'bin/submit_map'))
+            os.path.join(self.runner.REPO_ROOT, 'bin/submissions'))
         self.assertIn(expected, script)
 
     def test_ksu_wrapper_quotes_a_hostile_argv_element(self):
@@ -9983,7 +9964,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         # Negative half of the MUSE_WORK_DIR constraint: MUSE_DIR must
         # survive (the `muse` shell function needs it), and there must
         # be no `unset MUSE_*` glob that would sweep it up.
-        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        cmd = self.runner.ksu_wrapper(['bin/submissions'])
         script = cmd[-1]
         unset_lines = [ln.strip() for ln in script.splitlines()
                        if ln.strip().startswith('unset ')]
@@ -9995,7 +9976,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         # not run silently in a broken environment (both setup lines
         # redirect stdout/stderr to /dev/null, so a bare sequence of
         # statements would hide the failure entirely).
-        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        cmd = self.runner.ksu_wrapper(['bin/submissions'])
         script = cmd[-1]
         self.assertIn(
             "setupmu2e-art.sh > /dev/null 2>&1 \\\n"
@@ -10043,7 +10024,7 @@ class TestWriteRunnerGate(unittest.TestCase):
             self.assertIn(needle, script)
 
     def test_mktemp_failure_is_guarded(self):
-        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        cmd = self.runner.ksu_wrapper(['bin/submissions'])
         script = cmd[-1]
         self.assertIn('mktemp -d /tmp/mu2epro_mcp.XXXXXX) || exit 1', script)
 
@@ -10053,7 +10034,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         # it ran as production. Reject outright instead.
         with patch('subprocess.run') as run:
             with self.assertRaises(ValueError):
-                self.runner.run_cli(['bin/submit_map'], 'mu2Epro')
+                self.runner.run_cli(['bin/submissions'], 'mu2Epro')
         run.assert_not_called()
 
     def test_run_cli_rejects_explicit_cwd_under_mu2epro(self):
@@ -10061,7 +10042,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         # caller-supplied cwd would be silently ignored on this path.
         # Reject it instead of accepting and discarding it.
         with self.assertRaises(ValueError):
-            self.runner.run_cli(['bin/submit_map'], 'mu2epro',
+            self.runner.run_cli(['bin/submissions'], 'mu2epro',
                                 cwd='/tmp/somewhere')
 
     # -- Round-2 review fixes: no Musing on either identity's env chain --
@@ -10084,9 +10065,9 @@ class TestWriteRunnerGate(unittest.TestCase):
         self.assertIn(f"source {quoted} > /dev/null 2>&1", script)
 
     def test_ksu_wrapper_without_simjob_setup_is_unchanged(self):
-        # No Musing given (e.g. bin/submit_map, which needs none) must
+        # No Musing given (e.g. bin/submissions, which needs none) must
         # not grow a stray `source` clause.
-        cmd = self.runner.ksu_wrapper(['bin/submit_map'])
+        cmd = self.runner.ksu_wrapper(['bin/submissions'])
         self.assertNotIn('source /cvmfs/mu2e.opensciencegrid.org/Musings',
                          cmd[-1])
 
@@ -10113,7 +10094,7 @@ class TestWriteRunnerGate(unittest.TestCase):
     def test_self_without_a_musing_still_gets_the_base_setup_chain(self):
         with patch('subprocess.run') as run:
             run.return_value = SimpleNamespace(returncode=0, stdout='', stderr='')
-            self.runner.run_cli(['bin/submit_map'], 'self')
+            self.runner.run_cli(['bin/submissions'], 'self')
         script = run.call_args[0][0][2]
         self.assertIn('setupmu2e-art.sh', script)
         self.assertIn('muse setup ops', script)
@@ -10218,7 +10199,7 @@ class TestRunCliExitStatusSentinel(unittest.TestCase):
         # the sentinel is echoed outside it. Written as a flat chain the
         # first guard would exit before any sentinel could print, and
         # run_cli would see an rc-less (unknown) failure instead of 1.
-        script = self.runner.ksu_wrapper(['bin/submit_map'])[-1]
+        script = self.runner.ksu_wrapper(['bin/submissions'])[-1]
         chain_open = script.index('\n(\n')
         chain_close = script.index('\n)\n')
         guard = script.index("exit 1; }")
@@ -10255,7 +10236,7 @@ class TestRunCliExitStatusSentinel(unittest.TestCase):
         self.assertIn('no newline here', kept)
 
     def test_generated_scripts_still_parse(self):
-        for cmd in (self.runner.ksu_wrapper(['bin/submit_map']),
+        for cmd in (self.runner.ksu_wrapper(['bin/submissions']),
                     self.runner._self_wrapper(['bin/json2jobdef'],
                                               simjob_setup='/cvmfs/a/setup.sh')):
             proc = subprocess.run(['bash', '-n', '-c', cmd[-1]],
@@ -13373,6 +13354,39 @@ class TestResubmitVerb(unittest.TestCase):
                 submissions.main(['--db', db, 'resubmit', str(rid),
                                   '--indices-file', '/no/such/file.txt'])
             self.assertIn('submissions:', str(cm.exception))
+
+
+# ---------------------------------------------------------------------------
+# bin/submit_map retirement (Task 6) — the command is gone, the engine
+# (utils/submit.py) survives as a library
+# ---------------------------------------------------------------------------
+
+class TestSubmitMapCommandRetired(unittest.TestCase):
+    def test_bin_submit_map_is_gone(self):
+        import pathlib
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        self.assertFalse((repo / 'bin' / 'submit_map').exists())
+
+    def test_submit_map_function_is_gone(self):
+        import utils.submit as submit
+        self.assertFalse(hasattr(submit, 'submit_map'))
+
+    def test_submit_py_has_no_cli(self):
+        import utils.submit as submit
+        self.assertFalse(hasattr(submit, 'main'))
+
+    def test_engine_is_still_exported(self):
+        import utils.submit as submit
+        for name in ('SubmitOptions', 'submit_entry', 'enqueue_entry'):
+            self.assertTrue(hasattr(submit, name), f"lost {name}")
+
+    def test_runner_allowlist_drops_the_deleted_script(self):
+        """ALLOWED_ENTRY_POINTS is a security allowlist; an entry naming a
+        script that no longer exists is dead surface."""
+        from prodtools_mcp_write.runner import ALLOWED_ENTRY_POINTS
+        self.assertNotIn('bin/submit_map', ALLOWED_ENTRY_POINTS)
+        self.assertIn('bin/submissions', ALLOWED_ENTRY_POINTS)
+        self.assertIn('bin/json2jobdef', ALLOWED_ENTRY_POINTS)
 
 
 # ---------------------------------------------------------------------------
