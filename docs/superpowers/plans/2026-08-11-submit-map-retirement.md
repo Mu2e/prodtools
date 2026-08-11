@@ -1500,13 +1500,20 @@ Task 4's review found live comments naming a function that no longer exists. Fix
 - `utils/submission_ledger.py:501` — says `(submissions.recovery_resource_argv)`; the function is now `recovery_resource_kwargs`. The same docstring also says `resubmit` "rebuilds its map from `row['entry']`" — there is no map; it builds `SubmitOptions`.
 - `utils/jobsub_argv.py:35` — comment names `recovery_resource_argv`.
 
+**Rename the `submit_map:` error prefixes.** `enqueue_entry` emits seven operator-facing messages prefixed with the name of the deleted command (`utils/submit.py:383, 413, 429, 439, 445, 448, 461`). Its only caller is now `json2jobdef`, so the prefix should be `json2jobdef:`. This is not cosmetic: `:439` is `"submit_map: inputs not ready"` — the message an operator sees when a campaign's inputs are bad, which is the exact failure class that cost campaign 54 half its jobs. Telling them to go look at a command that does not exist wastes the one moment the message matters.
+
+`enqueue_entry`'s `sys.exit` *protocol* stays exactly as it is — only the prefix string changes.
+
+EXAMPLES.md documents these strings, so the Step 2 regeneration must reflect the new prefix. Grep the schema for `submit_map:` before regenerating.
+
 Then confirm nothing else dangles:
 
 ```bash
 grep -rn "recovery_resource_argv\|_scratch_map_dir\|SUBMIT_MAP\|submit_entry_direct" utils/ bin/ mcp/src/ test/
+grep -rn "submit_map" utils/ bin/ mcp/src/ test/
 ```
 
-Expected: no matches.
+Expected: no matches from either. The second is broader than the first on purpose — Task 6 left narrative `submit_map` prose in `utils/submissions.py`, `utils/submission_ledger.py`, `utils/runmu2e.py`, `mcp/src/prodtools_mcp_write/tools.py`, and `utils/submit.py`'s own docstrings, all correctly out of its scope and all owned here. Rewrite each to describe what the code does now; do not simply delete the sentence if it was explaining something real.
 
 - [ ] **Step 3c: Fix the live skill docs in `.claude/commands/`**
 
