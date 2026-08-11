@@ -764,6 +764,38 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
     return None
 
 
+# Row states that cannot have live jobs. Everything else — 'active',
+# 'submitting', 'failed' — blocks a resubmit. 'failed' blocks
+# deliberately: a jobsub_submit that exits non-zero can still have
+# created a cluster, so its window is NOT proven free. Clear it with
+# `submissions reconcile <row-id>` after checking jobsub_q.
+_SETTLED_STATES = ('complete', 'recovered', 'exhausted', 'reconciled')
+
+
+def _rows_blocking_indices(db_path, tarball, indices):
+    """The blocking ledger row (truthy) if any unsettled row for
+    `tarball` already covers one of `indices`, else None.
+
+    The scattered-set analog of _slice_overlaps_ledger. Returns the ROW
+    so the caller can name its id: the operator's next move is
+    `submissions reconcile <row-id>`, and "something overlaps" would
+    leave them hunting for which.
+
+    Works for both index rows and draining (file-keyed) rows:
+    row['indices'] holds filenames for the latter, and set intersection
+    is the same operation either way.
+    """
+    want = set(indices)
+    for row in submission_ledger.all_rows(db_path):
+        if row['tarball'] != tarball:
+            continue
+        if row.get('state') in _SETTLED_STATES:
+            continue
+        if want & set(row['indices']):
+            return row
+    return None
+
+
 def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
            submit_fn=submit_slice, only_campaign=None):
     """Feed slices from active campaigns while total idle+running stays
@@ -1373,6 +1405,32 @@ def build_parser():
              'default because an unset memory is what earns a recovery '
              f'the {RECOVERY_MEMORY} floor.')
 
+    resub_p = sub.add_parser(
+        'resubmit',
+        help='Re-fire specific work from a ledger row by hand',
+        description='Submit a named set of indices or input files from an '
+                    'existing ledger row, as a child submission (attempt+1). '
+                    'The entry comes from the row, so there is no file to '
+                    'write. REFUSES when any named index or file is still '
+                    'covered by an unsettled row for the same tarball: '
+                    'payloads are deterministic, so re-sending live work '
+                    'duplicates physics. Clear a stuck row with '
+                    '`submissions reconcile <row-id>` first.')
+    resub_p.add_argument('row_id', type=int)
+    resub_group = resub_p.add_mutually_exclusive_group(required=True)
+    resub_group.add_argument('--indices', default=None,
+                             help='Comma/space-separated ABSOLUTE cnf '
+                                  'indices')
+    resub_group.add_argument('--indices-file', default=None,
+                             help='File of absolute cnf indices; `#` '
+                                  'comment lines ignored')
+    resub_group.add_argument('--files', default=None,
+                             help='File of input art filenames, one per '
+                                  'line, for a draining row')
+    resub_p.add_argument('--dry-run', action='store_true',
+                         help='Print what would be submitted, submit '
+                              'nothing')
+
     # Bare invocation (no verb) IS status — an explicit default, not a
     # hidden fallthrough (spec Change 1). Must come AFTER
     # add_subparsers(dest='verb'): the subparsers action sets its own
@@ -1460,8 +1518,8 @@ def _run_pass(args):
         sys.exit(2)
 
 
-def main():
-    args = build_parser().parse_args()
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     verb = args.verb
     # Resolved ONCE here; args.db is overwritten so every use below
     # (including inside _run_pass) sees this same value rather than
@@ -1526,6 +1584,41 @@ def main():
         print(f"row {args.row_id}: {was} -> reconciled ({note}). Its "
               f"indices no longer block a campaign slice; "
               f"`submissions resume <ID>` to restart the campaign.")
+        return
+
+    if verb == 'resubmit':
+        row = submission_ledger.row_by_id(db, args.row_id)
+        if row is None:
+            sys.exit(f"submissions: no ledger row {args.row_id} in {db}")
+        if args.files is not None:
+            payload = submit.parse_files(args.files)
+            if not is_draining(row['entry']):
+                sys.exit(f"submissions: row {args.row_id} is an index row "
+                         f"— use --indices, not --files")
+        else:
+            payload = submit.parse_indices(args.indices, args.indices_file)
+            if is_draining(row['entry']):
+                sys.exit(f"submissions: row {args.row_id} is a draining "
+                         f"(file-keyed) row — use --files, not --indices")
+        if not payload:
+            sys.exit("submissions: nothing to resubmit (empty selection)")
+
+        blocking = _rows_blocking_indices(db, row['tarball'], payload)
+        if blocking:
+            sys.exit(
+                f"submissions: refusing — row {blocking['id']} "
+                f"(state={blocking['state']}) already covers part of this "
+                f"selection for {row['tarball']}. Deterministic payloads "
+                f"mean re-sending live work duplicates physics. Check "
+                f"jobsub_q, then `submissions reconcile {blocking['id']}` "
+                f"if the window is genuinely free.")
+
+        if not args.dry_run:
+            _acquire_lock(db)
+        fn = resubmit_files if args.files is not None else resubmit
+        ok = fn(row, payload, db, dry_run=args.dry_run)
+        if not ok:
+            sys.exit(f"submissions: resubmit of row {args.row_id} FAILED")
         return
 
     if verb in ('pause', 'resume', 'cancel', 'complete'):

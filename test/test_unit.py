@@ -4029,38 +4029,38 @@ class TestParseIndices(unittest.TestCase):
     """--indices/--indices-file parsing: sorted, deduped, comment-tolerant."""
 
     def test_none_when_neither_given(self):
-        from utils.submit import _parse_indices
-        self.assertIsNone(_parse_indices(None, None))
+        from utils.submit import parse_indices
+        self.assertIsNone(parse_indices(None, None))
 
     def test_comma_and_whitespace_separated(self):
-        from utils.submit import _parse_indices
-        self.assertEqual(_parse_indices('3,1 2', None), [1, 2, 3])
+        from utils.submit import parse_indices
+        self.assertEqual(parse_indices('3,1 2', None), [1, 2, 3])
 
     def test_sorts_and_dedupes(self):
-        from utils.submit import _parse_indices
-        self.assertEqual(_parse_indices('5,1,5,1', None), [1, 5])
+        from utils.submit import parse_indices
+        self.assertEqual(parse_indices('5,1,5,1', None), [1, 5])
 
     def test_mutually_exclusive(self):
-        from utils.submit import _parse_indices
+        from utils.submit import parse_indices
         with self.assertRaises(ValueError):
-            _parse_indices('1', '/tmp/whatever')
+            parse_indices('1', '/tmp/whatever')
 
     def test_non_integer_raises(self):
-        from utils.submit import _parse_indices
+        from utils.submit import parse_indices
         with self.assertRaises(ValueError):
-            _parse_indices('1,abc', None)
+            parse_indices('1,abc', None)
 
     def test_empty_spec_raises(self):
-        from utils.submit import _parse_indices
+        from utils.submit import parse_indices
         with self.assertRaises(ValueError):
-            _parse_indices(' , ', None)
+            parse_indices(' , ', None)
 
     def test_file_ignores_comments_and_blanks(self):
         """Accepts `#`-prefixed comment headers (the historical mkrecovery
         --print-indices format), whose `# <tarball>` headers must not parse
         as indices."""
         import tempfile
-        from utils.submit import _parse_indices
+        from utils.submit import parse_indices
         with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as f:
             f.write("# cnf.mu2e.MuStopPileup.Run1Ban-001.0.tar\n"
                     "14719\n"
@@ -4068,7 +4068,7 @@ class TestParseIndices(unittest.TestCase):
                     "15944  # trailing comment\n")
             path = f.name
         try:
-            self.assertEqual(_parse_indices(None, path), [14719, 15944])
+            self.assertEqual(parse_indices(None, path), [14719, 15944])
         finally:
             os.unlink(path)
 
@@ -11356,18 +11356,18 @@ class TestParseFiles(unittest.TestCase):
     F2 = 'dig.mu2e.B.MDC2025au_best_v1_5.001202_00000002.art'
 
     def _parse(self, text):
-        from utils.submit import _parse_files
+        from utils.submit import parse_files
         with tempfile.NamedTemporaryFile('w', suffix='.txt',
                                          delete=False) as fh:
             fh.write(text)
         try:
-            return _parse_files(fh.name)
+            return parse_files(fh.name)
         finally:
             os.unlink(fh.name)
 
     def test_none_passthrough(self):
-        from utils.submit import _parse_files
-        self.assertIsNone(_parse_files(None))
+        from utils.submit import parse_files
+        self.assertIsNone(parse_files(None))
 
     def test_sorted_unique_with_comments(self):
         got = self._parse(f"# header\n{self.F2}\n{self.F1}\n{self.F2}\n")
@@ -13142,6 +13142,131 @@ class TestMapScratchDirIsGone(unittest.TestCase):
     def test_no_submit_map_constant(self):
         from utils import submissions
         self.assertFalse(hasattr(submissions, 'SUBMIT_MAP'))
+
+
+# ---------------------------------------------------------------------------
+# submissions resubmit verb (utils/submission_ledger.py, utils/submissions.py)
+# ---------------------------------------------------------------------------
+class TestRowById(unittest.TestCase):
+    def test_returns_the_row(self):
+        from utils import submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar', entry={'tarball': 'x.tar'},
+                indices=[1, 2, 3])
+            row = submission_ledger.row_by_id(db, rid)
+        self.assertEqual(row['id'], rid)
+        self.assertEqual(row['indices'], [1, 2, 3])
+
+    def test_missing_row_is_none(self):
+        from utils import submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            self.assertIsNone(submission_ledger.row_by_id(db, 999))
+
+
+class TestResubmitOverlapGuard(unittest.TestCase):
+    """Deterministic payloads make an unverified resubmit the Run1Ban
+    failure mode: re-sending indices that are still live duplicates
+    physics. A live row blocks; a closed one does not."""
+
+    def _db_with_row(self, td, state, indices):
+        from utils import submission_ledger
+        db = os.path.join(td, 'submissions.db')
+        submission_ledger.ensure_ledger_dir(db)
+        rid = submission_ledger.reserve_submission(
+            db, tarball='x.tar', entry={'tarball': 'x.tar'},
+            indices=indices)
+        if state != 'submitting':
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+        if state in ('complete', 'recovered', 'exhausted'):
+            submission_ledger.close_row(db, rid, state)
+        return db, rid
+
+    def test_active_row_blocks(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid = self._db_with_row(td, 'active', [5, 6, 7])
+            blocking = submissions._rows_blocking_indices(db, 'x.tar', [6])
+        self.assertIsNotNone(blocking)
+        self.assertEqual(blocking['id'], rid)
+
+    def test_submitting_row_blocks(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._db_with_row(td, 'submitting', [5, 6, 7])
+            self.assertIsNotNone(
+                submissions._rows_blocking_indices(db, 'x.tar', [6]))
+
+    def test_complete_row_does_not_block(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._db_with_row(td, 'complete', [5, 6, 7])
+            self.assertIsNone(
+                submissions._rows_blocking_indices(db, 'x.tar', [6]))
+
+    def test_other_tarball_does_not_block(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._db_with_row(td, 'active', [5, 6, 7])
+            self.assertIsNone(
+                submissions._rows_blocking_indices(db, 'other.tar', [6]))
+
+    def test_disjoint_indices_do_not_block(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, _ = self._db_with_row(td, 'active', [5, 6, 7])
+            self.assertIsNone(
+                submissions._rows_blocking_indices(db, 'x.tar', [99]))
+
+
+class TestResubmitVerb(unittest.TestCase):
+    def test_refuses_a_missing_row(self):
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main(['--db', db, 'resubmit', '999',
+                                  '--indices', '1'])
+            self.assertIn('no ledger row 999', str(cm.exception))
+
+    def test_refuses_when_a_live_row_overlaps(self):
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar', entry={'tarball': 'x.tar'},
+                indices=[1, 2, 3])
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', '2'])
+            self.assertIn('refusing', str(cm.exception))
+            self.assertIn('reconcile', str(cm.exception))
+
+    def test_rejects_indices_on_a_draining_row(self):
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar',
+                entry={'tarball': 'x.tar', 'input_pattern': 'dts.*.art'},
+                indices=['dts.mu2e.a.v.art'])
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+            submission_ledger.close_row(db, rid, 'complete')
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', '1'])
+            self.assertIn('draining', str(cm.exception))
 
 
 # ---------------------------------------------------------------------------

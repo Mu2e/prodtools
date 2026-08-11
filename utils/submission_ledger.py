@@ -350,6 +350,17 @@ def all_rows(db_path):
         con.close()
 
 
+def row_by_id(db_path, row_id):
+    """One row by id, entry/indices JSON parsed, or None."""
+    con = _connect(db_path)
+    try:
+        row = con.execute(
+            'SELECT * FROM submissions WHERE id = ?', (row_id,)).fetchone()
+        return _to_dict(row) if row is not None else None
+    finally:
+        con.close()
+
+
 # States close_row may move an active row INTO. Deliberately NOT derived
 # from STATES: 'submitting' is a pre-submit reservation and 'failed' is
 # fail_reservation's alone, so a future addition to STATES must not

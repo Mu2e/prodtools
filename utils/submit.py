@@ -515,7 +515,7 @@ def _read_cnf_facts(tarball_path):
             [v for v in out.values() if v and "/" not in v])
 
 
-def _parse_indices(spec, path):
+def parse_indices(spec, path):
     """Parse --indices / --indices-file into a sorted unique list of ints.
 
     Returns None when neither is given. Accepts comma- and/or
@@ -543,7 +543,7 @@ def _parse_indices(spec, path):
     return sorted(parsed)
 
 
-def _parse_files(path):
+def parse_files(path):
     """Parse --files: one Mu2e art filename per line; `#` comments and
     blank lines allowed. Returns a sorted unique list, or None when no
     path was given. Every name must parse as a 6-field Mu2e file name —
@@ -993,8 +993,8 @@ def main():
         if _val is not None:
             _parse_or_exit(validate_entry_value, _key, _val)
 
-    args.indices = _parse_or_exit(_parse_indices, args.indices, args.indices_file)
-    args.files = _parse_or_exit(_parse_files, args.files)
+    args.indices = _parse_or_exit(parse_indices, args.indices, args.indices_file)
+    args.files = _parse_or_exit(parse_files, args.files)
     if args.files is not None and (
             args.first is not None or args.num is not None
             or args.indices is not None):
