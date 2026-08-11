@@ -28,7 +28,6 @@ at import time or during entry selection -- only at model
 instantiation, which this module never does.
 """
 import json as _json
-from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -87,29 +86,6 @@ def _select_push_params(json_path, desc, dsconf):
     return simjob_setup, tarball_desc
 
 
-def _read_entries(map_path):
-    """Tolerant read of a jobdefs map: missing file or blank content is
-    an empty map, mirroring `_write_jobdef_json_entry`'s own tolerance
-    (it starts fresh rather than erroring on either). Used only for the
-    pre-push snapshot -- a map that fails to parse strictly AFTER a
-    successful push is a real problem and must still raise loudly."""
-    path = Path(map_path)
-    if not path.is_file():
-        return []
-    text = path.read_text()
-    if not text.strip():
-        return []
-    try:
-        entries = _json.loads(text)
-    except _json.JSONDecodeError:
-        return []
-    return entries if isinstance(entries, list) else [entries]
-
-
-def _canon(entry):
-    return _json.dumps(entry, sort_keys=True)
-
-
 def _both_streams(result):
     """Failure text for a run_cli result: stdout AND stderr, labelled.
 
@@ -131,16 +107,15 @@ def _both_streams(result):
 
 
 def _read_entries_strict(map_path):
-    """Same shape as `_read_entries`, but a missing file or malformed
-    JSON is a real problem here, not "0 entries".
+    """Read a map's entries; a missing file or malformed JSON is a
+    real problem here, not "0 entries".
 
-    Used only by `_read_map_entry`'s `index=` mode: by the time
+    Used by `_read_map_entry`: by the time
     `enqueue_campaign` reaches it, `submit_map --entry N` has already
     read this same map successfully to find the entry it enqueued, so
     a map that turns out missing or corrupt when read back is worth a
     distinct error -- not silently folded into "entry N out of range
-    for 0 entries", the same misleading-message shape flagged for
-    `_read_entries` itself (see its own docstring)."""
+    for 0 entries"."""
     path = Path(map_path)
     if not path.is_file():
         raise RuntimeError(f"map file not found: {map_path}")
@@ -164,122 +139,50 @@ def _tarball_matches(tarball, tarball_desc, dsconf):
     return name.description == tarball_desc and name.dsconf == dsconf
 
 
-def _read_map_entry(map_path, tarball_desc=None, dsconf=None,
-                    before_entries=None, index=None):
-    """Return (index, entry) for the entry THIS push actually produced.
+def _read_map_entry(map_path, index):
+    """Return (index, entry) for map entry `index`.
 
-    `index`, when given, bypasses all of the disambiguation below:
-    submit_map's own `--entry N` already names an EXISTING map entry
-    unambiguously (it neither appends nor guesses at that entry), so
-    enqueue_campaign uses this mode to read it back by plain position
-    rather than by desc+dsconf disambiguation -- there is nothing to
-    disambiguate when the index was already known before the command
-    ran. `index` and `tarball_desc`/`dsconf` are mutually exclusive:
-    passing both would otherwise silently take the index path and
-    ignore the desc/dsconf disambiguation without saying so, which is
-    exactly the kind of accidental weak-path selection this project
-    exists to prevent -- so combining them raises instead.
-
-    Without `index` (push_cnf's use): selected by parsing tarball_desc+dsconf
-    out of each candidate
-    entry's own tarball name (`Mu2eName`), never by an owner-qualified
-    tarball name computed in this process (`owner` defaults to `$USER`
-    when a JSON entry omits it, and this process's `$USER` -- the
-    caller -- is not the identity json2jobdef actually ran as inside
-    the ksu block, `mu2epro` -> `mu2e`; computing the tarball name here
-    would report a successful production push as a failure), and never
-    by position (`entries[-1]` can silently return some OTHER
-    campaign's tarball and index as if it were this push's result).
-
-    A tarball_desc+dsconf pair can legitimately match MORE than one map
-    entry: `_write_jobdef_json_entry` dedupes on (tarball, firstjob),
-    not tarball alone, so a windowed campaign appends one entry per
-    index window sharing the same tarball; and the same tarball_desc
-    can coincidentally already exist in the map from an unrelated
-    prior push. `before_entries` (a snapshot taken before `run_cli`
-    ran) disambiguates: the entry this push produced is whichever
-    candidate is newly present in the map that was not there before.
-    If nothing was newly appended -- `_write_jobdef_json_entry`'s
-    documented dedup/re-run path, which returns without appending when
-    the entry already exists -- and exactly one candidate matches, that
-    one is unambiguously it. Only a genuine tie (more than one
-    candidate, none of them distinguishably new) raises, and the
-    message lists every candidate so an operator can resolve it by
-    hand -- there is no "last entry" fallback.
+    `submit_map --entry N` already names an EXISTING entry
+    unambiguously -- it neither appends nor guesses -- so enqueue_campaign
+    reads it back by plain position. There is nothing to disambiguate.
     """
-    if index is not None:
-        if tarball_desc is not None or dsconf is not None:
-            raise ValueError(
-                "_read_map_entry: index and tarball_desc/dsconf are "
-                "mutually exclusive -- pass one or the other, not both")
-        entries = _read_entries_strict(map_path)
-        if not (0 <= index < len(entries)):
-            raise RuntimeError(
-                f"entry {index} out of range for {map_path} "
-                f"({len(entries)} entries)")
-        return index, entries[index]
-
-    after_entries = _read_entries(map_path)
-    candidates = [(i, e) for i, e in enumerate(after_entries)
-                  if _tarball_matches(e.get('tarball'), tarball_desc, dsconf)]
-    if not candidates:
+    entries = _read_entries_strict(map_path)
+    if not (0 <= index < len(entries)):
         raise RuntimeError(
-            f"no entry for tarball_desc={tarball_desc!r} dsconf={dsconf!r} "
-            f"found in {map_path} after the push")
-
-    before_counts = Counter(_canon(e) for e in before_entries)
-    seen = Counter()
-    newly_appended = []
-    for i, e in candidates:
-        c = _canon(e)
-        seen[c] += 1
-        if seen[c] > before_counts.get(c, 0):
-            newly_appended.append((i, e))
-
-    if len(newly_appended) == 1:
-        return newly_appended[0]
-    if not newly_appended and len(candidates) == 1:
-        return candidates[0]
-
-    listing = ", ".join(f"index {i} tarball {e.get('tarball')!r}"
-                        for i, e in candidates)
-    raise RuntimeError(
-        f"tarball_desc={tarball_desc!r} dsconf={dsconf!r} matches "
-        f"{len(candidates)} entries in {map_path} and this push's own "
-        f"entry cannot be told apart from pre-existing ones; "
-        f"candidates: {listing}")
+            f"entry {index} out of range for {map_path} "
+            f"({len(entries)} entries)")
+    return index, entries[index]
 
 
-def push_cnf(json: str, desc: str, dsconf: str, run_as: str,
-             confirm: bool = False, slice_size: Optional[int] = None,
-             jobdefs_map: Optional[str] = None):
-    """Build a cnf tarball, register it in SAM, and (normally) create
-    its campaign -- the one-command flow, mirroring
-    `json2jobdef --prod --enqueue`.
+# What an operator has to know after ANY failure on the enqueue path.
+# `enqueue_entry` runs after `_pushout_to_sam` (utils/json2jobdef.py),
+# so every refusal downstream of the push -- check_inputs not ready,
+# njobs<1, a duplicate live campaign -- leaves the cnf REGISTERED and no
+# campaign created. Re-running pushes it again, and there is no
+# `submissions enqueue` verb to finish the job from where it stopped.
+# This sentence is the whole recovery procedure, so it rides on every
+# post-run_cli raise rather than living in a runbook nobody opens.
+_ENQUEUE_RECOVERY = (
+    "the cnf may already be REGISTERED in SAM while no campaign was "
+    "created -- check list_campaigns (and SAM) before re-running, "
+    "because a re-run pushes the cnf again")
+
+
+def push_cnf(json: str, desc: str, dsconf: str, slice_size: int,
+             run_as: str, confirm: bool = False):
+    """Build a cnf tarball, register it in SAM, and create its campaign
+    -- one call, mirroring `json2jobdef --prod --enqueue`.
 
     run_as="self" registers under your own dataset owner and scratch
     outstage. run_as="mu2epro" registers in PRODUCTION SAM and is not
     reversible; it requires confirm=true.
 
-    Pass EXACTLY ONE of:
+    No map file is involved anywhere. Returns `campaign_id`, ready to
+    hand to `run_submissions`.
 
-    - `slice_size` -- the normal path. Creates the campaign directly in
-      the ledger; no map file is written or needed. Returns
-      `campaign_id`, ready for `run_submissions`.
-    - `jobdefs_map` -- the legacy path, for the rare case that wants a
-      map file on disk (hand inspection, or feeding `bin/submit_map`).
-      Returns `map_path`/`entry_index` and creates NO campaign, so it
-      still needs an `enqueue_campaign` call to become submittable.
-
-    Neither is a default: a bare `--prod` pushes the cnf to SAM and
-    then registers nothing, a silent no-op the CLI itself refuses.
-
-    `jobdefs_map` must be an absolute path you can write --
-    production_manager/direct_maps/ is mu2epro-owned, and this tool
-    never invents a path. Absolute because, under run_as="mu2epro", the
-    ksu block cd's into its own mktemp workdir: a relative path would be
-    written there while the result is read back relative to this
-    server's own cwd.
+    `slice_size` is how many jobs each `submissions run` tick feeds to
+    the grid; it is frozen into the campaign at creation. The CLI's own
+    default is 1000, which is the right answer unless you have a reason.
 
     The Musing (simjob_setup) is never taken as an argument: it is
     derived from the `--json` config's own entry for desc+dsconf, so a
@@ -287,61 +190,28 @@ def push_cnf(json: str, desc: str, dsconf: str, run_as: str,
     """
     runner.require_confirmed(run_as, confirm)
 
-    if (slice_size is None) == (jobdefs_map is None):
-        raise ValueError(
-            "push_cnf takes exactly one of slice_size (create the "
-            "campaign directly -- the normal path) or jobdefs_map "
-            "(write a map file instead, which still needs a separate "
-            "enqueue_campaign call); "
-            f"got slice_size={slice_size!r} jobdefs_map={jobdefs_map!r}")
+    # Checked HERE, not left to create_campaign: that runs inside the
+    # CLI, after the irreversible SAM push, so a bad slice_size would
+    # cost a pushed cnf with no campaign (see _ENQUEUE_RECOVERY).
+    if not isinstance(slice_size, int) or isinstance(slice_size, bool):
+        raise ValueError(f"slice_size must be an int, got {slice_size!r}")
+    if slice_size < 1:
+        raise ValueError(f"slice_size must be >= 1, got {slice_size}")
 
     simjob_setup, tarball_desc = _select_push_params(json, desc, dsconf)
 
-    if slice_size is not None:
-        return _push_and_enqueue(json, desc, dsconf, slice_size, run_as,
-                                 simjob_setup, tarball_desc)
-
-    if not Path(jobdefs_map).is_absolute():
-        raise ValueError(
-            f"jobdefs_map must be an absolute path (got {jobdefs_map!r})")
-
-    before_entries = _read_entries(jobdefs_map)
-
-    argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
-            '--dsconf', dsconf, '--prod', '--jobdefs', jobdefs_map]
-    result = runner.run_cli(argv, run_as, simjob_setup=simjob_setup)
-    if result['rc'] != 0:
-        raise RuntimeError(
-            f"json2jobdef failed (rc={result['rc']}): "
-            f"{_both_streams(result)}")
-    index, entry = _read_map_entry(jobdefs_map, tarball_desc, dsconf,
-                                   before_entries)
-    return {
-        'tarball': entry.get('tarball'),
-        'datasets': [o.get('dataset') for o in entry.get('outputs', [])],
-        'map_path': jobdefs_map,
-        'entry_index': index,
-    }
-
-
-def _push_and_enqueue(json, desc, dsconf, slice_size, run_as,
-                      simjob_setup, tarball_desc):
-    """`json2jobdef --prod --enqueue`: the campaign row IS the artifact.
-
-    With no map file to read back, the ledger row is what this call
-    produced, and it is identified the same way the map path identifies
-    its entry -- by desc+dsconf, preferring a campaign that was not
-    there before the command ran. Never scraped from stdout.
-    """
     db = _ledger_path_for(run_as)
     try:
         before_ids = {c['id'] for c in _all_campaigns(db)}
     except RuntimeError:
-        # No ledger yet: a first-ever push creates the directory and the
-        # DB as it enqueues. An unreadable ledger BEFORE the write is
-        # not an error -- it is the empty snapshot. It stays fatal after
-        # the write, where _all_campaigns is called without this guard.
-        before_ids = set()
+        # A first-ever push creates the directory and the DB as it
+        # enqueues, so an unreadable ledger here is expected. Record
+        # UNKNOWN, not empty: this also catches a transient "database is
+        # locked" from a concurrent tick, and claiming an empty snapshot
+        # there would make a pre-existing campaign look freshly created.
+        # None means "require exactly one live match" downstream --
+        # strictly safer than a snapshot we do not actually have.
+        before_ids = None
 
     argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
             '--dsconf', dsconf, '--prod', '--enqueue',
@@ -350,7 +220,7 @@ def _push_and_enqueue(json, desc, dsconf, slice_size, run_as,
     if result['rc'] != 0:
         raise RuntimeError(
             f"json2jobdef --prod --enqueue failed (rc={result['rc']}): "
-            f"{_both_streams(result)}")
+            f"{_both_streams(result)} -- {_ENQUEUE_RECOVERY}")
 
     matches = [c for c in _all_campaigns(db)
                if c['state'] in _LIVE_CAMPAIGN_STATES
@@ -370,36 +240,57 @@ def _push_and_enqueue(json, desc, dsconf, slice_size, run_as,
 def _sole_live_campaign(db, matches, subject, what, before_ids=None):
     """The one live campaign `what` just created, or raise.
 
-    `before_ids`, when given, is the set of campaign ids that existed
-    before the command ran; a campaign absent from it is unambiguously
-    this call's, which is what lets a desc+dsconf match disambiguate
-    itself against the campaigns that tarball has accumulated over its
-    life. Without it (enqueue_campaign, which already matched an exact
-    tarball) a single live match is required outright.
+    Two callers, two ways of knowing:
 
-    Never falls back to "the newest one": the ledger's own
-    campaigns_live_tarball index forbids two live campaigns per
-    tarball, so more than one live match means that invariant is
-    broken and a human has to resolve it.
+    - `before_ids=None` (enqueue_campaign) matched an EXACT tarball, and
+      the ledger's campaigns_live_tarball index forbids two live
+      campaigns per tarball. So a second match means that DB invariant
+      is broken.
+    - `before_ids=<set>` (push_cnf) matched on desc+dsconf, which does
+      NOT imply a unique tarball: `_tarball_matches` ignores the version
+      index, and `cnf_name` puts `config['version']` there (`--extend`
+      bumps it), so live campaigns for `...D.C.0.tar` and `...D.C.1.tar`
+      both match and are both legal. The snapshot is what disambiguates
+      them, and it carries the whole burden on this path.
+
+    Never falls back to "the newest one", and never to "the only one" on
+    the snapshot path: a campaign that already existed is by definition
+    not the one this call created. Handing its id back would send
+    `run_submissions` at an unrelated production campaign while the new
+    one is never fed.
     """
     if not matches:
         raise RuntimeError(
             f"{what} reported success but no live campaign for "
-            f"{subject} is in {db} -- reconcile before retrying")
-    if before_ids is not None:
-        fresh = [c for c in matches if c['id'] not in before_ids]
-        if len(fresh) == 1:
-            return fresh[0]
-        if fresh:
-            matches = fresh
-    if len(matches) == 1:
-        return matches[0]
+            f"{subject} is in {db} -- {_ENQUEUE_RECOVERY}")
+
+    if before_ids is None:
+        if len(matches) == 1:
+            return matches[0]
+        ids = ', '.join(f"{c['id']} ({c['state']}, {c['tarball']})"
+                        for c in matches)
+        raise RuntimeError(
+            f"{db} holds {len(matches)} live campaigns for {subject} "
+            f"({ids}) -- the ledger's own uniqueness invariant is "
+            f"broken; resolve by hand rather than guessing which one "
+            f"{what} created")
+
+    fresh = [c for c in matches if c['id'] not in before_ids]
+    if len(fresh) == 1:
+        return fresh[0]
+
     ids = ', '.join(f"{c['id']} ({c['state']}, {c['tarball']})"
                     for c in matches)
+    if not fresh:
+        raise RuntimeError(
+            f"{what} reported success, but every live campaign matching "
+            f"{subject} in {db} ({ids}) already existed before it ran, "
+            f"so none of them is this call's -- {_ENQUEUE_RECOVERY}")
+    fresh_ids = ', '.join(str(c['id']) for c in fresh)
     raise RuntimeError(
-        f"{db} holds {len(matches)} live campaigns matching {subject} "
-        f"({ids}) -- the ledger's own uniqueness invariant is broken; "
-        f"resolve by hand rather than guessing which one {what} created")
+        f"{what} appears to have created {len(fresh)} campaigns matching "
+        f"{subject} in {db} (new: {fresh_ids}; all live matches: {ids}) "
+        f"-- refusing to guess which one to return; resolve by hand")
 
 
 def _ledger_path_for(run_as):
@@ -460,17 +351,20 @@ def enqueue_campaign(map_path: str, entry: int, slice_size: int,
     is omitted -- a typed tool defaulting to "all of them" is exactly
     the hazard this signature exists to remove.
 
-    `map_path` must be an absolute path for the same reason as
-    push_cnf's jobdefs_map: under run_as='mu2epro' the ksu block cd's
-    into its own mktemp workdir, so submit_map would read a relative
-    path from THERE while this function reads it back relative to the
-    server's own cwd.
+    `map_path` must be an absolute path: under run_as='mu2epro' the ksu
+    block cd's into its own mktemp workdir, so submit_map would read a
+    relative path from THERE while this function reads it back relative
+    to the server's own cwd.
+
+    Note this tool takes a map that ALREADY exists -- nothing in
+    prodtools writes one for an operator any more. Creating a campaign
+    is `push_cnf`, one call, no map.
 
     The campaign id is never scraped from stdout: it is read back from
     the ledger THIS identity writes (_ledger_path_for), matched by the
     tarball of the map entry submit_map was told to enqueue -- read
-    back via `_read_map_entry`'s index mode, since `--entry N` already
-    names the entry unambiguously and there is nothing to disambiguate.
+    back by position, since `--entry N` already names the entry
+    unambiguously and there is nothing to disambiguate.
 
     The match is restricted to a LIVE campaign (see _LIVE_CAMPAIGN_STATES)
     rather than taking the last of every campaign that tarball ever had.

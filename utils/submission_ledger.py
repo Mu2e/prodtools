@@ -24,7 +24,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from utils.jobdesc import validate_entry_value
+from utils.jobdesc import RESOURCE_KEYS, validate_entry_value
 
 # Entry keys `submissions set-entry` may edit on a live campaign.
 # Deliberately excludes tarball/njobs/firstjob/input_pattern: those
@@ -36,7 +36,10 @@ from utils.jobdesc import validate_entry_value
 # a valid VALUE looks like is entry-format knowledge, owned by
 # utils/jobdesc.validate_entry_value and shared with the json2jobdef
 # boundary so the two cannot drift.
-EDITABLE_ENTRY_KEYS = ('inloc', 'memory', 'disk', 'expected_lifetime')
+# Derived, not restated: a key added to RESOURCE_KEYS without being
+# added here would be silently unvalidatable, and the reverse would let
+# set-entry accept a key validate_entry_value ignores entirely.
+EDITABLE_ENTRY_KEYS = ('inloc',) + RESOURCE_KEYS
 
 
 PRODUCTION_DB = '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'

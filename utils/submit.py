@@ -33,9 +33,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for)
-from utils.jobdesc import (tarball_of, outputs_of, njobs_of, inloc_of,
-                           firstjob_of, validate_window, resources_of,
-                           is_draining)
+from utils.jobdesc import (RESOURCE_KEYS, tarball_of, outputs_of, njobs_of,
+                           inloc_of, firstjob_of, validate_window,
+                           resources_of, is_draining, validate_entry_value)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
 from utils.check_inputs import check_inputs, format_report, Problem
@@ -325,6 +325,35 @@ def _validate_draining_entry(entry):
     return None
 
 
+def _validate_entry_values(entry):
+    """Reject a malformed inloc / resource value in an ENTRY before any
+    ledger row exists.
+
+    json2jobdef validates the build config it reads, but this path also
+    serves `submit_map --map FILE --enqueue`, whose map is FOREIGN input
+    -- hand-written, or produced by something outside this repo. Nothing
+    in prodtools writes an operator-facing map any more, which makes
+    this a boundary check on untrusted JSON rather than a patch over our
+    own output.
+
+    It matters most for `inloc`: a misspelled location does not fail, it
+    degrades. file_resolver.locate finds no such location and falls
+    through to SAM, so the campaign runs to completion reading from the
+    wrong place.
+
+    The CLI overrides (--memory/--disk/--expected-lifetime) are NOT
+    checked here -- they are validated in main(), where they are read.
+    Checking the merged result instead would mean re-validating the
+    entry's own values on every path that merges.
+    """
+    for key in ('inloc',) + RESOURCE_KEYS:
+        if key in entry:
+            try:
+                validate_entry_value(key, entry[key])
+            except ValueError as e:
+                sys.exit(f"submit_map: {e}")
+
+
 def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
                   resources=None, provenance=None):
     """Register ONE entry as a sliced-submission campaign (cursor 0);
@@ -348,6 +377,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     never dispatched from — only the MCP status tools echo it back.
     """
     resources = resources or {}
+    _validate_entry_values(entry)
     if is_draining(entry):
         err = _validate_draining_entry(entry)
         if err:
@@ -986,6 +1016,16 @@ def main():
         except (ValueError, OSError) as e:
             print(f"Error: {e}")
             sys.exit(1)
+
+    # Resource flags are checked HERE, where they are read, rather than
+    # in enqueue_entry: _snapshot_entry merges them into the campaign's
+    # frozen entry, so `--memory "3000 MB"` would otherwise sit in the
+    # ledger looking applied and only surface a tick later as a
+    # jobsub_submit rejection.
+    for _key in RESOURCE_KEYS:
+        _val = getattr(args, _key, None)
+        if _val is not None:
+            _parse_or_exit(validate_entry_value, _key, _val)
 
     args.indices = _parse_or_exit(_parse_indices, args.indices, args.indices_file)
     args.files = _parse_or_exit(_parse_files, args.files)

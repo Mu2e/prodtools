@@ -70,10 +70,9 @@ Setup: `bash mcp/scripts/install.sh`. Health check:
 A second, write-capable server (`prodtools-write`) exposes submission:
 `push_cnf`, `enqueue_campaign`, `run_submissions`. A campaign takes two
 calls — `push_cnf(..., slice_size=N)` (builds the cnf, registers it,
-creates the campaign, returns `campaign_id`; no map file) then
-`run_submissions`. `push_cnf`'s `jobdefs_map` mode writes a map file
-and creates no campaign; it is the legacy path. Every tool takes a
-required `run_as`:
+creates the campaign, returns `campaign_id`) then `run_submissions`.
+No map file is involved. `enqueue_campaign` is for a map that already
+exists; nothing writes one. Every tool takes a required `run_as`:
 
 - `run_as="self"` needs no privilege and writes only your own scratch,
   datasets and ledger (`/exp/mu2e/data/users/$USER/prodtools/`). No

@@ -81,40 +81,37 @@ json2jobdef --json data/Run1B/mix.json --dsconf Run1Ban_best_v1_5-000
 # By index into the flattened entry expansion
 json2jobdef --json data/Run1B/primary_muon.json --index 0
 
-# Production push: registers the cnf in SAM and prints the map summary
-json2jobdef --json data/mdc2025/evntuple.json --desc EventNtupleFromMCS \
-    --dsconf MDC2025-002 --prod \
-    --jobdefs /tmp/map_evntuple_mdc2025.json
-
-# Production push + direct campaign registration: no map file written
+# Production push + campaign registration -- the whole flow, one command
 json2jobdef --json data/mdc2025/evntuple.json --desc EventNtupleFromMCS \
     --dsconf MDC2025-002 --prod --enqueue --slice-size 1000
 ```
 
 Flags: `--json` (required), `--desc`, `--dsconf`, `--index`, `--pushout`,
-`--prod`, `--jobdefs FILE`, `--enqueue`, `--slice-size N` (default 1000),
-`--extend`, `--ignore-empty`, `--event-count-positive`, `--no-cleanup`,
-`--verbose`.
+`--prod`, `--enqueue`, `--slice-size N` (default 1000), `--extend`,
+`--ignore-empty`, `--event-count-positive`, `--no-cleanup`, `--verbose`.
 
 Notes:
 
 - `--index N` indexes the *flattened* (entry × list-field) expansion, not
   the JSON array position. Prefer `--dsconf` (bulk) or `--desc --dsconf`.
-- `--prod` implies `--pushout` and prints the per-entry summary of the
-  jobdefs file it just wrote (tarball, job count, inloc, outputs, and the
-  cnf window for a `firstjob` entry) — only when `--jobdefs` was given;
-  `--enqueue`-only pushes write no such file, so there is nothing to
-  summarize. Re-running `--prod` is idempotent — use it to finish a
-  partially-failed push.
-- `--jobdefs` names the submission-map file entries are appended to.
-  There is no default filename any more: omit `--jobdefs` and no map
-  file is written at all. Give it an **absolute** path when running as
-  another account, or the append lands in a fresh file beside the
-  working directory.
-- Under `--prod`, at least one of `--jobdefs` or `--enqueue` is
-  required — `argparse` refuses a bare `--prod` (`json2jobdef: --prod
-  requires --jobdefs or --enqueue`), since otherwise the cnf would push
-  to SAM but register no campaign and write no map, a silent no-op.
+- `--prod` implies `--pushout`. Re-running `--prod` is idempotent — use
+  it to finish a partially-failed push.
+- **json2jobdef writes no map file.** There is no `--jobdefs` flag: the
+  submission map was the POMS-era intermediate, and a production
+  campaign is now one command. `submit_map --map FILE --enqueue`
+  (section 11) still accepts a map that already exists, but nothing in
+  prodtools writes one.
+- `--prod` requires `--enqueue` — a bare `--prod` is refused
+  (`json2jobdef: --prod requires --enqueue`), since otherwise the cnf
+  would push to SAM and register no campaign, a silent no-op.
+- `inloc` and any `memory`/`disk`/`expected_lifetime` in the config are
+  validated before anything is built. A misspelled `inloc` does not
+  fail at runtime — `file_resolver` finds no such location and falls
+  through to SAM, so the jobs run to completion reading from the wrong
+  place. That is why it is refused at the boundary.
+- A bulk `--dsconf X --prod --enqueue` that skips any entry exits **2**
+  and lists what it skipped. Entries that already processed are left
+  alone — they are in SAM and in the ledger.
 - `--enqueue` pushes the cnf to SAM, then registers the entry directly
   as a sliced-submission campaign in the ledger (the same registration
   `submit_map --enqueue`, section 11, performs from a map file) — no
@@ -250,8 +247,8 @@ key unset — naming it forfeits the `4000MB` recovery floor, which
 applies only when the key is absent.
 
 The draining keys `input_pattern` and `prestage` also pass straight
-through to the map entry, so a draining map comes out of `--jobdefs`
-ready to enqueue (section 11, `submit_map`):
+through to the submission entry, so a draining campaign is enqueued
+directly from its config with no hand-edit:
 
 ```json
 {
@@ -986,11 +983,17 @@ step (section 11 `submissions`, wiki page
   `simjob_setup`, `fcl`, `dsconf`, `outloc`.
 - `Please specify either --desc AND --dsconf, --dsconf only, or --index only`
   — json2jobdef entry selection is exactly one of those three forms.
-- `json2jobdef: --prod requires --jobdefs or --enqueue (otherwise a bare
-  --prod pushes the cnf to SAM but writes no map file and registers no
-  campaign -- a silent no-op)` — pass at least one; `--enqueue` is the
-  no-map-file path, `--jobdefs FILE` builds a map for manual
-  `submit_map` dispatch.
+- `json2jobdef: --prod requires --enqueue (otherwise a bare --prod
+  pushes the cnf to SAM and registers no campaign -- a silent no-op)`
+  — add `--enqueue`. There is no `--jobdefs` alternative any more.
+- `json2jobdef: inloc must be one of tape, disk, scratch, resilient,
+  stash, none or 'dir:/<absolute path>', got '<value>'` — a config
+  typo, refused before the cnf is built. `submit_map:` prefixes the
+  same message when the bad value came from a map file instead.
+- `<N> of <M> entries were SKIPPED and no campaign exists for them`
+  (exit 2) — a bulk `--dsconf` run dropped entries. The listed ones
+  need fixing and re-running individually with `--desc --dsconf`; the
+  others are already done.
 - `json2jobdef: --enqueue requires --prod (a campaign needs the cnf in
   SAM)` — `--enqueue` resolves the tarball from SAM, so the cnf must
   have been pushed first.

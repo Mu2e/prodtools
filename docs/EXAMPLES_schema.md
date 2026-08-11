@@ -51,15 +51,15 @@ When regenerating, read in this order:
    (recommended) and direct `jobdef` invocations. Cover stage-1, resampler,
    mixing shapes, and the optional per-entry resource keys `"memory"` /
    `"disk"` / `"expected_lifetime"` (jobsub-format strings) — mention that
-   `json2jobdef` copies them from the JSON config into the map entry
-   verbatim, and cross-reference the `submit_map` subsection for the
-   precedence rule. State plainly that `submit_map` (single-backend
+   `json2jobdef` copies them from the JSON config into the submission
+   entry verbatim, and cross-reference the `submit_map` subsection for
+   the precedence rule. State plainly that `submit_map` (single-backend
    direct — no other backend exists) always honors these keys: CLI flag
    > entry key > built-in default. Cover `--enqueue` and `--slice-size N`
    (default 1000): `--enqueue` pushes the cnf to SAM and registers a
-   sliced-submission campaign directly, no map file involved; requires
-   `--prod`. Under `--prod`, at least one of `--jobdefs` or `--enqueue`
-   is required.
+   sliced-submission campaign directly, no map file involved. `--prod`
+   REQUIRES `--enqueue`, and `--enqueue` requires `--prod`. There is no
+   `--jobdefs` flag: json2jobdef writes no map file at all.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -189,14 +189,17 @@ reading the code:
   runner modes were deleted with the POMS backend (2026-08, tag
   `pre-poms-removal`); g4bl and HPC submission go through the upstream
   `mu2ejobsub`/`mu2eg4bl` CLIs, which never pass through `submit_map`.
-- The `json2jobdef --prod --jobdefs` example must use a throwaway `/tmp`
-  map path. Never show
-  `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-NNN.json`
-  — POMS is retired, and that path teaches a map-numbering convention
-  that no longer has a consumer.
-- Under `--prod`, at least one of `--jobdefs` or `--enqueue` is
-  required. `--enqueue` also requires `--prod`: the campaign's cnf must
-  be in SAM, because enqueue resolves the tarball from there.
+- `json2jobdef` writes NO map file and has no `--jobdefs` flag. Never
+  show one, and never show
+  `/exp/mu2e/app/users/mu2epro/production_manager/{poms_map,direct_maps}/`
+  — those directories have no consumer. A production campaign is one
+  command: `json2jobdef --prod --enqueue [--slice-size N]`.
+- `--prod` requires `--enqueue`, and `--enqueue` requires `--prod`: the
+  campaign's cnf must be in SAM, because enqueue resolves the tarball
+  from there. A bare `--prod` would push the cnf and register nothing.
+- `submit_map --map FILE --enqueue` still exists for a map that already
+  exists, but nothing in prodtools writes one for an operator. Its
+  entry values are validated on the way in (see the validation bullet).
 - `--enqueue` writes no map file. The campaign's `map_path` records the
   config provenance (`<config>.json#<desc>@<dsconf>`) instead.
 - Bulk `json2jobdef --dsconf X --prod --enqueue` (no `--desc`) processes
@@ -229,6 +232,17 @@ reading the code:
   forfeits the `4000MB` recovery floor, which applies only when the key
   is absent — so prefer leaving it unset unless the entry genuinely
   needs more than the default.
+- `inloc` and the resource keys are validated at EVERY door into the
+  ledger — `json2jobdef` (where a campaign is born), `submit_map
+  --enqueue` (a foreign map), and `submissions set-entry` (editing a
+  live campaign) — by one shared validator, `jobdesc.validate_entry_value`.
+  Document the refusals in the troubleshooting catalog: a misspelled
+  `inloc` does NOT fail at runtime, it silently falls through to SAM,
+  which is why it is refused at the boundary instead.
+- A bulk `json2jobdef --dsconf X --prod --enqueue` that SKIPS any entry
+  (invalid value, missing required field) exits 2 and lists what was
+  skipped. Entries that already processed are left alone — they are in
+  SAM and in the ledger.
 - Sliced campaigns: `submit_map --enqueue` snapshots map entries into
   the campaigns table and submits nothing; `submissions run`'s top-up
   phase (runs after its recovery pass, inside the same hourly cron tick)

@@ -55,7 +55,7 @@ def _configure_chunk_mode(config):
     `config['chunk_mode']` so the tarball carries it into jobpars;
     at grid runtime, `runmu2e` extracts the per-job slice from the
     cvmfs source before invoking mu2e. njobs = ceil(lines/chunk_lines)
-    is computed here and written into the jobdefs_list.json entry.
+    is computed here and carried into the submission entry.
 
     Every job's FCL points at the same local filename (default:
     `chunk.txt`) via fcl_overrides; the per-job content is created
@@ -341,7 +341,7 @@ def validate_required_fields(config):
             try:
                 validate_entry_value(key, config[key])
             except ValueError as exc:
-                sys.exit(f"Invalid {key}: {exc}")
+                sys.exit(f"json2jobdef: {exc}")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
@@ -446,9 +446,10 @@ def build_jobdesc(config):
     Pure: no filesystem writes. The one impure part is the `njobs: -1`
     branch, which asks the freshly-built cnf for its job count.
 
-    Raises ValueError if `outloc` is not a dict — see append_jobdef for
-    why that stays a warning on the file-writing path and is fatal on
-    the enqueue path.
+    Raises ValueError if `outloc` is not a dict. Fatal, not a warning:
+    the only caller is the enqueue path, and skipping there would push
+    a cnf to SAM and create no campaign — a half-done production push
+    that reports success.
     """
     parfile_name = get_parfile_name(config)
     is_generic = config.get('generic_tarball', False)
@@ -466,9 +467,9 @@ def build_jobdesc(config):
         if key in config:
             jobdef_entry[key] = config[key]
 
-    # Draining configuration passes through too, so a draining map comes
-    # out of --jobdefs ready to enqueue instead of needing a hand-edit:
-    # the submit path reads `input_pattern` (jobdesc.is_draining, the
+    # Draining configuration passes through too, so a draining campaign
+    # is enqueued straight from its config with no hand-edit: the submit
+    # path reads `input_pattern` (jobdesc.is_draining, the
     # kind discriminator) and `prestage` (submit._validate_draining_entry,
     # and the tape-residency gate in submissions.drain_tick) off the
     # ENTRY, so a value left behind in the JSON config would silently do
@@ -528,62 +529,6 @@ def build_jobdesc(config):
     return jobdef_entry
 
 
-def append_jobdef(config, jobdefs_file=None):
-    """Append the config's entry to a jobdefs file in JSON format.
-
-    A non-dict outloc warns and skips rather than failing, preserving
-    long-standing behaviour on this path. The enqueue path (json2jobdef
-    --enqueue) deliberately does NOT swallow it: skipping there would
-    push a cnf to SAM and create no campaign, a half-done production
-    push that reports success.
-    """
-    try:
-        jobdef_entry = build_jobdesc(config)
-    except ValueError as e:
-        print(f"Warning: {e}")
-        return
-    _write_jobdef_json_entry(jobdef_entry, jobdefs_file)
-
-def _write_jobdef_json_entry(jobdef_entry, jobdefs_file=None):
-    """Helper function to write jobdef entries in JSON format."""
-    # Use provided jobdefs file or default to jobdefs_list.json
-    if jobdefs_file:
-        dsconf_file = Path(jobdefs_file)
-    else:
-        dsconf_file = Path("jobdefs_list.json")
-    
-    # Check if file exists and load existing entries
-    existing_entries = []
-    if dsconf_file.exists():
-        try:
-            existing_content = dsconf_file.read_text()
-            if existing_content.strip():
-                existing_entries = json.loads(existing_content)
-                if not isinstance(existing_entries, list):
-                    existing_entries = [existing_entries]
-        except json.JSONDecodeError:
-            print(f"Warning: Could not parse existing {dsconf_file}, starting fresh")
-            existing_entries = []
-    
-    # Check for duplicate (tarball, firstjob) entries — the same tarball
-    # may legitimately appear once per index window (statistics expansion),
-    # but the same window must not be dispatched twice.
-    tarball_name = jobdef_entry["tarball"]
-    new_firstjob = firstjob_of(jobdef_entry)
-    for existing in existing_entries:
-        if (existing.get("tarball") == tarball_name
-                and firstjob_of(existing) == new_firstjob):
-            print(f"Entry already exists in {dsconf_file}")
-            return
-    
-    # Add new entry and write back to file
-    existing_entries.append(jobdef_entry)
-    
-    with open(dsconf_file, 'w') as f:
-        json.dump(existing_entries, f, indent=2)
-    
-    print(f"Added JSON entry for {tarball_name} to {dsconf_file}")
-
 def main():
     p = argparse.ArgumentParser(description='Generate Mu2e job definitions from JSON configuration')
     p.add_argument('--json', required=True, help='Input JSON file')
@@ -594,11 +539,9 @@ def main():
     p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and print the submission-map summary after generation')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
-    p.add_argument('--jobdefs', help='Submission-map file to append this entry to; omit to write no map file (no default filename)')
     p.add_argument('--enqueue', action='store_true',
                    help='After pushing the cnf, register the entry as a '
-                        'sliced campaign in the ledger (no map file '
-                        'written). Requires --prod.')
+                        'sliced campaign in the ledger. Requires --prod.')
     p.add_argument('--slice-size', type=int, default=None,
                    help='Jobs per slice for --enqueue (default 1000; '
                         'frozen into the campaign).')
@@ -619,11 +562,10 @@ def main():
         sys.exit("json2jobdef: --slice-size requires --enqueue")
     if args.slice_size is None:
         args.slice_size = 1000
-    if args.prod and not (args.jobdefs or args.enqueue):
-        sys.exit("json2jobdef: --prod requires --jobdefs or --enqueue "
-                 "(otherwise a bare --prod pushes the cnf to SAM but "
-                 "writes no map file and registers no campaign -- a "
-                 "silent no-op)")
+    if args.prod and not args.enqueue:
+        sys.exit("json2jobdef: --prod requires --enqueue (otherwise a "
+                 "bare --prod pushes the cnf to SAM and registers no "
+                 "campaign -- a silent no-op)")
 
     # If --prod is specified, enable pushout
     if args.prod:
@@ -650,21 +592,12 @@ def main():
             config,
             pushout=args.pushout,
             no_cleanup=args.no_cleanup,
-            jobdefs_list=args.jobdefs,
             extend=args.extend,
             ignore_empty=args.ignore_empty,
             enqueue=args.enqueue,
             slice_size=args.slice_size,
             json_path=args.json,
         )
-
-    # If --prod mode, print the submission-map summary after generation
-    if args.prod and args.jobdefs:
-        jobdefs_file = args.jobdefs
-        print(f"\n{'='*60}")
-        print(f"Submission-map summary: {jobdefs_file}")
-        print(f"{'='*60}")
-        summarize_map(jobdefs_file)
 
 def _build_job_args(config):
     """Dispatch on `determine_job_type(config)` and return the per-mode
@@ -754,7 +687,7 @@ def _provenance(json_path, config):
 
 
 def process_single_entry(config, pushout=False, no_cleanup=True,
-                         jobdefs_list=None, extend=False, ignore_empty=False,
+                         extend=False, ignore_empty=False,
                          enqueue=False, slice_size=1000, json_path=None):
     """Process a single configuration entry (original behavior)"""
     validate_required_fields(config)
@@ -797,12 +730,6 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     # build_jobdef handles FCL template creation for non-mixing jobs
     result = build_jobdef(config, job_args)
 
-    # Only write the map file when a --jobdefs path was actually
-    # supplied. --enqueue's promise ("no map file written") is only
-    # true if a bare --prod --enqueue (no --jobdefs) doesn't fall back
-    # to the default jobdefs_list.json filename.
-    if jobdefs_list:
-        append_jobdef(config, jobdefs_list)
     parfile_name = get_parfile_name(config)
 
     if pushout:
@@ -880,7 +807,8 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
         sys.exit(f"No entries found matching dsconf: {dsconf}")
     
     print(f"Found {len(matching_configs)} entries matching dsconf: {dsconf}")
-    
+
+    skipped = []
     # Process each matching configuration using the existing process_single_entry function
     for i, config in enumerate(matching_configs):
         # Get display desc: use get_tarball_desc (handles tarball_append), or existing desc, or extract from input_data
@@ -896,6 +824,7 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             validate_required_fields(config)
         except SystemExit as e:
             print(f"Warning: {e}, skipping entry")
+            skipped.append(f"{display_desc}: {e}")
             continue
         
         # Propagate CLI options that affect input selection onto the config
@@ -906,7 +835,6 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             config,
             pushout=args.pushout,
             no_cleanup=True,
-            jobdefs_list=args.jobdefs,
             ignore_empty=args.ignore_empty,
             enqueue=args.enqueue,
             slice_size=args.slice_size,
@@ -916,6 +844,19 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
         # Clean up template.fcl for next iteration (since process_single_entry cleans up)
         if Path('template.fcl').exists():
             Path('template.fcl').unlink()
+
+    # A bulk run that silently dropped entries must NOT report success.
+    # The per-entry warning scrolls past in a long log, and the MCP write
+    # server (and any cron) reads only the exit code -- so a typo'd inloc
+    # in entry 7 of 22 would be reported as "all 22 done". The entries
+    # that DID process are left alone: they are already in SAM and in the
+    # ledger, and undoing them is not this function's call.
+    if skipped:
+        print(f"\n{len(skipped)} of {len(matching_configs)} entries were "
+              f"SKIPPED and no campaign exists for them:")
+        for note in skipped:
+            print(f"  - {note}")
+        sys.exit(2)
 
 if __name__ == '__main__':
     main()

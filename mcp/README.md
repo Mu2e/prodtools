@@ -22,15 +22,17 @@ Exposes submission: `push_cnf`, `enqueue_campaign`, `run_submissions`.
 A production campaign takes two calls: `push_cnf(..., slice_size=N)`
 builds the cnf, registers it in SAM and creates the campaign, returning
 a `campaign_id` for `run_submissions`. No map file is involved — that
-call mirrors `json2jobdef --prod --enqueue`.
+call mirrors `json2jobdef --prod --enqueue`, which is now the only way
+json2jobdef runs under `--prod`.
 
-`push_cnf`'s other mode, `jobdefs_map=<abs path>`, writes a map file
-instead and creates NO campaign, so it still needs a separate
-`enqueue_campaign`. It exists for the rare case that wants the file on
-disk. Exactly one of the two must be given: a bare `--prod` pushes the
-cnf to SAM and then registers nothing, which the CLI refuses too.
+With no map to read back, `push_cnf` identifies the campaign it created
+by desc+dsconf against a snapshot of the ledger taken before the CLI
+ran. If nothing new appears it RAISES rather than returning a
+pre-existing campaign — handing back the wrong id would point
+`run_submissions` at an unrelated production campaign.
 
-`enqueue_campaign` remains the tool for a map that already exists.
+`enqueue_campaign` remains the tool for a map that already exists,
+though nothing in prodtools writes one any more.
 
 Every tool takes a required `run_as`:
 

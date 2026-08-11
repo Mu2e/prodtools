@@ -10,7 +10,7 @@ from pathlib import Path
 from .config_utils import normalize_input_data
 from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
-from .jobdesc import firstjob_of, inloc_of, njobs_of, outputs_of, tarball_of
+from .jobdesc import firstjob_of, njobs_of
 from .samweb_wrapper import (
     dataset_summary,
     definition_file_count,
@@ -200,24 +200,6 @@ def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
 
         for line in post_lines:
             f.write(line + '\n')
-
-def summarize_map(jobdefs_file):
-    """Print the per-entry summary of a jobdefs/submission-map JSON.
-    Shared by `json2jobdef --prod`. Tolerates njobs-less (generic)
-    entries — they contribute 0 to the total."""
-    with open(jobdefs_file, 'r') as f:
-        jobdefs = json.load(f)
-
-    total_jobs = sum(j.get('njobs', 0) for j in jobdefs)
-
-    for i, j in enumerate(jobdefs):
-        outputs = ", ".join(f"{o['dataset']}→{o['location']}" for o in outputs_of(j))
-        njobs = njobs_of(j, 0)
-        firstjob = firstjob_of(j)
-        window = f", cnf window={firstjob}..{firstjob + njobs - 1}" if firstjob else ""
-        print(f"[{i}] {tarball_of(j)}: {njobs} jobs, input={inloc_of(j)}, outputs={outputs}{window}")
-
-    print(f"\nTotal: {total_jobs} jobs")
 
 def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False):
     """Write the direct-input FCL for `fname` from a generic cnf's base FCL:

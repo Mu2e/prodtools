@@ -2100,8 +2100,7 @@ class TestGenericTarballGuard(unittest.TestCase):
         from utils import json2jobdef
         with patch.object(json2jobdef, 'validate_output_filenames') as guard, \
              patch.object(json2jobdef, 'create_jobdef'), \
-             patch.object(json2jobdef, 'get_parfile_name', return_value='cnf.x.0.tar'), \
-             patch.object(json2jobdef, 'append_jobdef'):
+             patch.object(json2jobdef, 'get_parfile_name', return_value='cnf.x.0.tar'):
             cfg = {'desc': 'reco', 'dsconf': 'D', 'owner': 'mu2e',
                    'simjob_setup': 's', 'inloc': 'tape', 'generic_tarball': True,
                    'fcl': 'f.fcl', 'outloc': {'*.art': 'tape'}}
@@ -4524,34 +4523,9 @@ class TestRunSubmitClusterVerification(unittest.TestCase):
         self.assertEqual(r['status'], 'failed')
 
 
-class TestJobdefsDedupePerWindow(unittest.TestCase):
-    """_write_jobdef_json_entry dedupes on (tarball, firstjob): the same
-    tarball may appear once per index window, but never twice per window."""
-
-    def _write(self, path, entry):
-        from utils.json2jobdef import _write_jobdef_json_entry
-        _write_jobdef_json_entry(entry, str(path))
-
-    def test_expansion_coexists_original_dedupes(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / 'map.json'
-            original = {'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
-                        'njobs': 5000, 'outputs': []}
-            expansion = {'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
-                         'njobs': 100, 'firstjob': 5000, 'outputs': []}
-            self._write(path, original)
-            self._write(path, expansion)   # new window → appended
-            self._write(path, dict(expansion))  # same window → deduped
-            self._write(path, dict(original))   # same window → deduped
-            entries = json.loads(path.read_text())
-            self.assertEqual(len(entries), 2)
-            self.assertEqual(entries[1].get('firstjob'), 5000)
-
-
 class TestValidateWindow(unittest.TestCase):
     """validate_window is the single owner of the window rule, shared by
-    the map writer (append_jobdef) and the submit path (_compute_jobset)."""
+    build_jobdesc and the submit path (_compute_jobset)."""
 
     def test_open_ended_any_window(self):
         from utils.jobdesc import validate_window
@@ -5231,16 +5205,11 @@ class TestEntryResources(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build_jobdesc(config)
 
-    def test_append_jobdef_passes_resource_keys(self):
-        import tempfile
-        from utils import json2jobdef
-        out = os.path.join(tempfile.mkdtemp(), 'map.json')
-        config = {'desc': 'TestDesc', 'dsconf': 'TestConf', 'owner': 'mu2e',
-                  'inloc': 'tape', 'njobs': 5, 'memory': '4000MB',
-                  'outloc': {'sim.mu2e.TestDesc.TestConf.art': 'tape'}}
-        json2jobdef.append_jobdef(config, jobdefs_file=out)
-        with open(out) as f:
-            entry = json.load(f)[0]
+    def test_build_jobdesc_passes_resource_keys(self):
+        entry = self._entry({
+            'desc': 'TestDesc', 'dsconf': 'TestConf', 'owner': 'mu2e',
+            'inloc': 'tape', 'njobs': 5, 'memory': '4000MB',
+            'outloc': {'sim.mu2e.TestDesc.TestConf.art': 'tape'}})
         self.assertEqual(entry['memory'], '4000MB')
         self.assertNotIn('disk', entry)           # absent key stays absent
 
@@ -5253,21 +5222,17 @@ class TestEntryResources(unittest.TestCase):
         cfg.update(over)
         return cfg
 
-    def _append(self, config):
-        import tempfile
-        from utils import json2jobdef
-        out = os.path.join(tempfile.mkdtemp(), 'map.json')
-        json2jobdef.append_jobdef(config, jobdefs_file=out)
-        with open(out) as f:
-            return json.load(f)[0]
+    def _entry(self, config):
+        from utils.json2jobdef import build_jobdesc
+        return build_jobdesc(config)
 
-    def test_append_jobdef_passes_draining_keys(self):
-        """A draining map must come out of --jobdefs ready to enqueue.
-        input_pattern and prestage are read off the MAP entry (is_draining,
-        _validate_draining_entry, drain_tick's residency gate), so leaving
-        them in the JSON config alone silently produced a non-draining map
-        and forced a hand-edit of the generated file."""
-        entry = self._append(self._drain_config())
+    def test_build_jobdesc_passes_draining_keys(self):
+        """A draining campaign must be enqueueable straight from its
+        config. input_pattern and prestage are read off the ENTRY
+        (is_draining, _validate_draining_entry, drain_tick's residency
+        gate), so leaving them in the JSON config alone would silently
+        produce a non-draining campaign."""
+        entry = self._entry(self._drain_config())
         self.assertEqual(entry['input_pattern'],
                          'mcs.mu2e.%OnSpill.TestConf.art')
         self.assertIs(entry['prestage'], True)
@@ -5278,22 +5243,21 @@ class TestEntryResources(unittest.TestCase):
         on a draining entry let the worker declare its own fetched INPUT for
         push, which pushOutput's orphan recovery then tried to DELETE from
         tape (2026-08-02 smoke). outloc is where that is fixed once."""
-        entry = self._append(self._drain_config())
+        entry = self._entry(self._drain_config())
         self.assertEqual(entry['outputs'],
                          [{'dataset': 'nts.*.root', 'location': 'tape'}])
 
     def test_input_pattern_without_generic_tarball_is_refused(self):
-        """Emitting both input_pattern and njobs would leave the map
+        """Emitting both input_pattern and njobs would leave the entry
         self-contradictory: is_draining() says draining while njobs claims a
-        fixed window. Refuse rather than write it."""
-        from utils import json2jobdef
+        fixed window. Refuse rather than build it."""
         cfg = self._drain_config(njobs=5)
         del cfg['generic_tarball']
         with self.assertRaises(SystemExit):
-            self._append(cfg)
+            self._entry(cfg)
 
     def test_non_draining_entry_gains_no_draining_keys(self):
-        entry = self._append({
+        entry = self._entry({
             'desc': 'TestDesc', 'dsconf': 'TestConf', 'owner': 'mu2e',
             'inloc': 'tape', 'njobs': 5,
             'outloc': {'sim.mu2e.TestDesc.TestConf.art': 'tape'}})
@@ -10527,6 +10491,14 @@ class TestMcpWriteGuardHook(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestPushCnfTool(unittest.TestCase):
+    """push_cnf: build the cnf, register it in SAM, create the campaign.
+
+    One call, no map file. The campaign ROW is the artifact this tool
+    reads its result back from, so most of these tests are about one
+    question: did it hand back the campaign THIS call created, or some
+    other campaign that happened to match?
+    """
+
     def setUp(self):
         from prodtools_mcp_write import tools
         self.tools = tools
@@ -10542,180 +10514,235 @@ class TestPushCnfTool(unittest.TestCase):
                 'simjob_setup': self.simjob_setup,
                 'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
             }], f)
-        # A tarball name matching desc=D dsconf=C -- who computed it is
-        # no longer this module's concern (see _read_map_entry).
         self.tarball = 'cnf.mu2e.D.C.0.tar'
-        self.jobdefs_map = os.path.join(self._tmpdir, 'm.json')
+        self.map_path = os.path.join(self._tmpdir, 'm.json')
+
+    def _camp(self, cid, tarball=None, state='active', njobs=100,
+              datasets=('dig.mu2e.D.C.art',)):
+        return {'id': cid, 'tarball': tarball or self.tarball,
+                'state': state,
+                'entry': {'njobs': njobs,
+                          'outputs': [{'dataset': d} for d in datasets]}}
+
+    def _push(self, before, after, *, json_path=None, desc='D', dsconf='C',
+              slice_size=500, run_as='self', confirm=False, cli=None):
+        """push_cnf with the ledger faked.
+
+        `before`/`after` are what _all_campaigns returns either side of
+        run_cli (pass an Exception instance for `before` to simulate a
+        ledger that cannot be read yet).
+        """
+        cli = cli if cli is not None else {'rc': 0, 'stdout': '', 'stderr': ''}
+        kw = ({'side_effect': cli} if callable(cli)
+              else {'return_value': cli})
+        with patch('prodtools_mcp_write.runner.run_cli', **kw) as run, \
+             patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value='/db'), \
+             patch('prodtools_mcp_write.tools._all_campaigns',
+                   side_effect=[before, after]):
+            out = self.tools.push_cnf(
+                json=json_path or self.json_path, desc=desc, dsconf=dsconf,
+                slice_size=slice_size, run_as=run_as, confirm=confirm)
+        self.last_run = run
+        return out
+
+    # -- the production gate ------------------------------------------
 
     def test_mu2epro_without_confirm_refused_before_running_anything(self):
         with patch('prodtools_mcp_write.runner.run_cli') as run:
             with self.assertRaises(PermissionError):
                 self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
-                                    jobdefs_map=self.jobdefs_map,
+                                    slice_size=500, run_as='mu2epro')
+        run.assert_not_called()
+
+    def test_argument_checks_run_after_the_production_gate(self):
+        """An unconfirmed mu2epro call must be refused as a permission
+        problem, not reported as malformed arguments -- otherwise the
+        operator fixes the wrong thing."""
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(PermissionError):
+                self.tools.push_cnf(json=self.json_path, desc='D',
+                                    dsconf='C', slice_size=0,
                                     run_as='mu2epro')
         run.assert_not_called()
 
-    def test_builds_the_expected_argv_and_derives_the_musing(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
-            with patch('prodtools_mcp_write.tools._read_map_entry',
-                       return_value=(3, {'tarball': self.tarball})):
-                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
-                                    jobdefs_map=self.jobdefs_map,
-                                    run_as='mu2epro', confirm=True)
-        args, kwargs = run.call_args
+    # -- slice_size is checked BEFORE the irreversible push ------------
+
+    def test_bad_slice_size_refused_before_running_anything(self):
+        """create_campaign's own `slice_size must be >= 1` fires inside
+        the CLI -- i.e. AFTER _pushout_to_sam has irreversibly registered
+        the cnf. Checking here is the difference between a refused call
+        and a pushed cnf with no campaign."""
+        for bad in (0, -1, True, 'lots', None):
+            with self.subTest(slice_size=bad):
+                with patch('prodtools_mcp_write.runner.run_cli') as run:
+                    with self.assertRaises(ValueError):
+                        self.tools.push_cnf(
+                            json=self.json_path, desc='D', dsconf='C',
+                            slice_size=bad, run_as='self')
+                run.assert_not_called()
+
+    # -- the argv, and where the Musing comes from ---------------------
+
+    def test_builds_the_one_command_argv_and_derives_the_musing(self):
+        self._push([], [self._camp(7)])
+        args, kwargs = self.last_run.call_args
         argv = args[0]
         self.assertEqual(argv[0], 'bin/json2jobdef')
         self.assertIn('--prod', argv)
-        self.assertIn('--jobdefs', argv)
-        self.assertIn(self.jobdefs_map, argv)
-        self.assertIn('D', argv)
-        # Dropped: it only added stdout this tool never reads across a
-        # ksu boundary.
-        self.assertNotIn('--verbose', argv)
-        # The Musing comes from the entry's own simjob_setup -- push_cnf
-        # takes no Musing/version argument at all, so a caller can never
-        # pass one that disagrees with the entry.
-        self.assertEqual(kwargs.get('simjob_setup'), self.simjob_setup)
-
-    def test_result_is_read_from_the_map_not_stdout(self):
-        noisy = 'Added JSON entry for cnf.mu2e.WRONG.tar to jobdefs_list.json'
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': noisy, 'stderr': ''}):
-            with patch('prodtools_mcp_write.tools._read_map_entry',
-                       return_value=(0, {'tarball': 'cnf.mu2e.RIGHT.C.0.tar'})):
-                out = self.tools.push_cnf(json=self.json_path, desc='D',
-                                          dsconf='C',
-                                          jobdefs_map=self.jobdefs_map,
-                                          run_as='self')
-        self.assertEqual(out['tarball'], 'cnf.mu2e.RIGHT.C.0.tar')
-        self.assertEqual(out['entry_index'], 0)
-
-    def test_nonzero_rc_raises_with_stderr(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 2, 'stdout': '', 'stderr': 'boom'}):
-            with self.assertRaises(RuntimeError) as ctx:
-                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
-                                    jobdefs_map=self.jobdefs_map, run_as='self')
-        self.assertIn('boom', str(ctx.exception))
-
-    def _campaign(self, cid=7, tarball=None, state='active', njobs=100):
-        return {'id': cid, 'tarball': tarball or self.tarball,
-                'state': state,
-                'entry': {'njobs': njobs,
-                          'outputs': [{'dataset': 'dig.mu2e.D.C.art'}]}}
-
-    def test_enqueue_mode_builds_the_one_command_argv(self):
-        """slice_size selects `--prod --enqueue`: no map file is
-        written, and no separate enqueue_campaign call is needed."""
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value='/db'):
-                with patch('prodtools_mcp_write.tools._all_campaigns',
-                           side_effect=[[], [self._campaign()]]):
-                    out = self.tools.push_cnf(
-                        json=self.json_path, desc='D', dsconf='C',
-                        slice_size=500, run_as='mu2epro', confirm=True)
-        argv = run.call_args[0][0]
         self.assertIn('--enqueue', argv)
         self.assertIn('--slice-size', argv)
         self.assertIn('500', argv)
+        # The map file is gone from this path entirely.
         self.assertNotIn('--jobdefs', argv)
+        # The Musing comes from the entry's own simjob_setup -- push_cnf
+        # takes no Musing argument, so a caller can never pass one that
+        # disagrees with the entry.
+        self.assertEqual(kwargs.get('simjob_setup'), self.simjob_setup)
+
+    def test_result_is_read_from_the_ledger_not_stdout(self):
+        noisy = 'Enqueued campaign 999: cnf.mu2e.WRONG.C.0.tar'
+        out = self._push([], [self._camp(7, njobs=42)],
+                         cli={'rc': 0, 'stdout': noisy, 'stderr': ''})
         self.assertEqual(out['campaign_id'], 7)
-        self.assertEqual(out['njobs'], 100)
+        self.assertEqual(out['njobs'], 42)
+        self.assertEqual(out['tarball'], self.tarball)
         self.assertEqual(out['datasets'], ['dig.mu2e.D.C.art'])
         # No map file exists on this path, so claiming one would be a lie.
         self.assertNotIn('map_path', out)
 
-    def test_enqueue_mode_prefers_the_campaign_this_call_created(self):
-        """A tarball accumulates campaigns over its life. The one this
-        push created is the one absent from the before-snapshot --
-        never "the last row"."""
-        stale = self._campaign(cid=3, njobs=10)
-        fresh = self._campaign(cid=9, njobs=20)
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value='/db'):
-                with patch('prodtools_mcp_write.tools._all_campaigns',
-                           side_effect=[[stale], [stale, fresh]]):
-                    out = self.tools.push_cnf(
-                        json=self.json_path, desc='D', dsconf='C',
-                        slice_size=500, run_as='self')
+    def test_nonzero_rc_raises_with_both_streams_and_recovery_advice(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._push([], [], cli={'rc': 2, 'stdout': 'diagnosis here',
+                                    'stderr': 'boom'})
+        msg = str(ctx.exception)
+        self.assertIn('boom', msg)
+        self.assertIn('diagnosis here', msg)
+        # enqueue_entry runs AFTER _pushout_to_sam, so any failure here
+        # may have left the cnf registered with no campaign. Saying so
+        # is the operator's whole recovery procedure.
+        self.assertIn('list_campaigns', msg)
+        self.assertIn('SAM', msg)
+
+    # -- which campaign did THIS call create? --------------------------
+
+    def test_prefers_the_campaign_this_call_created(self):
+        """A tarball accumulates campaigns over its life (complete,
+        cancelled, then a new one). The one this push created is the one
+        absent from the before-snapshot.
+
+        The stale campaign is listed AFTER the fresh one on purpose: with
+        `[fresh, stale]` ordering, "newest row wins" and "prefer fresh"
+        disagree, so this fails against a `return matches[-1]`
+        implementation. Ordered the other way it would pass against both
+        and pin nothing.
+        """
+        fresh = self._camp(9, njobs=20)
+        stale = self._camp(3, njobs=10)
+        out = self._push([stale], [fresh, stale])
         self.assertEqual(out['campaign_id'], 9)
 
-    def test_enqueue_mode_survives_a_ledger_that_does_not_exist_yet(self):
-        """A first-ever push creates the ledger as it enqueues. Reading
-        the before-snapshot must not turn that into a failure -- but the
-        read AFTER the write stays fatal."""
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value='/db'):
-                with patch('prodtools_mcp_write.tools._all_campaigns',
-                           side_effect=[RuntimeError('cannot read ledger'),
-                                        [self._campaign()]]):
-                    out = self.tools.push_cnf(
-                        json=self.json_path, desc='D', dsconf='C',
-                        slice_size=500, run_as='self')
+    def test_never_returns_a_campaign_that_already_existed(self):
+        """rc=0 with nothing fresh means the snapshot and the write
+        disagree about the database. Returning the pre-existing campaign
+        would send run_submissions at an unrelated PRODUCTION campaign
+        while the new one is never fed -- so refuse.
+
+        A successful --enqueue always INSERTs (create_campaign), and a
+        duplicate live tarball raises -> rc!=0, so this state is never a
+        legitimate re-run.
+        """
+        stale = self._camp(3)
+        with self.assertRaises(RuntimeError) as ctx:
+            self._push([stale], [stale])
+        msg = str(ctx.exception)
+        self.assertIn('already existed', msg)
+        self.assertIn('3', msg)
+        self.assertIn('list_campaigns', msg)
+
+    def test_several_fresh_campaigns_raises_listing_them(self):
+        a, b = self._camp(9), self._camp(10, tarball='cnf.mu2e.D.C.1.tar')
+        with self.assertRaises(RuntimeError) as ctx:
+            self._push([], [a, b])
+        msg = str(ctx.exception)
+        self.assertIn('9', msg)
+        self.assertIn('10', msg)
+        self.assertIn('refusing to guess', msg.lower())
+
+    def test_windowed_versions_are_disambiguated_by_the_snapshot(self):
+        """Two live campaigns for the same desc+dsconf are LEGAL:
+        _tarball_matches ignores the version index, and cnf_name puts
+        `config['version']` there (--extend bumps it). So `...D.C.0.tar`
+        and `...D.C.1.tar` both match, and only the snapshot can tell
+        which one this call created. This must resolve, not raise."""
+        v0 = self._camp(3, tarball='cnf.mu2e.D.C.0.tar')
+        v1 = self._camp(9, tarball='cnf.mu2e.D.C.1.tar')
+        out = self._push([v0], [v0, v1])
+        self.assertEqual(out['campaign_id'], 9)
+        self.assertEqual(out['tarball'], 'cnf.mu2e.D.C.1.tar')
+
+    def test_unreadable_ledger_snapshot_falls_back_to_strict_matching(self):
+        """A first-ever push creates the DB as it enqueues, so the
+        before-read legitimately fails. Recording an EMPTY snapshot there
+        would make every pre-existing campaign look freshly created --
+        including after a transient 'database is locked'. Unknown means
+        'require exactly one live match' instead."""
+        out = self._push(RuntimeError('cannot read the submission ledger'),
+                         [self._camp(7)])
         self.assertEqual(out['campaign_id'], 7)
 
-    def test_enqueue_mode_raises_when_no_campaign_appeared(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': 'looks fine',
-                                 'stderr': ''}):
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value='/db'):
-                with patch('prodtools_mcp_write.tools._all_campaigns',
-                           side_effect=[[], []]):
-                    with self.assertRaises(RuntimeError) as ctx:
-                        self.tools.push_cnf(
-                            json=self.json_path, desc='D', dsconf='C',
-                            slice_size=500, run_as='self')
+    def test_unreadable_snapshot_then_two_matches_raises(self):
+        """The strict half of the rule above: with no snapshot to
+        disambiguate with, two live matches cannot be resolved."""
+        with self.assertRaises(RuntimeError) as ctx:
+            self._push(RuntimeError('cannot read the submission ledger'),
+                       [self._camp(3), self._camp(9)])
+        self.assertIn('uniqueness invariant', str(ctx.exception))
+
+    def test_raises_when_no_campaign_appeared(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._push([], [], cli={'rc': 0, 'stdout': 'looks fine',
+                                    'stderr': ''})
         self.assertIn('no live campaign', str(ctx.exception))
 
-    def test_neither_mode_is_refused_before_running_anything(self):
-        """A bare --prod pushes the cnf to SAM and registers nothing.
-        The CLI refuses it; so must this."""
-        with patch('prodtools_mcp_write.runner.run_cli') as run:
-            with self.assertRaises(ValueError) as ctx:
-                self.tools.push_cnf(json=self.json_path, desc='D',
-                                    dsconf='C', run_as='self')
-        self.assertIn('exactly one', str(ctx.exception))
-        run.assert_not_called()
+    def test_only_live_campaigns_match(self):
+        """A completed campaign for the same tarball is not a candidate:
+        matching it would resurrect a finished campaign's id."""
+        done = self._camp(3, state='complete')
+        fresh = self._camp(9)
+        out = self._push([done], [done, fresh])
+        self.assertEqual(out['campaign_id'], 9)
 
-    def test_both_modes_is_refused_before_running_anything(self):
-        with patch('prodtools_mcp_write.runner.run_cli') as run:
-            with self.assertRaises(ValueError) as ctx:
-                self.tools.push_cnf(json=self.json_path, desc='D',
-                                    dsconf='C', slice_size=500,
-                                    jobdefs_map=self.jobdefs_map,
-                                    run_as='self')
-        self.assertIn('exactly one', str(ctx.exception))
-        run.assert_not_called()
+    def test_failed_push_never_returns_a_pre_existing_campaign(self):
+        """The re-run case the read-back could NOT save on its own: a
+        live campaign for this tarball already exists, so a FAILED
+        json2jobdef would find exactly one candidate. The rc check must
+        stop it first."""
+        with self.assertRaises(RuntimeError) as ctx:
+            self._push([self._camp(3)], [self._camp(3)],
+                       cli={'rc': 1, 'stdout': '',
+                            'stderr': 'json2jobdef: boom'})
+        self.assertIn('boom', str(ctx.exception))
 
-    def test_mode_check_runs_after_the_production_gate(self):
-        """An unconfirmed mu2epro call must be refused as a permission
-        problem, not reported as a malformed-arguments one."""
-        with patch('prodtools_mcp_write.runner.run_cli') as run:
-            with self.assertRaises(PermissionError):
-                self.tools.push_cnf(json=self.json_path, desc='D',
-                                    dsconf='C', run_as='mu2epro')
-        run.assert_not_called()
+    def test_ksu_truncated_failure_does_not_report_a_push_that_never_ran(self):
+        """Same scenario one layer down, with run_cli REAL: ksu returns 0
+        for a child that failed, and the only thing that catches it is
+        the missing stderr sentinel."""
+        with patch('subprocess.run') as run:
+            run.return_value = SimpleNamespace(
+                returncode=0, stdout='',
+                stderr='json2jobdef: no such Musing\n')
+            with patch('prodtools_mcp_write.tools._ledger_path_for',
+                       return_value='/db'), \
+                 patch('prodtools_mcp_write.tools._all_campaigns',
+                       side_effect=[[], [self._camp(3)]]):
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.tools.push_cnf(json=self.json_path, desc='D',
+                                        dsconf='C', slice_size=500,
+                                        run_as='self')
+        self.assertIn('no such Musing', str(ctx.exception))
 
-    def test_relative_jobdefs_map_is_refused_before_running_anything(self):
-        # Under run_as='mu2epro' the ksu block cd's into its own mktemp
-        # workdir, so a relative path would be written THERE while
-        # _read_map_entry reads it back relative to the server's own
-        # cwd -- silent divergence, no error, unless this is guarded.
-        with patch('prodtools_mcp_write.runner.run_cli') as run:
-            with self.assertRaises(ValueError) as ctx:
-                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
-                                    jobdefs_map='relative/m.json',
-                                    run_as='self')
-        self.assertIn('absolute', str(ctx.exception).lower())
-        run.assert_not_called()
+    # -- entry selection (shared with json2jobdef itself) --------------
 
     def test_no_matching_json_entry_raises_without_guessing(self):
         # find_json_entry's own "found 0" message -- reused verbatim
@@ -10724,7 +10751,7 @@ class TestPushCnfTool(unittest.TestCase):
         # reports for the same input.
         with self.assertRaises(ValueError) as ctx:
             self.tools.push_cnf(json=self.json_path, desc='NOPE', dsconf='C',
-                                jobdefs_map=self.jobdefs_map, run_as='self')
+                                slice_size=500, run_as='self')
         self.assertIn('found 0', str(ctx.exception).lower())
 
     def test_entry_missing_simjob_setup_raises_without_guessing(self):
@@ -10733,175 +10760,8 @@ class TestPushCnfTool(unittest.TestCase):
             json.dump([{'desc': 'D', 'dsconf': 'C', 'owner': 'mu2e'}], f)
         with self.assertRaises(ValueError) as ctx:
             self.tools.push_cnf(json=path, desc='D', dsconf='C',
-                                jobdefs_map=self.jobdefs_map, run_as='self')
+                                slice_size=500, run_as='self')
         self.assertIn('simjob_setup', str(ctx.exception))
-
-    def test_rerun_with_no_append_still_returns_this_pushs_entry(self):
-        # _write_jobdef_json_entry dedupes on (tarball, firstjob) and
-        # returns WITHOUT appending when the entry already exists --
-        # re-running --prod is the documented way to finish a partial
-        # push. entries[-1] would silently return some OTHER campaign's
-        # tarball and index as if it were this push's result.
-        with open(self.jobdefs_map, 'w') as f:
-            json.dump([
-                {'tarball': 'cnf.mu2e.SomeOtherCampaign.X.0.tar',
-                 'outputs': [{'dataset': 'other', 'location': 'tape'}]},
-                {'tarball': self.tarball,
-                 'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                              'location': 'disk'}]},
-            ], f)
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': 'Entry already exists',
-                                  'stderr': ''}):
-            out = self.tools.push_cnf(json=self.json_path, desc='D',
-                                      dsconf='C',
-                                      jobdefs_map=self.jobdefs_map,
-                                      run_as='self')
-        self.assertEqual(out['tarball'], self.tarball)
-        self.assertEqual(out['entry_index'], 1)
-        self.assertEqual(out['datasets'], ['dig.mu2e.D.C.art'])
-
-    def test_read_map_entry_against_a_real_file_empty_map_raises(self):
-        # Exercised through mocks in every test above; this one hits the
-        # real function so the empty-map RuntimeError path and the
-        # datasets mapping are not both left untested.
-        with open(self.jobdefs_map, 'w') as f:
-            json.dump([], f)
-        with self.assertRaises(RuntimeError):
-            self.tools._read_map_entry(self.jobdefs_map, 'D', 'C', [])
-
-    def test_read_map_entry_against_a_real_file_returns_datasets(self):
-        with open(self.jobdefs_map, 'w') as f:
-            json.dump([{
-                'tarball': self.tarball,
-                'outputs': [{'dataset': 'dig.mu2e.D.C.art', 'location': 'disk'},
-                            {'dataset': 'rec.mu2e.D.C.art', 'location': 'tape'}],
-            }], f)
-        index, entry = self.tools._read_map_entry(self.jobdefs_map, 'D', 'C', [])
-        self.assertEqual(index, 0)
-        self.assertEqual(entry['tarball'], self.tarball)
-
-    # -- Task-9 fix round 1: index= mode direct coverage --
-
-    def test_read_map_entry_index_mode_returns_expected_entry(self):
-        # index= is enqueue_campaign's own use: submit_map's --entry N
-        # already names the entry unambiguously, so this reads it back
-        # by plain position, never through desc/dsconf disambiguation.
-        with open(self.jobdefs_map, 'w') as f:
-            json.dump([
-                {'tarball': 'cnf.mu2e.OTHER.C.0.tar'},
-                {'tarball': self.tarball,
-                 'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                              'location': 'tape'}]},
-            ], f)
-        index, entry = self.tools._read_map_entry(self.jobdefs_map, index=1)
-        self.assertEqual(index, 1)
-        self.assertEqual(entry['tarball'], self.tarball)
-
-    def test_read_map_entry_index_out_of_range_raises(self):
-        with open(self.jobdefs_map, 'w') as f:
-            json.dump([{'tarball': self.tarball}], f)
-        with self.assertRaises(RuntimeError) as ctx:
-            self.tools._read_map_entry(self.jobdefs_map, index=5)
-        self.assertIn('out of range', str(ctx.exception))
-
-    def test_read_map_entry_index_missing_file_raises_a_distinct_message(self):
-        # Index mode must not fold a missing/corrupt map into "0
-        # entries" the way the tolerant _read_entries would -- that's
-        # the same misleading-message class flagged for push_cnf.
-        missing = os.path.join(self._tmpdir, 'does_not_exist.json')
-        with self.assertRaises(RuntimeError) as ctx:
-            self.tools._read_map_entry(missing, index=0)
-        self.assertIn('not found', str(ctx.exception))
-        self.assertNotIn('0 entries', str(ctx.exception))
-
-    def test_read_map_entry_index_malformed_json_raises_a_distinct_message(self):
-        with open(self.jobdefs_map, 'w') as f:
-            f.write('{not valid json')
-        with self.assertRaises(RuntimeError) as ctx:
-            self.tools._read_map_entry(self.jobdefs_map, index=0)
-        self.assertIn('not valid JSON', str(ctx.exception))
-
-    def test_read_map_entry_index_and_desc_together_raises(self):
-        # Combining index= with tarball_desc/dsconf would otherwise
-        # silently take the index path and skip the before/after
-        # disambiguation without saying so -- reject the combination
-        # outright instead.
-        with open(self.jobdefs_map, 'w') as f:
-            json.dump([{'tarball': self.tarball}], f)
-        with self.assertRaises(ValueError) as ctx:
-            self.tools._read_map_entry(self.jobdefs_map, 'D', 'C', [],
-                                       index=0)
-        self.assertIn('mutually exclusive', str(ctx.exception))
-
-    # -- Round-2 review fixes: reuse json2jobdef's own expansion/naming --
-
-    def test_mixing_entry_with_no_raw_desc_resolves_end_to_end(self):
-        # Mixing entries carry no literal `desc` key in the raw JSON --
-        # it is derived from input_data + pbeam by
-        # prepare_fields_for_job during expansion. A parallel scan over
-        # raw entries (matching the literal `desc` key) can never find
-        # this; only json2jobdef's own load_json + find_json_entry can.
-        mix_json = str(Path(__file__).resolve().parent.parent /
-                       'data' / 'Run1B' / 'mix.json')
-        expected_setup = (
-            '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh')
-        setup, tarball_desc = self.tools._select_push_params(
-            mix_json, 'CeEndpointMixLow', 'Run1Bab_best_v1_2')
-        self.assertEqual(setup, expected_setup)
-        # No tarball_append on a mixing entry -- tarball_desc falls
-        # back to the (derived) desc itself.
-        self.assertEqual(tarball_desc, 'CeEndpointMixLow')
-
-        # And push_cnf itself, end to end (run_cli mocked, map faked).
-        jobdefs_map = os.path.join(self._tmpdir, 'mix_m.json')
-        with open(jobdefs_map, 'w') as f:
-            json.dump([{
-                'tarball': 'cnf.mu2e.CeEndpointMixLow.Run1Bab_best_v1_2.0.tar',
-                'outputs': [{'dataset': 'dig.mu2e.CeEndpointMixLow.'
-                                        'Run1Bab_best_v1_2.art',
-                             'location': 'tape'}],
-            }], f)
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
-            out = self.tools.push_cnf(
-                json=mix_json, desc='CeEndpointMixLow',
-                dsconf='Run1Bab_best_v1_2', jobdefs_map=jobdefs_map,
-                run_as='self')
-        self.assertEqual(run.call_args.kwargs.get('simjob_setup'),
-                         expected_setup)
-        self.assertEqual(
-            out['tarball'],
-            'cnf.mu2e.CeEndpointMixLow.Run1Bab_best_v1_2.0.tar')
-
-    def test_owner_omitted_under_mu2epro_still_finds_the_right_entry(self):
-        # cnf_name defaults an omitted `owner` to $USER. The OLD
-        # implementation computed that default in THIS server process
-        # (the caller, e.g. 'oksuzian') while json2jobdef actually ran
-        # inside ksu with USER=mu2epro -> owner 'mu2e' -- a push that
-        # ACTUALLY SUCCEEDED and irreversibly registered a dataset
-        # would report as a failure. Selecting by desc+dsconf parsed
-        # from the map's own tarball name never needs to know owner.
-        path = os.path.join(self._tmpdir, 'no_owner.json')
-        with open(path, 'w') as f:
-            json.dump([{
-                'desc': 'D', 'dsconf': 'C', 'simjob_setup': self.simjob_setup,
-                'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
-            }], f)
-        with open(self.jobdefs_map, 'w') as f:
-            json.dump([{
-                # 'mu2e' -- the identity ksu actually ran as, not this
-                # test process's own $USER.
-                'tarball': 'cnf.mu2e.D.C.0.tar',
-                'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                             'location': 'tape'}],
-            }], f)
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
-            out = self.tools.push_cnf(json=path, desc='D', dsconf='C',
-                                      jobdefs_map=self.jobdefs_map,
-                                      run_as='mu2epro', confirm=True)
-        self.assertEqual(out['tarball'], 'cnf.mu2e.D.C.0.tar')
 
     def test_find_json_entry_ambiguity_becomes_valueerror_not_systemexit(self):
         # find_json_entry sys.exit()s on 0 or >1 matches -- fine for a
@@ -10915,47 +10775,74 @@ class TestPushCnfTool(unittest.TestCase):
             ], f)
         with self.assertRaises(ValueError):
             self.tools.push_cnf(json=path, desc='D', dsconf='C',
-                                jobdefs_map=self.jobdefs_map, run_as='self')
+                                slice_size=500, run_as='self')
 
-    # -- Round-3 review fixes: tarball_append collision, windowed dedupe --
+    def test_mixing_entry_with_no_raw_desc_resolves_end_to_end(self):
+        # Mixing entries carry no literal `desc` key in the raw JSON --
+        # it is derived from input_data + pbeam by prepare_fields_for_job
+        # during expansion. A parallel scan over raw entries (matching
+        # the literal `desc` key) can never find this; only json2jobdef's
+        # own load_json + find_json_entry can.
+        mix_json = str(Path(__file__).resolve().parent.parent /
+                       'data' / 'Run1B' / 'mix.json')
+        expected_setup = (
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bab/setup.sh')
+        setup, tarball_desc = self.tools._select_push_params(
+            mix_json, 'CeEndpointMixLow', 'Run1Bab_best_v1_2')
+        self.assertEqual(setup, expected_setup)
+        # No tarball_append on a mixing entry -- tarball_desc falls
+        # back to the (derived) desc itself.
+        self.assertEqual(tarball_desc, 'CeEndpointMixLow')
 
-    def test_tarball_append_collision_returns_the_reco_entry_not_digi(self):
+        tar = 'cnf.mu2e.CeEndpointMixLow.Run1Bab_best_v1_2.0.tar'
+        out = self._push([], [self._camp(7, tarball=tar)],
+                         json_path=mix_json, desc='CeEndpointMixLow',
+                         dsconf='Run1Bab_best_v1_2')
+        self.assertEqual(
+            self.last_run.call_args.kwargs.get('simjob_setup'),
+            expected_setup)
+        self.assertEqual(out['tarball'], tar)
+
+    def test_owner_omitted_still_finds_the_right_campaign(self):
+        # cnf_name defaults an omitted `owner` to $USER. Computing that
+        # default in THIS server process (the caller, e.g. 'oksuzian')
+        # while json2jobdef actually ran inside ksu with USER=mu2epro ->
+        # owner 'mu2e' would report a push that ACTUALLY SUCCEEDED and
+        # irreversibly registered a dataset as a failure. Selecting by
+        # desc+dsconf parsed from the ledger's own tarball name never
+        # needs to know owner.
+        path = os.path.join(self._tmpdir, 'no_owner.json')
+        with open(path, 'w') as f:
+            json.dump([{
+                'desc': 'D', 'dsconf': 'C', 'simjob_setup': self.simjob_setup,
+                'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
+            }], f)
+        # 'mu2e' -- the identity ksu actually ran as, not this test
+        # process's own $USER.
+        out = self._push([], [self._camp(7, tarball='cnf.mu2e.D.C.0.tar')],
+                         json_path=path, run_as='mu2epro', confirm=True)
+        self.assertEqual(out['tarball'], 'cnf.mu2e.D.C.0.tar')
+
+    def test_tarball_append_collision_returns_the_reco_campaign_not_digi(self):
         # Real regression against data/mdc2025/reco.json's
         # CosmicCRYExtracted / MDC2025au_best_v1_5 entry, which has
         # tarball_append='-reco' -- its real tarball is
         # cnf.mu2e.CosmicCRYExtracted-reco.MDC2025au_best_v1_5.0.tar.
-        # Matching on the bare desc (round 2) would find only a
-        # DIFFERENT stage's entry sharing the same desc+dsconf with no
-        # append -- this repo's own jobdefs_list.json holds -reco and
-        # -nts entries at this exact dsconf, so the collision is real,
-        # not hypothetical. 103/642 expanded entries across data/**/*
-        # use tarball_append (all of Run1B/reco.json, mdc2025/reco.json,
-        # mdc2030/reco.json, mdc2025/evntuple.json, both mds3a.json).
+        # Matching on the bare desc would find a DIFFERENT stage's
+        # campaign sharing the same desc+dsconf with no append.
         reco_json = str(Path(__file__).resolve().parent.parent /
                         'data' / 'mdc2025' / 'reco.json')
-        jobdefs_map = os.path.join(self._tmpdir, 'reco_collision_m.json')
-        with open(jobdefs_map, 'w') as f:
-            json.dump([
-                # A DIFFERENT stage's entry sharing the same bare
-                # desc+dsconf -- the collision that silently misfired.
-                {'tarball': 'cnf.mu2e.CosmicCRYExtracted.'
-                            'MDC2025au_best_v1_5.0.tar',
-                 'outputs': [{'dataset': 'dig.mu2e.CosmicCRYExtracted.'
-                                         'MDC2025au_best_v1_5.art',
-                              'location': 'tape'}]},
-                # The entry this push actually produces.
-                {'tarball': 'cnf.mu2e.CosmicCRYExtracted-reco.'
-                            'MDC2025au_best_v1_5.0.tar',
-                 'outputs': [{'dataset': 'rec.mu2e.CosmicCRYExtracted.'
-                                         'MDC2025au_best_v1_5.art',
-                              'location': 'tape'}]},
-            ], f)
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
-            out = self.tools.push_cnf(
-                json=reco_json, desc='CosmicCRYExtracted',
-                dsconf='MDC2025au_best_v1_5', jobdefs_map=jobdefs_map,
-                run_as='self')
+        digi = self._camp(
+            3, tarball='cnf.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.0.tar',
+            datasets=('dig.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art',))
+        reco = self._camp(
+            9,
+            tarball='cnf.mu2e.CosmicCRYExtracted-reco.'
+                    'MDC2025au_best_v1_5.0.tar',
+            datasets=('rec.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art',))
+        out = self._push([digi], [digi, reco], json_path=reco_json,
+                         desc='CosmicCRYExtracted',
+                         dsconf='MDC2025au_best_v1_5')
         self.assertEqual(
             out['tarball'],
             'cnf.mu2e.CosmicCRYExtracted-reco.MDC2025au_best_v1_5.0.tar')
@@ -10963,103 +10850,44 @@ class TestPushCnfTool(unittest.TestCase):
             out['datasets'],
             ['rec.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art'])
 
-    def test_windowed_campaign_new_window_disambiguated_not_raised(self):
-        # _write_jobdef_json_entry dedupes on (tarball, firstjob), not
-        # tarball alone: a windowed campaign appends a NEW entry
-        # sharing the SAME tarball as an existing window. Matching on
-        # tarball_desc+dsconf alone finds both -- the before-push
-        # snapshot must identify the newly appended one instead of
-        # raising ">1 match" on a push that actually succeeded, and
-        # must never fall back to "last entry".
-        jobdefs_map = os.path.join(self._tmpdir, 'windowed_m.json')
-        existing = {'tarball': self.tarball, 'firstjob': 0,
-                   'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                                'location': 'tape'}]}
-        with open(jobdefs_map, 'w') as f:
-            json.dump([existing], f)
+    # -- _read_map_entry: still used by enqueue_campaign ---------------
 
-        new_window = {'tarball': self.tarball, 'firstjob': 500,
-                      'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                                   'location': 'tape'}]}
+    def test_read_map_entry_returns_the_entry_at_that_index(self):
+        # submit_map's --entry N already names the entry unambiguously,
+        # so this reads it back by plain position.
+        with open(self.map_path, 'w') as f:
+            json.dump([
+                {'tarball': 'cnf.mu2e.OTHER.C.0.tar'},
+                {'tarball': self.tarball,
+                 'outputs': [{'dataset': 'dig.mu2e.D.C.art',
+                              'location': 'tape'}]},
+            ], f)
+        index, entry = self.tools._read_map_entry(self.map_path, index=1)
+        self.assertEqual(index, 1)
+        self.assertEqual(entry['tarball'], self.tarball)
 
-        def _fake_run_cli(argv, run_as, simjob_setup=None):
-            # Simulate json2jobdef appending the new window's entry.
-            entries = json.loads(Path(jobdefs_map).read_text())
-            entries.append(new_window)
-            Path(jobdefs_map).write_text(json.dumps(entries))
-            return {'rc': 0, 'stdout': '', 'stderr': ''}
+    def test_read_map_entry_out_of_range_raises(self):
+        with open(self.map_path, 'w') as f:
+            json.dump([{'tarball': self.tarball}], f)
+        with self.assertRaises(RuntimeError) as ctx:
+            self.tools._read_map_entry(self.map_path, index=5)
+        self.assertIn('out of range', str(ctx.exception))
 
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   side_effect=_fake_run_cli):
-            out = self.tools.push_cnf(json=self.json_path, desc='D',
-                                      dsconf='C', jobdefs_map=jobdefs_map,
-                                      run_as='self')
-        self.assertEqual(out['entry_index'], 1)
-        self.assertEqual(out['tarball'], self.tarball)
+    def test_read_map_entry_missing_file_raises_a_distinct_message(self):
+        # Must not fold a missing/corrupt map into "0 entries" -- that
+        # sends the operator looking for the wrong problem.
+        missing = os.path.join(self._tmpdir, 'does_not_exist.json')
+        with self.assertRaises(RuntimeError) as ctx:
+            self.tools._read_map_entry(missing, index=0)
+        self.assertIn('not found', str(ctx.exception))
+        self.assertNotIn('0 entries', str(ctx.exception))
 
-    def test_genuinely_ambiguous_match_raises_listing_candidates(self):
-        # If nothing is newly appended (e.g. a pre-existing map already
-        # has more than one candidate for this desc+dsconf, none of
-        # them new) this cannot be resolved and must raise -- never
-        # silently pick one, and the message must name the candidates
-        # so an operator can resolve it by hand.
-        jobdefs_map = os.path.join(self._tmpdir, 'ambiguous_m.json')
-        pre_existing = [
-            {'tarball': self.tarball, 'firstjob': 0,
-             'outputs': [{'dataset': 'a', 'location': 'tape'}]},
-            {'tarball': self.tarball, 'firstjob': 500,
-             'outputs': [{'dataset': 'b', 'location': 'tape'}]},
-        ]
-        with open(jobdefs_map, 'w') as f:
-            json.dump(pre_existing, f)
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': 'Entry already exists',
-                                  'stderr': ''}):
-            with self.assertRaises(RuntimeError) as ctx:
-                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
-                                    jobdefs_map=jobdefs_map, run_as='self')
-        self.assertIn('index 0', str(ctx.exception))
-        self.assertIn('index 1', str(ctx.exception))
-
-    def test_failed_push_never_returns_a_pre_existing_entry_as_success(self):
-        # The re-run case the map read-back could NOT save: an entry for
-        # this tarball is already in the map from an earlier push, so a
-        # FAILED json2jobdef would find exactly one candidate, call it
-        # "this push's entry" and report success. The rc must stop it
-        # first.
-        jobdefs_map = os.path.join(self._tmpdir, 'rerun_m.json')
-        pre_existing = [{'tarball': self.tarball, 'firstjob': 0,
-                         'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                                      'location': 'tape'}]}]
-        with open(jobdefs_map, 'w') as f:
-            json.dump(pre_existing, f)
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 1, 'stdout': '',
-                                 'stderr': 'json2jobdef: boom'}):
-            with self.assertRaises(RuntimeError) as ctx:
-                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
-                                    jobdefs_map=jobdefs_map, run_as='self')
-        self.assertIn('boom', str(ctx.exception))
-
-    def test_ksu_truncated_failure_does_not_report_a_push_that_never_ran(self):
-        # Same scenario one layer down, with run_cli REAL: ksu returns 0
-        # for a child that failed, and the only thing that catches it is
-        # the missing stderr sentinel. Before it existed this returned
-        # the pre-existing entry as a fresh, successful production push.
-        jobdefs_map = os.path.join(self._tmpdir, 'truncated_m.json')
-        pre_existing = [{'tarball': self.tarball, 'firstjob': 0,
-                         'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                                      'location': 'tape'}]}]
-        with open(jobdefs_map, 'w') as f:
-            json.dump(pre_existing, f)
-        with patch('subprocess.run') as run:
-            run.return_value = SimpleNamespace(
-                returncode=0, stdout='',
-                stderr='json2jobdef: no such Musing\n')
-            with self.assertRaises(RuntimeError) as ctx:
-                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C',
-                                    jobdefs_map=jobdefs_map, run_as='self')
-        self.assertIn('no such Musing', str(ctx.exception))
+    def test_read_map_entry_malformed_json_raises_a_distinct_message(self):
+        with open(self.map_path, 'w') as f:
+            f.write('{not valid json')
+        with self.assertRaises(RuntimeError) as ctx:
+            self.tools._read_map_entry(self.map_path, index=0)
+        self.assertIn('not valid JSON', str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -13087,15 +12915,34 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
              '--slice-size', '1000'])
         self.assertIn('--slice-size requires --enqueue', msg)
 
-    def test_prod_requires_jobdefs_or_enqueue(self):
-        """A bare --prod (neither --jobdefs nor --enqueue) would push the
-        cnf to SAM and then register nothing -- no map file, no campaign
-        -- a silent no-op that reports success."""
+    def test_prod_requires_enqueue(self):
+        """A bare --prod would push the cnf to SAM and then register no
+        campaign -- a silent no-op that reports success."""
         msg = self._run_main(
             ['--json', 'data/Run1B/resampler_beam.json',
              '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
              '--prod'])
-        self.assertIn('--prod requires --jobdefs or --enqueue', msg)
+        self.assertIn('--prod requires --enqueue', msg)
+
+    def test_jobdefs_flag_is_gone(self):
+        """`--jobdefs` wrote a submission map for a human to hand-edit
+        and feed to submit_map -- the POMS-era two-step. It was the only
+        thing in prodtools that produced an operator-facing map file, and
+        that hand-edit window was an unvalidated door into the ledger.
+        argparse must reject it outright rather than ignore it."""
+        import contextlib, io
+        err = io.StringIO()
+        argv = ['json2jobdef.py', '--json', 'data/Run1B/resampler_beam.json',
+                '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
+                '--prod', '--jobdefs', '/tmp/map.json']
+        with patch.object(sys, 'argv', argv), \
+                contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                self.json2jobdef.main()
+        # argparse's own refusal: exit 2, message on stderr.
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn('unrecognized arguments', err.getvalue().lower())
+        self.assertIn('--jobdefs', err.getvalue())
 
     def test_provenance_string_format(self):
         from utils.json2jobdef import _provenance
@@ -13104,17 +12951,13 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                         {'desc': 'PhysicalPionStops', 'dsconf': 'Run1Bap'}),
             'data/Run1B/resampler_beam.json#PhysicalPionStops@Run1Bap')
 
-    def test_enqueue_without_jobdefs_writes_no_map_file(self):
-        """--jobdefs is optional: supply it and the map file is still
-        written (unchanged behaviour); omit it -- even under --enqueue --
-        and nothing is written. Regression pin: append_jobdef used to run
-        unconditionally, so a bare `--prod --enqueue` (no --jobdefs) fell
-        back to the default filename and wrote ./jobdefs_list.json anyway,
-        contradicting the --enqueue help text's "no map file written"
-        claim. Runs from a scratch cwd so a stray file left by another
-        test/run cannot fool the assertion; the SAM- and ledger-facing
-        calls are mocked since this pins a file-write decision, not a
-        submission."""
+    def test_enqueue_writes_no_map_file(self):
+        """json2jobdef writes no submission map at all any more. Runs
+        from a scratch cwd so a stray file left by another test/run
+        cannot fool the assertion, and checks the whole directory rather
+        than one filename -- the historical bug was a fall-back to a
+        DEFAULT name (./jobdefs_list.json), so naming the file we expect
+        to be absent is exactly the assertion that missed it."""
         from utils import json2jobdef
         config = {
             'desc': 'PhysicalPionStops', 'dsconf': 'Run1Bap',
@@ -13134,9 +12977,10 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                  patch('utils.submit.enqueue_entry', return_value=1):
                 json2jobdef.process_single_entry(
                     dict(config), pushout=False, no_cleanup=True,
-                    jobdefs_list=None, enqueue=True, slice_size=1000,
+                    enqueue=True, slice_size=1000,
                     json_path='data/Run1B/resampler_beam.json')
-            self.assertFalse(os.path.exists('jobdefs_list.json'))
+            self.assertEqual(sorted(os.listdir('.')), [],
+                             'json2jobdef --enqueue wrote a file into cwd')
         finally:
             os.chdir(cwd)
 
@@ -13185,7 +13029,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                 expected_entry = json2jobdef.build_jobdesc(dict(config))
                 json2jobdef.process_single_entry(
                     dict(config), pushout=True, no_cleanup=True,
-                    jobdefs_list=None, enqueue=True, slice_size=7,
+                    enqueue=True, slice_size=7,
                     json_path='data/x.json')
         finally:
             os.chdir(cwd)
@@ -13296,19 +13140,59 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
                 with self.assertRaises(SystemExit) as cm:
                     self.json2jobdef.validate_required_fields(
                         self._cfg(**{key: bad}))
-                self.assertIn(key, str(cm.exception))
+                msg = str(cm.exception)
+                self.assertIn(key, msg)
+                # The offending value, not just the key: asserting the
+                # key alone passes on the message prefix even if the
+                # underlying complaint is empty.
+                self.assertIn(bad, msg)
 
     def test_wellformed_resource_values_accepted(self):
         self.json2jobdef.validate_required_fields(
             self._cfg(memory='4000MB', disk='50GB', expected_lifetime='48h'))
 
     def test_same_validator_as_set_entry(self):
-        """One definition, two callers. If these drift, an operator can
-        enqueue a value that `set-entry` would refuse -- the asymmetry
-        this change exists to remove."""
+        """One definition, three callers. Cheap wiring check; the
+        behavioural equivalence below is what actually pins the
+        requirement."""
         from utils import jobdesc, submission_ledger
         self.assertIs(submission_ledger.validate_entry_value,
                       jobdesc.validate_entry_value)
+
+    def test_every_enqueue_boundary_agrees_on_the_grammar(self):
+        """The requirement, tested as behaviour rather than as wiring:
+        a value one boundary accepts, all of them accept.
+
+        The assertIs above pins a name binding, which a copy-pasted
+        second validator would satisfy while diverging. There are three
+        doors into the ledger -- json2jobdef (where a campaign is born),
+        submit_map --enqueue (a foreign map), and set-entry (editing a
+        live campaign) -- and an operator must not meet three different
+        answers.
+        """
+        from utils import json2jobdef, submit, submission_ledger
+
+        good = ['tape', 'disk', 'scratch', 'resilient', 'stash', 'none',
+                'dir:/pnfs/mu2e/tape/phy-sim']
+        bad = ['resiliant', 'Tape', 'dir:relative', '', 'tape ']
+
+        def via_json2jobdef(value):
+            json2jobdef.validate_required_fields(self._cfg(inloc=value))
+
+        def via_submit_map(value):
+            submit._validate_entry_values({'tarball': 't', 'inloc': value})
+
+        def via_set_entry(value):
+            submission_ledger.validate_entry_value('inloc', value)
+
+        for door in (via_json2jobdef, via_submit_map, via_set_entry):
+            for value in good:
+                with self.subTest(door=door.__name__, value=value):
+                    door(value)
+            for value in bad:
+                with self.subTest(door=door.__name__, value=value):
+                    with self.assertRaises((SystemExit, ValueError)):
+                        door(value)
 
 
 # ---------------------------------------------------------------------------
