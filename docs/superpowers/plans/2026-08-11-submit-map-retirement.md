@@ -1576,6 +1576,11 @@ Not a task — the operator runs these, since two need mu2epro.
 - [ ] `submissions resubmit <row-id> --indices <n> --dry-run` against a **closed** row, exit 0 and prints the intended submission.
 - [ ] `submissions resubmit <row-id> --indices <n>` against a row that overlaps a live one — must REFUSE and name the blocking row.
 - [ ] One `json2jobdef --prod --enqueue` as mu2epro (via `/mu2epro-run`), campaign appears in `list_campaigns`.
-- [ ] `grep -rn "submit_map\|map_path\|--jobdefs" utils/ bin/ mcp/ EXAMPLES.md CLAUDE.md` returns nothing.
+- [ ] `grep -rn "submit_map\|map_path\|--jobdefs" utils/ bin/ mcp/ EXAMPLES.md CLAUDE.md` returns **only these four expected hits** — anything else is a miss:
+  - `utils/submission_ledger.py` — the `map_path` → `origin` migration must name the old column.
+  - `mcp/src/prodtools_mcp/ledger_ro.py` — the read-only compat shim, same reason.
+  - `EXAMPLES.md` (two sites) — `--jobdefs` inside sentences saying it no longer exists.
+
+  `test/` is excluded from this grep on purpose: the retirement tests and legacy-schema fixtures need the literal strings as test *data*, not as prose.
 
 **Never wrap `submissions run` in `timeout`** — it orphans a cluster.
