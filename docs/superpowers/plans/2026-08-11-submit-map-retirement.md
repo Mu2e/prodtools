@@ -1508,6 +1508,17 @@ grep -rn "recovery_resource_argv\|_scratch_map_dir\|SUBMIT_MAP\|submit_entry_dir
 
 Expected: no matches.
 
+- [ ] **Step 3c: Fix the live skill docs in `.claude/commands/`**
+
+These are **instructions future sessions follow**, not prose. Leaving them stale means a later session is told to run a command that no longer exists. Four files reference `submit_map`:
+
+- **`.claude/commands/mu2epro-submit.md` (10 references)** — this skill exists *solely* to run `submit_map` as mu2epro. Its entire premise is gone. Rewrite it around `submissions resubmit` (hand re-firing) and `submissions run` (feeding campaigns), or delete it and fold what survives into `/mu2epro-run`. Decide which, and say why in the commit message.
+- **`.claude/commands/mu2epro-run.md` (2)** — also still carries a "HARD RULE: `--jobdefs` is mandatory for `json2jobdef --prod`". That flag was deleted in `c859821`; the rule is now actively wrong and must go. Replace with `--prod` requiring `--enqueue`.
+- **`.claude/commands/mu2ejobsub-submit.md` (7)** — check whether this skill is already dead: the `mu2ejobsub` backend was retired 2026-07-19. If it is, delete it; if not, drop only the `submit_map` references.
+- **`.claude/commands/jit-cnf-build.md` (3)** — drop or retarget the references.
+
+**Do NOT rewrite `wiki/` or `docs/superpowers/plans/`.** Those are historical records — a wiki page describing what the workflow was in May 2026 is *correct* as written, and editing it to match today's code destroys the record. Only live instructions get updated.
+
 - [ ] **Step 4: Update `CLAUDE.md` and `mcp/README.md`**
 
 In `CLAUDE.md`: drop `enqueue_campaign` from the write-server tool list (leaving `push_cnf` and `run_submissions`), and remove the "No map file is involved" phrasing — with no map anywhere, the disclaimer is itself a reference to a dead concept.
