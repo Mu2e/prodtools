@@ -10,7 +10,7 @@ from pathlib import Path
 from .config_utils import normalize_input_data
 from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
-from .map_entry import firstjob_of, inloc_of, njobs_of, outputs_of, tarball_of
+from .jobdesc import firstjob_of, inloc_of, njobs_of, outputs_of, tarball_of
 from .samweb_wrapper import (
     dataset_summary,
     definition_file_count,
@@ -270,7 +270,7 @@ def resolve_map_index(entry, job_index):
 
     `local = job_index + firstjob`, so a windowed entry runs cnf indices
     [firstjob, firstjob+njobs). Window semantics (statistics expansion,
-    seed safety): see utils/map_entry.py. A generic entry (no njobs)
+    seed safety): see utils/jobdesc.py. A generic entry (no njobs)
     occupies no index space.
 
     Returns:

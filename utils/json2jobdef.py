@@ -18,7 +18,7 @@ from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
-from utils.map_entry import firstjob_of, validate_window
+from utils.jobdesc import firstjob_of, validate_window
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -440,7 +440,7 @@ def build_jobdesc(config):
     }
 
     # Optional per-entry resource requests pass through to the entry;
-    # the submit path reads them via map_entry.resources_of
+    # the submit path reads them via jobdesc.resources_of
     # (CLI flag > entry key > built-in default).
     for key in ('memory', 'disk', 'expected_lifetime'):
         if key in config:
@@ -448,7 +448,7 @@ def build_jobdesc(config):
 
     # Draining configuration passes through too, so a draining map comes
     # out of --jobdefs ready to enqueue instead of needing a hand-edit:
-    # the submit path reads `input_pattern` (map_entry.is_draining, the
+    # the submit path reads `input_pattern` (jobdesc.is_draining, the
     # kind discriminator) and `prestage` (submit._validate_draining_entry,
     # and the tape-residency gate in submissions.drain_tick) off the
     # ENTRY, so a value left behind in the JSON config would silently do
@@ -466,7 +466,7 @@ def build_jobdesc(config):
              "(a draining entry has no fixed job count)")
 
     # Optional cnf-index window start (statistics expansion; semantics
-    # in utils/map_entry.py). firstjob_of/validate_window are the single
+    # in utils/jobdesc.py). firstjob_of/validate_window are the single
     # validation authority — shared with the submit path.
     try:
         firstjob = firstjob_of(config)

@@ -1,14 +1,14 @@
-"""Submission-map entry accessors.
+"""Submission-entry (`jobdesc`) accessors.
 
-Submission-map files (`/exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC*.json`)
-are lists of entries with stable shape — historically the POMS-map entry
-shape, now also the direct backend's map format:
+A jobdesc describes one submission. It is stored in both ledger tables
+(`campaigns.entry_json`, `submissions.entry_json`), shipped to the
+worker as `ops["jobdesc"]`, and read there by `utils/runmu2e.py`:
 
     {
         "tarball":  "cnf.mu2e.<desc>.<dsconf>.<index>.tar",   # required
         "outputs":  [ {"dataset": "...", "location": "tape|disk|scratch"}, ... ],  # required
         "njobs":    <int>,                                    # optional
-        "inloc":    "tape|disk|scratch|dir:<path>|none",      # optional, defaults 'none'
+        "inloc":    "tape|disk|resilient|stash|dir:<path>|none",  # optional, defaults 'none'
         "firstjob": <int>,                                    # optional, defaults 0
     }
 
@@ -20,8 +20,8 @@ tarball (statistics expansion of open-ended resampler/generator cnfs).
 
 These helpers enforce fail-loud access on the required fields and the
 documented sentinel defaults on the optional ones. Use them instead of
-bare `entry[...]` or `entry.get(...)` so a malformed submission-map entry
-is caught at the boundary, not as a downstream crash.
+bare `entry[...]` or `entry.get(...)` so a malformed jobdesc is caught
+at the boundary, not as a downstream crash.
 """
 
 from typing import Optional
