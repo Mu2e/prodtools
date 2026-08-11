@@ -79,10 +79,10 @@ def replace_file_extensions(input_str, first_field, last_field):
     return str(Mu2eName.parse(input_str).as_tier(first_field).with_extension(last_field))
 
 def validate_jobdesc(jobdesc):
-    """Validate job descriptions list structure and required fields.
+    """Validate the job description and pick the dispatch mode.
 
     Args:
-        jobdesc: List of job description dictionaries
+        jobdesc: One job description dictionary
 
     Returns:
         str or False: 'direct_input' if direct-input mode, False if
@@ -91,41 +91,26 @@ def validate_jobdesc(jobdesc):
     Raises:
         SystemExit: If validation fails
     """
-    # Validate list is not empty
     if not jobdesc:
-        fail("Error: No job descriptions found in jobdesc file")
+        fail("Error: No job description found in ops")
 
-    # firstjob (cnf-index window) is only meaningful on njobs-bearing
-    # entries — anywhere else it would be silently ignored and the entry
-    # would re-run cnf indices [0, N), duplicating physics. Maps are
-    # hand-edited in practice, so enforce this at the dispatch boundary
-    # for every mode, not just at map-write time.
-    for i, entry in enumerate(jobdesc):
-        if 'firstjob' in entry and 'njobs' not in entry:
-            fail(f"Error: jobdesc entry {i} has 'firstjob' but no 'njobs' — "
-                 f"index windows require a fixed job count")
+    # firstjob (cnf-index window) is only meaningful on an njobs-bearing
+    # entry — anywhere else it would be silently ignored and the entry
+    # would re-run cnf indices [0, N), duplicating physics.
+    if 'firstjob' in jobdesc and 'njobs' not in jobdesc:
+        fail("Error: jobdesc has 'firstjob' but no 'njobs' — "
+             "index windows require a fixed job count")
 
-    # Check if direct-input mode: tarball present but no njobs
-    if 'tarball' in jobdesc[0] and 'njobs' not in jobdesc[0]:
-        if len(jobdesc) > 1:
-            fail("Error: Direct-input mode requires exactly one entry in jobdesc list\n"
-                 f"Found {len(jobdesc)} entries.")
-        _require_fields(jobdesc[0],
-                        ['tarball', 'inloc', 'outputs'],
+    # Direct-input mode: tarball present but no njobs.
+    if 'tarball' in jobdesc and 'njobs' not in jobdesc:
+        _require_fields(jobdesc, ['tarball', 'inloc', 'outputs'],
                         'Direct-input mode')
         return 'direct_input'
 
-    # Normal mode validation
-    # Entries with tarball but no njobs are generic tarballs - skip in normal dispatch
-    # Entries missing tarball entirely are invalid
-    for i, entry in enumerate(jobdesc):
-        if 'njobs' not in entry:
-            if 'tarball' in entry:
-                print(f"[INFO] entry {i} ({entry['tarball']}) has no njobs (generic tarball) - skipped in normal dispatch")
-                continue
-            fail(f"Error: Normal mode requires 'njobs' field in jobdesc entry {i}")
-        _require_fields(entry, ['tarball', 'inloc', 'outputs'], f'Normal mode (jobdesc entry {i})')
-
+    if 'njobs' not in jobdesc:
+        fail("Error: Normal mode requires 'njobs' in the jobdesc")
+    _require_fields(jobdesc, ['tarball', 'inloc', 'outputs'],
+                    'Normal mode')
     return False
 
 def process_direct_input(jobdesc, fname, args):
@@ -135,7 +120,7 @@ def process_direct_input(jobdesc, fname, args):
     Output filenames are derived from fname's desc and sequencer fields.
 
     Args:
-        jobdesc: List with exactly one job description dictionary
+        jobdesc: The job description dictionary
         fname: Input art filename (full name, e.g. dig.mu2e.CeEndpoint....art)
         args: Command line arguments (unused but kept for API consistency)
 
@@ -143,7 +128,7 @@ def process_direct_input(jobdesc, fname, args):
         tuple: (fcl, simjob_setup, fname, outputs)
     """
 
-    jobdesc_entry = jobdesc[0]
+    jobdesc_entry = jobdesc
     tarball = jobdesc_entry['tarball']
 
     # Parse fname components: tier.owner.desc.dsconf.sequencer.ext
@@ -173,7 +158,7 @@ def process_jobdef(jobdesc, fname, args):
     """Process a job in normal mode.
 
     Args:
-        jobdesc: List of job descriptions
+        jobdesc: The job description dictionary
         fname: Index filename
         args: Command line arguments (needs copy_input attribute; the
             resolved entry's 'copy_input' key overrides it when present)
@@ -188,15 +173,15 @@ def process_jobdef(jobdesc, fname, args):
     except RuntimeError as e:
         fail(f"Error: {e}")
 
-    # Find which job description this job index belongs to
-    jobdesc_entry, jobdesc_index, job_index_num = resolve_map_index(jobdesc, job_index)
+    # Resolve the global job index to the entry's cnf-local index
+    jobdesc_entry, job_index_num = resolve_map_index(jobdesc, job_index)
 
     if jobdesc_entry is None:
-        total_jobs = sum(d.get('njobs', 0) for d in jobdesc)
-        fail(f"Error: Job index {job_index} out of range. Total jobs available: {total_jobs}")
+        fail(f"Error: Job index {job_index} out of range. "
+             f"Total jobs available: {jobdesc.get('njobs', 0)}")
 
-    print(f"Job {job_index} uses definition {jobdesc_index}")
-    print(f"Global job index: {job_index}, Local job index within definition: {job_index_num}")
+    print(f"Global job index: {job_index}, "
+          f"Local job index within definition: {job_index_num}")
 
     # Extract fields from JSON structure
     inloc = jobdesc_entry['inloc']
@@ -432,8 +417,8 @@ def _direct_input_dir():
 
 def _load_direct_ops():
     """Load the ops JSON shipped via dropbox. Contains: jobs (PROCESS→index
-    array), inspec (dataset → [protocol, location]), jobdesc (a one-element
-    list mirroring the submission-map entry shape for reuse via process_jobdef)."""
+    array), inspec (dataset → [protocol, location]), jobdesc (the
+    submission-map entry, consumed via process_jobdef)."""
     ops_basename = os.environ['MU2EGRID_OPSJSON']
     ops_path = os.path.join(_direct_input_dir(), ops_basename)
     with open(ops_path) as f:
@@ -652,7 +637,7 @@ def _direct_dispatch(args, ops, index):
             sys.exit(1)
         fname = files[index]
         print(f"[direct] files[{index}] = {fname}")
-        inloc = jobdesc[0].get('inloc')
+        inloc = jobdesc.get('inloc')
         # Stage the input locally (nothing pre-stages for the worker, and
         # direct-input FCL has no xroot streaming fallback — it writes the
         # bare local filename, so every draining input must be fetched).

@@ -265,29 +265,22 @@ def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False
     return fcl
 
 
-def resolve_map_index(jobdesc, job_index):
-    """Map a global (index-dataset) job index to its map entry and
-    the cnf-local job index.
+def resolve_map_index(entry, job_index):
+    """Map a global job index to the entry's cnf-local index.
 
-    Each njobs-bearing entry occupies the next `njobs` slots of the global
-    index space (generic entries occupy none); within an entry
-    `local = global - cumulative + firstjob`, so a windowed entry runs cnf
-    indices [firstjob, firstjob+njobs). Window semantics (statistics
-    expansion, seed safety): see utils/map_entry.py.
+    `local = job_index + firstjob`, so a windowed entry runs cnf indices
+    [firstjob, firstjob+njobs). Window semantics (statistics expansion,
+    seed safety): see utils/map_entry.py. A generic entry (no njobs)
+    occupies no index space.
 
     Returns:
-        tuple: (entry, entry_index, local_job_index), or (None, None, None)
-               if job_index is beyond the map's total njobs.
+        tuple: (entry, local_job_index), or (None, None) if job_index is
+               beyond the entry's njobs.
     """
-    cumulative_jobs = 0
-    for i, entry in enumerate(jobdesc):
-        njobs = njobs_of(entry)
-        if njobs is None:
-            continue  # skip generic tarball entries
-        if job_index < cumulative_jobs + njobs:
-            return entry, i, job_index - cumulative_jobs + firstjob_of(entry)
-        cumulative_jobs += njobs
-    return None, None, None
+    njobs = njobs_of(entry)
+    if njobs is None or job_index >= njobs:
+        return None, None
+    return entry, job_index + firstjob_of(entry)
 
 
 def push_output(output_specs, output_file="output.txt", simjob_setup=None):

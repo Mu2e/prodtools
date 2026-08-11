@@ -1452,12 +1452,12 @@ class TestProcessJobdefStashSkipsCopyInput(unittest.TestCase):
         args = MagicMock()
         args.copy_input = True   # would trigger mdh copy for tape/disk
 
-        jobdesc = [{
+        jobdesc = {
             'tarball': tar,
             'njobs': 1,
             'inloc': 'stash',
             'outputs': [],
-        }]
+        }
 
         mock_fcl = tar.replace('.tar', '.fcl')
 
@@ -1501,8 +1501,8 @@ class TestProcessJobdefCopyInputFlip(unittest.TestCase):
         tar = _make_tarball(jp, "module_type : RootInput\n")
         args = MagicMock()
         args.copy_input = cli_copy
-        jobdesc = [{'tarball': tar, 'njobs': 1, 'inloc': 'tape',
-                    'outputs': [], **(entry_extra or {})}]
+        jobdesc = {'tarball': tar, 'njobs': 1, 'inloc': 'tape',
+                    'outputs': [], **(entry_extra or {})}
         located = {self.FILE: [{'location_type': 'tape'}]}
         try:
             with patch('utils.runmu2e.write_fcl',
@@ -1924,66 +1924,46 @@ class TestValidateJobdesc(unittest.TestCase):
 
     def test_direct_input_mode(self):
         from utils.runmu2e import validate_jobdesc
-        jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
-               'inloc': 'tape', 'outputs': []}]
+        jd = {'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
+              'inloc': 'tape', 'outputs': []}
         self.assertEqual(validate_jobdesc(jd), 'direct_input')
 
     def test_normal_mode(self):
         from utils.runmu2e import validate_jobdesc
-        jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
-               'inloc': 'tape', 'outputs': []}]
+        jd = {'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
+              'inloc': 'tape', 'outputs': []}
         self.assertFalse(validate_jobdesc(jd))
 
     def test_direct_input_is_truthy(self):
         """'direct_input' string must be truthy for backward-compatible if-checks."""
         from utils.runmu2e import validate_jobdesc
-        jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
-               'inloc': 'tape', 'outputs': []}]
+        jd = {'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar',
+              'inloc': 'tape', 'outputs': []}
         self.assertTrue(validate_jobdesc(jd))
 
     def test_normal_mode_is_falsy(self):
         from utils.runmu2e import validate_jobdesc
-        jd = [{'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
-               'inloc': 'tape', 'outputs': []}]
+        jd = {'tarball': 'cnf.mu2e.T.TC.0.tar', 'njobs': 5,
+              'inloc': 'tape', 'outputs': []}
         self.assertFalse(validate_jobdesc(jd))
-
-    def test_direct_input_multiple_entries_exits(self):
-        from utils.runmu2e import validate_jobdesc
-        jd = [
-            {'tarball': 'a.tar', 'inloc': 'tape', 'outputs': []},
-            {'tarball': 'b.tar', 'inloc': 'tape', 'outputs': []},
-        ]
-        with self.assertRaises(SystemExit):
-            validate_jobdesc(jd)
 
     def test_direct_input_missing_outputs_exits(self):
         from utils.runmu2e import validate_jobdesc
-        jd = [{'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar', 'inloc': 'tape'}]
+        jd = {'tarball': 'cnf.mu2e.Reco.MDC2025af.0.tar', 'inloc': 'tape'}
         with self.assertRaises(SystemExit):
             validate_jobdesc(jd)
 
     def test_normal_mode_missing_njobs_exits(self):
         """Entry without tarball: falls through to normal-mode validation which requires njobs."""
         from utils.runmu2e import validate_jobdesc
-        jd = [{'inloc': 'tape', 'outputs': []}]  # no tarball, no njobs
+        jd = {'inloc': 'tape', 'outputs': []}  # no tarball, no njobs
         with self.assertRaises(SystemExit):
             validate_jobdesc(jd)
 
-    def test_normal_mode_with_generic_entry_ignored(self):
-        """Normal-mode jobdesc with a trailing generic tarball (no njobs) is valid."""
-        from utils.runmu2e import validate_jobdesc
-        jd = [
-            {'tarball': 'a.tar', 'njobs': 100, 'inloc': 'tape', 'outputs': []},
-            {'tarball': 'b.tar', 'njobs': 200, 'inloc': 'tape', 'outputs': []},
-            {'tarball': 'cnf.mu2e.OnSpillTriggeredReco.MDC2025af.0.tar',
-             'inloc': 'tape', 'outputs': []},  # generic - no njobs
-        ]
-        self.assertFalse(validate_jobdesc(jd))
-
-    def test_empty_list_exits(self):
+    def test_empty_dict_exits(self):
         from utils.runmu2e import validate_jobdesc
         with self.assertRaises(SystemExit):
-            validate_jobdesc([])
+            validate_jobdesc({})
 
 
 # ---------------------------------------------------------------------------
@@ -2337,11 +2317,11 @@ class TestProcessDirectInput(unittest.TestCase):
 
     def _run(self, fname):
         from utils.runmu2e import process_direct_input
-        jobdesc = [{
+        jobdesc = {
             'tarball': self._tar,
             'inloc': 'tape',
             'outputs': [{'dataset': '*.art', 'location': 'disk'}],
-        }]
+        }
         with patch('utils.jobquery.Mu2eJobPars') as mock_pars:
             mock_pars.return_value.setup.return_value = \
                 "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
@@ -2418,7 +2398,7 @@ class TestProcessDirectInput(unittest.TestCase):
 
     def test_bad_fname_format_exits(self):
         from utils.runmu2e import process_direct_input
-        jobdesc = [{'tarball': self._tar, 'inloc': 'tape', 'outputs': []}]
+        jobdesc = {'tarball': self._tar, 'inloc': 'tape', 'outputs': []}
         with self.assertRaises(SystemExit):
             process_direct_input(jobdesc, "only.four.parts.art", MagicMock())
 
@@ -3932,50 +3912,36 @@ class TestFirstjobOf(unittest.TestCase):
 
 
 class TestResolveMapIndex(unittest.TestCase):
-    """Global (index-dataset) → (entry, local cnf index) dispatch, the
-    seed-critical arithmetic: local = global - cumulative + firstjob."""
+    """Global job index → (entry, cnf-local index) dispatch for the single
+    entry ops['jobdesc'] ships. `local = global + firstjob`, gated on
+    `global < njobs`; a generic entry (no njobs) occupies no index space."""
 
-    MAP = [
-        {'tarball': 'cnf.mu2e.A.C.0.tar', 'njobs': 3},
-        {'tarball': 'cnf.mu2e.G.C.0.tar'},  # generic: occupies no slots
-        {'tarball': 'cnf.mu2e.B.C.0.tar', 'njobs': 2, 'firstjob': 5000},
-    ]
-
-    def _resolve(self, global_idx):
+    def test_resolve_map_index_single_entry(self):
         from utils.prod_utils import resolve_map_index
-        return resolve_map_index(self.MAP, global_idx)
+        entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 10,
+                 'inloc': 'tape', 'outputs': []}
+        got_entry, local = resolve_map_index(entry, 3)
+        self.assertIs(got_entry, entry)
+        self.assertEqual(local, 3)
 
-    def test_plain_entry_starts_at_zero(self):
-        entry, i, local = self._resolve(0)
-        self.assertEqual((i, local), (0, 0))
-        entry, i, local = self._resolve(2)
-        self.assertEqual((i, local), (0, 2))
-
-    def test_generic_entry_skipped(self):
-        """The generic entry between A and B must not consume index slots."""
-        entry, i, local = self._resolve(3)
-        self.assertEqual(entry['tarball'], 'cnf.mu2e.B.C.0.tar')
-        self.assertEqual(i, 2)
-
-    def test_windowed_entry_offsets_local_index(self):
-        """Expansion entry: global slots 3..4 → cnf indices 5000..5001,
-        i.e. baseSeed 5001..5002 — no collision with the original 0..2."""
-        self.assertEqual(self._resolve(3)[2], 5000)
-        self.assertEqual(self._resolve(4)[2], 5001)
-
-    def test_out_of_range_returns_none(self):
-        self.assertEqual(self._resolve(5), (None, None, None))
-
-    def test_same_tarball_two_windows(self):
-        """Original + expansion entries for one tarball must partition the
-        cnf index space with no overlap."""
+    def test_resolve_map_index_applies_firstjob(self):
         from utils.prod_utils import resolve_map_index
-        map_ = [
-            {'tarball': 'cnf.mu2e.X.C.0.tar', 'njobs': 5000},
-            {'tarball': 'cnf.mu2e.X.C.0.tar', 'njobs': 100, 'firstjob': 5000},
-        ]
-        locals_ = [resolve_map_index(map_, g)[2] for g in (0, 4999, 5000, 5099)]
-        self.assertEqual(locals_, [0, 4999, 5000, 5099])
+        entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 10,
+                 'firstjob': 100, 'inloc': 'tape', 'outputs': []}
+        _, local = resolve_map_index(entry, 3)
+        self.assertEqual(local, 103)
+
+    def test_resolve_map_index_out_of_range(self):
+        from utils.prod_utils import resolve_map_index
+        entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 10,
+                 'inloc': 'tape', 'outputs': []}
+        self.assertEqual(resolve_map_index(entry, 10), (None, None))
+
+    def test_resolve_map_index_generic_entry_has_no_slots(self):
+        from utils.prod_utils import resolve_map_index
+        entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'inloc': 'tape',
+                 'outputs': []}
+        self.assertEqual(resolve_map_index(entry, 0), (None, None))
 
 
 class TestComputeJobsetWindow(unittest.TestCase):
@@ -4119,7 +4085,7 @@ class TestIndicesOpsEntryContract(unittest.TestCase):
         ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0,
                      'njobs': indices[-1] + 1}          # mirrors submit.py
         for k in indices:
-            entry, _, local = resolve_map_index([ops_entry], k)
+            entry, local = resolve_map_index(ops_entry, k)
             self.assertIsNotNone(entry, f"index {k} unreachable")
             self.assertEqual(local, k)
 
@@ -4128,7 +4094,7 @@ class TestIndicesOpsEntryContract(unittest.TestCase):
         njobs == max would put the largest index out of range."""
         from utils.prod_utils import resolve_map_index
         ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0, 'njobs': 24301}
-        self.assertEqual(resolve_map_index([ops_entry], 24301), (None, None, None))
+        self.assertEqual(resolve_map_index(ops_entry, 24301), (None, None))
 
 
 class TestLogStorageLocation(unittest.TestCase):
@@ -4610,15 +4576,15 @@ class TestValidateJobdescFirstjob(unittest.TestCase):
 
     def test_firstjob_without_njobs_rejected(self):
         from utils.runmu2e import validate_jobdesc
-        bad = [{'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
-                'outputs': [], 'firstjob': 5000}]
+        bad = {'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
+               'outputs': [], 'firstjob': 5000}
         with self.assertRaises(SystemExit):
             validate_jobdesc(bad)
 
     def test_firstjob_with_njobs_accepted(self):
         from utils.runmu2e import validate_jobdesc
-        ok = [{'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
-               'outputs': [], 'firstjob': 5000, 'njobs': 10}]
+        ok = {'tarball': 'cnf.mu2e.X.C.0.tar', 'inloc': 'tape',
+              'outputs': [], 'firstjob': 5000, 'njobs': 10}
         self.assertEqual(validate_jobdesc(ok), False)  # normal mode
 
 
@@ -11798,6 +11764,15 @@ class TestParseFiles(unittest.TestCase):
 
 
 class TestBuildOpsJsonFiles(unittest.TestCase):
+    def test_build_ops_json_ships_single_jobdesc(self):
+        from utils.jobsub_argv import build_ops_json
+        entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 10,
+                 'inloc': 'tape', 'outputs': []}
+        ops = build_ops_json(entry=entry, jobset=[0, 1],
+                             input_datasets=[], files=None)
+        self.assertIsInstance(ops['jobdesc'], dict)
+        self.assertEqual(ops['jobdesc']['tarball'], 'cnf.mu2e.D.C.0.tar')
+
     def test_files_key_present_only_when_given(self):
         from utils.jobsub_argv import build_ops_json
         entry = {'tarball': 't', 'inloc': 'tape',
@@ -11978,7 +11953,7 @@ class TestDirectDispatchFiles(unittest.TestCase):
             # replace_file_extensions -> Mu2eName.parse).
             fcl = Path(fname).stem + '.fcl'
             return (fcl, '/cvmfs/setup.sh', fname,
-                    ops['jobdesc'][0]['outputs'])
+                    ops['jobdesc']['outputs'])
 
         with patch.object(runmu2e, 'process_direct_input', fake_pdi), \
              patch.object(runmu2e, 'locate_file_strict',
@@ -11992,7 +11967,7 @@ class TestDirectDispatchFiles(unittest.TestCase):
 
     def test_index_selects_the_file(self):
         ops = {'jobs': [0, 1], 'files': list(self.FILES),
-               'jobdesc': [dict(self.DRAIN)]}
+               'jobdesc': dict(self.DRAIN)}
         failed, calls, ffl, lfs = self._dispatch(ops, 1)
         self.assertFalse(failed)
         self.assertEqual(calls['fname'], self.FILES[1])
@@ -12009,14 +11984,14 @@ class TestDirectDispatchFiles(unittest.TestCase):
         after the POMS dispatch tail was deleted."""
         from utils import runmu2e
         ops = {'jobs': [0, 1], 'files': list(self.FILES),
-               'jobdesc': [dict(self.DRAIN)]}
+               'jobdesc': dict(self.DRAIN)}
         args = self._args()
         args.dry_run = True
 
         def fake_pdi(jobdesc, fname, _args):
             fcl = Path(fname).stem + '.fcl'
             return (fcl, '/cvmfs/setup.sh', fname,
-                    ops['jobdesc'][0]['outputs'])
+                    ops['jobdesc']['outputs'])
 
         with patch.object(runmu2e, 'process_direct_input', fake_pdi), \
              patch.object(runmu2e, 'locate_file_strict',
@@ -12031,7 +12006,7 @@ class TestDirectDispatchFiles(unittest.TestCase):
     def test_index_out_of_range_exits(self):
         from utils import runmu2e
         ops = {'jobs': [0, 1, 2], 'files': list(self.FILES),
-               'jobdesc': [dict(self.DRAIN)]}
+               'jobdesc': dict(self.DRAIN)}
         with self.assertRaises(SystemExit):
             runmu2e._direct_dispatch(self._args(), ops, 2)
 
@@ -12040,13 +12015,13 @@ class TestDirectDispatchFiles(unittest.TestCase):
         normal = dict(self.DRAIN, njobs=10)
         normal.pop('input_pattern')
         ops = {'jobs': [0], 'files': list(self.FILES),
-               'jobdesc': [normal]}
+               'jobdesc': normal}
         with self.assertRaises(SystemExit):
             runmu2e._direct_dispatch(self._args(), ops, 0)
 
     def test_direct_input_jobdesc_without_files_still_exits(self):
         from utils import runmu2e
-        ops = {'jobs': [0], 'jobdesc': [dict(self.DRAIN)]}
+        ops = {'jobs': [0], 'jobdesc': dict(self.DRAIN)}
         with self.assertRaises(SystemExit):
             runmu2e._direct_dispatch(self._args(), ops, 0)
 

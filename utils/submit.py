@@ -671,10 +671,10 @@ def submit_entry_direct(entry, idx, opts):
     print(f"{'='*60}")
 
     # `--indices` values ARE cnf indices, but the worker reaches a cnf index via
-    # resolve_map_index (`local = global - cumulative + firstjob`, gated on
-    # `global < cumulative + njobs`). So the SHIPPED entry must sit at firstjob=0
-    # and span past the largest index for `local == global` to hold. Only the ops
-    # copy is rewritten — the on-disk map keeps its own njobs, so a recovery map
+    # resolve_map_index (`local = global + firstjob`, gated on `global <
+    # njobs`). So the SHIPPED entry must sit at firstjob=0 and span past the
+    # largest index for `local == global` to hold. Only the ops copy is
+    # rewritten — the on-disk map keeps its own njobs, so a recovery map
     # never has to store the "bare submit re-runs everything" njobs.
     ops_entry = entry
     if opts.indices is not None:

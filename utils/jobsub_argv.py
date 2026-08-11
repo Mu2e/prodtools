@@ -167,7 +167,7 @@ def build_ops_json(*, entry, jobset, input_datasets, files=None):
 
     - `jobs`: PROCESS → real-job-index lookup table (replaces `mu2ejobmap`)
     - `inspec`: per-input-dataset (protocol, location)
-    - `jobdesc`: single-element submission-map entry, consumed by
+    - `jobdesc`: the submission entry, consumed by
       `runmu2e._direct_dispatch` via `process_jobdef`
     - `files` (draining batches only): job index → input art filename;
       the worker runs process_direct_input on files[index]
@@ -175,7 +175,7 @@ def build_ops_json(*, entry, jobset, input_datasets, files=None):
     ops = {
         "jobs": list(jobset),
         "inspec": build_inspec(input_datasets, inloc_of(entry)),
-        "jobdesc": [dict(entry)],
+        "jobdesc": dict(entry),
     }
     if files is not None:
         ops["files"] = list(files)
