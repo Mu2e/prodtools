@@ -177,7 +177,11 @@ In `main()`, delete the `if not args.no_ledger:` guard around `_resolve_ledger_d
 
 - [ ] **Step 6: Delete the MCP `enqueue_campaign` tool**
 
-In `mcp/src/prodtools_mcp_write/tools.py` delete `enqueue_campaign` whole, then `_read_map_entry` and `_read_entries_strict` if nothing else calls them (grep first — `push_cnf` may still use `_read_map_entry`; if so, keep it). Remove the tool's registration from the server's tool list and any `Path`/`json` imports left unused.
+In `mcp/src/prodtools_mcp_write/tools.py` delete `enqueue_campaign` whole, then `_read_map_entry` and `_read_entries_strict` if nothing else calls them (grep first — `push_cnf` may still use `_read_map_entry`; if so, keep it). Also delete the `submit_map` references in the surviving docstrings at `:114`, `:145`, `:302` — they describe a workflow that no longer exists.
+
+Remove the `'enqueue_campaign'` entry from `TOOL_FUNCTIONS` in `mcp/src/prodtools_mcp_write/server.py:9`. `TOOL_NAMES` is derived from that dict (`TOOL_NAMES = tuple(TOOL_FUNCTIONS)`), so the two cannot drift — edit the dict only. Drop any `Path`/`json` imports left unused.
+
+Leave `'bin/submit_map'` in `runner.py`'s `ALLOWED_ENTRY_POINTS` for now — Task 6 removes it when the script is deleted. Removing it here would break `enqueue_campaign`'s siblings before their turn.
 
 - [ ] **Step 7: Fix the tests that exercised the deleted surface**
 
@@ -1182,6 +1186,7 @@ EOF
 **Files:**
 - Delete: `bin/submit_map`
 - Modify: `utils/submit.py` (delete `submit_map:820`, `main:933`, `_check_token` if unused)
+- Modify: `mcp/src/prodtools_mcp_write/runner.py:56` (drop `'bin/submit_map'` from `ALLOWED_ENTRY_POINTS`)
 - Test: `test/test_unit.py`
 
 **Interfaces:**
@@ -1193,7 +1198,8 @@ EOF
 ```python
 class TestSubmitMapCommandRetired(unittest.TestCase):
     def test_bin_submit_map_is_gone(self):
-        self.assertFalse((REPO_ROOT / 'bin' / 'submit_map').exists())
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        self.assertFalse((repo / 'bin' / 'submit_map').exists())
 
     def test_submit_map_function_is_gone(self):
         import utils.submit as submit
@@ -1207,9 +1213,17 @@ class TestSubmitMapCommandRetired(unittest.TestCase):
         import utils.submit as submit
         for name in ('SubmitOptions', 'submit_entry', 'enqueue_entry'):
             self.assertTrue(hasattr(submit, name), f"lost {name}")
+
+    def test_runner_allowlist_drops_the_deleted_script(self):
+        """ALLOWED_ENTRY_POINTS is a security allowlist; an entry naming a
+        script that no longer exists is dead surface."""
+        from prodtools_mcp_write.runner import ALLOWED_ENTRY_POINTS
+        self.assertNotIn('bin/submit_map', ALLOWED_ENTRY_POINTS)
+        self.assertIn('bin/submissions', ALLOWED_ENTRY_POINTS)
+        self.assertIn('bin/json2jobdef', ALLOWED_ENTRY_POINTS)
 ```
 
-`REPO_ROOT` already exists in the test module; grep for it and reuse rather than redefining.
+There is **no** module-level `REPO_ROOT` in `test/test_unit.py` — the idiom is `pathlib.Path(__file__).resolve().parent.parent` (see `:9757`, `:9784`). `pathlib` is already imported.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1226,6 +1240,8 @@ git rm bin/submit_map
 ```
 
 In `utils/submit.py` delete `submit_map()` (`:820`), `main()` (`:933`), and the `if __name__ == '__main__':` block. Check whether `_check_token` has any remaining caller (it was called from `submit_map`); if not, delete it and its `httokendecode` import.
+
+In `mcp/src/prodtools_mcp_write/runner.py:56`, drop `'bin/submit_map'` from `ALLOWED_ENTRY_POINTS`, leaving `'bin/json2jobdef'` and `'bin/submissions'`. This is a security allowlist guarding which repo scripts the write server may run as mu2epro; an entry naming a deleted script is dead surface. `test/test_unit.py:10079` asserts on this path — update it.
 
 Grep for stragglers and fix each:
 
