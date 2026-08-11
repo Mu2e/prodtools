@@ -125,6 +125,16 @@ Notes:
   never dispatched from, only echoed back by status tooling.
   `--slice-size` (default 1000, only meaningful with `--enqueue`) is
   frozen into the campaign row.
+- Bulk `--dsconf X --prod --enqueue` (no `--desc`) loops over every
+  matching entry, pushing and enqueueing each one in turn. A failure
+  partway through (e.g. entry 7 of 22) leaves campaigns registered for
+  the entries before it and nothing for the rest — the bulk run as a
+  whole is **not resumable**. Re-running the identical command then
+  dies immediately on the first entry's `active campaign N already
+  exists for <tarball>` refusal (section 12) — that message is the
+  double-submit guard working correctly, not ledger damage. Recover
+  per-entry: re-run just the failed and remaining entries with
+  `--desc <D> --dsconf <C> --prod --enqueue`.
 - `--extend` excludes input files already consumed by the previous version
   of the same jobdef and auto-increments the tarball version.
 - List-valued fields expand combinatorially: an entry with two `dsconf`
@@ -806,6 +816,7 @@ submissions run --dry-run          # verify + top-up report, no submissions
 submissions run                    # full pass (mu2epro; cron entry point)
 submissions run --row 42 --max-attempts 5
 submissions run --max-queued 5000  # override the top-up cap for this pass
+submissions run --campaign 7       # top up only campaign 7 (recovery pass still runs)
 submissions pause 7 --note "investigating OOM"
 submissions resume 7               # paused -> active; preserves the pause note
 submissions cancel 7               # close; already-submitted rows still recovered
@@ -813,6 +824,7 @@ submissions complete 7 --note "upstream production finished"
 submissions set-slice 7 500        # retune the batch size from the next tick
 submissions set-memory 7 3000MB    # retune the memory request from the next tick
 submissions set-entry 7 inloc resilient --include-open-rows  # also fix open rows' recoveries
+submissions reconcile 123 --note "checked jobsub_q, window free"
 ```
 
 Global flag: `--db PATH` (default: the submission-ledger path above,
@@ -838,7 +850,9 @@ Verbs:
   (process only this ledger row id, skips top-up), `--max-attempts N`
   (default 3; a row closes `exhausted` once its attempt count reaches
   this cap), `--max-queued N` (top-up cap for this pass; default: env
-  `MU2E_MAX_QUEUED`, then `5000`).
+  `MU2E_MAX_QUEUED`, then `5000`), `--campaign ID` (top up only this
+  campaign; the recovery pass still runs over all rows; omit for the
+  cron behavior of ticking every active campaign).
 - `pause CAMP_ID [--note TEXT]` — pause an active campaign (default
   note: `"operator pause"`).
 - `resume CAMP_ID` — reactivate a paused campaign; the note recorded
@@ -864,6 +878,16 @@ Verbs:
   the `4000MB` floor (section 3) — cascading a memory value would
   forfeit it; an `inloc` fix, which has no floor to lose, normally wants
   the flag on.
+- `reconcile ROW_ID [--note TEXT]` — close a ledger row stuck in
+  `failed` or `submitting` so its index window stops blocking a
+  campaign's slice progress, marking it `reconciled` (kept for audit,
+  never revisited by the recovery pass). By running this you assert you
+  have checked `jobsub_q` yourself and the jobs for this window are
+  genuinely absent — a `jobsub_submit` that exits non-zero can still
+  have created a cluster, and reconciling a window that is actually
+  running duplicates physics (deterministic payloads). Never touches a
+  campaign's cursor — run `submissions resume <ID>` afterward to
+  restart it.
 
 Notes:
 
@@ -1044,15 +1068,20 @@ step (section 11 `submissions`, wiki page
   no memory of what the cancelled one already fed — check `submissions
   status` (or the ledger directly) for that tarball before
   re-enqueueing, so you don't resubmit indices already covered.
-- `campaign N: ledger already covers indices in this slice — crash-window
-  suspected; reconcile ...` — top-up found ledger rows for this
-  campaign's tarball whose indices already fall inside the next slice
-  window, meaning a prior submission likely succeeded but its cursor
-  advance or ledger write was lost to a crash. Reconcile manually:
-  compare the ledger rows for the tarball (`submissions status` /
-  `sqlite3`) against the campaign's `cursor`, adjust the cursor if
-  needed, then `submissions resume <ID>`. Do not resume blind —
-  resuming without reconciling can still double-submit.
+- `campaign N: ledger row R already covers indices in this slice — PAUSED
+  (crash-window suspected; check jobsub_q, then submissions reconcile R
+  and submissions resume N)` — top-up found a ledger row (`R`) whose
+  indices already fall inside the campaign's next slice window, meaning
+  a prior submission likely succeeded but its cursor advance or ledger
+  write was lost to a crash. Check `jobsub_q` yourself to confirm the
+  window is genuinely free (a `jobsub_submit` that exited non-zero can
+  still have created a cluster), then `submissions reconcile R` to close
+  the blocking row and `submissions resume N` to restart the campaign.
+  Do not resume without reconciling first — the same row keeps
+  overlapping and the very next tick re-pauses the campaign. If row `R`
+  is not in a reconcilable state (`failed`/`submitting`), the message
+  instead says to reconcile the campaign cursor by hand before
+  resuming.
 - `MU2E_MAX_QUEUED is not an integer: '<value>'` — the env var must
   parse as an int; unset it or fix the value, or pass `--max-queued`
   directly to override it for one run.

@@ -574,12 +574,12 @@ def main():
     p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and print the submission-map summary after generation')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
-    p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.json)')
+    p.add_argument('--jobdefs', help='Submission-map file to append this entry to; omit to write no map file (no default filename)')
     p.add_argument('--enqueue', action='store_true',
                    help='After pushing the cnf, register the entry as a '
                         'sliced campaign in the ledger (no map file '
                         'written). Requires --prod.')
-    p.add_argument('--slice-size', type=int, default=1000,
+    p.add_argument('--slice-size', type=int, default=None,
                    help='Jobs per slice for --enqueue (default 1000; '
                         'frozen into the campaign).')
     p.add_argument('--extend', action='store_true',
@@ -595,8 +595,10 @@ def main():
     if args.enqueue and not args.prod:
         sys.exit("json2jobdef: --enqueue requires --prod (a campaign "
                  "needs the cnf in SAM)")
-    if args.slice_size != 1000 and not args.enqueue:
+    if args.slice_size is not None and not args.enqueue:
         sys.exit("json2jobdef: --slice-size requires --enqueue")
+    if args.slice_size is None:
+        args.slice_size = 1000
     if args.prod and not (args.jobdefs or args.enqueue):
         sys.exit("json2jobdef: --prod requires --jobdefs or --enqueue "
                  "(otherwise a bare --prod pushes the cnf to SAM but "

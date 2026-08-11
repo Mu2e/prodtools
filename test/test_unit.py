@@ -12955,6 +12955,18 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
              '--slice-size', '500'])
         self.assertIn('--slice-size requires --enqueue', msg)
 
+    def test_slice_size_matching_default_still_requires_enqueue(self):
+        """Regression pin: the refusal used to compare against the
+        literal default (1000) as a sentinel, so an operator who typed
+        `--slice-size 1000` explicitly (without --enqueue) got silence
+        instead of the refusal. `default=None` + an explicit is-not-None
+        check catches this."""
+        msg = self._run_main(
+            ['--json', 'data/Run1B/resampler_beam.json',
+             '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
+             '--slice-size', '1000'])
+        self.assertIn('--slice-size requires --enqueue', msg)
+
     def test_prod_requires_jobdefs_or_enqueue(self):
         """A bare --prod (neither --jobdefs nor --enqueue) would push the
         cnf to SAM and then register nothing -- no map file, no campaign
@@ -13007,6 +13019,63 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
             self.assertFalse(os.path.exists('jobdefs_list.json'))
         finally:
             os.chdir(cwd)
+
+    def test_enqueue_joins_build_jobdesc_to_real_enqueue_entry(self):
+        """End-to-end join of the branch's headline path: build_jobdesc's
+        output must be exactly what the REAL utils.submit.enqueue_entry
+        accepts and writes to the ledger. Every other enqueue test patches
+        `utils.submit.enqueue_entry` itself out, so a signature drift
+        between build_jobdesc and enqueue_entry would pass the whole
+        suite and only fail in production, after the cnf was already in
+        SAM. Only things that would touch the network or filesystem are
+        stubbed: check_inputs, _ensure_local_tarball, get_parfile_name,
+        and the cnf build (_build_job_args/build_jobdef) plus
+        _pushout_to_sam. The ledger itself is real (a temp sqlite file),
+        and enqueue_entry runs unpatched end to end."""
+        from utils import json2jobdef
+        from utils import submit
+        from utils import submission_ledger as sl
+
+        tarball = 'cnf.mu2e.IntegDesc.IntegConf.0.tar'
+        config = {
+            'desc': 'IntegDesc', 'dsconf': 'IntegConf',
+            'simjob_setup': 's', 'fcl': 'f.fcl',
+            'outloc': {'*.art': 'tape'}, 'inloc': 'none',
+            'njobs': 20, 'owner': 'mu2e',
+        }
+        db_path = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        tmpdir = tempfile.mkdtemp()
+        cwd = os.getcwd()
+
+        try:
+            os.chdir(tmpdir)
+            with patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+                 patch.object(json2jobdef, 'build_jobdef', return_value=None), \
+                 patch.object(json2jobdef, 'get_parfile_name',
+                              return_value=tarball), \
+                 patch.object(json2jobdef, '_pushout_to_sam'), \
+                 patch.object(submit, '_ensure_local_tarball',
+                              return_value=Path(tarball)), \
+                 patch.object(submit, 'check_inputs', return_value=(True, [])), \
+                 patch.object(submit, '_resolve_ledger_db',
+                              return_value=db_path):
+                # Computed under the same patches process_single_entry uses,
+                # so this is exactly what build_jobdesc produced for the
+                # run under test -- not a second, differently-mocked call.
+                expected_entry = json2jobdef.build_jobdesc(dict(config))
+                json2jobdef.process_single_entry(
+                    dict(config), pushout=True, no_cleanup=True,
+                    jobdefs_list=None, enqueue=True, slice_size=7,
+                    json_path='data/x.json')
+        finally:
+            os.chdir(cwd)
+
+        camps = sl.active_campaigns(db_path)
+        self.assertEqual(len(camps), 1)
+        camp = camps[0]
+        self.assertEqual(camp['entry'], expected_entry)
+        self.assertEqual(camp['slice_size'], 7)
+        self.assertEqual(camp['map_path'], 'data/x.json#IntegDesc@IntegConf')
 
 
 # ---------------------------------------------------------------------------

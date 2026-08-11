@@ -163,7 +163,7 @@ reading the code:
   count, njobs)` — same inputs always produce the same file selection.
 - The per-job seed is `baseSeed = 1 + cnf index` (flat — no version, run,
   or dsconf term). To extend a dataset's statistics, reuse the existing
-  tarball at fresh indices via a `firstjob` window: a POMS-map entry with
+  tarball at fresh indices via a `firstjob` window: a map entry with
   `"firstjob": F, "njobs": M` runs cnf indices `[F, F+M)` (fresh seeds
   `F+1..`, fresh sequencers). Do NOT bump `version`/`run` for a
   same-input expansion — that restarts the cnf index at 0 and duplicates
@@ -199,12 +199,22 @@ reading the code:
   be in SAM, because enqueue resolves the tarball from there.
 - `--enqueue` writes no map file. The campaign's `map_path` records the
   config provenance (`<config>.json#<desc>@<dsconf>`) instead.
+- Bulk `json2jobdef --dsconf X --prod --enqueue` (no `--desc`) processes
+  every matching entry in one loop, and every refusal inside
+  `enqueue_entry` is a `sys.exit`, so a failure partway through leaves
+  campaigns registered for the entries before it and nothing for the
+  entries after — bulk mode is not resumable as a whole. Re-running the
+  identical bulk command then dies immediately on the FIRST entry's
+  duplicate-live-campaign guard ("active campaign already exists" —
+  this is the double-submit guard working correctly, not ledger
+  corruption). Recovery is per-entry: re-run the failed and remaining
+  entries individually with `--desc <D> --dsconf <C> --prod --enqueue`.
 - `set-entry --include-open-rows` is OFF by default because an UNSET
   `memory` is what earns a recovery the 4000MB floor; cascading a memory
   value forfeits it. An `inloc` fix normally wants the flag ON.
 - Optional per-entry resource keys `"memory"` / `"disk"` /
   `"expected_lifetime"` (jobsub-format strings, e.g. `4000MB` / `50GB` /
-  `48h`) live in the POMS-map entry itself, or in the jobdef JSON config
+  `48h`) live in the submission-map entry itself, or in the jobdef JSON config
   that produces it — `json2jobdef` copies them into the entry verbatim.
   `submit_map` always honors these keys. Precedence is CLI flag > entry
   key > built-in default (`2500MB` / `30GB` / `24h`). The *effective*

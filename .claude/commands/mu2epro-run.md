@@ -68,6 +68,17 @@ You are given `$ARGUMENTS`. Follow these steps:
    `--jobdefs` only when you also want the file as a handle for a
    manual `submit_map --map <file> --first N --num M` re-dispatch.
 
+   **Known limitation, bulk `--dsconf X --prod --enqueue` (no `--desc`,
+   line 36 above):** this processes every matching entry in one loop,
+   and a failure partway through (e.g. entry 7 of 22) leaves campaigns
+   registered for the entries before it and nothing for the rest — the
+   bulk run as a whole is not resumable. Re-running the identical
+   command then exits immediately on the FIRST entry's "active campaign
+   already exists" refusal — that message is the double-submit guard
+   doing its job, not ledger damage. Recovery is per-entry: re-run just
+   the failed and remaining entries with `--desc <D> --dsconf <C>
+   --prod --enqueue`.
+
 4. **Run** the following as a single Bash command. Everything runs
    inside one `ksu` invocation so the sourced environment is live when
    the prodtools command executes:
