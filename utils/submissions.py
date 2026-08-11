@@ -1590,18 +1590,34 @@ def main(argv=None):
         row = submission_ledger.row_by_id(db, args.row_id)
         if row is None:
             sys.exit(f"submissions: no ledger row {args.row_id} in {db}")
-        if args.files is not None:
-            payload = submit.parse_files(args.files)
-            if not is_draining(row['entry']):
-                sys.exit(f"submissions: row {args.row_id} is an index row "
-                         f"— use --indices, not --files")
-        else:
-            payload = submit.parse_indices(args.indices, args.indices_file)
-            if is_draining(row['entry']):
-                sys.exit(f"submissions: row {args.row_id} is a draining "
-                         f"(file-keyed) row — use --files, not --indices")
+        try:
+            if args.files is not None:
+                payload = submit.parse_files(args.files)
+                if not is_draining(row['entry']):
+                    sys.exit(f"submissions: row {args.row_id} is an index "
+                             f"row — use --indices, not --files")
+            else:
+                payload = submit.parse_indices(args.indices,
+                                               args.indices_file)
+                if is_draining(row['entry']):
+                    sys.exit(f"submissions: row {args.row_id} is a "
+                             f"draining (file-keyed) row — use --files, "
+                             f"not --indices")
+        except (ValueError, OSError) as e:
+            sys.exit(f"submissions: {e}")
         if not payload:
             sys.exit("submissions: nothing to resubmit (empty selection)")
+
+        # Lock BEFORE the overlap scan, not after: the scan and the
+        # submit must be one atomic operation against the ledger, same as
+        # every mutating tick (_acquire_lock's own docstring: "both
+        # passing the drain gate before either closes a row = double
+        # submit"). Scanning outside the lock would let a concurrent
+        # `submissions run` reserve a window AFTER this scan sees it
+        # clear and BEFORE this submits into it — the exact crash-window
+        # race the ledger reservation protocol exists to close.
+        if not args.dry_run:
+            _acquire_lock(db)
 
         blocking = _rows_blocking_indices(db, row['tarball'], payload)
         if blocking:
@@ -1613,12 +1629,39 @@ def main(argv=None):
                 f"jobsub_q, then `submissions reconcile {blocking['id']}` "
                 f"if the window is genuinely free.")
 
-        if not args.dry_run:
-            _acquire_lock(db)
         fn = resubmit_files if args.files is not None else resubmit
+        # _guarded_submit (inside fn) returns True for ANY non-raising
+        # call — including submit_entry returning {'status': 'failed'}
+        # when jobsub_submit exits non-zero (possibly after already
+        # creating a cluster) or exits 0 with no parseable cluster id.
+        # `ok` alone cannot distinguish that from a real submission, so
+        # confirm by evidence: a NEW active (open) child row parented on
+        # this one. No such row means nothing was confirmed submitted —
+        # exit nonzero rather than let a caller's `&& next-step.sh` run
+        # on a false success. Skipped on --dry-run: submit_entry returns
+        # before touching the ledger in that mode, so there is nothing to
+        # find and nothing was promised.
+        before = {r['id'] for r in submission_ledger.open_rows(db)
+                 if r['parent_id'] == row['id']}
         ok = fn(row, payload, db, dry_run=args.dry_run)
         if not ok:
             sys.exit(f"submissions: resubmit of row {args.row_id} FAILED")
+        if args.dry_run:
+            return
+        new_children = [r for r in submission_ledger.open_rows(db)
+                        if r['parent_id'] == row['id']
+                        and r['id'] not in before]
+        if not new_children:
+            sys.exit(
+                f"submissions: resubmit of row {args.row_id} did NOT "
+                f"confirm a submission — no new active child ledger row "
+                f"appeared. jobsub_submit likely failed (possibly after "
+                f"creating a cluster); nothing is confirmed re-fired. "
+                f"Check jobsub_q, look for a 'failed' child row on "
+                f"row {args.row_id}, and `submissions reconcile <id>` "
+                f"it before retrying.")
+        print(f"row {args.row_id}: resubmitted -> child row "
+              f"{new_children[0]['id']}")
         return
 
     if verb in ('pause', 'resume', 'cancel', 'complete'):

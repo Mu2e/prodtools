@@ -13223,6 +13223,28 @@ class TestResubmitOverlapGuard(unittest.TestCase):
             self.assertIsNone(
                 submissions._rows_blocking_indices(db, 'x.tar', [99]))
 
+    def test_failed_row_blocks(self):
+        """'failed' is deliberately NOT in _SETTLED_STATES: a
+        jobsub_submit that exits non-zero can still have created a
+        cluster, so a failed row's window is not proven free. Pinned
+        separately from the 'submitting'/'active' cases because it is
+        the one a future hygiene pass is most likely to mistake for
+        terminal-hence-safe (fail_reservation's own docstring: "the
+        window is not proven free and must keep blocking until a human
+        reconciles it")."""
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar', entry={'tarball': 'x.tar'},
+                indices=[5, 6, 7])
+            submission_ledger.fail_reservation(
+                db, rid, 'jobsub_submit exit 1 (cluster may exist)')
+            blocking = submissions._rows_blocking_indices(db, 'x.tar', [6])
+        self.assertIsNotNone(blocking)
+        self.assertEqual(blocking['id'], rid)
+
 
 class TestResubmitVerb(unittest.TestCase):
     def test_refuses_a_missing_row(self):
@@ -13267,6 +13289,90 @@ class TestResubmitVerb(unittest.TestCase):
                 submissions.main(['--db', db, 'resubmit', str(rid),
                                   '--indices', '1'])
             self.assertIn('draining', str(cm.exception))
+
+    def test_files_selector_dispatches_to_resubmit_files_not_resubmit(self):
+        """The --files branch had zero coverage: every existing test here
+        drives --indices, so nothing pinned that a draining row's
+        file-keyed selector reaches resubmit_files (the file-keyed
+        submitter) rather than resubmit (the index submitter, which
+        would treat filenames as cnf indices)."""
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar',
+                entry={'tarball': 'x.tar', 'input_pattern': 'dts.*.art'},
+                indices=['dts.mu2e.a.v.art'])
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+            files_path = os.path.join(td, 'files.txt')
+            with open(files_path, 'w') as fh:
+                fh.write('dts.mu2e.CosmicCORSIKA.MDC2020az.'
+                         '001202_00000002.art\n')
+            with patch.object(submissions, 'resubmit_files',
+                              return_value=True) as fake_files, \
+                 patch.object(submissions, 'resubmit') as fake_indices:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--files', files_path, '--dry-run'])
+            fake_files.assert_called_once()
+            fake_indices.assert_not_called()
+
+    def test_a_non_raising_but_unconfirmed_submit_exits_nonzero(self):
+        """_guarded_submit returns True for ANY non-raising call,
+        including submit_entry returning {'status': 'failed'} — the
+        shape jobsub_submit produces on a non-zero exit, possibly after
+        already creating a cluster (see submit._run_submit), or on exit
+        0 with no parseable cluster id. The verb must not report success
+        on that truthy return alone: it must see a new ACTIVE child
+        ledger row, mirroring process_row's own 'child-missing' check."""
+        from utils import submissions, submission_ledger, submit
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar', entry={'tarball': 'x.tar'},
+                indices=[1, 2, 3])
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+            fake_result = {'status': 'failed', 'tarball': 'x.tar',
+                           'cluster_id': None, 'njobs': 1}
+            with patch.object(submit, 'submit_entry',
+                              return_value=fake_result):
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main(['--db', db, 'resubmit', str(rid),
+                                      '--indices', '99'])
+            self.assertIn('did NOT confirm', str(cm.exception))
+
+    def test_bad_indices_spec_exits_cleanly_not_a_traceback(self):
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar', entry={'tarball': 'x.tar'},
+                indices=[1, 2, 3])
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', 'abc'])
+            self.assertIn('submissions:', str(cm.exception))
+
+    def test_missing_indices_file_exits_cleanly_not_a_traceback(self):
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar', entry={'tarball': 'x.tar'},
+                indices=[1, 2, 3])
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+            with self.assertRaises(SystemExit) as cm:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices-file', '/no/such/file.txt'])
+            self.assertIn('submissions:', str(cm.exception))
 
 
 # ---------------------------------------------------------------------------
