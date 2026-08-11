@@ -5308,7 +5308,9 @@ class TestSubmitEntryDirectResourceWiring(unittest.TestCase):
 # submit_map --enqueue (utils/submit.py) — sliced-campaign submission
 # ---------------------------------------------------------------------------
 class TestEnqueue(unittest.TestCase):
-    """submit_map --enqueue: campaign registration, no submission."""
+    """enqueue_entry: campaign registration, no submission. The only
+    caller left is json2jobdef --enqueue; these tests exercise the
+    function directly rather than through a CLI argv."""
 
     def setUp(self):
         import tempfile
@@ -5331,17 +5333,12 @@ class TestEnqueue(unittest.TestCase):
         self.addCleanup(tb_patcher.stop)
         self.addCleanup(ci_patcher.stop)
 
-    def _opts(self, dry_run=False, slice_size=100, memory=None):
-        import argparse
-        return argparse.Namespace(
-            ledger_db=self.db, slice_size=slice_size, dry_run=dry_run,
-            memory=memory, disk=None, expected_lifetime=None)
-
     def test_enqueue_writes_campaign(self):
-        from utils.submit import _enqueue_entries
-        ids = _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+        from utils.submit import enqueue_entry
+        camp_id = enqueue_entry(self.entry, ledger_db=self.db,
+                                slice_size=100, provenance='/tmp/m.json')
         camps = self.sl.active_campaigns(self.db)
-        self.assertEqual([c['id'] for c in camps], ids)
+        self.assertEqual([c['id'] for c in camps], [camp_id])
         c = camps[0]
         self.assertEqual(c['tarball'], self.entry['tarball'])
         self.assertEqual(c['slice_size'], 100)
@@ -5352,50 +5349,48 @@ class TestEnqueue(unittest.TestCase):
         self.assertEqual(self.sl.open_rows(self.db), [])
 
     def test_enqueue_merges_cli_resources_into_snapshot(self):
-        from utils.submit import _enqueue_entries
-        _enqueue_entries([(0, self.entry)], '/tmp/m.json',
-                         self._opts(memory='4000MB'))
+        from utils.submit import enqueue_entry
+        enqueue_entry(self.entry, ledger_db=self.db, slice_size=100,
+                      resources={'memory': '4000MB'})
         c = self.sl.active_campaigns(self.db)[0]
         self.assertEqual(c['entry']['memory'], '4000MB')
         self.assertNotIn('memory', self.entry)     # original untouched
 
     def test_enqueue_dry_run_writes_nothing(self):
-        from utils.submit import _enqueue_entries
-        ids = _enqueue_entries([(0, self.entry)], '/tmp/m.json',
-                               self._opts(dry_run=True))
-        self.assertEqual(ids, [])
+        from utils.submit import enqueue_entry
+        result = enqueue_entry(self.entry, ledger_db=self.db,
+                               slice_size=100, dry_run=True)
+        self.assertIsNone(result)
         self.assertEqual(self.sl.all_campaigns(self.db), [])
 
     def test_enqueue_duplicate_is_hard_error(self):
-        from utils.submit import _enqueue_entries
-        _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+        from utils.submit import enqueue_entry
+        enqueue_entry(self.entry, ledger_db=self.db, slice_size=100)
         with self.assertRaises(SystemExit):
-            _enqueue_entries([(0, self.entry)], '/tmp/m.json', self._opts())
+            enqueue_entry(self.entry, ledger_db=self.db, slice_size=100)
 
     def test_enqueue_generic_entry_refused(self):
-        from utils.submit import _enqueue_entries
+        from utils.submit import enqueue_entry
         generic = {'tarball': 'cnf.mu2e.G.C.0.tar', 'inloc': 'tape',
                    'outputs': []}   # no njobs
         with self.assertRaises(SystemExit):
-            _enqueue_entries([(0, generic)], '/tmp/m.json', self._opts())
+            enqueue_entry(generic, ledger_db=self.db, slice_size=100)
 
     def test_enqueue_zero_njobs_refused(self):
         """njobs_of(entry) is None misses njobs: 0 — a zero-job campaign
         is nonsensical and must be refused just like the missing case."""
-        from utils.submit import _enqueue_entries
+        from utils.submit import enqueue_entry
         zero = {'tarball': 'cnf.mu2e.Z.C.0.tar', 'njobs': 0,
                 'inloc': 'tape', 'outputs': []}
         with self.assertRaises(SystemExit):
-            _enqueue_entries([(0, zero)], '/tmp/m.json', self._opts())
+            enqueue_entry(zero, ledger_db=self.db, slice_size=100)
 
     def test_enqueue_db_failure_is_hard_error(self):
-        from utils.submit import _enqueue_entries
-        import argparse
-        opts = argparse.Namespace(
-            ledger_db='/nonexistent-dir-enqueue-test/s.db', slice_size=10,
-            dry_run=False, memory=None, disk=None, expected_lifetime=None)
+        from utils.submit import enqueue_entry
         with self.assertRaises(SystemExit):
-            _enqueue_entries([(0, self.entry)], '/tmp/m.json', opts)
+            enqueue_entry(self.entry,
+                         ledger_db='/nonexistent-dir-enqueue-test/s.db',
+                         slice_size=10)
 
     def test_enqueue_entry_returns_campaign_id(self):
         from utils.submit import enqueue_entry
@@ -5423,18 +5418,14 @@ class TestEnqueue(unittest.TestCase):
 
 
 class TestEnqueueErrorStyle(unittest.TestCase):
-    """Operator-reachable enqueue failures are one-line submit_map:
-    messages, not tracebacks; --enqueue --no-ledger is refused."""
+    """Operator-reachable enqueue_entry failures are one-line
+    submit_map: messages, not tracebacks."""
 
     def setUp(self):
         import tempfile
-        from types import SimpleNamespace
         from utils import submit
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, 'sub.db')
-        self.opts = SimpleNamespace(
-            ledger_db=self.db, slice_size=10, dry_run=False,
-            memory=None, disk=None, expected_lifetime=None)
         # Task 6 enqueue gate reads the tarball; stub tarball resolution
         # and the pre-flight check so these tests stay file-free.
         tb_patcher = patch.object(submit, '_ensure_local_tarball',
@@ -5450,37 +5441,21 @@ class TestEnqueueErrorStyle(unittest.TestCase):
         return {'tarball': tarball, 'njobs': 50}
 
     def test_duplicate_enqueue_one_line_no_traceback(self):
-        from utils import submit
-        submit._enqueue_entries([(0, self._entry())], 'm.json', self.opts)
+        from utils.submit import enqueue_entry
+        enqueue_entry(self._entry(), ledger_db=self.db, slice_size=10)
         with self.assertRaises(SystemExit) as cm:
-            submit._enqueue_entries([(0, self._entry())], 'm.json',
-                                    self.opts)
+            enqueue_entry(self._entry(), ledger_db=self.db, slice_size=10)
         msg = str(cm.exception.code)
         self.assertTrue(msg.startswith('submit_map: '), msg)
         self.assertNotIn('\n', msg)
         self.assertNotIn('Traceback', msg)
 
     def test_db_error_one_line(self):
-        from utils import submit
-        self.opts.ledger_db = os.path.join(self.tmp, 'no', 'such',
-                                           'dir', 'sub.db')
+        from utils.submit import enqueue_entry
+        bad_db = os.path.join(self.tmp, 'no', 'such', 'dir', 'sub.db')
         with self.assertRaises(SystemExit) as cm:
-            submit._enqueue_entries([(0, self._entry())], 'm.json',
-                                    self.opts)
+            enqueue_entry(self._entry(), ledger_db=bad_db, slice_size=10)
         self.assertTrue(str(cm.exception.code).startswith('submit_map: '))
-
-    def test_enqueue_no_ledger_refused(self):
-        from utils import submit
-        import io as _io
-        buf = _io.StringIO()
-        with patch('sys.stdout', buf), \
-             patch.object(sys, 'argv',
-                          ['submit_map', '--map', 'nonexistent.json',
-                           '--enqueue', '--no-ledger']):
-            with self.assertRaises(SystemExit) as cm:
-                submit.main()
-        self.assertEqual(cm.exception.code, 1)
-        self.assertIn('--no-ledger contradicts it', buf.getvalue())
 
 
 # ---------------------------------------------------------------------------
@@ -6270,8 +6245,9 @@ class TestSubmitLedgerHook(unittest.TestCase):
             1, result, self._opts('/nonexistent-dir-recovery-test/s.db'))
 
     def test_none_row_id_is_a_noop(self):
-        # --no-ledger: _reserve_in_ledger returns None, and both
-        # closing calls must tolerate that without touching the DB.
+        # A caller can still hand a None row_id (e.g. a reservation
+        # step it chose to skip), and both closing calls must tolerate
+        # that without touching the DB.
         from utils import submit
         opts = self._opts('/nonexistent-dir-recovery-test/s.db')
         submit._attach_cluster(None, {'cluster_id': '1'}, opts)
@@ -6291,7 +6267,7 @@ class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
         self.opts = SimpleNamespace(ledger_db=self.db, map='/tmp/map.json',
-                                    ledger_parent=None, no_ledger=False)
+                                    ledger_parent=None)
 
     def test_row_exists_and_is_reserved_during_submit(self):
         seen = {}
@@ -6324,11 +6300,6 @@ class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
         self.opts.ledger_db = '/proc/nope/submissions.db'
         with self.assertRaises(Exception):
             self.submit._reserve_in_ledger(self.entry, 0, [0, 1, 2], self.opts)
-
-    def test_no_ledger_skips_reservation(self):
-        self.opts.no_ledger = True
-        self.assertIsNone(
-            self.submit._reserve_in_ledger(self.entry, 0, [0, 1, 2], self.opts))
 
 
 class TestDirectPathPreflight(unittest.TestCase):
@@ -6395,44 +6366,6 @@ class TestSubmitResolveLedgerDb(unittest.TestCase):
         got = self.submit._resolve_ledger_db(opts)
         self.assertEqual(got, explicit)
         self.assertFalse(os.path.isdir(os.path.dirname(explicit)))
-
-
-class TestSubmitEnqueueCreatesFreshLedgerDir(unittest.TestCase):
-    """--enqueue writes to the ledger (create_campaign) before any
-    submission — main() must resolve+create a never-used personal
-    ledger's directory, or this dies in _connect with
-    sqlite3.OperationalError before a campaign is ever registered."""
-
-    def setUp(self):
-        from utils import submit
-        self.submit = submit
-        self.map_path = os.path.join(tempfile.mkdtemp(), 'map.json')
-        with open(self.map_path, 'w') as f:
-            json.dump([{'tarball': 'cnf.mu2e.E.C.0.tar', 'njobs': 5,
-                       'inloc': 'tape',
-                       'outputs': [{'location': 'tape'}]}], f)
-        tb_patcher = patch.object(submit, '_ensure_local_tarball',
-                                  return_value=Path('cnf.mu2e.E.C.0.tar'))
-        ci_patcher = patch.object(submit, 'check_inputs',
-                                  return_value=(True, []))
-        tb_patcher.start()
-        ci_patcher.start()
-        self.addCleanup(tb_patcher.stop)
-        self.addCleanup(ci_patcher.stop)
-
-    def test_enqueue_creates_fresh_personal_ledger_directory(self):
-        base = tempfile.mkdtemp()
-        derived = os.path.join(base, 'freshuser', 'prodtools',
-                               'submissions.db')
-        with patch.object(self.submit.submission_ledger, 'ledger_for',
-                          return_value=derived), \
-             patch.object(sys, 'argv',
-                          ['submit_map', '--map', self.map_path,
-                           '--enqueue']):
-            self.submit.main()
-        self.assertTrue(os.path.isdir(os.path.dirname(derived)))
-        self.assertEqual(
-            len(self.submit.submission_ledger.all_campaigns(derived)), 1)
 
 
 class TestSubmissionsRunCreatesFreshLedgerDir(unittest.TestCase):
@@ -7590,16 +7523,14 @@ class TestCheckInputsCLI(unittest.TestCase):
 
 
 class TestEnqueueInputGate(unittest.TestCase):
-    """submit_map --enqueue refuses to create a campaign when an entry's
-    inputs fail the pre-flight check (exit 2, no ledger row)."""
+    """enqueue_entry refuses to create a campaign when an entry's inputs
+    fail the pre-flight check (exit 2, no ledger row)."""
 
     def test_failing_check_blocks_and_creates_no_campaign(self):
         from utils import submit
         entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
                  "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
                                             "location": "tape"}]}
-        opts = MagicMock(dry_run=False, slice_size=500,
-                         ledger_db="/tmp/never.db")
         created = []
         with patch.object(submit, "_ensure_local_tarball",
                           return_value=Path("cnf.mu2e.T.C.0.tar")), \
@@ -7610,7 +7541,8 @@ class TestEnqueueInputGate(unittest.TestCase):
              patch.object(submit.submission_ledger, "create_campaign",
                           side_effect=lambda *a, **k: created.append(1)):
             with self.assertRaises(SystemExit) as cm:
-                submit._enqueue_entries([(0, entry)], "map.json", opts)
+                submit.enqueue_entry(entry, ledger_db="/tmp/never.db",
+                                     slice_size=500)
         self.assertEqual(cm.exception.code, 2)
         self.assertEqual(created, [])   # no campaign row
 
@@ -7619,15 +7551,14 @@ class TestEnqueueInputGate(unittest.TestCase):
         entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
                  "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
                                             "location": "tape"}]}
-        opts = MagicMock(dry_run=False, slice_size=500,
-                         ledger_db="/tmp/never.db")
         with patch.object(submit, "_ensure_local_tarball",
                           return_value=Path("cnf.mu2e.T.C.0.tar")), \
              patch.object(submit, "check_inputs", return_value=(True, [])), \
              patch.object(submit.submission_ledger, "create_campaign",
                           return_value=7):
-            ids = submit._enqueue_entries([(0, entry)], "map.json", opts)
-        self.assertEqual(ids, [7])
+            camp_id = submit.enqueue_entry(entry, ledger_db="/tmp/never.db",
+                                           slice_size=500)
+        self.assertEqual(camp_id, 7)
 
 
 # ---------------------------------------------------------------------------
@@ -9843,11 +9774,12 @@ class TestWriteToolParameterTypes(unittest.TestCase):
     signature, and an UNANNOTATED parameter is advertised to the model
     as a string. Both consequences were live bugs (2026-08-09):
 
-      - `entry`/`slice_size`/`campaign_id` arrived as str. enqueue_campaign
-        got as far as running submit_map -- creating the campaign -- and
-        then died in _read_map_entry's `0 <= index < len(entries)` with
-        "'<=' not supported between instances of 'int' and 'str'", so a
-        campaign existed that the tool had reported as a failure.
+      - `entry`/`slice_size`/`campaign_id` arrived as str. The
+        (since-retired) `enqueue_campaign` tool got as far as running
+        submit_map -- creating the campaign -- and then died in its
+        entry-lookup helper's `0 <= index < len(entries)` with "'<=' not
+        supported between instances of 'int' and 'str'", so a campaign
+        existed that the tool had reported as a failure.
       - `confirm` arrived as str, and require_confirmed tests `not
         confirm`. Every non-empty string is truthy, so confirm="false"
         OPENED the production gate.
@@ -9857,7 +9789,7 @@ class TestWriteToolParameterTypes(unittest.TestCase):
     the model was told to send as text.
     """
 
-    NUMERIC = {'entry', 'slice_size', 'campaign_id'}
+    NUMERIC = {'slice_size', 'campaign_id'}
 
     def test_every_tool_parameter_is_annotated(self):
         import inspect
@@ -10515,7 +10447,6 @@ class TestPushCnfTool(unittest.TestCase):
                 'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
             }], f)
         self.tarball = 'cnf.mu2e.D.C.0.tar'
-        self.map_path = os.path.join(self._tmpdir, 'm.json')
 
     def _camp(self, cid, tarball=None, state='active', njobs=100,
               datasets=('dig.mu2e.D.C.art',)):
@@ -10850,51 +10781,16 @@ class TestPushCnfTool(unittest.TestCase):
             out['datasets'],
             ['rec.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art'])
 
-    # -- _read_map_entry: still used by enqueue_campaign ---------------
-
-    def test_read_map_entry_returns_the_entry_at_that_index(self):
-        # submit_map's --entry N already names the entry unambiguously,
-        # so this reads it back by plain position.
-        with open(self.map_path, 'w') as f:
-            json.dump([
-                {'tarball': 'cnf.mu2e.OTHER.C.0.tar'},
-                {'tarball': self.tarball,
-                 'outputs': [{'dataset': 'dig.mu2e.D.C.art',
-                              'location': 'tape'}]},
-            ], f)
-        index, entry = self.tools._read_map_entry(self.map_path, index=1)
-        self.assertEqual(index, 1)
-        self.assertEqual(entry['tarball'], self.tarball)
-
-    def test_read_map_entry_out_of_range_raises(self):
-        with open(self.map_path, 'w') as f:
-            json.dump([{'tarball': self.tarball}], f)
-        with self.assertRaises(RuntimeError) as ctx:
-            self.tools._read_map_entry(self.map_path, index=5)
-        self.assertIn('out of range', str(ctx.exception))
-
-    def test_read_map_entry_missing_file_raises_a_distinct_message(self):
-        # Must not fold a missing/corrupt map into "0 entries" -- that
-        # sends the operator looking for the wrong problem.
-        missing = os.path.join(self._tmpdir, 'does_not_exist.json')
-        with self.assertRaises(RuntimeError) as ctx:
-            self.tools._read_map_entry(missing, index=0)
-        self.assertIn('not found', str(ctx.exception))
-        self.assertNotIn('0 entries', str(ctx.exception))
-
-    def test_read_map_entry_malformed_json_raises_a_distinct_message(self):
-        with open(self.map_path, 'w') as f:
-            f.write('{not valid json')
-        with self.assertRaises(RuntimeError) as ctx:
-            self.tools._read_map_entry(self.map_path, index=0)
-        self.assertIn('not valid JSON', str(ctx.exception))
-
 
 # ---------------------------------------------------------------------------
-# enqueue_campaign / run_submissions tools
+# run_submissions tool
 # ---------------------------------------------------------------------------
 
-class TestEnqueueAndRunTools(unittest.TestCase):
+class TestRunSubmissionsTool(unittest.TestCase):
+    """run_submissions and the ledger-identity helpers it (and push_cnf)
+    share. The map-based enqueue_campaign tool was retired with
+    submit_map --enqueue; campaign creation is push_cnf now."""
+
     def setUp(self):
         from prodtools_mcp_write import tools
         from utils import submission_ledger as sl
@@ -10902,93 +10798,11 @@ class TestEnqueueAndRunTools(unittest.TestCase):
         self.sl = sl
         self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
 
-    def test_entry_is_required_no_fan_out_default(self):
-        import inspect
-        sig = inspect.signature(self.tools.enqueue_campaign)
-        self.assertIs(sig.parameters['entry'].default, inspect.Parameter.empty)
-
     def test_campaign_id_is_required(self):
         import inspect
         sig = inspect.signature(self.tools.run_submissions)
         self.assertIs(sig.parameters['campaign_id'].default,
                       inspect.Parameter.empty)
-
-    def test_enqueue_refuses_mu2epro_without_confirm(self):
-        with patch('prodtools_mcp_write.runner.run_cli') as run:
-            with self.assertRaises(PermissionError):
-                self.tools.enqueue_campaign(map_path='/tmp/m.json', entry=0,
-                                            slice_size=500, run_as='mu2epro')
-        run.assert_not_called()
-
-    def test_enqueue_relative_map_path_is_refused_before_running_anything(self):
-        # Same reasoning as push_cnf's jobdefs_map: under run_as='mu2epro'
-        # the ksu block cd's into its own mktemp workdir, so a relative
-        # path here and the one submit_map itself reads could resolve
-        # to two different files.
-        with patch('prodtools_mcp_write.runner.run_cli') as run:
-            with self.assertRaises(ValueError) as ctx:
-                self.tools.enqueue_campaign(map_path='relative/m.json',
-                                            entry=0, slice_size=500,
-                                            run_as='self')
-        self.assertIn('absolute', str(ctx.exception).lower())
-        run.assert_not_called()
-
-    def test_enqueue_reads_campaign_id_from_the_ledger(self):
-        camp = self.sl.create_campaign(
-            self.db, tarball='cnf.mu2e.D.C.0.tar',
-            entry={'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 500},
-            slice_size=500, map_path='/tmp/m.json')
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': 'noise', 'stderr': ''}):
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value=self.db):
-                with patch('prodtools_mcp_write.tools._read_map_entry',
-                           return_value=(0, {'tarball': 'cnf.mu2e.D.C.0.tar'})):
-                    out = self.tools.enqueue_campaign(
-                        map_path='/tmp/m.json', entry=0, slice_size=500,
-                        run_as='self')
-        self.assertEqual(out['campaign_id'], camp)
-        self.assertEqual(out['njobs'], 500)
-        self.assertEqual(out['tarball'], 'cnf.mu2e.D.C.0.tar')
-
-    def test_enqueue_builds_the_expected_argv(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run:
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value=self.db):
-                with patch('prodtools_mcp_write.tools._read_map_entry',
-                           return_value=(2, {'tarball': 'cnf.mu2e.D.C.0.tar'})):
-                    with self.assertRaises(RuntimeError):
-                        # No matching campaign in the (empty) ledger --
-                        # only the argv is under test here.
-                        self.tools.enqueue_campaign(
-                            map_path='/tmp/m.json', entry=2, slice_size=250,
-                            run_as='self')
-        argv = run.call_args[0][0]
-        self.assertEqual(argv, ['bin/submit_map', '--map', '/tmp/m.json',
-                                '--entry', '2', '--enqueue',
-                                '--slice-size', '250'])
-
-    def test_enqueue_nonzero_rc_raises_with_stderr(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 1, 'stdout': '', 'stderr': 'boom'}):
-            with self.assertRaises(RuntimeError) as ctx:
-                self.tools.enqueue_campaign(map_path='/tmp/m.json', entry=0,
-                                            slice_size=500, run_as='self')
-        self.assertIn('boom', str(ctx.exception))
-
-    def test_enqueue_no_matching_campaign_raises(self):
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value=self.db):
-                with patch('prodtools_mcp_write.tools._read_map_entry',
-                           return_value=(0, {'tarball': 'cnf.mu2e.NONE.C.0.tar'})):
-                    with self.assertRaises(RuntimeError) as ctx:
-                        self.tools.enqueue_campaign(
-                            map_path='/tmp/m.json', entry=0, slice_size=500,
-                            run_as='self')
-        self.assertIn('cnf.mu2e.NONE.C.0.tar', str(ctx.exception))
 
     def _active_campaign(self, tarball='cnf.mu2e.X.Y.0.tar', njobs=10):
         return self.sl.create_campaign(
@@ -11107,28 +10921,6 @@ class TestEnqueueAndRunTools(unittest.TestCase):
                 with self.assertRaises(RuntimeError) as ctx:
                     self.tools.run_submissions(campaign_id=cid, run_as='self')
         self.assertIn('holds the lock', str(ctx.exception))
-
-    def test_enqueue_refuses_to_return_a_closed_campaign_for_the_tarball(self):
-        # `match[-1]` returned the highest-id campaign for the tarball
-        # whether or not this call created it. Only a LIVE campaign
-        # (active/paused — the ledger's own uniqueness set) can be the
-        # one just enqueued.
-        cid = self.sl.create_campaign(
-            self.db, tarball='cnf.mu2e.D.C.0.tar',
-            entry={'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 500},
-            slice_size=500)
-        self.sl.set_campaign_state(self.db, cid, 'complete', note='done')
-        with patch('prodtools_mcp_write.runner.run_cli',
-                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}):
-            with patch('prodtools_mcp_write.tools._ledger_path_for',
-                       return_value=self.db):
-                with patch('prodtools_mcp_write.tools._read_map_entry',
-                           return_value=(0, {'tarball': 'cnf.mu2e.D.C.0.tar'})):
-                    with self.assertRaises(RuntimeError) as ctx:
-                        self.tools.enqueue_campaign(
-                            map_path='/tmp/m.json', entry=0, slice_size=500,
-                            run_as='self')
-        self.assertIn('cnf.mu2e.D.C.0.tar', str(ctx.exception))
 
     def test_unopenable_ledger_is_named_not_a_bare_sqlite_error(self):
         # A brand-new user has no /exp/mu2e/data/users/<them>/prodtools
@@ -11613,7 +11405,7 @@ class TestValidateDrainingEntry(unittest.TestCase):
 
 
 class TestEnqueueDraining(unittest.TestCase):
-    """--enqueue on a draining entry creates a campaign with the
+    """enqueue_entry on a draining entry creates a campaign with the
     snapshotted entry; check_inputs is skipped (a generic cnf bakes no
     inputs — the tick gates each batch instead)."""
 
@@ -11621,13 +11413,6 @@ class TestEnqueueDraining(unittest.TestCase):
              'inloc': 'tape',
              'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
              'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
-
-    def _opts(self, **over):
-        from argparse import Namespace
-        base = dict(dry_run=False, slice_size=500, ledger_db='/x.db',
-                    memory=None, disk=None, expected_lifetime=None)
-        base.update(over)
-        return Namespace(**base)
 
     def test_creates_campaign_without_check_inputs(self):
         from utils import submit
@@ -11643,9 +11428,10 @@ class TestEnqueueDraining(unittest.TestCase):
              patch.object(submit, 'check_inputs') as ci, \
              patch.object(submit.submission_ledger, 'create_campaign',
                           fake_create):
-            ids = submit._enqueue_entries([(0, dict(self.ENTRY))],
-                                          '/m.json', self._opts())
-        self.assertEqual(ids, [48])
+            camp_id = submit.enqueue_entry(dict(self.ENTRY),
+                                           ledger_db='/x.db',
+                                           slice_size=500)
+        self.assertEqual(camp_id, 48)
         ci.assert_not_called()
         self.assertEqual(created['slice_size'], 500)
         self.assertEqual(created['entry']['input_pattern'],
@@ -11657,7 +11443,7 @@ class TestEnqueueDraining(unittest.TestCase):
         with patch.object(submit, '_ensure_local_tarball',
                           return_value='/tmp/t.tar'):
             with self.assertRaises(SystemExit):
-                submit._enqueue_entries([(0, bad)], '/m.json', self._opts())
+                submit.enqueue_entry(bad, ledger_db='/x.db', slice_size=500)
 
     def test_dry_run_creates_nothing(self):
         from utils import submit
@@ -11665,10 +11451,10 @@ class TestEnqueueDraining(unittest.TestCase):
                           return_value='/tmp/t.tar'), \
              patch.object(submit.submission_ledger,
                           'create_campaign') as cc:
-            ids = submit._enqueue_entries([(0, dict(self.ENTRY))],
-                                          '/m.json',
-                                          self._opts(dry_run=True))
-        self.assertEqual(ids, [])
+            result = submit.enqueue_entry(dict(self.ENTRY),
+                                          ledger_db='/x.db',
+                                          slice_size=500, dry_run=True)
+        self.assertIsNone(result)
         cc.assert_not_called()
 
 
@@ -13193,6 +12979,41 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
                 with self.subTest(door=door.__name__, value=value):
                     with self.assertRaises((SystemExit, ValueError)):
                         door(value)
+
+
+class TestEnqueueDoorClosed(unittest.TestCase):
+    """The only campaign-creation path is json2jobdef --prod --enqueue.
+
+    submit_map's --enqueue was a second door into campaign creation, and
+    a rule enforced on one door only is how campaign 54 lost 239 of 500
+    jobs to an unvalidated inloc.
+    """
+
+    def test_enqueue_flags_are_gone_from_argv(self):
+        import utils.submit as submit
+        src = Path(submit.__file__).read_text()
+        for flag in ("'--enqueue'", "'--slice-size'", "'--entry'",
+                     "'--no-ledger'"):
+            self.assertNotIn(
+                flag, src,
+                f"{flag} still registered in submit.py argparse")
+
+    def test_enqueue_entries_helper_is_gone(self):
+        import utils.submit as submit
+        self.assertFalse(hasattr(submit, '_enqueue_entries'))
+
+    def test_enqueue_entry_survives_for_json2jobdef(self):
+        import utils.submit as submit
+        self.assertTrue(callable(submit.enqueue_entry))
+
+    def test_no_ledger_attribute_is_not_consulted(self):
+        import utils.submit as submit
+        src = Path(submit.__file__).read_text()
+        self.assertNotIn('no_ledger', src)
+
+    def test_mcp_enqueue_campaign_tool_is_gone(self):
+        import prodtools_mcp_write.tools as tools
+        self.assertFalse(hasattr(tools, 'enqueue_campaign'))
 
 
 # ---------------------------------------------------------------------------

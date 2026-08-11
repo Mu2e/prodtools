@@ -144,8 +144,7 @@ def _ledger_payload(firstjob, jobset, files=None):
 
 
 def _reserve_in_ledger(entry, firstjob, jobset, opts, files=None):
-    """Claim this window BEFORE jobsub_submit. Returns the row id, or
-    None when --no-ledger.
+    """Claim this window BEFORE jobsub_submit. Returns the row id.
 
     RAISES on failure, deliberately: an unrecordable window must not be
     submitted, because nothing would then stop the next tick from
@@ -160,8 +159,6 @@ def _reserve_in_ledger(entry, firstjob, jobset, opts, files=None):
     resolving once — an explicit path pointing at a missing directory
     must fail here, not get silently mkdir'd.
     """
-    if opts.no_ledger:
-        return None
     return submission_ledger.reserve_submission(
         opts.ledger_db,
         tarball=entry['tarball'],
@@ -329,12 +326,9 @@ def _validate_entry_values(entry):
     """Reject a malformed inloc / resource value in an ENTRY before any
     ledger row exists.
 
-    json2jobdef validates the build config it reads, but this path also
-    serves `submit_map --map FILE --enqueue`, whose map is FOREIGN input
-    -- hand-written, or produced by something outside this repo. Nothing
-    in prodtools writes an operator-facing map any more, which makes
-    this a boundary check on untrusted JSON rather than a patch over our
-    own output.
+    json2jobdef validates the build config it reads, but this is also
+    the boundary check `enqueue_entry` applies before any campaign is
+    created, and `json2jobdef --enqueue` is the only remaining caller.
 
     It matters most for `inloc`: a misspelled location does not fail, it
     degrades. file_resolver.locate finds no such location and falls
@@ -433,23 +427,6 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
           f"njobs={njobs} slice={slice_size} (db {ledger_db})")
     return camp_id
-
-
-def _enqueue_entries(entries_to_submit, map_path, opts):
-    """Register each entry as a campaign. Returns new campaign ids.
-    Preflight and error handling live in enqueue_entry."""
-    ids = []
-    for idx, entry in entries_to_submit:
-        camp_id = enqueue_entry(
-            entry,
-            ledger_db=opts.ledger_db,
-            slice_size=opts.slice_size,
-            dry_run=opts.dry_run,
-            resources=_effective_resources(entry, opts),
-            provenance=map_path)
-        if camp_id is not None:
-            ids.append(camp_id)
-    return ids
 
 
 def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
@@ -603,11 +580,11 @@ def _preflight_inputs(entry, tarball_path):
     """Verify a cnf's baked inputs before submitting. Returns
     (ok, problems).
 
-    Mirrors the gate _enqueue_entries applies, so the DIRECT path
+    Mirrors the gate enqueue_entry applies, so the DIRECT path
     (--first/--num and every recovery resubmit) gets it too — it is
     exactly the bulk-death failure check_inputs exists to prevent.
     A draining/generic cnf bakes no inputs and is skipped, the same
-    carve-out _enqueue_entries makes.
+    carve-out enqueue_entry makes.
     """
     if is_draining(entry):
         return True, []
@@ -791,8 +768,7 @@ def submit_entry_direct(entry, idx, opts):
     row_id = _reserve_in_ledger(_snapshot_entry(entry, resources), firstjob,
                                 jobset, opts, files=files)
     result = _run_submit(cmd, tarball_name, len(jobset))
-    if not opts.no_ledger:
-        _log_submission(firstjob, jobset, result, opts, files=files)
+    _log_submission(firstjob, jobset, result, opts, files=files)
     if result['status'] == 'submitted':
         _attach_cluster(row_id, result, opts)
     else:
@@ -839,54 +815,25 @@ def submit_map(map_path, opts):
         print(f"Error: {map_path} is empty")
         sys.exit(1)
 
-    # Filter by --entry if specified
-    if opts.entry is not None:
-        if opts.entry < 0 or opts.entry >= len(entries):
-            print(f"Error: --entry {opts.entry} out of range (map has {len(entries)} entries)")
-            sys.exit(1)
-        entries_to_submit = [(opts.entry, entries[opts.entry])]
-    else:
-        entries_to_submit = list(enumerate(entries))
-
-    # Skip entries without njobs (generic/direct-input tarballs) unless
-    # there's only one entry (direct-input mode). Draining (input_pattern)
-    # entries have no njobs by design — they are not generic/direct-input,
-    # so they survive this filter.
-    if len(entries_to_submit) > 1:
-        filtered = []
-        for idx, entry in entries_to_submit:
-            if njobs_of(entry) is None and not is_draining(entry):
-                print(f"[INFO] Skipping entry {idx} "
-                      f"({entry.get('tarball', '?')}): no njobs "
-                      f"(generic tarball)")
-                continue
-            filtered.append((idx, entry))
-        entries_to_submit = filtered
-
-    if not entries_to_submit:
-        print("No submittable entries found.")
-        return []
-
-    if getattr(opts, 'enqueue', False):
-        _enqueue_entries(entries_to_submit, map_path, opts)
-        return []
+    if len(entries) != 1:
+        print(f"Error: {map_path} must contain exactly one entry "
+              f"(got {len(entries)}) — multi-entry maps were removed with "
+              f"the map workflow; use json2jobdef --dsconf to enqueue a set")
+        sys.exit(1)
+    entries_to_submit = [(0, entries[0])]
 
     # A draining entry has no index space — it cannot be submitted via the
-    # ordinary indexed path. --files lets a caller hand it a concrete batch
-    # outside --enqueue; without it, refuse loudly rather than silently
-    # drop into submit_entry_direct with a missing njobs.
+    # ordinary indexed path. --files lets a caller hand it a concrete batch;
+    # without it, refuse loudly rather than silently drop into
+    # submit_entry_direct with a missing njobs.
     for idx, entry in entries_to_submit:
         if is_draining(entry) and getattr(opts, 'files', None) is None:
             print(f"Error: entry {idx} is a draining entry "
-                  f"(input_pattern) — use --enqueue (tick-fed) or "
-                  f"--files <list>")
+                  f"(input_pattern) — use json2jobdef --enqueue "
+                  f"(tick-fed) or --files <list>")
             sys.exit(1)
 
     if getattr(opts, 'files', None) is not None:
-        if len(entries_to_submit) != 1:
-            print("Error: --files requires exactly one entry "
-                  "(use --entry N on a multi-entry map)")
-            sys.exit(1)
         if not is_draining(entries_to_submit[0][1]):
             print("Error: --files requires a draining (input_pattern) "
                   "entry")
@@ -936,8 +883,6 @@ def main():
     )
     parser.add_argument('--map', required=True,
                         help='Path to submission-map JSON (e.g., MDC2025-001.json)')
-    parser.add_argument('--entry', type=int, default=None,
-                        help='Submit only this entry index (0-based)')
     parser.add_argument('--first', type=int, default=None,
                         help='First job index to submit. With --num '
                              'submits a contiguous range; without --num '
@@ -973,20 +918,6 @@ def main():
                         help='Ledger row id this submission '
                              'recovers (set by the recovery loop; chains '
                              'attempt counting).')
-    parser.add_argument('--no-ledger', action='store_true',
-                        help='Do not record this submission in '
-                             'the ledger (ad-hoc/test submissions the '
-                             'recovery loop must not watch).')
-    parser.add_argument('--enqueue', action='store_true',
-                        help='Register entries as sliced-submission '
-                             'campaigns in the ledger DB instead of '
-                             'submitting; the `submissions run` tick then '
-                             'feeds slices '
-                             'while total mu2epro idle+running is under '
-                             'its cap.')
-    parser.add_argument('--slice-size', type=int, default=1000,
-                        help='Jobs per slice for --enqueue '
-                             '(default 1000; frozen into the campaign).')
     parser.add_argument('--wftop', default=None,
                         help='Outstage top dir (default: '
                              '/pnfs/mu2e/persistent/users for Production, '
@@ -1031,32 +962,15 @@ def main():
     args.files = _parse_or_exit(_parse_files, args.files)
     if args.files is not None and (
             args.first is not None or args.num is not None
-            or args.indices is not None or args.enqueue):
+            or args.indices is not None):
         print("Error: --files cannot be combined with "
-              "--first/--num/--indices/--indices-file/--enqueue")
+              "--first/--num/--indices/--indices-file")
         sys.exit(1)
 
-    # Resolved ONCE here, before anything writes to the ledger (--enqueue
-    # included): the rest of the flow sees a plain string, already
-    # pointed at a directory that exists if it was defaulted. Skipped
-    # under --no-ledger, since nothing downstream then touches the DB —
-    # args.ledger_db just keeps whatever (possibly None) it was given.
-    if not args.no_ledger:
-        args.ledger_db = _resolve_ledger_db(args)
-
-    if args.enqueue:
-        if args.no_ledger:
-            print("submit_map: --enqueue registers a campaign in the "
-                  "ledger DB; --no-ledger contradicts it")
-            sys.exit(1)
-        if (args.first is not None or args.num is not None
-                or args.indices is not None):
-            print("Error: --enqueue submits nothing — it cannot be "
-                  "combined with --first/--num/--indices")
-            sys.exit(1)
-        if args.slice_size < 1:
-            print(f"Error: --slice-size must be >= 1, got {args.slice_size}")
-            sys.exit(1)
+    # Resolved ONCE here, before anything writes to the ledger: the rest
+    # of the flow sees a plain string, already pointed at a directory
+    # that exists if it was defaulted.
+    args.ledger_db = _resolve_ledger_db(args)
 
     if not Path(args.map).is_file():
         print(f"Error: map file not found: {args.map}")

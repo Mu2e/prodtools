@@ -1,7 +1,9 @@
 """Write tool implementations for the prodtools-write MCP server.
 
-Signatures are fixed here; real bodies land in Tasks 8 (push_cnf) and
-9 (enqueue_campaign, run_submissions).
+Exposes `push_cnf` and `run_submissions`. Campaign creation is
+`push_cnf` (one call, mirroring `json2jobdef --prod --enqueue`) --
+there is no map-based `enqueue_campaign`; that tool was retired with
+`submit_map --enqueue`.
 
 Thin by design: validate, delegate to runner, read the result back
 from the artifact the CLI wrote -- never from its stdout.
@@ -106,29 +108,6 @@ def _both_streams(result):
     return '\n'.join(parts) if parts else '(no output on either stream)'
 
 
-def _read_entries_strict(map_path):
-    """Read a map's entries; a missing file or malformed JSON is a
-    real problem here, not "0 entries".
-
-    Used by `_read_map_entry`: by the time
-    `enqueue_campaign` reaches it, `submit_map --entry N` has already
-    read this same map successfully to find the entry it enqueued, so
-    a map that turns out missing or corrupt when read back is worth a
-    distinct error -- not silently folded into "entry N out of range
-    for 0 entries"."""
-    path = Path(map_path)
-    if not path.is_file():
-        raise RuntimeError(f"map file not found: {map_path}")
-    text = path.read_text()
-    if not text.strip():
-        raise RuntimeError(f"map file is empty: {map_path}")
-    try:
-        entries = _json.loads(text)
-    except _json.JSONDecodeError as e:
-        raise RuntimeError(f"{map_path} is not valid JSON: {e}")
-    return entries if isinstance(entries, list) else [entries]
-
-
 def _tarball_matches(tarball, tarball_desc, dsconf):
     if not tarball:
         return False
@@ -137,21 +116,6 @@ def _tarball_matches(tarball, tarball_desc, dsconf):
     except ValueError:
         return False
     return name.description == tarball_desc and name.dsconf == dsconf
-
-
-def _read_map_entry(map_path, index):
-    """Return (index, entry) for map entry `index`.
-
-    `submit_map --entry N` already names an EXISTING entry
-    unambiguously -- it neither appends nor guesses -- so enqueue_campaign
-    reads it back by plain position. There is nothing to disambiguate.
-    """
-    entries = _read_entries_strict(map_path)
-    if not (0 <= index < len(entries)):
-        raise RuntimeError(
-            f"entry {index} out of range for {map_path} "
-            f"({len(entries)} entries)")
-    return index, entries[index]
 
 
 # What an operator has to know after ANY failure on the enqueue path.
@@ -240,18 +204,18 @@ def push_cnf(json: str, desc: str, dsconf: str, slice_size: int,
 def _sole_live_campaign(db, matches, subject, what, before_ids=None):
     """The one live campaign `what` just created, or raise.
 
-    Two callers, two ways of knowing:
-
-    - `before_ids=None` (enqueue_campaign) matched an EXACT tarball, and
-      the ledger's campaigns_live_tarball index forbids two live
-      campaigns per tarball. So a second match means that DB invariant
-      is broken.
-    - `before_ids=<set>` (push_cnf) matched on desc+dsconf, which does
-      NOT imply a unique tarball: `_tarball_matches` ignores the version
-      index, and `cnf_name` puts `config['version']` there (`--extend`
-      bumps it), so live campaigns for `...D.C.0.tar` and `...D.C.1.tar`
-      both match and are both legal. The snapshot is what disambiguates
-      them, and it carries the whole burden on this path.
+    Called by `push_cnf`, which matches on desc+dsconf -- that does NOT
+    imply a unique tarball: `_tarball_matches` ignores the version index,
+    and `cnf_name` puts `config['version']` there (`--extend` bumps it),
+    so live campaigns for `...D.C.0.tar` and `...D.C.1.tar` both match
+    and are both legal. `before_ids` (the snapshot taken before run_cli)
+    is what disambiguates them, and it carries the whole burden on this
+    path -- EXCEPT on a first-ever push, where the ledger doesn't exist
+    yet to snapshot, and `before_ids` arrives as `None`; there the
+    ledger's own campaigns_live_tarball uniqueness index (one live
+    campaign per tarball) is the only guarantee available, so a second
+    match means that DB invariant is broken rather than that this call
+    created two campaigns.
 
     Never falls back to "the newest one", and never to "the only one" on
     the snapshot path: a campaign that already existed is by definition
@@ -299,7 +263,7 @@ def _ledger_path_for(run_as):
     For run_as='mu2epro' this IS the production ledger (see
     submission_ledger.ledger_for) -- defaulting to THIS process's own
     user here would look up the CALLER's personal ledger while
-    submit_map --enqueue actually wrote the campaign row into
+    `json2jobdef --prod --enqueue` actually wrote the campaign row into
     production's (inside the ksu block, as mu2epro), silently
     reporting a successful production enqueue as "no campaign found".
     """
@@ -340,68 +304,6 @@ def _all_campaigns(db):
             f"directory is created by the submitting identity on its "
             f"first write, so this usually means the command never got "
             f"as far as writing the ledger") from e
-
-
-def enqueue_campaign(map_path: str, entry: int, slice_size: int,
-                     run_as: str, confirm: bool = False):
-    """Register ONE entry of a map as a sliced-submission campaign.
-
-    `entry` is required: a map can hold several entries, and
-    `submit_map` itself fans out over every one of them when `--entry`
-    is omitted -- a typed tool defaulting to "all of them" is exactly
-    the hazard this signature exists to remove.
-
-    `map_path` must be an absolute path: under run_as='mu2epro' the ksu
-    block cd's into its own mktemp workdir, so submit_map would read a
-    relative path from THERE while this function reads it back relative
-    to the server's own cwd.
-
-    Note this tool takes a map that ALREADY exists -- nothing in
-    prodtools writes one for an operator any more. Creating a campaign
-    is `push_cnf`, one call, no map.
-
-    The campaign id is never scraped from stdout: it is read back from
-    the ledger THIS identity writes (_ledger_path_for), matched by the
-    tarball of the map entry submit_map was told to enqueue -- read
-    back by position, since `--entry N` already names the entry
-    unambiguously and there is nothing to disambiguate.
-
-    The match is restricted to a LIVE campaign (see _LIVE_CAMPAIGN_STATES)
-    rather than taking the last of every campaign that tarball ever had.
-    A tarball accumulates campaigns over its life -- complete, cancelled,
-    then a new one -- and `match[-1]` silently returns whichever is
-    newest in the ledger. The live set is unique by construction: the
-    campaigns_live_tarball index (submission_ledger._connect) forbids a
-    second active-or-paused campaign per tarball, which is the same
-    invariant create_campaign refuses on. Exactly one live match is
-    therefore this enqueue's campaign, and anything else is reported
-    rather than guessed at.
-    """
-    runner.require_confirmed(run_as, confirm)
-
-    if not Path(map_path).is_absolute():
-        raise ValueError(
-            f"map_path must be an absolute path (got {map_path!r})")
-
-    argv = ['bin/submit_map', '--map', map_path, '--entry', str(entry),
-            '--enqueue', '--slice-size', str(slice_size)]
-    result = runner.run_cli(argv, run_as)
-    if result['rc'] != 0:
-        raise RuntimeError(
-            f"submit_map --enqueue failed (rc={result['rc']}): "
-            f"{_both_streams(result)}")
-
-    _, map_entry = _read_map_entry(map_path, index=entry)
-    tarball = map_entry.get('tarball')
-    db = _ledger_path_for(run_as)
-    matches = [c for c in _all_campaigns(db)
-               if c['tarball'] == tarball
-               and c['state'] in _LIVE_CAMPAIGN_STATES]
-    campaign = _sole_live_campaign(db, matches, repr(tarball),
-                                   'submit_map --enqueue')
-    return {'campaign_id': campaign['id'],
-            'njobs': (campaign.get('entry') or {}).get('njobs'),
-            'tarball': tarball}
 
 
 def run_submissions(campaign_id: int, run_as: str, confirm: bool = False):
