@@ -1257,3 +1257,14 @@ run1b-archive-2026-08-08 created locally on the branch tip
 (5122019310278bbfada64ec68098ce6bf6bb5f66); push and branch deletion are
 the user's to run.
 Source: docs/superpowers/plans/2026-08-08-run1b-consolidation.md Task 7
+
+## [2026-08-12] update | Run1B branch kept, not deleted
+Correction to the entry above: the user declined branch deletion. The
+`Run1B` branch stays in Mu2e/Offline, frozen — consolidation is complete
+so nothing further lands on it, and it remains the source-code record of
+v02-v06, the fuller v01, and the un-ported Mu2eWorld.cc /
+constructVirtualDetectors.cc changes. The tag run1b-archive-2026-08-08
+was NOT pushed; it exists only in the local scratch clone at
+5122019310278bbfada64ec68098ce6bf6bb5f66 and is redundant while the
+branch lives. Push it first if the branch is ever deleted. Updated
+data/Run1B/README.md, the wiki page, and the index accordingly.

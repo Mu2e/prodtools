@@ -53,10 +53,11 @@ tag.** Every frozen entry pins an immutable CVMFS Musing, and each Musing's
 needs (verified 2026-08-10: Run1Bab ships v01; Run1Baf v01–v02; Run1Bah v01–v03;
 Run1Bai v01–v06). Reproducibility never depended on the `Run1B` branch.
 
-The Offline tag `run1b-archive-2026-08-08` is the source-code record of the
-retired branch — the only remaining copy of `v02`–`v06` and of the un-ported
-`Mu2eWorld.cc` / `constructVirtualDetectors.cc` changes. Read it to understand
-what a frozen campaign did; run the Musing to reproduce it.
+`v02`–`v06` and the un-ported `Mu2eWorld.cc` / `constructVirtualDetectors.cc`
+changes remain on the Offline `Run1B` branch, which is kept but is no longer
+developed — consolidation is finished, so nothing further will land there. Read
+the branch to understand what a frozen campaign did; run the Musing to reproduce
+it.
 
 See `docs/superpowers/specs/2026-08-08-run1b-consolidation-design.md` for the
 consolidation rationale.

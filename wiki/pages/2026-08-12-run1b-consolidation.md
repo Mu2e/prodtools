@@ -1,5 +1,5 @@
 ---
-title: Run1B consolidated into Offline main; Run1B branch retired
+title: Run1B consolidated into Offline main; Run1B branch frozen (kept)
 tags: [decision, run1b, offline, geometry, campaigns]
 sources: []
 updated: 2026-08-12
@@ -9,8 +9,11 @@ updated: 2026-08-12
 
 ## Outcome
 
-The long-lived `Run1B` branch in Mu2e/Offline is retired. Everything Run1B
-production actually runs now lives on `main`.
+Everything Run1B production actually runs now lives on `main`. The long-lived
+`Run1B` branch is **kept but frozen**: consolidation is finished, nothing
+further lands there, and nothing on it is needed to run or reproduce Run1B.
+Deleting it was considered and deliberately declined (2026-08-12) — there is no
+cost to leaving it in place.
 
 | PR | repo | content | merged |
 |---|---|---|---|
@@ -69,11 +72,15 @@ editing a Run1B entry will hit it.
 Every frozen entry pins `simjob_setup` to an immutable CVMFS Musing, and each
 Musing's `backing/Offline/Mu2eG4/geom/` carries exactly the geometries its
 campaign needs (verified 2026-08-10): Run1Bab ships v01; Run1Baf v01–v02;
-Run1Bah v01–v03; Run1Bai v01–v06. Retiring the branch strands nothing.
+Run1Bah v01–v03; Run1Bai v01–v06. The branch is not in the reproduction path at
+all — retiring it would strand nothing, which is why keeping it costs nothing
+either.
 
-The tag `run1b-archive-2026-08-08` is the **source-code** record — the only
-remaining copy of v02–v06, of the fuller v01, and of the un-ported C++. Read it
-to understand a frozen campaign; run the Musing to reproduce one.
+The branch remains the **source-code** record of v02–v06, of the fuller v01, and
+of the un-ported C++. Read it to understand a frozen campaign; run the Musing to
+reproduce one. A tag `run1b-archive-2026-08-08` was prepared locally at the
+branch tip `5122019310278bb` but was **not** pushed: with the branch kept, it is
+redundant. Push it first if the branch is ever deleted.
 
 ## Beam-power side thread
 
