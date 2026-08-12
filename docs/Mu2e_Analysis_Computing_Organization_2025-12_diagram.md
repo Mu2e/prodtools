@@ -1,3 +1,22 @@
+# Mu2e Analysis Computing Organization
+
+Baseline: the official 2025-12 chart (`Mu2e_Analysis_Computing_Organization_2025-12_diagram.png`).
+The mermaid source below carries corrections applied since that chart was
+published, so it and the `.png` no longer agree — the mermaid is the current one.
+
+## Corrections since 2025-12
+
+**2026-08-12, Simulation subgroup** (Oksuzian, org chat):
+
+- **Geant4 and Geometry are a single subgroup**, and have been almost since the
+  beginning. The 2025-12 chart still shows them split (`Geometry: Tripathy`,
+  `Geant4: Cao, Tripathy`); they are merged here into one node.
+- **Max Jenkinson (U. Manchester)** leads the merged Geant4 & Geometry subgroup.
+- **Tausiff Houssain** leads Generators, replacing Borrel.
+- Neither subgroup lead currently has experience modifying the Offline geometry,
+  so Offline geometry changes are being made by Oksuzian directly. Treat the
+  chart as reporting lines, not as a routing table for geometry work.
+
 ```mermaid
 %%{init: { 'theme': 'base', 'flowchart': { 'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 30, 'padding': 5, 'useMaxWidth': false, 'curve': 'linear' }, 'securityLevel': 'loose' } }%%
 graph TD
@@ -26,9 +45,8 @@ graph TD
     
     subgraph SIMGROUP[" "]
         SIM[Simulation:<br/>DiFalco]
-        GEN[Generators:<br/>Borrel]
-        GEOM[Geometry:<br/>Tripathy]
-        G4[Geant4:<br/>Cao, Tripathy&nbsp;]
+        GEN[Generators:<br/>Houssain]
+        G4GEOM[Geant4 &amp; Geometry:<br/>Jenkinson]
         NONG4[Other MC:<br/>Mueller]
     end
     
@@ -85,7 +103,7 @@ graph TD
     class INF infrastructureLeader
     class PROD,CODE,DATA,DB,DQM infrastructure
     class SIM simulationLeader
-    class GEN,GEOM,G4,NONG4 simulation
+    class GEN,G4GEOM,NONG4 simulation
     class RECO reconstructionLeader
     class ALG,VAL reconstruction
     class CAL calibrationLeader
