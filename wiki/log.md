@@ -1243,3 +1243,17 @@ one column short/long); de-duplicated the `--indices-file` help text's
 double "ignored". `[[slug]]` cross-ref additions and the EXAMPLES.md
 tag-pointer bullet remain deferred per the review's own triage.
 Source: .superpowers/sdd/2026-08-08-poms-removal/final-review.md
+
+## [2026-08-12] update | Run1B consolidation landed; branch retirement prepared
+Added [[2026-08-12-run1b-consolidation]]. Offline #1923 merged 2026-08-12
+(main @ 38f6943d5), joining #1927; Production #565 and 1dacb738 also on
+main, so all four pieces of the consolidation are in. Verified on main:
+all three production geometries present; v40 differs from the branch copy
+only in commented-out dead lines; v01 differs FUNCTIONALLY (branch adds
+mu2e.detectorSystemZ0 and the EMC source VD positions) and no code on
+main reads inDS2Vacuum, so a re-run of a v01 campaign exits 0 with the
+wrong world. Recorded the freeze in data/Run1B/README.md. Archive tag
+run1b-archive-2026-08-08 created locally on the branch tip
+(5122019310278bbfada64ec68098ce6bf6bb5f66); push and branch deletion are
+the user's to run.
+Source: docs/superpowers/plans/2026-08-08-run1b-consolidation.md Task 7

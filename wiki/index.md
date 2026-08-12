@@ -9,6 +9,7 @@
 <!-- entries added by wiki-ingest -->
 
 ### Decisions
+- [[2026-08-12-run1b-consolidation]] — Run1B folded into Offline `main` (PRs #1923, #1927, Production #565); `main` keeps the Run1A default and Run1B is selected by naming `geom_run1_b_v40.txt`. Production-scoped: v40 + degrader fix only; v01–v06 and their un-ported C++ archived under tag `run1b-archive-2026-08-08`. Run1Baa/Bab/Baf, Run1Bag/Bah and Run1Bai are **frozen** — v01 resolves on main but `inDS2Vacuum` is silently ignored, so re-running exits 0 with the wrong world. Reproduce via each entry's pinned CVMFS Musing, not the tag _(2026-08-12)_
 - [[2026-07-21-input-preflight-check]] — `check_inputs` gate: verify a campaign's inputs are readable before jobs launch (resilient pileup present+sized vs SAM by direct stat; tape inputs staged via mdh — mdh is blind to resilient). Read-only, block-only (exit 2), fails closed; wired into `json2jobdef --prod --enqueue` (the map-file-removal branch, 2026-08-11, retired `submit_map`). Motivated by the index-519 truncated-pileup incident _(2026-07-21)_
 - [[2026-07-12-hygiene-tiers-and-kept-duplication]] — tiers 1+2 consolidations (drifted fcl writer, cnf-name contract) + the deliberate-duplication do-not-fix list _(2026-07-12)_
 - [[2026-04-21-extend-jobdef-per-index-overrides]] — add `event_id_per_index` to tbs; per-index linear overrides `offset + index × step` for any fcl key _(ingested 2026-04-21)_
