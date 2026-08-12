@@ -31,9 +31,9 @@ All from MacKenzie, org chat, 2026-08-12.
 ```mermaid
 %%{init: { 'theme': 'base', 'flowchart': { 'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 30, 'padding': 5, 'useMaxWidth': false, 'curve': 'linear' }, 'securityLevel': 'loose' } }%%
 graph TD
-    SPK[Spokespersons:<br/>Bernstein, Miscetti&nbsp;]
+    SPK[<b>Spokespersons</b><br/>Bernstein, Miscetti&nbsp;]
     
-    SPK --> AC[Analysis Coordinators:<br/>Echenard, Oksuzian&nbsp;]
+    SPK --> AC[<b>Analysis Coordinators</b><br/>Echenard, Oksuzian&nbsp;]
     
     AC --> INFGROUP
     AC --> SIMGROUP
@@ -41,49 +41,49 @@ graph TD
     AC --> TOOLSGROUP
     AC --> CALGROUP
     AC --> TRIGGROUP
-    SPK --> OC[Operations Coordinators:<br/>Rackness, Xia&nbsp;]
+    SPK --> OC[<b>Operations Coordinators</b><br/>Rackness, Xia&nbsp;]
     OC --> TRIGGROUP
-    AC -.-> ML[ML/AI:<br/>Corrodi, Kampa&nbsp;]
+    AC -.-> ML[<b>ML/AI</b><br/>Corrodi, Kampa&nbsp;]
     
     subgraph INFGROUP[" "]
-        INF[Infrastructure:<br/>Culbertson]
-        PROD[Production:<br/>Oksuzian]
-        CODE[Code Management:<br/>Culbertson]
-        DATA[Data Handling:<br/>Tran]
-        DB[Databases:<br/>Culbertson]
-        DQM[Offline DQM:<br/>Tedeschi]
+        INF[<b>Infrastructure</b><br/>Culbertson]
+        PROD[<b>Production</b><br/>Oksuzian]
+        CODE[<b>Code Management</b><br/>Culbertson]
+        DATA[<b>Data Handling</b><br/>Tran]
+        DB[<b>Databases</b><br/>Culbertson]
+        DQM[<b>Offline DQM</b><br/>Tedeschi]
     end
     
     subgraph SIMGROUP[" "]
-        SIM[Simulation:<br/>DiFalco]
-        GEN[Generators:<br/>Houssain]
-        G4GEOM[Geant4 &amp; Geometry:<br/>Jenkinson]
-        NONG4[Other MC:<br/>Mueller]
+        SIM[<b>Simulation</b><br/>DiFalco]
+        GEN[<b>Generators</b><br/>Houssain]
+        G4GEOM[<b>Geant4 & Geometry</b><br/>Jenkinson]
+        NONG4[<b>Other MC</b><br/>Mueller]
     end
     
     subgraph RECOGROUP[" "]
-        RECO[Reconstruction:<br/>Brown]
-        ALG[Algorithms:<br/>Brown]
-        VAL[Validation:<br/>Culbertson]
+        RECO[<b>Reconstruction</b><br/>Brown]
+        ALG[<b>Algorithms</b><br/>Brown]
+        VAL[<b>Validation</b><br/>Culbertson]
     end
     
     subgraph TOOLSGROUP[" "]
-        TOOLS[Tools:<br/>TBD, Middleton&nbsp;]
-        NTUP[Analysis Tuple:<br/>TBD]
-        IFACE[Analysis Interfaces:<br/>Harrison]
-        EVD[Event Display:<br/>Chithirasreemadam]
-        REF[Reference Analyses:<br/>Middleton]
+        TOOLS[<b>Tools</b><br/>TBD, Middleton&nbsp;]
+        NTUP[<b>Analysis Tuple</b><br/>TBD]
+        IFACE[<b>Analysis Interfaces</b><br/>Harrison]
+        EVD[<b>Event Display</b><br/>Chithirasreemadam]
+        REF[<b>Reference Analyses</b><br/>Middleton]
     end
     
     subgraph CALGROUP[" "]
-        CAL[Calibration & Alignment:<br/>Bonventre]
-        CALIB[Calibration:<br/>Group]
-        ALIGN[Alignment:<br/>Palo]
-        FMAP[Field Map:<br/>Kampa]
+        CAL[<b>Calibration & Alignment</b><br/>Bonventre]
+        CALIB[<b>Calibration</b><br/>Group]
+        ALIGN[<b>Alignment</b><br/>Palo]
+        FMAP[<b>Field Map</b><br/>Kampa]
     end
     
     subgraph TRIGGROUP[" "]
-        TRIG[Trigger:<br/>MacKenzie]
+        TRIG[<b>Trigger</b><br/>MacKenzie]
     end
     linkStyle 9 stroke:none,stroke-width:0
     
