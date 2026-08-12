@@ -711,11 +711,63 @@ def _guarded_submit(what, fn):
         return False
 
 
+def _camp_tarball(camp):
+    """The campaign's tarball for evidence-keying: the top-level column
+    (every real campaign row from submission_ledger has one), else the
+    snapshot entry's own 'tarball' key — a fallback for test doubles
+    that only set the latter; production entries always agree with the
+    campaign row's own tarball."""
+    return camp.get('tarball') or camp['entry'].get('tarball')
+
+
+def _guarded_submit_with_evidence(what, tarball, db_path, fn):
+    """_guarded_submit, plus proof the ledger actually gained a new
+    ACTIVE row for `tarball`. Returns True only when both hold.
+
+    submit_entry RETURNS {'status': 'failed'} — it does NOT raise — when
+    jobsub_submit exits non-zero, or exits 0 with no parseable cluster
+    id (utils/submit.py's _fail_reservation leaves the 'failed'
+    reservation in the ledger in that case). _guarded_submit alone
+    cannot see that: it only catches exceptions, so a returned-but-
+    failed submission still reads as success, the tick advances the
+    cursor past a slice that was never actually submitted, and the
+    'failed' reservation is left strictly BELOW every future slice
+    window — _slice_overlaps_ledger never intersects it either (see its
+    docstring), so nothing ever blocks on it again and the gap is
+    silent.
+
+    This is the same evidence check the `submissions resubmit` verb
+    already applies before reporting success, keyed on
+    `parent_id == row['id']`. A tick's slice has no parent row, so this
+    keys on the campaign's TARBALL plus a before/after diff of active
+    row ids instead — narrow enough that a concurrent row for a
+    DIFFERENT tarball can never false-positive it, and open_rows()
+    already filters to state='active', so a reservation stuck in
+    'submitting' (crash mid-flight) or closed 'failed' does not count
+    as evidence either.
+    """
+    before = {r['id'] for r in submission_ledger.open_rows(db_path)
+             if r['tarball'] == tarball}
+    if not _guarded_submit(what, fn):
+        return False
+    after = {r['id'] for r in submission_ledger.open_rows(db_path)
+             if r['tarball'] == tarball}
+    if not (after - before):
+        print(f"  {what}: submit FAILED (no new active ledger row for "
+              f"{tarball} — jobsub_submit likely exited non-zero, or "
+              f"0 with no parseable cluster id, after already "
+              f"returning instead of raising)")
+        return False
+    return True
+
+
 def submit_slice(camp, n, db_path, submit_fn=None):
     """Submit the campaign's next slice in-process. The snapshot entry
     ships VERBATIM: firstjob is preserved because cursor and first/num
     are entry-relative, exactly like a manual windowed submission.
-    Returns True on submit success."""
+    Returns True on submit success — verified by a new active ledger
+    row for this tarball, not merely the absence of an exception (see
+    _guarded_submit_with_evidence)."""
     submit_fn = submit_fn or submit.submit_entry
     options = submit.SubmitOptions(
         ledger_db=str(db_path),
@@ -724,8 +776,8 @@ def submit_slice(camp, n, db_path, submit_fn=None):
         origin=f"campaign {camp['id']}",
     )
     print(f"  campaign {camp['id']}: slice first={camp['cursor']} num={n}")
-    return _guarded_submit(
-        f"campaign {camp['id']}",
+    return _guarded_submit_with_evidence(
+        f"campaign {camp['id']}", _camp_tarball(camp), db_path,
         lambda: submit_fn(camp['entry'], 0, options))
 
 
@@ -986,7 +1038,8 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
 
 def submit_drain_batch(camp, files, db_path, submit_fn=None):
     """Submit one draining batch in-process. The snapshot entry ships
-    VERBATIM. Returns True on submit success."""
+    VERBATIM. Returns True on submit success — verified by a new active
+    ledger row for this tarball (see _guarded_submit_with_evidence)."""
     submit_fn = submit_fn or submit.submit_entry
     options = submit.SubmitOptions(
         ledger_db=str(db_path),
@@ -994,8 +1047,8 @@ def submit_drain_batch(camp, files, db_path, submit_fn=None):
         origin=f"campaign {camp['id']} drain",
     )
     print(f"  campaign {camp['id']}: batch of {len(files)}")
-    return _guarded_submit(
-        f"campaign {camp['id']}",
+    return _guarded_submit_with_evidence(
+        f"campaign {camp['id']}", _camp_tarball(camp), db_path,
         lambda: submit_fn(camp['entry'], 0, options))
 
 

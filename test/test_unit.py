@@ -5846,6 +5846,9 @@ class TestSubmitSlice(unittest.TestCase):
     def test_options_and_entry_content(self):
         from utils import submissions as recover
         from utils import submit
+        from utils import submission_ledger as sl
+        import tempfile
+        db = os.path.join(tempfile.mkdtemp(), 'led.db')
         entry = {'tarball': 'cnf.mu2e.W.C.0.tar', 'njobs': 50,
                  'firstjob': 100, 'inloc': 'tape', 'outputs': [],
                  'memory': '4000MB'}
@@ -5856,14 +5859,20 @@ class TestSubmitSlice(unittest.TestCase):
             captured['entry'] = e
             captured['idx'] = idx
             captured['options'] = options
-        ok = recover.submit_slice(camp, 5, '/tmp/led.db',
-                                  submit_fn=submit_fn)
+            # A real submit_entry success leaves a new ACTIVE ledger
+            # row behind (reserve -> jobsub_submit -> attach_cluster);
+            # submit_slice now requires that evidence, not merely a
+            # non-raising call (Fix A).
+            sl.record_submission(db, tarball=entry['tarball'], entry=e,
+                                 indices=[110, 111, 112, 113, 114],
+                                 jobsub_id='1.0@js', cluster_id='1')
+        ok = recover.submit_slice(camp, 5, db, submit_fn=submit_fn)
         self.assertTrue(ok)
         options = captured['options']
         self.assertIsInstance(options, submit.SubmitOptions)
         self.assertEqual(options.first, 10)
         self.assertEqual(options.num, 5)
-        self.assertEqual(options.ledger_db, '/tmp/led.db')
+        self.assertEqual(options.ledger_db, db)
         self.assertEqual(options.origin, 'campaign 7')
         self.assertEqual(captured['idx'], 0)
         # entry ships VERBATIM — firstjob preserved, exactly like a
@@ -13854,6 +13863,193 @@ class TestResubmitOriginIsDistinguishable(unittest.TestCase):
             self.assertEqual(kwargs['origin'],
                              f'operator resubmit of row {rid}')
             self.assertNotEqual(kwargs['origin'], f'recovery of row {rid}')
+
+
+class TestTickAdvanceRequiresEvidence(unittest.TestCase):
+    """FIX A (2026-08-11 wave 2): submit_entry RETURNS {'status':
+    'failed'} — it does NOT raise — when jobsub_submit exits non-zero,
+    or exits 0 with no parseable cluster id. _guarded_submit alone only
+    catches exceptions, so submit_slice/submit_drain_batch used to
+    report success on that returned failure, and top_up/drain_tick
+    would advance the cursor / count the batch as delivered past work
+    that was never actually submitted. The fix requires a new ACTIVE
+    ledger row for the tarball as evidence, same principle as the
+    `submissions resubmit` verb's own child-row check."""
+
+    def setUp(self):
+        import tempfile
+        from utils import submission_ledger as sl
+        self.sl = sl
+        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+
+    def _campaign(self, tarball='cnf.mu2e.A.C.0.tar', njobs=10, slice=4):
+        entry = {'tarball': tarball, 'njobs': njobs, 'inloc': 'tape',
+                 'outputs': []}
+        return self.sl.create_campaign(self.db, tarball=tarball,
+                                       entry=entry, slice_size=slice)
+
+    # -- submit_slice, direct --------------------------------------------
+
+    def test_submit_slice_false_on_returned_failed_status(self):
+        """A submit_fn that returns the non-raising 'failed' shape and
+        leaves no ledger trace must be reported as failure."""
+        from utils import submissions
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        camp = {'id': 1, 'cursor': 0, 'tarball': tarball,
+                'entry': {'tarball': tarball, 'njobs': 10}}
+        def fake_submit_entry(entry, idx, options):
+            return {'status': 'failed', 'tarball': tarball,
+                    'cluster_id': None, 'njobs': 0}
+        ok = submissions.submit_slice(camp, 4, self.db,
+                                      submit_fn=fake_submit_entry)
+        self.assertFalse(ok)
+
+    def test_submit_slice_true_on_genuine_ledger_evidence(self):
+        from utils import submissions
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        camp = {'id': 1, 'cursor': 0, 'tarball': tarball,
+                'entry': {'tarball': tarball, 'njobs': 10}}
+        def fake_submit_entry(entry, idx, options):
+            self.sl.record_submission(
+                self.db, tarball=tarball, entry=entry,
+                indices=[0, 1, 2, 3], jobsub_id='5.0@js', cluster_id='5')
+            return {'status': 'submitted', 'cluster_id': '5'}
+        ok = submissions.submit_slice(camp, 4, self.db,
+                                      submit_fn=fake_submit_entry)
+        self.assertTrue(ok)
+
+    # -- submit_drain_batch, direct ---------------------------------------
+
+    def test_submit_drain_batch_false_on_returned_failed_status(self):
+        from utils import submissions
+        tarball = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+        camp = {'id': 2, 'tarball': tarball,
+                'entry': {'tarball': tarball, 'input_pattern': 'dts.*.art'}}
+        def fake_submit_entry(entry, idx, options):
+            return {'status': 'failed', 'cluster_id': None}
+        ok = submissions.submit_drain_batch(
+            camp, ['dts.mu2e.a.v.art'], self.db,
+            submit_fn=fake_submit_entry)
+        self.assertFalse(ok)
+
+    def test_submit_drain_batch_true_on_genuine_ledger_evidence(self):
+        from utils import submissions
+        tarball = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+        camp = {'id': 2, 'tarball': tarball,
+                'entry': {'tarball': tarball, 'input_pattern': 'dts.*.art'}}
+        def fake_submit_entry(entry, idx, options):
+            self.sl.record_submission(
+                self.db, tarball=tarball, entry=entry,
+                indices=['dts.mu2e.a.v.art'],
+                jobsub_id='6.0@js', cluster_id='6')
+            return {'status': 'submitted', 'cluster_id': '6'}
+        ok = submissions.submit_drain_batch(
+            camp, ['dts.mu2e.a.v.art'], self.db,
+            submit_fn=fake_submit_entry)
+        self.assertTrue(ok)
+
+    # -- top_up integration: cursor must not advance -----------------------
+
+    def test_top_up_pauses_without_advancing_on_returned_failure(self):
+        """End-to-end through the REAL submit_slice (top_up's own
+        default submit_fn), with submit.submit_entry itself patched to
+        return the returned-not-raised failure shape. The cursor must
+        stay put and the campaign must pause — exactly the same handling
+        top_up already gives an exception-raising submit_fn."""
+        from utils.submissions import top_up
+        from utils import submit
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        self._campaign(tarball=tarball, njobs=10, slice=4)
+        def fake_submit_entry(entry, idx, options):
+            return {'status': 'failed', 'cluster_id': None}
+        with patch.object(submit, 'submit_entry', fake_submit_entry):
+            s = top_up(self.db, cap=100, count_fn=lambda: 0)
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['cursor'], 0)
+        self.assertEqual(c['state'], 'paused')
+        self.assertEqual(s['campaign-paused'], 1)
+
+    def test_top_up_advances_on_genuine_success(self):
+        """top_up loops slices within one call until the cap or the
+        campaign is exhausted (see TestTopUp.test_feeds_until_complete),
+        so njobs=10/slice=4 with a fixed cap=100 count_fn drains the
+        whole campaign in this one call: three genuinely-evidenced
+        slices, cursor to njobs, closed complete."""
+        from utils.submissions import top_up
+        from utils import submit
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        self._campaign(tarball=tarball, njobs=10, slice=4)
+        counter = [0]
+        def fake_submit_entry(entry, idx, options):
+            counter[0] += 1
+            self.sl.record_submission(
+                self.db, tarball=tarball, entry=entry,
+                indices=[counter[0]], jobsub_id=f'{counter[0]}.0@js',
+                cluster_id=str(counter[0]))
+            return {'status': 'submitted', 'cluster_id': str(counter[0])}
+        with patch.object(submit, 'submit_entry', fake_submit_entry):
+            s = top_up(self.db, cap=100, count_fn=lambda: 0)
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['cursor'], 10)
+        self.assertEqual(c['state'], 'complete')
+        self.assertEqual(s['slice'], 3)
+        self.assertEqual(counter[0], 3)
+
+    # -- drain_tick integration: no cursor, but must still pause ----------
+
+    def test_drain_tick_pauses_on_returned_failure(self):
+        """The draining analog: no cursor to protect, but the campaign
+        must still pause rather than count a never-submitted batch as
+        delivered."""
+        from utils.submissions import drain_tick
+        from utils import submit
+        tarball = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+        entry = {'tarball': tarball, 'inloc': 'tape',
+                 'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                 'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+        self.sl.create_campaign(self.db, tarball=tarball, entry=entry,
+                                slice_size=2)
+        pending = ['dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art']
+        def fake_state(camp, db):
+            return {'inputs': set(pending), 'landed': set(),
+                    'in_flight': set(), 'parked': set(),
+                    'pending': list(pending)}
+        def fake_submit_entry(entry, idx, options):
+            return {'status': 'failed', 'cluster_id': None}
+        with patch.object(submit, 'submit_entry', fake_submit_entry):
+            s = drain_tick(self.db, cap=100, count_fn=lambda: 0,
+                           state_fn=fake_state,
+                           gate_fn=lambda e, cand: (list(cand), [], []))
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'paused')
+        self.assertEqual(s['campaign-paused'], 1)
+
+    def test_drain_tick_delivers_on_genuine_success(self):
+        from utils.submissions import drain_tick
+        from utils import submit
+        tarball = 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar'
+        entry = {'tarball': tarball, 'inloc': 'tape',
+                 'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
+                 'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+        self.sl.create_campaign(self.db, tarball=tarball, entry=entry,
+                                slice_size=2)
+        pending = ['dig.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art']
+        def fake_state(camp, db):
+            return {'inputs': set(pending), 'landed': set(),
+                    'in_flight': set(), 'parked': set(),
+                    'pending': list(pending)}
+        def fake_submit_entry(entry, idx, options):
+            self.sl.record_submission(
+                self.db, tarball=tarball, entry=entry, indices=pending,
+                jobsub_id='8.0@js', cluster_id='8')
+            return {'status': 'submitted', 'cluster_id': '8'}
+        with patch.object(submit, 'submit_entry', fake_submit_entry):
+            s = drain_tick(self.db, cap=100, count_fn=lambda: 0,
+                           state_fn=fake_state,
+                           gate_fn=lambda e, cand: (list(cand), [], []))
+        c = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(c['state'], 'active')
+        self.assertEqual(s['drain-batch'], 1)
 
 
 # ---------------------------------------------------------------------------
