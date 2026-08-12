@@ -884,18 +884,31 @@ def _rows_blocking_indices(db_path, tarball, indices):
 
 
 def _live_campaign_cursor(db_path, tarball):
-    """The cursor of the one LIVE (active or paused) campaign for
-    `tarball`, or None if no such campaign exists.
+    """The ABSOLUTE cnf-index bound of the one LIVE (active or paused)
+    campaign for `tarball` (firstjob + cursor), or None if no such
+    campaign exists.
 
     'active or paused' — never 'complete'/'cancelled' — matches the
     campaigns_live_tarball unique index in submission_ledger._connect:
     at most one campaign can hold this state pair for a given tarball
     at a time, so this can never be ambiguous. A paused campaign still
-    counts as live: its cursor names ground a future `submissions
+    counts as live: its bound names ground a future `submissions
     resume` will resubmit from, same as an active one's next tick.
 
+    `cursor` on the campaign row is ENTRY-RELATIVE (submit_slice's own
+    docstring: "cursor and first/num are entry-relative, exactly like
+    a manual windowed submission"), but callers compare against
+    ABSOLUTE `--indices` values (same as `row['indices']`, written by
+    _ledger_payload as `firstjob + i`). Add `firstjob` here — taken
+    from the live campaign's own entry, the same idiom top_up uses
+    before calling _slice_overlaps_ledger — so the bound this returns
+    is directly comparable to absolute indices without the caller
+    redoing the arithmetic (and risking comparing entry-relative
+    cursor against absolute indices, which is exactly the bug this
+    function's callers must not reintroduce).
+
     Backs the `submissions resubmit --indices` cursor-bound refusal
-    (see main()): an index at or above this cursor has never been
+    (see main()): an index at or above this bound has never been
     submitted by the campaign, so a hand resubmit there is not a
     recovery of missing work — it is new work the top-up tick will
     ALSO eventually submit when the cursor reaches it, and if the
@@ -906,7 +919,8 @@ def _live_campaign_cursor(db_path, tarball):
     """
     for camp in submission_ledger.all_campaigns(db_path):
         if camp['tarball'] == tarball and camp['state'] in ('active', 'paused'):
-            return camp['cursor']
+            firstjob = camp['entry'].get('firstjob', 0)
+            return firstjob + camp['cursor']
     return None
 
 
@@ -1757,24 +1771,29 @@ def main(argv=None):
         # work the campaign already submitted; at or above it is ground
         # the campaign has not reached yet and will submit itself.
         if args.files is None:
-            cursor = _live_campaign_cursor(db, row['tarball'])
-            if cursor is None:
+            # _live_campaign_cursor returns the ABSOLUTE bound
+            # (firstjob + cursor) — comparable directly against
+            # `payload`, which is absolute cnf indices (same space as
+            # row['indices']).
+            abs_cursor = _live_campaign_cursor(db, row['tarball'])
+            if abs_cursor is None:
                 # No active/paused campaign owns this tarball's index
                 # space right now — there is no cursor to bound against,
                 # so nothing is refused here.
                 pass
             else:
-                over = sorted(i for i in payload if i >= cursor)
+                over = sorted(i for i in payload if i >= abs_cursor)
                 if over:
                     sys.exit(
                         f"submissions: refusing — index(es) {over} are at "
-                        f"or above the live campaign's cursor ({cursor}) "
-                        f"for {row['tarball']}. That ground has not been "
-                        f"submitted yet; a future top-up slice will cover "
-                        f"it itself, and a hand-fired child there can "
-                        f"permanently block the tick with no CLI escape. "
-                        f"If you meant to recover work the campaign has "
-                        f"ALREADY submitted, use an index below {cursor}.")
+                        f"or above the live campaign's cursor "
+                        f"({abs_cursor}) for {row['tarball']}. That ground "
+                        f"has not been submitted yet; a future top-up "
+                        f"slice will cover it itself, and a hand-fired "
+                        f"child there can permanently block the tick with "
+                        f"no CLI escape. If you meant to recover work the "
+                        f"campaign has ALREADY submitted, use an index "
+                        f"below {abs_cursor}.")
 
         fn = resubmit_files if args.files is not None else resubmit
         # _guarded_submit (inside fn) returns True for ANY non-raising

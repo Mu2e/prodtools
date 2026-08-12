@@ -14191,6 +14191,83 @@ class TestResubmitCursorBound(unittest.TestCase):
             fake.assert_called_once()
 
 
+class TestResubmitCursorBoundWindowed(unittest.TestCase):
+    """FIX 1 (2026-08-11 wave 3): the cursor bound compared ABSOLUTE
+    --indices values against an ENTRY-RELATIVE `cursor` — omitting
+    `firstjob`. None of TestResubmitCursorBound's fixtures set
+    firstjob, so the omission never showed up there. On a windowed
+    campaign (firstjob=200000, njobs=1000, cursor=500 — i.e. absolute
+    [200000, 200500) already submitted) the bare-cursor bug refused
+    200100 (legitimate recovery of already-submitted work) while
+    letting 200600 through only by coincidence. The fix bounds against
+    firstjob + cursor (200500), matching _slice_overlaps_ledger's own
+    `lo = firstjob + cursor` idiom."""
+
+    def _setup(self, td):
+        from utils import submission_ledger as sl
+        db = os.path.join(td, 'submissions.db')
+        sl.ensure_ledger_dir(db)
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        entry = {'tarball': tarball, 'firstjob': 200000, 'njobs': 1000,
+                 'inloc': 'tape', 'outputs': []}
+        cid = sl.create_campaign(db, tarball=tarball, entry=entry,
+                                 slice_size=100)
+        sl.advance_campaign(db, cid, 500)   # entry-relative cursor
+        rid = sl.reserve_submission(db, tarball=tarball, entry=entry,
+                                    indices=[200999])
+        sl.attach_cluster(db, rid, jobsub_id='j', cluster_id='1')
+        return db, rid, tarball
+
+    def test_absolute_index_below_absolute_cursor_allowed(self):
+        """200100 sits inside the already-submitted absolute window
+        [200000, 200500) — legitimate recovery, must be ALLOWED. The
+        bare-cursor bug compared 200100 against the raw entry-relative
+        cursor (500) and wrongly REFUSED this."""
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, _ = self._setup(td)
+            with patch.object(submissions, 'resubmit',
+                              return_value=True) as fake:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', '200100', '--dry-run'])
+            fake.assert_called_once()
+
+    def test_absolute_index_above_absolute_cursor_refused(self):
+        """200600 is past the absolute bound (200500) — ground the
+        campaign has not reached yet — REFUSED, and the message must
+        name the ABSOLUTE bound (200500), not the raw cursor (500),
+        since 500 is index space this tarball's campaign does not
+        own."""
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, tarball = self._setup(td)
+            with patch.object(submissions, 'resubmit') as fake:
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main(['--db', db, 'resubmit', str(rid),
+                                      '--indices', '200600', '--dry-run'])
+            fake.assert_not_called()
+            msg = str(cm.exception)
+            self.assertIn('200600', msg)
+            self.assertIn('200500', msg)
+            self.assertIn(tarball, msg)
+
+    def test_index_outside_campaign_window_allowed(self):
+        """400 is below firstjob entirely — an index this campaign's
+        [200000, 201000) window will never contain. It is still
+        numerically below the absolute cursor bound (200500), so the
+        bound (scoped to this fix — the domain-membership check is a
+        separate, out-of-scope concern) allows it, same as before and
+        after the fix."""
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, _ = self._setup(td)
+            with patch.object(submissions, 'resubmit',
+                              return_value=True) as fake:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', '400', '--dry-run'])
+            fake.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
