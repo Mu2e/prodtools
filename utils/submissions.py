@@ -883,6 +883,33 @@ def _rows_blocking_indices(db_path, tarball, indices):
     return None
 
 
+def _live_campaign_cursor(db_path, tarball):
+    """The cursor of the one LIVE (active or paused) campaign for
+    `tarball`, or None if no such campaign exists.
+
+    'active or paused' — never 'complete'/'cancelled' — matches the
+    campaigns_live_tarball unique index in submission_ledger._connect:
+    at most one campaign can hold this state pair for a given tarball
+    at a time, so this can never be ambiguous. A paused campaign still
+    counts as live: its cursor names ground a future `submissions
+    resume` will resubmit from, same as an active one's next tick.
+
+    Backs the `submissions resubmit --indices` cursor-bound refusal
+    (see main()): an index at or above this cursor has never been
+    submitted by the campaign, so a hand resubmit there is not a
+    recovery of missing work — it is new work the top-up tick will
+    ALSO eventually submit when the cursor reaches it, and if the
+    hand-fired child lands and closes first, the tick's own overlap
+    guard (_slice_overlaps_ledger) permanently blocks on it with no
+    CLI escape (reconcile_row refuses anything not
+    'failed'/'submitting').
+    """
+    for camp in submission_ledger.all_campaigns(db_path):
+        if camp['tarball'] == tarball and camp['state'] in ('active', 'paused'):
+            return camp['cursor']
+    return None
+
+
 def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
            submit_fn=submit_slice, only_campaign=None):
     """Feed slices from active campaigns while total idle+running stays
@@ -1716,6 +1743,38 @@ def main(argv=None):
                 f"mean re-sending live work duplicates physics. Check "
                 f"jobsub_q, then `submissions reconcile {blocking['id']}` "
                 f"if the window is genuinely free.")
+
+        # --indices/--indices-file only: --files is file-keyed and has no
+        # index space to bound. Nothing checks that a requested index
+        # actually belongs to `row` — a typo (e.g. row 4231's indices
+        # meant, cursor 5000 typed) sails through _rows_blocking_indices
+        # above, since nothing else covers it YET. If a child lands there
+        # and closes before the campaign's own cursor reaches it,
+        # _slice_overlaps_ledger permanently blocks the tick on that row
+        # with no CLI escape (reconcile_row refuses anything not
+        # 'failed'/'submitting' — it would need hand-edited sqlite). The
+        # cursor is the correct bound: below it is legitimate recovery of
+        # work the campaign already submitted; at or above it is ground
+        # the campaign has not reached yet and will submit itself.
+        if args.files is None:
+            cursor = _live_campaign_cursor(db, row['tarball'])
+            if cursor is None:
+                # No active/paused campaign owns this tarball's index
+                # space right now — there is no cursor to bound against,
+                # so nothing is refused here.
+                pass
+            else:
+                over = sorted(i for i in payload if i >= cursor)
+                if over:
+                    sys.exit(
+                        f"submissions: refusing — index(es) {over} are at "
+                        f"or above the live campaign's cursor ({cursor}) "
+                        f"for {row['tarball']}. That ground has not been "
+                        f"submitted yet; a future top-up slice will cover "
+                        f"it itself, and a hand-fired child there can "
+                        f"permanently block the tick with no CLI escape. "
+                        f"If you meant to recover work the campaign has "
+                        f"ALREADY submitted, use an index below {cursor}.")
 
         fn = resubmit_files if args.files is not None else resubmit
         # _guarded_submit (inside fn) returns True for ANY non-raising

@@ -14052,6 +14052,145 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
         self.assertEqual(s['drain-batch'], 1)
 
 
+class TestResubmitCursorBound(unittest.TestCase):
+    """FIX B (2026-08-11 wave 2): `submissions resubmit --indices`
+    must refuse an index at or above the live (active/paused)
+    campaign's cursor for the row's tarball. Below the cursor is a
+    legitimate recovery of already-submitted work; at or above it is
+    ground the campaign has not reached yet, and a hand-fired child
+    that lands and closes there permanently blocks the tick
+    (_slice_overlaps_ledger skips only 'reconciled', and reconcile_row
+    refuses anything not 'failed'/'submitting' — no CLI escape)."""
+
+    def _setup(self, td, cursor, camp_state='active'):
+        from utils import submission_ledger as sl
+        db = os.path.join(td, 'submissions.db')
+        sl.ensure_ledger_dir(db)
+        tarball = 'cnf.mu2e.A.C.0.tar'
+        entry = {'tarball': tarball, 'njobs': 10000, 'inloc': 'tape',
+                 'outputs': []}
+        cid = sl.create_campaign(db, tarball=tarball, entry=entry,
+                                 slice_size=100)
+        sl.advance_campaign(db, cid, cursor)   # must be 'active' to advance
+        if camp_state == 'paused':
+            sl.set_campaign_state(db, cid, 'paused', note='operator pause')
+        rid = sl.reserve_submission(db, tarball=tarball, entry=entry,
+                                    indices=[4231])
+        sl.attach_cluster(db, rid, jobsub_id='j', cluster_id='1')
+        return db, rid, tarball
+
+    def test_below_cursor_allowed(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, _ = self._setup(td, cursor=1000)
+            with patch.object(submissions, 'resubmit',
+                              return_value=True) as fake:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', '999', '--dry-run'])
+            fake.assert_called_once()
+
+    def test_at_cursor_refused(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, tarball = self._setup(td, cursor=1000)
+            with patch.object(submissions, 'resubmit') as fake:
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main(['--db', db, 'resubmit', str(rid),
+                                      '--indices', '1000', '--dry-run'])
+            fake.assert_not_called()
+            self.assertIn('cursor', str(cm.exception))
+            self.assertIn('1000', str(cm.exception))
+            self.assertIn(tarball, str(cm.exception))
+
+    def test_above_cursor_refused(self):
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, _ = self._setup(td, cursor=1000)
+            with patch.object(submissions, 'resubmit') as fake:
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main(['--db', db, 'resubmit', str(rid),
+                                      '--indices', '5000,5001',
+                                      '--dry-run'])
+            fake.assert_not_called()
+            self.assertIn('cursor', str(cm.exception))
+            self.assertIn('5000', str(cm.exception))
+
+    def test_no_live_campaign_allowed(self):
+        """No active/paused campaign owns the tarball's index space —
+        there is no cursor to bound against, so nothing is refused
+        here (a closed/complete/cancelled campaign does not count)."""
+        from utils import submission_ledger as sl, submissions
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            sl.ensure_ledger_dir(db)
+            tarball = 'cnf.mu2e.A.C.0.tar'
+            rid = sl.reserve_submission(
+                db, tarball=tarball, entry={'tarball': tarball},
+                indices=[1, 2, 3])
+            sl.attach_cluster(db, rid, jobsub_id='j', cluster_id='1')
+            with patch.object(submissions, 'resubmit',
+                              return_value=True) as fake:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', '999999', '--dry-run'])
+            fake.assert_called_once()
+
+    def test_paused_campaign_also_bounds(self):
+        """A paused campaign still owns its index space (same live set
+        as the campaigns_live_tarball unique index) — its cursor bounds
+        a resubmit exactly like an active campaign's."""
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, _ = self._setup(td, cursor=1000, camp_state='paused')
+            with patch.object(submissions, 'resubmit') as fake:
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main(['--db', db, 'resubmit', str(rid),
+                                      '--indices', '1000', '--dry-run'])
+            fake.assert_not_called()
+            self.assertIn('cursor', str(cm.exception))
+
+    def test_indices_file_variant_also_bounded(self):
+        """--indices-file goes through the same payload/refusal path as
+        --indices; pin it separately since it is a different argparse
+        branch."""
+        from utils import submissions
+        with tempfile.TemporaryDirectory() as td:
+            db, rid, _ = self._setup(td, cursor=1000)
+            idx_path = os.path.join(td, 'idx.txt')
+            with open(idx_path, 'w') as fh:
+                fh.write('1500\n')
+            with patch.object(submissions, 'resubmit') as fake:
+                with self.assertRaises(SystemExit) as cm:
+                    submissions.main(['--db', db, 'resubmit', str(rid),
+                                      '--indices-file', idx_path,
+                                      '--dry-run'])
+            fake.assert_not_called()
+            self.assertIn('cursor', str(cm.exception))
+
+    def test_files_selector_not_bounded_by_cursor(self):
+        """--files is file-keyed with no index space — the cursor bound
+        must not touch it, even when a live index campaign exists for
+        the same tarball name."""
+        from utils import submission_ledger as sl, submissions
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            sl.ensure_ledger_dir(db)
+            tarball = 'cnf.mu2e.A.C.0.tar'
+            entry = {'tarball': tarball, 'input_pattern': 'dts.*.art'}
+            rid = sl.reserve_submission(
+                db, tarball=tarball, entry=entry,
+                indices=['dts.mu2e.a.v.art'])
+            sl.attach_cluster(db, rid, jobsub_id='j', cluster_id='1')
+            files_path = os.path.join(td, 'files.txt')
+            with open(files_path, 'w') as fh:
+                fh.write('dts.mu2e.CosmicCORSIKA.MDC2020az.'
+                         '001202_00000002.art\n')
+            with patch.object(submissions, 'resubmit_files',
+                              return_value=True) as fake:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--files', files_path, '--dry-run'])
+            fake.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
