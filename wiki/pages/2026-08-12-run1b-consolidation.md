@@ -22,6 +22,24 @@ cost to leaving it in place.
 | [#565](https://github.com/Mu2e/Production/pull/565) | Production | `JobConfig/mixing/OneBB1500W.fcl` + `1BB1500W` beam constants | 2026-08-12 |
 | `1dacb738` | Production | `NoFieldRun1B.fcl` default v01 → v40 | on main |
 
+## Verification of the merged result (2026-08-12)
+
+Nothing had built main with both PRs in it — GitHub reports `pending` with no
+statuses on the merge commit, so the two PRs were only ever tested separately.
+Built and ran it by hand in a scratch Muse workspace (`al9-prof-e29-p106`,
+Offline `38f6943d5` + Production `5aa34efb` + mu2e-trig-config `51b30e6`):
+
+| check | result |
+|---|---|
+| `muse build -j 30` | exit 0 |
+| `mu2e -c Offline/Mu2eG4/fcl/gdmldump_run1_b_v40.fcl` | exit 0, GDML written, **no overlaps, no G4 exceptions** |
+| `mu2e -c Run1BReco.fcl -n 1` on `dig.mu2e.CosmicCRYAllMix1BB.Run1Ban_best_v1_4-000` | exit 0, full reco path ran |
+
+The reco smoke resolved to `geom_run1_b_v40.txt` + `bfgeom_no_field.txt`
+(confirmed via `fhicl-dump`), so it exercised the newly-landed geometry rather
+than a default. The Run1Ban digis are tape-only; the input was prestaged with
+`mdh prestage-files`.
+
 ## The decision, and what it deliberately does not do
 
 **Land capability, keep Run1A default.** `geom_common.txt` on main still points

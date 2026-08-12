@@ -1268,3 +1268,14 @@ was NOT pushed; it exists only in the local scratch clone at
 5122019310278bbfada64ec68098ce6bf6bb5f66 and is redundant while the
 branch lives. Push it first if the branch is ever deleted. Updated
 data/Run1B/README.md, the wiki page, and the index accordingly.
+
+## [2026-08-12] update | Merged Run1B consolidation verified on main
+Built and ran Offline main (38f6943d5) with Production 5aa34efb and
+mu2e-trig-config 51b30e6 in a scratch Muse workspace, because CI never
+built the merged result (pending, no statuses on the merge commit).
+muse build exit 0; gdmldump_run1_b_v40 exit 0 with no overlaps or G4
+exceptions; Run1BReco.fcl -n 1 exit 0 over a prestaged real digi from
+dig.mu2e.CosmicCRYAllMix1BB.Run1Ban_best_v1_4-000. fhicl-dump confirmed
+the smoke resolved to geom_run1_b_v40.txt + bfgeom_no_field.txt, so it
+exercised the newly-landed geometry and not a default.
+Source: docs/superpowers/plans/2026-08-08-run1b-consolidation.md Task 7 step 2
