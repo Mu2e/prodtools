@@ -684,7 +684,7 @@ submissions set-slice 7 500        # retune the batch size from the next tick
 submissions set-memory 7 3000MB    # retune the memory request from the next tick
 submissions set-entry 7 inloc resilient --include-open-rows  # also fix open rows' recoveries
 submissions reconcile 123 --note "checked jobsub_q, window free"
-submissions resubmit 4231 --indices 4000,4001,4055-4062       # named indices
+submissions resubmit 4231 --indices 4000,4001,4055             # named indices
 submissions resubmit 4231 --indices-file gaps.txt --dry-run   # preview first
 submissions resubmit 4198 --files parked.txt                  # draining row
 ```
@@ -756,8 +756,9 @@ Verbs:
   from an *existing* ledger row, as a child submission (attempt+1). The
   entry comes from the row itself — nothing to hand-edit, no file to
   write. `--indices` is a comma/space-separated list of absolute cnf
-  indices (`4000,4001,4055-4062`); `--indices-file` is the same, one
-  entry per line, `#`-comments ignored; `--files` is a file of input
+  indices (`4000,4001,4055`) — integers only, no `N-M` range syntax;
+  for a large or scattered set use `--indices-file` instead (same
+  grammar, one entry per line, `#`-comments ignored); `--files` is a file of input
   art filenames, one per line, for a draining row. `--files` only
   works against a draining (file-keyed) row, and `--indices`/
   `--indices-file` only against an index row — the CLI refuses the

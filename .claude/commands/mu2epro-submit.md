@@ -86,7 +86,9 @@ See `reference_ksu_jobsub_env` for the incident history.
 
 ```
 # Recovery: resubmit specific missing indices from a stuck row
-/mu2epro-submit resubmit 4231 --indices 4000,4001,4055-4062
+# (comma/space-separated integers only — no N-M range syntax; for a
+# large or scattered set use --indices-file instead)
+/mu2epro-submit resubmit 4231 --indices 4000,4001,4055
 
 # Re-dispatch parked draining files from an exhausted row
 /mu2epro-submit resubmit 4198 --files /tmp/parked_ceendpoint.txt
@@ -101,7 +103,7 @@ See `reference_ksu_jobsub_env` for the incident history.
 ## Instructions
 
 You are given `$ARGUMENTS` (the verb and its args, e.g.
-`resubmit 4231 --indices 4000-4010` or `run --campaign 17`). Follow
+`resubmit 4231 --indices 4000,4001,4010` or `run --campaign 17`). Follow
 these steps:
 
 1. Resolve the repo root (cwd at invocation) → `REPO`.
@@ -110,12 +112,12 @@ these steps:
    token-refresh. If the submit fails for lack of a token, STOP and report
    the absence; do not remediate.
 
-3. **DRY-RUN first** (no submission): run the ksu block below with
-   `--dry-run` appended. Show the user the would-* output — for
-   `resubmit`, the reconstructed jobset size and any refusal; for
-   `run`, what each active row/campaign would do. If the dry-run errors
-   (e.g. `no ledger row N`, a blocking-row refusal), STOP and report —
-   do NOT submit.
+3. **DRY-RUN first** (no submission): run the ksu block for the given
+   verb (below) with `--dry-run` appended. Show the user the would-*
+   output — for `resubmit`, the reconstructed jobset size and any
+   refusal; for `run`, what each active row/campaign would do. If the
+   dry-run errors (e.g. `no ledger row N`, a blocking-row refusal),
+   STOP and report — do NOT submit.
 
 4. **WARN + confirm:** print `WARNING: this submits grid jobs to the
    production pool as mu2epro; the cluster is not easily reversible.` and ask
@@ -123,7 +125,7 @@ these steps:
    mu2epro guard hook also prompts on `ksu mu2epro`, but confirm here
    regardless — the hook may not be armed this session.)
 
-5. **REAL submit:** the same ksu block WITHOUT `--dry-run`.
+5. **REAL submit:** the same verb's ksu block WITHOUT `--dry-run`.
 
 6. **VERIFY (mandatory — a vault failure can exit 0 with NO cluster):** parse
    the cluster ID from the output (`Submitted cluster: NNN`). Then run a
@@ -138,7 +140,7 @@ these steps:
    child row id (`submissions status` shows it parented on the row you
    resubmitted).
 
-### ksu block (dry-run and real submit share this shape)
+### ksu block — `resubmit` (bounded: a single named jobset, safe to time out)
 
 ```bash
 timeout 590 ksu mu2epro -e /bin/bash -c '
@@ -147,19 +149,37 @@ export USER=mu2epro LOGNAME=mu2epro HOME=/exp/mu2e/app/home/mu2epro
 WORKDIR=$(mktemp -d /tmp/mu2epro_submit.XXXXXX)
 export XDG_RUNTIME_DIR="$WORKDIR"
 cd "$WORKDIR"
-bash <REPO>/bin/submissions <VERB> <ARGS> 2>&1
+bash <REPO>/bin/submissions resubmit <ARGS> 2>&1
+RC=${PIPESTATUS[0]}
+echo "=== submit RC=$RC ==="
+exit $RC
+'
+```
+
+### ksu block — `run` (NEVER wrap in `timeout`)
+
+`run` can walk many campaigns in one tick; killing it mid-tick orphans
+a grid cluster that jobsub_submit already created but the process never
+got to record. This is a standing hard rule in this project — do not
+reintroduce a `timeout` wrapper here even for convenience.
+
+```bash
+ksu mu2epro -e /bin/bash -c '
+unset MUSE_WORK_DIR
+export USER=mu2epro LOGNAME=mu2epro HOME=/exp/mu2e/app/home/mu2epro
+WORKDIR=$(mktemp -d /tmp/mu2epro_submit.XXXXXX)
+export XDG_RUNTIME_DIR="$WORKDIR"
+cd "$WORKDIR"
+bash <REPO>/bin/submissions run <ARGS> 2>&1
 RC=${PIPESTATUS[0]}
 echo "=== submit RC=$RC ==="
 exit $RC
 '
 ```
 (`bin/submissions` sources the Mu2e ops environment itself, so nothing
-extra is needed before it in this block.) A big `run` tick (many
-campaigns) may exceed the 590s timeout; raise it if needed, and if it
-times out go to step 6 (jobsub_q) BEFORE any retry — **never wrap
-`submissions run` in `timeout` and let it silently kill the process
-mid-tick; if you raise the timeout, raise it generously instead of
-retrying blind.**
+extra is needed before it in either block.) If a `run` tick appears to
+hang, do NOT kill it — go to step 6 (jobsub_q) to check what has
+actually been submitted before deciding anything.
 
 ## Notes
 

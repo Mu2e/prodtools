@@ -154,7 +154,16 @@ table (`campaigns`, same sqlite3 DB) and one new phase inside
 `submissions run` — no new daemons, no new cron entries, no worker-side
 changes.
 
-**Enqueue workflow.** The one-command path — build the cnf, push it to
+> **superseded 2026-08-11 — see EXAMPLES.md §submissions.** The
+> `map-file-removal` branch retired the submission map entirely:
+> `bin/submit_map` is deleted, `--jobdefs` no longer exists, and there
+> is now exactly one way to create a campaign. The paragraphs below
+> describe that current, single path — kept here (rather than deleted)
+> because the surrounding rationale (why enqueue submits nothing, the
+> active/paused double-feed guard, the crash-window discussion further
+> down) still applies verbatim; only the "two doors" framing is gone.
+
+**Enqueue workflow.** There is one command: build the cnf, push it to
 SAM, and register the campaign, all in one invocation, no map file
 involved:
 
@@ -165,35 +174,27 @@ json2jobdef --json <config>.json --desc <D> --dsconf <C> \
 
 `--enqueue` requires `--prod` (the cnf must land in SAM first —
 enqueue resolves the tarball from there, not from a file on disk).
-Under `--prod`, at least one of `--jobdefs` or `--enqueue` is now
-required; `argparse` enforces it. The campaign's `map_path` records
-provenance as `<config>.json#<desc>@<dsconf>` instead of a filename.
+The campaign's ledger row records provenance in its `origin` column
+(renamed from `map_path` 2026-08-11 — the column is free-text
+provenance; the file it used to name no longer exists) as
+`<config>.json#<desc>@<dsconf>`.
 
-An operator can still register a campaign from an existing map file
-built with `--jobdefs` (e.g. to enqueue a hand-edited entry, or one
-entry out of a multi-entry map via `--entry N`):
-
-```bash
-submit_map --map MDC2025-032.json --enqueue --slice-size 2000
-```
-
-Both paths snapshot the selected entry/entries into the `campaigns`
-table at `cursor=0` and **submit nothing** — same "hard error, not a
-fallback" discipline as the ledger write in the normal submit path,
-but inverted: here nothing has gone to the grid yet, so a DB failure
-at enqueue time is a hard error rather than a warn-and-continue.
-`--slice-size` (default 1000) is frozen into the row. `submit_map` is
-single-backend (direct) — no `--backend` flag exists. Mutually
-exclusive with
-`--first`/`--num`/`--indices`/`--indices-file`. An entry with no fixed
-`njobs`, or `njobs < 1`, (`generic_tarball`, or `njobs: 0`) can't be
-enqueued — a campaign needs a positive job count to slice against. A
-second `--enqueue` for a tarball that already has an *active OR
-paused* campaign is refused outright — no silent double-feed. *(added
-at final review: the guard originally checked `active` only; a paused
-campaign still owns its index space, so "pause then enqueue" would have
-been an undetected double-submit path — see the crash-window discussion
-below for the closely related overlap guard.)*
+The snapshotted entry lands in the `campaigns` table at `cursor=0` and
+**submits nothing** — same "hard error, not a fallback" discipline as
+the ledger write in the normal submit path, but inverted: here nothing
+has gone to the grid yet, so a DB failure at enqueue time is a hard
+error rather than a warn-and-continue. `--slice-size` (default 1000)
+is frozen into the row. The direct backend is the only backend — no
+`--backend` flag exists anywhere in this workflow. An entry with no
+fixed `njobs`, or `njobs < 1`, (`generic_tarball`, or `njobs: 0`)
+can't be enqueued — a campaign needs a positive job count to slice
+against. A second `--enqueue` for a tarball that already has an
+*active OR paused* campaign is refused outright — no silent
+double-feed. *(added at final review: the guard originally checked
+`active` only; a paused campaign still owns its index space, so
+"pause then enqueue" would have been an undetected double-submit path
+— see the crash-window discussion below for the closely related
+overlap guard.)*
 
 **Top-up semantics.** Every `submissions run` invocation (the same
 hourly cron tick that does recovery) runs the top-up phase *after* the
