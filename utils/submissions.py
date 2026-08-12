@@ -745,13 +745,28 @@ def _guarded_submit_with_evidence(what, tarball, db_path, fn):
     already filters to state='active', so a reservation stuck in
     'submitting' (crash mid-flight) or closed 'failed' does not count
     as evidence either.
+
+    Both open_rows() reads (pre- and post-submit) sit inside the SAME
+    try as _guarded_submit's own catch, for the same reason
+    _guarded_submit exists at all: top_up/drain_tick have no outer
+    try, so an exception here (e.g. a locked ledger) would otherwise
+    escape the call site raw and abort the whole tick — including a
+    POST-submit read raising AFTER the slice already went to the
+    grid, which would abort before the cursor advance and before the
+    pause, wedging every remaining campaign that tick. SystemExit is
+    caught explicitly for the same reason _guarded_submit catches it;
+    KeyboardInterrupt is deliberately NOT caught.
     """
-    before = {r['id'] for r in submission_ledger.open_rows(db_path)
-             if r['tarball'] == tarball}
-    if not _guarded_submit(what, fn):
+    try:
+        before = {r['id'] for r in submission_ledger.open_rows(db_path)
+                 if r['tarball'] == tarball}
+        if not _guarded_submit(what, fn):
+            return False
+        after = {r['id'] for r in submission_ledger.open_rows(db_path)
+                 if r['tarball'] == tarball}
+    except (Exception, SystemExit) as e:
+        print(f"  {what}: submit FAILED ({type(e).__name__}: {e})")
         return False
-    after = {r['id'] for r in submission_ledger.open_rows(db_path)
-             if r['tarball'] == tarball}
     if not (after - before):
         print(f"  {what}: submit FAILED (no new active ledger row for "
               f"{tarball} — jobsub_submit likely exited non-zero, or "

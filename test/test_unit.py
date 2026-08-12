@@ -14268,6 +14268,98 @@ class TestResubmitCursorBoundWindowed(unittest.TestCase):
             fake.assert_called_once()
 
 
+class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
+    """FIX 2 (2026-08-11 wave 3): _guarded_submit_with_evidence's two
+    open_rows() reads (pre- and post-submit, utils/submissions.py
+    around what were lines 749/753) sat OUTSIDE any try. submit_slice
+    and submit_drain_batch are called from top_up/_run_pass and
+    drain_tick with no outer try (see TestCallSitesContainFailures),
+    so a raising open_rows — e.g. a locked ledger — escaped the call
+    site raw and aborted the whole tick. The POST-read case is the
+    damaging one: the slice has already gone to the grid, so the
+    escape happens before both the cursor advance and the pause,
+    wedging every remaining campaign that tick with no physics
+    duplicated (the next tick's overlap guard still blocks on the
+    active row) but no self-heal either.
+
+    Both cases must yield False, not an escaping exception, from both
+    submit_slice and submit_drain_batch."""
+
+    @staticmethod
+    def _raise_on_call(n_to_raise):
+        """An open_rows stand-in that raises on call number `n_to_raise`
+        (1-indexed) and otherwise returns an empty active-row list."""
+        calls = {'n': 0}
+
+        def fn(db_path):
+            calls['n'] += 1
+            if calls['n'] == n_to_raise:
+                raise sqlite3.OperationalError('database is locked')
+            return []
+        fn.calls = calls
+        return fn
+
+    def test_submit_slice_pre_read_raise_contained(self):
+        from utils import submissions, submission_ledger
+        camp = {'id': 1, 'cursor': 0,
+                'entry': {'tarball': 'a.tar', 'njobs': 10}}
+        raiser = self._raise_on_call(1)   # PRE-READ
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            with patch.object(submission_ledger, 'open_rows',
+                              side_effect=raiser):
+                self.assertFalse(submissions.submit_slice(
+                    camp, 5, db,
+                    submit_fn=lambda entry, idx, options:
+                        {'status': 'submitted'}))
+        self.assertEqual(raiser.calls['n'], 1)
+
+    def test_submit_slice_post_read_raise_contained(self):
+        from utils import submissions, submission_ledger
+        camp = {'id': 1, 'cursor': 0,
+                'entry': {'tarball': 'a.tar', 'njobs': 10}}
+        raiser = self._raise_on_call(2)   # POST-READ
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            with patch.object(submission_ledger, 'open_rows',
+                              side_effect=raiser):
+                self.assertFalse(submissions.submit_slice(
+                    camp, 5, db,
+                    submit_fn=lambda entry, idx, options:
+                        {'status': 'submitted'}))
+        self.assertEqual(raiser.calls['n'], 2)
+
+    def test_submit_drain_batch_pre_read_raise_contained(self):
+        from utils import submissions, submission_ledger
+        camp = {'id': 2,
+                'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
+        raiser = self._raise_on_call(1)   # PRE-READ
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            with patch.object(submission_ledger, 'open_rows',
+                              side_effect=raiser):
+                self.assertFalse(submissions.submit_drain_batch(
+                    camp, ['dts.mu2e.a.v.art'], db,
+                    submit_fn=lambda entry, idx, options:
+                        {'status': 'submitted'}))
+        self.assertEqual(raiser.calls['n'], 1)
+
+    def test_submit_drain_batch_post_read_raise_contained(self):
+        from utils import submissions, submission_ledger
+        camp = {'id': 2,
+                'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
+        raiser = self._raise_on_call(2)   # POST-READ
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            with patch.object(submission_ledger, 'open_rows',
+                              side_effect=raiser):
+                self.assertFalse(submissions.submit_drain_batch(
+                    camp, ['dts.mu2e.a.v.art'], db,
+                    submit_fn=lambda entry, idx, options:
+                        {'status': 'submitted'}))
+        self.assertEqual(raiser.calls['n'], 2)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
