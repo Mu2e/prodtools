@@ -1,0 +1,90 @@
+%%{init: { 'theme': 'base', 'flowchart': { 'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 30, 'padding': 5, 'useMaxWidth': false, 'curve': 'linear' }, 'securityLevel': 'loose' } }%%
+graph TD
+    SPK[<b>Spokespersons</b><br/>Bernstein, Miscetti&nbsp;]
+    
+    SPK --> AC[<b>Analysis Coordinators</b><br/>Echenard, Oksuzian&nbsp;]
+    
+    AC --> INFGROUP
+    AC --> SIMGROUP
+    AC --> RECOGROUP
+    AC --> TOOLSGROUP
+    AC --> CALGROUP
+    AC --> TRIGGROUP
+    SPK --> OC[<b>Operations Coordinators</b><br/>Rackness, Xia&nbsp;]
+    OC --> TRIGGROUP
+    AC -.-> ML[<b>ML/AI</b><br/>Corrodi, Kampa&nbsp;]
+    
+    subgraph INFGROUP[" "]
+        INF[<b>Infrastructure</b><br/>Culbertson]
+        PROD[<b>Production</b><br/>Oksuzian]
+        CODE[<b>Code Management</b><br/>Culbertson]
+        DATA[<b>Data Handling</b><br/>Tran]
+        DB[<b>Databases</b><br/>Culbertson]
+        DQM[<b>Offline DQM</b><br/>Tedeschi]
+    end
+    
+    subgraph SIMGROUP[" "]
+        SIM[<b>Simulation</b><br/>DiFalco]
+        GEN[<b>Generators</b><br/>Houssain]
+        G4GEOM[<b>Geant4 & Geometry</b><br/>Jenkinson]
+        NONG4[<b>Other MC</b><br/>Mueller]
+    end
+    
+    subgraph RECOGROUP[" "]
+        RECO[<b>Reconstruction</b><br/>Brown]
+        ALG[<b>Algorithms</b><br/>Brown]
+        VAL[<b>Validation</b><br/>Culbertson]
+    end
+    
+    subgraph TOOLSGROUP[" "]
+        TOOLS[<b>Tools</b><br/>TBD, Middleton&nbsp;]
+        NTUP[<b>Analysis Tuple</b><br/>TBD]
+        IFACE[<b>Analysis Interfaces</b><br/>Harrison]
+        EVD[<b>Event Display</b><br/>Chithirasreemadam]
+        REF[<b>Reference Analyses</b><br/>Middleton]
+    end
+    
+    subgraph CALGROUP[" "]
+        CAL[<b>Calibration & Alignment</b><br/>Bonventre]
+        CALIB[<b>Calibration</b><br/>Group]
+        ALIGN[<b>Alignment</b><br/>Palo]
+        FMAP[<b>Field Map</b><br/>Kampa]
+    end
+    
+    subgraph TRIGGROUP[" "]
+        TRIG[<b>Trigger</b><br/>MacKenzie]
+    end
+    linkStyle 9 stroke:none,stroke-width:0
+    
+    classDef spokespersons fill:#1E40AF,stroke:#1E3A8A,stroke-width:2px,color:#fff
+    classDef analysis fill:#7C3AED,stroke:#6D28D9,stroke-width:2px,color:#fff
+    classDef operations fill:#BE185D,stroke:#9F1239,stroke-width:2px,color:#fff
+    classDef tools fill:#D97706,stroke:#B45309,stroke-width:2px,color:#fff
+    classDef infrastructure fill:#059669,stroke:#047857,stroke-width:2px,color:#fff
+    classDef infrastructureLeader fill:#059669,stroke:#065F46,stroke-width:6px,color:#fff
+    classDef simulation fill:#0891B2,stroke:#0C5D7A,stroke-width:2px,color:#fff
+    classDef simulationLeader fill:#0891B2,stroke:#0C5D7A,stroke-width:6px,color:#fff
+    classDef reconstruction fill:#2563EB,stroke:#1E3A8A,stroke-width:2px,color:#fff
+    classDef reconstructionLeader fill:#2563EB,stroke:#1E3A8A,stroke-width:6px,color:#fff
+    classDef calibration fill:#DC2626,stroke:#991B1B,stroke-width:2px,color:#fff
+    classDef calibrationLeader fill:#DC2626,stroke:#991B1B,stroke-width:6px,color:#fff
+    classDef toolsLeader fill:#D97706,stroke:#92400E,stroke-width:6px,color:#fff
+    classDef operationsLeader fill:#BE185D,stroke:#881337,stroke-width:6px,color:#fff
+    classDef triggerLeader fill:#BE185D,stroke:#881337,stroke-width:6px,color:#fff
+    classDef mlai fill:#374151,stroke:#1F2937,stroke-width:2px,color:#fff
+    
+    class SPK spokespersons
+    class AC analysis
+    class OC operations
+    class ML mlai
+    class TRIG triggerLeader
+    class TOOLS toolsLeader
+    class NTUP,IFACE,EVD,REF tools
+    class INF infrastructureLeader
+    class PROD,CODE,DATA,DB,DQM infrastructure
+    class SIM simulationLeader
+    class GEN,G4GEOM,NONG4 simulation
+    class RECO reconstructionLeader
+    class ALG,VAL reconstruction
+    class CAL calibrationLeader
+    class CALIB,ALIGN,FMAP calibration
