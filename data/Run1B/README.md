@@ -59,5 +59,5 @@ developed — consolidation is finished, so nothing further will land there. Rea
 the branch to understand what a frozen campaign did; run the Musing to reproduce
 it.
 
-See `docs/superpowers/specs/2026-08-08-run1b-consolidation-design.md` for the
-consolidation rationale.
+See `wiki/pages/2026-08-12-run1b-consolidation.md` for the consolidation
+rationale.

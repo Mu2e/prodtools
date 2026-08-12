@@ -15,7 +15,7 @@ consumption-status recovery re-dispatches finished work). Deterministic
 payloads re-run identical events, so systematic failures re-fail every
 round — `exhausted` is where a human takes over.
 
-Design: docs/superpowers/specs/2026-07-18-direct-recovery-design.md
+Design: wiki/pages/2026-07-18-direct-recovery-loop.md
 """
 import argparse
 import fcntl
