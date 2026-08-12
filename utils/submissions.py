@@ -1701,14 +1701,26 @@ def main(argv=None):
 
     if verb == 'set-entry':
         _acquire_lock(db)
+        # Read the state BEFORE the write: on a settled campaign the
+        # ledger deliberately leaves the campaign snapshot alone and
+        # edits only the open rows, so claiming the campaign changed
+        # would misreport what happened.
+        was = next((c for c in submission_ledger.all_campaigns(db)
+                    if c['id'] == args.camp_id), None)
+        live = was is not None and was['state'] in ('active', 'paused')
         try:
             old, rows = submission_ledger.set_campaign_entry_key(
                 db, args.camp_id, args.key, args.value,
                 include_open_rows=args.include_open_rows)
         except ValueError as e:
             sys.exit(f"submissions: {e}")
-        print(f"campaign {args.camp_id}: {args.key} {old or 'unset'} -> "
-              f"{args.value} (applies from the next tick)")
+        if live:
+            print(f"campaign {args.camp_id}: {args.key} {old or 'unset'} -> "
+                  f"{args.value} (applies from the next tick)")
+        else:
+            print(f"campaign {args.camp_id} is {was['state']}: campaign "
+                  f"snapshot left unchanged (no future slice reads it); "
+                  f"{args.key} set to {args.value} on its open rows only")
         if args.include_open_rows:
             print(f"  rows updated: "
                   f"{', '.join(str(r) for r in rows) if rows else 'none'}")

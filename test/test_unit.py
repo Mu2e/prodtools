@@ -5059,6 +5059,57 @@ class TestCampaignLedger(unittest.TestCase):
         row = [r for r in self.sl.all_rows(self.db) if r['id'] == other][0]
         self.assertEqual(row['entry']['inloc'], 'tape')
 
+    def test_cascade_reaches_open_rows_of_a_complete_campaign(self):
+        """'complete' means every SLICE was dispatched, not that every job
+        landed — the open rows still recover, and recovery reads the ROW's
+        entry. Refusing the cascade here made inloc uncorrectable without
+        hand-editing entry_json (campaign 54, 2026-08-12)."""
+        cid = self._create()
+        rid = self._row()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        previous, changed = self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient', include_open_rows=True)
+        self.assertEqual(previous, 'tape')
+        self.assertEqual(changed, [rid])
+        row = [r for r in self.sl.all_rows(self.db) if r['id'] == rid][0]
+        self.assertEqual(row['entry']['inloc'], 'resilient')
+
+    def test_settled_campaign_snapshot_is_left_unchanged(self):
+        """The campaign snapshot is deliberately NOT edited once the
+        cursor is settled: no future slice reads it, so writing there
+        would record an intent nothing executes."""
+        cid = self._create()
+        self._row()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient', include_open_rows=True)
+        camp = [c for c in self.sl.all_campaigns(self.db)
+                if c['id'] == cid][0]
+        self.assertEqual(camp['entry']['inloc'], 'tape')
+
+    def test_cascade_reaches_open_rows_of_a_cancelled_campaign(self):
+        """A cancelled campaign still recovers its dispatched rows, so it
+        needs the same correction path as a complete one."""
+        cid = self._create()
+        rid = self._row()
+        self.sl.set_campaign_state(self.db, cid, 'cancelled')
+        _, changed = self.sl.set_campaign_entry_key(
+            self.db, cid, 'inloc', 'resilient', include_open_rows=True)
+        self.assertEqual(changed, [rid])
+        row = [r for r in self.sl.all_rows(self.db) if r['id'] == rid][0]
+        self.assertEqual(row['entry']['inloc'], 'resilient')
+
+    def test_settled_refusal_points_at_the_flag_not_just_the_state(self):
+        """Without the flag a settled campaign is still refused — but the
+        message must name the way forward, or the operator concludes the
+        value is uncorrectable and reaches for sqlite."""
+        cid = self._create()
+        self.sl.set_campaign_state(self.db, cid, 'complete')
+        with self.assertRaises(ValueError) as cm:
+            self.sl.set_campaign_entry_key(
+                self.db, cid, 'inloc', 'resilient')
+        self.assertIn('--include-open-rows', str(cm.exception))
+
     def test_advance_cursor(self):
         cid = self._create()
         self.sl.advance_campaign(self.db, cid, 4)

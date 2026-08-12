@@ -569,6 +569,26 @@ def set_campaign_entry_key(db_path, camp_id, key, value,
     `closed_utc IS NULL` rather than state='active' on purpose: a
     'submitting' row (reserved, cluster not yet attached) is still going
     to be recovered, so it needs the new value too.
+
+    SETTLED CAMPAIGNS (2026-08-12): a campaign whose cursor is exhausted
+    is 'complete', and a cancelled one is 'cancelled', but BOTH keep
+    recovering their already-dispatched rows — `complete` means every
+    slice was dispatched, not that every job landed
+    (reference: windowed-campaign completeness). The live-retune gate
+    used to refuse those outright, which closed the operator surface
+    exactly when it was needed: campaign 54 (PhysicalPionStops.Run1Bap)
+    sat 'complete' at 500/500 dispatched with 239 outputs missing and an
+    open row that was about to re-run them from the WRONG inloc, and
+    there was no CLI way to correct it short of hand-editing entry_json
+    in sqlite.
+
+    So a settled campaign now accepts the row cascade and only the row
+    cascade: `include_open_rows=True` rewrites its open rows, while the
+    CAMPAIGN snapshot is deliberately left alone, because with the
+    cursor exhausted (or the campaign cancelled) no future slice will
+    ever read it — editing it would record an intent that nothing
+    executes. Without the flag a settled campaign is still refused, and
+    the error names the flag rather than the state.
     """
     if key not in EDITABLE_ENTRY_KEYS:
         raise ValueError(
@@ -584,15 +604,19 @@ def set_campaign_entry_key(db_path, camp_id, key, value,
             (camp_id,)).fetchone()
         if row is None:
             raise ValueError(f"no campaign {camp_id}")
-        if row['state'] not in ('active', 'paused'):
+        live = row['state'] in ('active', 'paused')
+        if not live and not include_open_rows:
             raise ValueError(
-                f"campaign {camp_id} is {row['state']} — {key} only "
-                f"applies to an active or paused campaign")
+                f"campaign {camp_id} is {row['state']} — its cursor is "
+                f"settled, so editing the campaign snapshot would change "
+                f"nothing. Pass --include-open-rows to set {key} on its "
+                f"still-open rows, which is what their recoveries read")
         entry = json.loads(row['entry_json'])
         previous = entry.get(key)
-        entry[key] = value
-        con.execute('UPDATE campaigns SET entry_json = ? WHERE id = ?',
-                    (json.dumps(entry), camp_id))
+        if live:
+            entry[key] = value
+            con.execute('UPDATE campaigns SET entry_json = ? WHERE id = ?',
+                        (json.dumps(entry), camp_id))
         changed = []
         if include_open_rows:
             open_ = con.execute(
