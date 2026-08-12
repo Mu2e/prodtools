@@ -6,7 +6,9 @@ published, so it and the `.png` no longer agree — the mermaid is the current o
 
 ## Corrections since 2025-12
 
-**2026-08-12, Simulation subgroup** (Oksuzian, org chat):
+All from MacKenzie, org chat, 2026-08-12.
+
+**Simulation subgroup:**
 
 - **Geant4 and Geometry are a single subgroup**, and have been almost since the
   beginning. The 2025-12 chart still shows them split (`Geometry: Tripathy`,
@@ -14,8 +16,17 @@ published, so it and the `.png` no longer agree — the mermaid is the current o
 - **Max Jenkinson (U. Manchester)** leads the merged Geant4 & Geometry subgroup.
 - **Tausiff Houssain** leads Generators, replacing Borrel.
 - Neither subgroup lead currently has experience modifying the Offline geometry,
-  so Offline geometry changes are being made by Oksuzian directly. Treat the
-  chart as reporting lines, not as a routing table for geometry work.
+  so those changes are being made by MacKenzie directly. Treat the chart as
+  reporting lines, not as a routing table for geometry work.
+
+**Leadership and spelling:**
+
+- **Trigger is led by MacKenzie alone, with no deputy** — the 2025-12 chart
+  lists `Demers, MacKinzie`.
+- The surname is **MacKenzie**, not "MacKinzie".
+- **Operations deputy is Lei Xia**, replacing Grant.
+- ML/AI is **Corrodi, Kampa** — the chart spelled Cole Kampa's surname "Campa"
+  in ML/AI while spelling it correctly under Field Map.
 
 ```mermaid
 %%{init: { 'theme': 'base', 'flowchart': { 'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 30, 'padding': 5, 'useMaxWidth': false, 'curve': 'linear' }, 'securityLevel': 'loose' } }%%
@@ -30,9 +41,9 @@ graph TD
     AC --> TOOLSGROUP
     AC --> CALGROUP
     AC --> TRIGGROUP
-    SPK --> OC[Operations Coordinators:<br/>Rackness, Grant&nbsp;]
+    SPK --> OC[Operations Coordinators:<br/>Rackness, Xia&nbsp;]
     OC --> TRIGGROUP
-    AC -.-> ML[ML/AI:<br/>Corrodi, Campa&nbsp;]
+    AC -.-> ML[ML/AI:<br/>Corrodi, Kampa&nbsp;]
     
     subgraph INFGROUP[" "]
         INF[Infrastructure:<br/>Culbertson]
@@ -72,7 +83,7 @@ graph TD
     end
     
     subgraph TRIGGROUP[" "]
-        TRIG[Trigger:<br/>Demers, MacKinzie&nbsp;]
+        TRIG[Trigger:<br/>MacKenzie]
     end
     linkStyle 9 stroke:none,stroke-width:0
     
