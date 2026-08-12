@@ -189,11 +189,12 @@ def _reserve_in_ledger(entry, firstjob, jobset, options, files=None):
     discovering it cannot write the ledger.
 
     options.ledger_db is expected already resolved (see
-    _resolve_ledger_db, called once in main()): a DERIVED path arrives
-    with its directory already created, an explicit --ledger-db arrives
-    exactly as given. Creating it again here would defeat the point of
-    resolving once — an explicit path pointing at a missing directory
-    must fail here, not get silently mkdir'd.
+    _resolve_ledger_db, called once by the sole caller, `json2jobdef`):
+    a DERIVED path arrives with its directory already created, an
+    explicit --ledger-db arrives exactly as given. Creating it again
+    here would defeat the point of resolving once — an explicit path
+    pointing at a missing directory must fail here, not get silently
+    mkdir'd.
     """
     return submission_ledger.reserve_submission(
         options.ledger_db,
@@ -307,10 +308,12 @@ def _snapshot_entry(entry, resources):
 
 
 def _resolve_ledger_db(opts):
-    """Writer ledger path, resolved ONCE in main(). A DEFAULTED (derived)
-    path gets its directory created (submission_ledger.ensure_ledger_dir);
-    an operator-supplied --ledger-db never does — a typo there must fail
-    loudly rather than silently make a stray database."""
+    """Writer ledger path, resolved ONCE by the sole caller, `json2jobdef`
+    (there is no `main()` in this module — submit.py is a library, not a
+    CLI). A DEFAULTED (derived) path gets its directory created
+    (submission_ledger.ensure_ledger_dir); an operator-supplied
+    --ledger-db never does — a typo there must fail loudly rather than
+    silently make a stray database."""
     if opts.ledger_db:
         return opts.ledger_db
     return submission_ledger.ensure_ledger_dir(submission_ledger.ledger_for())
@@ -568,12 +571,12 @@ def _compute_jobset(options, njobs_total, firstjob=0, entry_njobs=None):
     """Resolve --first/--num/--indices into the list of job indices to submit.
 
     Indices are entry-relative (PROCESS space, starting at 0) — a windowed
-    entry's `firstjob` offset is applied worker-side by `resolve_map_index`
+    entry's `firstjob` offset is applied worker-side by `resolve_entry_index`
     (the entry ships in ops['jobdesc']), not here. A window is sized by the
     entry's njobs and validated against the cnf capacity (njobs_total,
     0 = open-ended) via jobdesc.validate_window.
 
-    Default: every index 0..size-1 (== mu2ejobsub --all).
+    Default: every index 0..size-1 (the whole cnf).
     --first N alone: 1 job at index N.
     --first N --num M: indices [N, N+M).
     --indices K1,K2,...: exactly those ABSOLUTE cnf indices (recovery). Only
@@ -713,7 +716,7 @@ def submit_entry(entry, idx, options):
     print(f"{'='*60}")
 
     # `--indices` values ARE cnf indices, but the worker reaches a cnf index via
-    # resolve_map_index (`local = global + firstjob`, gated on `global <
+    # resolve_entry_index (`local = global + firstjob`, gated on `global <
     # njobs`). So the SHIPPED entry must sit at firstjob=0 and span past the
     # largest index for `local == global` to hold. Only the ops copy is
     # rewritten — the on-disk map keeps its own njobs, so a recovery map

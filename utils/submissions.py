@@ -583,13 +583,20 @@ def recovery_resource_kwargs(entry):
     return kwargs
 
 
-def resubmit(row, missing, db_path, dry_run=False, submit_fn=None):
+def resubmit(row, missing, db_path, dry_run=False, submit_fn=None,
+            origin=None):
     """Resubmit missing indices in-process. Returns True on success.
 
     The reconstructed entry DROPS firstjob: --indices values are absolute
     cnf indices, and the worker-side firstjob+index resolution must
     degenerate to the identity. The original windowed entry stays in the
     parent row's snapshot.
+
+    `origin` defaults to the automatic-recovery-loop string; a caller
+    acting on an operator's behalf (the `submissions resubmit` verb)
+    passes a distinguishable one, so the ledger's origin column — the
+    whole reason the column was renamed off map_path — can actually
+    tell a hand re-fire apart from an automatic recovery.
     """
     submit_fn = submit_fn or submit.submit_entry
     entry = {k: v for k, v in row['entry'].items() if k != 'firstjob'}
@@ -598,7 +605,7 @@ def resubmit(row, missing, db_path, dry_run=False, submit_fn=None):
         indices=list(missing),
         ledger_parent=row['id'],
         dry_run=dry_run,
-        origin=f"recovery of row {row['id']}",
+        origin=origin or f"recovery of row {row['id']}",
         **recovery_resource_kwargs(entry))
     print(f"  resubmit row {row['id']}: {len(missing)} indices")
     return _guarded_submit(f"row {row['id']}",
@@ -635,9 +642,13 @@ def verify_files_row(row, sam_lister=files_in_dataset):
     return missing, partial
 
 
-def resubmit_files(row, missing, db_path, dry_run=False, submit_fn=None):
+def resubmit_files(row, missing, db_path, dry_run=False, submit_fn=None,
+                   origin=None):
     """Draining analog of resubmit(): child submission of exactly the
-    missing input files. Returns True on success."""
+    missing input files. Returns True on success.
+
+    See resubmit()'s docstring for `origin`'s default/override contract.
+    """
     submit_fn = submit_fn or submit.submit_entry
     entry = row['entry']
     options = submit.SubmitOptions(
@@ -645,7 +656,7 @@ def resubmit_files(row, missing, db_path, dry_run=False, submit_fn=None):
         files=list(missing),
         ledger_parent=row['id'],
         dry_run=dry_run,
-        origin=f"recovery of row {row['id']}",
+        origin=origin or f"recovery of row {row['id']}",
         **recovery_resource_kwargs(entry))
     print(f"  resubmit row {row['id']}: {len(missing)} files")
     return _guarded_submit(f"row {row['id']}",
@@ -723,6 +734,22 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
     has an absolute cnf index inside the slice's absolute window
     [firstjob+cursor, firstjob+cursor+n), else None.
 
+    Sibling guard: _rows_blocking_indices (below) is the analog for
+    `submissions resubmit`'s scattered index/file set. The two
+    deliberately use DIFFERENT skip lists — this one skips draining
+    rows entirely (a slice window is cnf-index space; a draining row
+    has none to overlap) and only the 'reconciled' state (a CAMPAIGN
+    slice must stay blocked by every other open state, including
+    'complete'/'exhausted'/'recovered', because campaign top-up is
+    advancing a cursor that must never re-cover ground the ledger
+    still remembers submitting); _rows_blocking_indices includes
+    draining rows (a hand resubmit of specific files must still see a
+    draining row in its way) and skips the full _SETTLED_STATES list
+    (a hand resubmit is checking "is this exact index/file still
+    live", not "has this cursor position ever been submitted"). If you
+    are about to make these two skip lists match, re-read this
+    paragraph first — they differ on purpose.
+
     Returns the ROW, not a bool, so the caller can name its id in the
     pause note: the operator's next move is `submissions reconcile
     <row-id>`, and "some row overlaps" would leave them hunting for
@@ -770,6 +797,11 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
 # deliberately: a jobsub_submit that exits non-zero can still have
 # created a cluster, so its window is NOT proven free. Clear it with
 # `submissions reconcile <row-id>` after checking jobsub_q.
+#
+# Sibling guard: _slice_overlaps_ledger (above) is the campaign-slice
+# analog and deliberately skips a shorter list ('reconciled' only, plus
+# draining rows outright) — see its docstring for why the two lists
+# differ. Do not "fix" one to match the other.
 _SETTLED_STATES = ('complete', 'recovered', 'exhausted', 'reconciled')
 
 
@@ -784,7 +816,9 @@ def _rows_blocking_indices(db_path, tarball, indices):
 
     Works for both index rows and draining (file-keyed) rows:
     row['indices'] holds filenames for the latter, and set intersection
-    is the same operation either way.
+    is the same operation either way — unlike _slice_overlaps_ledger,
+    this one does NOT skip draining rows (see _SETTLED_STATES's comment
+    for the full contrast).
     """
     want = set(indices)
     for row in submission_ledger.all_rows(db_path):
@@ -1644,7 +1678,8 @@ def main(argv=None):
         # find and nothing was promised.
         before = {r['id'] for r in submission_ledger.open_rows(db)
                  if r['parent_id'] == row['id']}
-        ok = fn(row, payload, db, dry_run=args.dry_run)
+        ok = fn(row, payload, db, dry_run=args.dry_run,
+               origin=f"operator resubmit of row {row['id']}")
         if not ok:
             sys.exit(f"submissions: resubmit of row {args.row_id} FAILED")
         if args.dry_run:

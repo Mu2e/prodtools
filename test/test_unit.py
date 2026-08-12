@@ -3915,32 +3915,32 @@ class TestResolveMapIndex(unittest.TestCase):
     entry ops['jobdesc'] ships. `local = global + firstjob`, gated on
     `global < njobs`; a generic entry (no njobs) occupies no index space."""
 
-    def test_resolve_map_index_single_entry(self):
-        from utils.prod_utils import resolve_map_index
+    def test_resolve_entry_index_single_entry(self):
+        from utils.prod_utils import resolve_entry_index
         entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 10,
                  'inloc': 'tape', 'outputs': []}
-        got_entry, local = resolve_map_index(entry, 3)
+        got_entry, local = resolve_entry_index(entry, 3)
         self.assertIs(got_entry, entry)
         self.assertEqual(local, 3)
 
-    def test_resolve_map_index_applies_firstjob(self):
-        from utils.prod_utils import resolve_map_index
+    def test_resolve_entry_index_applies_firstjob(self):
+        from utils.prod_utils import resolve_entry_index
         entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 10,
                  'firstjob': 100, 'inloc': 'tape', 'outputs': []}
-        _, local = resolve_map_index(entry, 3)
+        _, local = resolve_entry_index(entry, 3)
         self.assertEqual(local, 103)
 
-    def test_resolve_map_index_out_of_range(self):
-        from utils.prod_utils import resolve_map_index
+    def test_resolve_entry_index_out_of_range(self):
+        from utils.prod_utils import resolve_entry_index
         entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'njobs': 10,
                  'inloc': 'tape', 'outputs': []}
-        self.assertEqual(resolve_map_index(entry, 10), (None, None))
+        self.assertEqual(resolve_entry_index(entry, 10), (None, None))
 
-    def test_resolve_map_index_generic_entry_has_no_slots(self):
-        from utils.prod_utils import resolve_map_index
+    def test_resolve_entry_index_generic_entry_has_no_slots(self):
+        from utils.prod_utils import resolve_entry_index
         entry = {'tarball': 'cnf.mu2e.D.C.0.tar', 'inloc': 'tape',
                  'outputs': []}
-        self.assertEqual(resolve_map_index(entry, 0), (None, None))
+        self.assertEqual(resolve_entry_index(entry, 0), (None, None))
 
 
 class TestComputeJobsetWindow(unittest.TestCase):
@@ -4075,25 +4075,25 @@ class TestParseIndices(unittest.TestCase):
 
 class TestIndicesOpsEntryContract(unittest.TestCase):
     """The worker-side half of --indices: submit_entry ships
-    `{**entry, firstjob: 0, njobs: max+1}`, which must make resolve_map_index
+    `{**entry, firstjob: 0, njobs: max+1}`, which must make resolve_entry_index
     an identity (local == the absolute cnf index) for every submitted index."""
 
-    def test_resolve_map_index_is_identity(self):
-        from utils.prod_utils import resolve_map_index
+    def test_resolve_entry_index_is_identity(self):
+        from utils.prod_utils import resolve_entry_index
         indices = [14719, 15944, 24301]
         ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0,
                      'njobs': indices[-1] + 1}          # mirrors submit.py
         for k in indices:
-            entry, local = resolve_map_index(ops_entry, k)
+            entry, local = resolve_entry_index(ops_entry, k)
             self.assertIsNotNone(entry, f"index {k} unreachable")
             self.assertEqual(local, k)
 
     def test_njobs_without_the_plus_one_drops_the_max_index(self):
-        """Pins the +1: resolve_map_index gates on `global < njobs`, so
+        """Pins the +1: resolve_entry_index gates on `global < njobs`, so
         njobs == max would put the largest index out of range."""
-        from utils.prod_utils import resolve_map_index
+        from utils.prod_utils import resolve_entry_index
         ops_entry = {'tarball': 'cnf.mu2e.X.0.tar', 'firstjob': 0, 'njobs': 24301}
-        self.assertEqual(resolve_map_index(ops_entry, 24301), (None, None))
+        self.assertEqual(resolve_entry_index(ops_entry, 24301), (None, None))
 
 
 class TestLogStorageLocation(unittest.TestCase):
@@ -13388,6 +13388,19 @@ class TestSubmitMapCommandRetired(unittest.TestCase):
         self.assertIn('bin/submissions', ALLOWED_ENTRY_POINTS)
         self.assertIn('bin/json2jobdef', ALLOWED_ENTRY_POINTS)
 
+    def test_mu2ejobsub_helpers_gone(self):
+        """Regression guard restored from the deleted TestSingleBackend
+        (2026-07-19's retirement of the INTERNAL mu2ejobsub backend —
+        build_mu2ejobsub_argv/_submit_entry_mu2ejobsub — a DIFFERENT
+        retirement from this branch's map-file removal). Nothing else
+        pins this: .claude/commands/mu2ejobsub-submit.md deliberately
+        survives because the UPSTREAM mu2ejobsub CLI is still in use,
+        which makes accidental reintroduction of these internal helpers
+        more plausible, not less."""
+        from utils import submit
+        self.assertFalse(hasattr(submit, 'build_mu2ejobsub_argv'))
+        self.assertFalse(hasattr(submit, '_submit_entry_mu2ejobsub'))
+
 
 # ---------------------------------------------------------------------------
 # Ledger map_path -> origin column migration (Task 7)
@@ -13760,6 +13773,87 @@ class TestOriginMigrationReadOnlyDb(unittest.TestCase):
                 con.close()
         self.assertIn('map_path', cols)
         self.assertNotIn('origin', cols)
+
+
+# ---------------------------------------------------------------------------
+# Whole-branch review fix wave (2026-08-11), FIX 5: resubmit()/
+# resubmit_files() hardcoded origin=f"recovery of row {id}" — the SAME
+# string the automatic recovery loop writes. The ledger column was
+# renamed map_path -> origin specifically to make it audit-trail
+# provenance; a hand re-fire through `submissions resubmit` writing the
+# identical string as an automatic recovery defeated that on day one.
+# ---------------------------------------------------------------------------
+
+class TestResubmitOriginIsDistinguishable(unittest.TestCase):
+    def test_resubmit_default_origin_is_the_recovery_string(self):
+        """Unchanged default: the automatic recovery loop (process_row)
+        never passes origin, so it must keep getting the original
+        string."""
+        from utils import submissions
+        captured = {}
+
+        def fake_submit(entry, idx, options):
+            captured['options'] = options
+            return {'status': 'submitted'}
+
+        row = {'id': 5, 'tarball': 'x.tar', 'entry': {'njobs': 10}}
+        submissions.resubmit(row, [1], '/tmp/x.db', submit_fn=fake_submit)
+        self.assertEqual(captured['options'].origin, 'recovery of row 5')
+
+    def test_resubmit_honors_an_explicit_origin(self):
+        from utils import submissions
+        captured = {}
+
+        def fake_submit(entry, idx, options):
+            captured['options'] = options
+            return {'status': 'submitted'}
+
+        row = {'id': 5, 'tarball': 'x.tar', 'entry': {'njobs': 10}}
+        submissions.resubmit(row, [1], '/tmp/x.db', submit_fn=fake_submit,
+                             origin='operator resubmit of row 5')
+        self.assertEqual(captured['options'].origin,
+                         'operator resubmit of row 5')
+
+    def test_resubmit_files_honors_an_explicit_origin(self):
+        from utils import submissions
+        captured = {}
+
+        def fake_submit(entry, idx, options):
+            captured['options'] = options
+            return {'status': 'submitted'}
+
+        row = {'id': 6, 'tarball': 'x.tar',
+              'entry': {'input_pattern': 'dts.*.art'}}
+        submissions.resubmit_files(row, ['f.art'], '/tmp/x.db',
+                                   submit_fn=fake_submit,
+                                   origin='operator resubmit of row 6')
+        self.assertEqual(captured['options'].origin,
+                         'operator resubmit of row 6')
+
+    def test_resubmit_verb_passes_an_operator_origin_distinct_from_recovery(self):
+        """End-to-end through the CLI dispatch (mirrors
+        test_files_selector_dispatches_to_resubmit_files_not_resubmit's
+        pattern of patching the module-level resubmit/resubmit_files
+        names and driving via --dry-run, which returns right after the
+        call without needing a confirmed ledger child)."""
+        from utils import submissions, submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'submissions.db')
+            submission_ledger.ensure_ledger_dir(db)
+            rid = submission_ledger.reserve_submission(
+                db, tarball='x.tar', entry={'tarball': 'x.tar'},
+                indices=[1, 2, 3])
+            submission_ledger.attach_cluster(db, rid, jobsub_id='j',
+                                             cluster_id='1')
+            with patch.object(submissions, 'resubmit',
+                              return_value=True) as fake_resubmit:
+                submissions.main(['--db', db, 'resubmit', str(rid),
+                                  '--indices', '99', '--dry-run'])
+            fake_resubmit.assert_called_once()
+            _, kwargs = fake_resubmit.call_args
+            self.assertEqual(kwargs['origin'],
+                             f'operator resubmit of row {rid}')
+            self.assertNotEqual(kwargs['origin'], f'recovery of row {rid}')
 
 
 # ---------------------------------------------------------------------------

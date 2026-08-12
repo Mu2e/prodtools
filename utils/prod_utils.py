@@ -247,7 +247,7 @@ def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False
     return fcl
 
 
-def resolve_map_index(entry, job_index):
+def resolve_entry_index(entry, job_index):
     """Map a global job index to the entry's cnf-local index.
 
     `local = job_index + firstjob`, so a windowed entry runs cnf indices

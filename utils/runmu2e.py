@@ -23,7 +23,7 @@ from utils.prod_utils import (
     run,
     fail,
     _fetch_file_local,
-    resolve_map_index,
+    resolve_entry_index,
     write_fcl,
     write_direct_input_fcl,
     push_output,
@@ -174,7 +174,7 @@ def process_jobdef(jobdesc, fname, args):
         fail(f"Error: {e}")
 
     # Resolve the global job index to the entry's cnf-local index
-    jobdesc_entry, job_index_num = resolve_map_index(jobdesc, job_index)
+    jobdesc_entry, job_index_num = resolve_entry_index(jobdesc, job_index)
 
     if jobdesc_entry is None:
         fail(f"Error: Job index {job_index} out of range. "

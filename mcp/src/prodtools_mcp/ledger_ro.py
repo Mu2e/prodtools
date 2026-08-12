@@ -1,12 +1,15 @@
 """Read-only access to the submission ledger.
 
-utils.submission_ledger._connect issues DDL on every connect
-(utils/submission_ledger.py:73-84): _SCHEMA, _CAMPAIGN_SCHEMA, and a
-CREATE UNIQUE INDEX. Reading works today as a non-mu2epro user only
-because every object already exists — creating a missing one raises
-`OperationalError: attempt to write a readonly database`. A future
-schema addition shipped before mu2epro's writer has run it would
-otherwise break every campaign_status call.
+utils.submission_ledger._connect (utils/submission_ledger.py:149-205)
+issues DDL on every connect: _SCHEMA, _CAMPAIGN_SCHEMA, a CREATE UNIQUE
+INDEX, and — since 2026-08-11 — an ALTER TABLE ... RENAME COLUMN
+map_path TO origin (~line 170) for any DB still on the old column name.
+Reading works today as a non-mu2epro user only because every object
+already exists except possibly that rename; _connect itself now
+tolerates the ALTER's `OperationalError: attempt to write a readonly
+database` (it leaves the DB un-migrated rather than raising), but a
+FUTURE schema addition shipped before mu2epro's writer has run it would
+still break every campaign_status call the same way.
 
 This module opens the DB with sqlite's mode=ro URI and issues no DDL.
 """
@@ -58,18 +61,31 @@ def _query(db_path, sql, params=()):
 
 
 def _normalize_origin(row):
-    """TRANSITION SHIM (2026-08-11, delete once every ledger has been
-    touched by a writer at least once post-rename): the map_path->origin
-    column rename (utils/submission_ledger.py) migrates on a WRITE
-    connection only (_connect's PRAGMA-guarded ALTER TABLE) — this module
-    deliberately opens mode=ro and issues no DDL (see module docstring),
-    so it can be handed a ledger no writer has reconnected to since the
-    rename shipped. Without this, status.py's unconditional
-    camp['origin'] raises KeyError on such a ledger until the next cron
-    tick / CLI invocation / write-server call happens to touch it — which
-    may be never, for a personal or idle ledger. Normalize here so every
-    caller downstream of ledger_ro always sees 'origin', regardless of
-    which side of the migration the ledger is on.
+    """TRANSITION SHIM (2026-08-11): the map_path->origin column rename
+    (utils/submission_ledger.py) migrates on a WRITE connection only
+    (_connect's PRAGMA-guarded ALTER TABLE) — this module deliberately
+    opens mode=ro and issues no DDL (see module docstring), so it can be
+    handed a ledger no writer has reconnected to since the rename
+    shipped. Without this, status.py's unconditional camp['origin']
+    raises KeyError on such a ledger until the next cron tick / CLI
+    invocation / write-server call happens to touch it — which may be
+    never, for a personal or idle ledger.
+
+    NOT safe to delete on a schedule (e.g. "once every ledger has been
+    touched by a writer"): _connect was hardened (2026-08-11 fix wave)
+    to swallow the ALTER's read-only OperationalError rather than
+    raise, for the production ledger's non-mu2epro readers. That
+    hardening removed the only forcing function that used to make an
+    un-migrated ledger visible (a crash) — a ledger only ever opened by
+    non-owner readers can now stay on map_path indefinitely, with
+    nothing prompting a migration. This shim is therefore the ONLY
+    thing making such a ledger readable at all, permanently, not a
+    transition measure with a natural expiry. Delete it only if
+    _connect's read-only tolerance is removed first.
+
+    Normalize here so every caller downstream of ledger_ro always sees
+    'origin', regardless of which side of the migration the ledger is
+    on.
     """
     if 'origin' not in row and 'map_path' in row:
         row['origin'] = row.pop('map_path')
