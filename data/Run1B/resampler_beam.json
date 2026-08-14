@@ -442,5 +442,28 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh",
         "owner": "mu2e",
         "sequential_aux": true
+    },
+    {
+        "desc": "NeutralsFlash",
+        "dsconf": "Run1Baq",
+        "fcl": "Production/JobConfig/pileup/NeutralsResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+        },
+        "resampler_name": "neutralsResampler",
+        "input_data": {
+            "sim.mu2e.Neutrals.MDC2025ae3.art": 1
+        },
+        "njobs": 5000,
+        "events": 500000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
 ]
