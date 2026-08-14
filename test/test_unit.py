@@ -10,12 +10,14 @@ Run with:  python -m pytest test/test_unit.py -v
        or: python test/test_unit.py
 """
 
+import atexit
 import contextlib
 import copy
 import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -29,6 +31,27 @@ from unittest.mock import MagicMock, patch
 
 # Make the package root importable when running from any directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Every temp dir this suite makes is removed at interpreter exit. Bare
+# tempfile.mkdtemp() leaks one directory per test; at ~1000 tests a run,
+# that walked /tmp into the ext4 65000-subdirectory ceiling on the gpvms,
+# after which NOTHING on the node could mkdir in /tmp -- including
+# production submission (2026-08-13). Cleanup lives here, once, rather
+# than in 31 separate setUp methods that each have to remember.
+_TMPDIRS = []
+
+
+def _mkdtemp():
+    """tempfile.mkdtemp() that is cleaned up when the process exits."""
+    d = tempfile.mkdtemp()
+    _TMPDIRS.append(d)
+    return d
+
+
+@atexit.register
+def _cleanup_tmpdirs():
+    for d in _TMPDIRS:
+        shutil.rmtree(d, ignore_errors=True)
 
 # The MCP server package lives outside utils/; add its src root so the
 # server's tools are testable in this suite without MCP machinery.
@@ -1700,7 +1723,7 @@ class TestCreateInputsFileExclude(unittest.TestCase):
     def setUp(self):
         import tempfile
         self._orig_dir = os.getcwd()
-        self._tmpdir = tempfile.mkdtemp()
+        self._tmpdir = _mkdtemp()
         os.chdir(self._tmpdir)
 
     def tearDown(self):
@@ -2302,7 +2325,7 @@ class TestProcessDirectInput(unittest.TestCase):
     def setUp(self):
         import tempfile
         self._orig_dir = os.getcwd()
-        self._tmpdir = tempfile.mkdtemp()
+        self._tmpdir = _mkdtemp()
         os.chdir(self._tmpdir)
         self._tar = _make_tarball(
             _generic_reco_jobpars(),
@@ -4551,7 +4574,7 @@ class TestSubmissionLedger(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
         self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
@@ -4636,7 +4659,7 @@ class TestTwoPhaseLedgerWrite(unittest.TestCase):
     def setUp(self):
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
         self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
@@ -4782,7 +4805,7 @@ class TestCampaignLedger(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
         self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
                       'njobs': 10, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
@@ -5345,7 +5368,7 @@ class TestEnqueue(unittest.TestCase):
         from utils import submission_ledger as sl
         from utils import submit
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
         self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
                       'njobs': 10, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
@@ -5452,7 +5475,7 @@ class TestEnqueueErrorStyle(unittest.TestCase):
     def setUp(self):
         import tempfile
         from utils import submit
-        self.tmp = tempfile.mkdtemp()
+        self.tmp = _mkdtemp()
         self.db = os.path.join(self.tmp, 'sub.db')
         # Task 6 enqueue gate reads the tarball; stub tarball resolution
         # and the pre-flight check so these tests stay file-free.
@@ -5495,7 +5518,7 @@ class TestSubmissionLog(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        self.dbdir = tempfile.mkdtemp()
+        self.dbdir = _mkdtemp()
         self.db = os.path.join(self.dbdir, 'submissions.db')
 
     def _opts(self):
@@ -5672,7 +5695,7 @@ class TestTopUp(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
         self.calls = []
 
     def _campaign(self, tarball='cnf.mu2e.A.C.0.tar', njobs=10, slice=4):
@@ -5899,7 +5922,7 @@ class TestSubmitSlice(unittest.TestCase):
         from utils import submit
         from utils import submission_ledger as sl
         import tempfile
-        db = os.path.join(tempfile.mkdtemp(), 'led.db')
+        db = os.path.join(_mkdtemp(), 'led.db')
         entry = {'tarball': 'cnf.mu2e.W.C.0.tar', 'njobs': 50,
                  'firstjob': 100, 'inloc': 'tape', 'outputs': [],
                  'memory': '4000MB'}
@@ -5945,7 +5968,7 @@ class TestManageCampaign(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
         self.cid = sl.create_campaign(
             self.db, tarball='cnf.mu2e.M.C.0.tar',
             entry={'tarball': 'cnf.mu2e.M.C.0.tar', 'njobs': 5},
@@ -5979,7 +6002,7 @@ class TestSubmissionsVerbs(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.dbdir = tempfile.mkdtemp()
+        self.dbdir = _mkdtemp()
         self.db = os.path.join(self.dbdir, 'sub.db')
 
     def _campaign(self, tarball='cnf.mu2e.V.C.0.tar', njobs=4):
@@ -6175,7 +6198,7 @@ class TestSubmitLedgerHook(unittest.TestCase):
     def test_reserve_then_attach_absolute_indices(self):
         import tempfile
         from utils import submit, submission_ledger
-        db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        db = os.path.join(_mkdtemp(), 'sub.db')
         entry = {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 3, 'firstjob': 100}
         rid = submit._reserve_in_ledger(entry, 100, [0, 1, 2],
                                         self._opts(db))
@@ -6192,7 +6215,7 @@ class TestSubmitLedgerHook(unittest.TestCase):
     def test_reserve_then_attach_parent_chains(self):
         import tempfile
         from utils import submit, submission_ledger
-        db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        db = os.path.join(_mkdtemp(), 'sub.db')
         rid = submission_ledger.record_submission(
             db, tarball='t', entry={}, indices=[0, 1],
             jobsub_id='1.0@js', cluster_id='1')
@@ -6249,7 +6272,7 @@ class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
         from utils.submit import SubmitOptions
         self.submit = submit
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
         self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
@@ -6336,7 +6359,7 @@ class TestSubmitResolveLedgerDb(unittest.TestCase):
         self.sl = sl
 
     def test_defaulted_ledger_db_creates_its_directory(self):
-        base = tempfile.mkdtemp()
+        base = _mkdtemp()
         derived = os.path.join(base, 'someuser', 'prodtools',
                                'submissions.db')
         opts = SimpleNamespace(ledger_db=None)
@@ -6346,7 +6369,7 @@ class TestSubmitResolveLedgerDb(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.dirname(derived)))
 
     def test_explicit_ledger_db_directory_is_never_created(self):
-        base = tempfile.mkdtemp()
+        base = _mkdtemp()
         explicit = os.path.join(base, 'no', 'such', 'dir',
                                 'submissions.db')
         opts = SimpleNamespace(ledger_db=explicit)
@@ -6364,7 +6387,7 @@ class TestSubmissionsRunCreatesFreshLedgerDir(unittest.TestCase):
 
     def test_run_creates_directory_before_acquiring_the_lock(self):
         from utils import submissions
-        base = tempfile.mkdtemp()
+        base = _mkdtemp()
         derived = os.path.join(base, 'freshuser2', 'prodtools',
                                'submissions.db')
         with patch.object(submissions.submission_ledger, 'ledger_for',
@@ -6404,7 +6427,7 @@ class TestRecoverLoop(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.db = os.path.join(_mkdtemp(), 'sub.db')
         self.entry = {'tarball': 'cnf.mu2e.T.C.0.tar', 'njobs': 3}
         self.rid = sl.record_submission(
             self.db, tarball='cnf.mu2e.T.C.0.tar', entry=self.entry,
@@ -6782,7 +6805,7 @@ class TestRecoverCLI(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.db = os.path.join(_mkdtemp(), 'sub.db')
 
     def test_print_status_empty(self):
         from utils import submissions as recover
@@ -6883,7 +6906,7 @@ class TestSubmissionsExitHonesty(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.db = os.path.join(_mkdtemp(), 'sub.db')
 
     def test_count_error_exits_2(self):
         from utils import submissions
@@ -6978,7 +7001,7 @@ class TestPauseNotePreservation(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'sub.db')
+        self.db = os.path.join(_mkdtemp(), 'sub.db')
         self.cid = sl.create_campaign(
             self.db, tarball='cnf.mu2e.N.C.0.tar',
             entry={'tarball': 'cnf.mu2e.N.C.0.tar', 'njobs': 4},
@@ -10781,7 +10804,7 @@ class TestRunSubmissionsTool(unittest.TestCase):
         from utils import submission_ledger as sl
         self.tools = tools
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
 
     def test_campaign_id_is_required(self):
         import inspect
@@ -12490,13 +12513,13 @@ class TestLedgerPathResolution(unittest.TestCase):
                 importlib.reload(self.sl)
 
     def test_ensure_ledger_dir_creates_a_derived_parent(self):
-        base = tempfile.mkdtemp()
+        base = _mkdtemp()
         db = os.path.join(base, 'prodtools', 'submissions.db')
         self.assertEqual(self.sl.ensure_ledger_dir(db), db)
         self.assertTrue(os.path.isdir(os.path.dirname(db)))
 
     def test_ensure_ledger_dir_is_idempotent(self):
-        base = tempfile.mkdtemp()
+        base = _mkdtemp()
         db = os.path.join(base, 'prodtools', 'submissions.db')
         self.sl.ensure_ledger_dir(db)
         self.sl.ensure_ledger_dir(db)   # must not raise
@@ -12564,7 +12587,7 @@ class TestSubmissionsDbResolution(unittest.TestCase):
         # DEFAULTED path must get its directory created, so `submissions
         # run` against a never-used personal ledger doesn't die in
         # _connect/_acquire_lock before it can do anything.
-        base = tempfile.mkdtemp()
+        base = _mkdtemp()
         derived = os.path.join(base, 'someuser', 'prodtools',
                                'submissions.db')
         with patch.object(self.sl, 'ledger_for', return_value=derived):
@@ -12576,7 +12599,7 @@ class TestSubmissionsDbResolution(unittest.TestCase):
         # An operator-supplied --db pointing at a typo'd/nonexistent
         # directory must fail loudly downstream, never get silently
         # mkdir'd — only a DERIVED (ledger_for()) path is ever created.
-        base = tempfile.mkdtemp()
+        base = _mkdtemp()
         explicit = os.path.join(base, 'no', 'such', 'dir',
                                 'submissions.db')
         got = self.submissions.resolve_db(
@@ -12688,7 +12711,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
             'outloc': {'*.art': 'tape'}, 'inloc': 'none',
             'njobs': 1, 'owner': 'mu2e',
         }
-        tmpdir = tempfile.mkdtemp()
+        tmpdir = _mkdtemp()
         cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
@@ -12730,8 +12753,8 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
             'outloc': {'*.art': 'tape'}, 'inloc': 'none',
             'njobs': 20, 'owner': 'mu2e',
         }
-        db_path = os.path.join(tempfile.mkdtemp(), 'submissions.db')
-        tmpdir = tempfile.mkdtemp()
+        db_path = os.path.join(_mkdtemp(), 'submissions.db')
+        tmpdir = _mkdtemp()
         cwd = os.getcwd()
 
         try:
@@ -13931,7 +13954,7 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
         import tempfile
         from utils import submission_ledger as sl
         self.sl = sl
-        self.db = os.path.join(tempfile.mkdtemp(), 'submissions.db')
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
 
     def _campaign(self, tarball='cnf.mu2e.A.C.0.tar', njobs=10, slice=4):
         entry = {'tarball': tarball, 'njobs': njobs, 'inloc': 'tape',
