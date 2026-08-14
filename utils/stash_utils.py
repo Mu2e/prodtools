@@ -33,7 +33,8 @@ from typing import List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.file_resolver import sam_physical_path, path_from_sam_locations
-from utils.samweb_wrapper import files_in_dataset, locate_files_strict
+from utils.samweb_wrapper import (files_in_dataset, file_sizes_in_dataset,
+                                  locate_files_strict)
 from utils import file_resolver
 
 
@@ -84,6 +85,7 @@ def _copy_dataset(
     limit: Optional[int] = None,
     dry_run: bool = False,
     verbose: bool = True,
+    skip_existing: bool = False,
 ) -> int:
     """
     Copy all files in a SAM dataset to the destination given by
@@ -103,6 +105,11 @@ def _copy_dataset(
     limit        : If set, copy at most this many files
     dry_run      : If True, print what would be done without copying
     verbose      : If True, print progress for each file
+    skip_existing: If True, skip files already at the destination with the
+                   SAM-recorded size. Without it a partially staged dataset
+                   is re-copied in full, and each existing file is opened
+                   for truncating write — which on dCache either fails or,
+                   worse, truncates a good file if the copy dies midway.
 
     Returns
     -------
@@ -116,12 +123,32 @@ def _copy_dataset(
     if limit is not None:
         files = files[:limit]
 
+    # Expected sizes are only needed to answer "is this file already here";
+    # one dataset-wide SAM call, not one per file.
+    expected_sizes = file_sizes_in_dataset(dataset) if skip_existing else {}
+    n_skip = 0
+    if skip_existing:
+        keep = []
+        for filename in files:
+            want = expected_sizes.get(filename)
+            try:
+                if want is not None and os.path.getsize(
+                        dest_path_fn(filename)) == want:
+                    n_skip += 1
+                    continue
+            except OSError:
+                pass
+            keep.append(filename)
+        files = keep
+        if verbose:
+            print(f"  skipping {n_skip} file(s) already at destination")
+
     # One batch SAM locate for the whole copy list (vs one HTTP round-trip
     # per file — resilient staging copies 10k+ pileup files). Files missing
     # from the batch result fall back to the per-file call, so error
     # semantics per file are unchanged.
     try:
-        locations_map = locate_files_strict(files)
+        locations_map = locate_files_strict(files) if files else {}
     except Exception:
         locations_map = {}
 
@@ -172,7 +199,9 @@ def _copy_dataset(
 
     if verbose:
         status = "dry-run" if dry_run else "done"
-        print(f"\n{status}: {n_ok} copied, {n_fail} failed out of {len(files)} files")
+        skipped = f", {n_skip} skipped" if skip_existing else ""
+        print(f"\n{status}: {n_ok} copied, {n_fail} failed{skipped} "
+              f"out of {len(files) + n_skip} files")
 
     return n_ok
 
@@ -183,9 +212,11 @@ def copy_dataset_to_stash(
     limit: Optional[int] = None,
     dry_run: bool = False,
     verbose: bool = True,
+    skip_existing: bool = False,
 ) -> int:
     """Copy all files in a SAM dataset to their stash write locations."""
-    return _copy_dataset(dataset, write_path_for_file, source_loc, limit, dry_run, verbose)
+    return _copy_dataset(dataset, write_path_for_file, source_loc, limit,
+                         dry_run, verbose, skip_existing)
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +245,8 @@ def copy_dataset_to_resilient(
     limit: Optional[int] = None,
     dry_run: bool = False,
     verbose: bool = True,
+    skip_existing: bool = False,
 ) -> int:
     """Copy all files in a SAM dataset to their resilient dCache locations."""
-    return _copy_dataset(dataset, resilient_path_for_file, source_loc, limit, dry_run, verbose)
+    return _copy_dataset(dataset, resilient_path_for_file, source_loc, limit,
+                         dry_run, verbose, skip_existing)
