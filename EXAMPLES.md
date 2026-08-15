@@ -191,6 +191,39 @@ or `dir:<path>` (locally-mounted FS, e.g. cvmfs). There is no `auto`.
 `resilient` reads via xrootd, `stash` reads via CVMFS, and `dir:` reads
 via direct POSIX (the `file` protocol is forced).
 
+`outloc` values accept `tape`, `disk`, `scratch`, `outstage`, and are
+validated when the config is read. The first three are pushOutput
+actions: each copies the file to its dataset path **and** declares it to
+SAM. pushOutput has no copy-without-declare mode, and its `scratch`
+action is a fully declared dataset that merely lives on scratch.
+
+`outstage` is this repo's own, for test and study runs whose output
+should stay out of SAM. The worker copies matching files to
+`$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` with `ifdh` and declares
+nothing; the log follows the data there, because a declared log would
+otherwise name parents SAM has never heard of.
+
+```json
+{
+  "desc": "STMBeamToVDEle",
+  "dsconf": "Run1Ban-001",
+  "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
+  "resampler_name": "beamResampler",
+  "input_data": { "sim.mu2e.EleBeamCat.Run1Bai.art": 1 },
+  "njobs": 20,
+  "events": 200000,
+  "run": 1470,
+  "inloc": "tape",
+  "outloc": { "*.art": "outstage" },
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh"
+}
+```
+
+An outstage entry **cannot be enqueued as a campaign**: campaign
+verification is fail-closed against SAM, so with nothing declared every
+index reads as missing and each tick would recover the whole row,
+forever. Build it and submit it by hand.
+
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
 sequencer) and `generic_tarball` (build a reusable direct-input cnf with
@@ -471,6 +504,11 @@ streaming).
   stream regardless.
 - Outputs are pushed only when `mu2e` exits 0; the log is pushed always,
   including when the data push itself raises.
+- Outputs are partitioned by their entry's `outloc` location. Anything
+  bound for `outstage` (section 3) is copied to
+  `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` with `ifdh` and never reaches
+  pushOutput; `parents_list.txt` is written only when something is
+  actually declared.
 
 ## 8. Sequential vs. Pseudo-Random Auxiliary Input Selection
 
@@ -876,6 +914,19 @@ step (section 11 `submissions`, wiki page
   stash, none or 'dir:/<absolute path>', got '<value>'` — a config
   typo, refused before the cnf is built (same validator fires on
   `submissions set-entry`, prefixed `submissions:` there instead).
+- ``json2jobdef: outloc['<pattern>'] must be one of tape, disk, scratch,
+  outstage, got '<value>'`` — a misspelled output location, refused
+  before the cnf is built. Unlike a bad `inloc` (which silently falls
+  through to SAM), a bad `outloc` would have reached pushOutput on the
+  worker and failed there, after the job had already run.
+- `json2jobdef: outloc must be a dictionary of dataset pattern ->
+  location, got '<value>'` — `outloc` is a map, e.g.
+  `{"*.art": "disk"}`, not a bare string.
+- `json2jobdef: outstage outputs are not declared to SAM, so campaign
+  verification cannot see them and every slice would recover forever. An
+  outstage entry cannot be enqueued — submit it by hand.` — drop
+  `--enqueue` (and `--prod`) for an outstage entry, or change `outloc`
+  to a declared location if you did want a campaign.
 - `<N> of <M> entries were SKIPPED and no campaign exists for them`
   (exit 2) — a bulk `--dsconf` run dropped entries. The listed ones
   need fixing and re-running individually with `--desc --dsconf`; the
