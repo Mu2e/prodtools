@@ -225,6 +225,22 @@ class JobResult:
         return self.rc == 0
 
 
+def child_env():
+    """The caller's environment minus the one variable that breaks a job.
+
+    Each job sources the cnf's own `simjob_setup`, which calls
+    museSetup; museSetup refuses to run when `MUSE_WORK_DIR` is already
+    set. So a caller who did `muse setup SimJob <tag>` first — the
+    habit, since most prodtools commands want it — loses every job to
+    `ERROR - Muse already setup for directory`, a message that names
+    Muse and never mentions runlocal. Dropping that one variable is the
+    same narrow fix the ksu wrappers use: unset MUSE_WORK_DIR only, not
+    MUSE_* (which would take MUSE_DIR with it) and not PATH.
+    """
+    return {key: value for key, value in os.environ.items()
+            if key != 'MUSE_WORK_DIR'}
+
+
 def _run_child(index, args, globs):
     """Launch one job in its own directory, capturing its output."""
     directory = job_dir(args.workdir, index)
@@ -234,7 +250,7 @@ def _run_child(index, args, globs):
     with open(directory / 'stdout.log', 'w') as log:
         log.write(shlex.join(argv) + '\n')
         log.flush()
-        rc = subprocess.run(argv, cwd=str(directory),
+        rc = subprocess.run(argv, cwd=str(directory), env=child_env(),
                             stdout=log, stderr=subprocess.STDOUT).returncode
     elapsed = time.time() - start
     produced = sorted(p.name for g in globs for p in directory.glob(g))

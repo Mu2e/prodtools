@@ -14816,7 +14816,7 @@ class TestRunLocalDrive(unittest.TestCase):
         `mv *.art indir/` — shared directories would cross-contaminate."""
         seen = []
 
-        def fake(argv, cwd=None, stdout=None, stderr=None):
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
             seen.append((self._index_of(argv), cwd))
             Path(cwd, 'dts.mu2e.X.TestConf.001430_00000000.art').touch()
             return SimpleNamespace(returncode=0)
@@ -14828,7 +14828,7 @@ class TestRunLocalDrive(unittest.TestCase):
                          ['job_000003', 'job_000004'])
 
     def test_child_output_is_captured_per_job(self):
-        def fake(argv, cwd=None, stdout=None, stderr=None):
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
             stdout.write("mu2e chatter\n")
             return SimpleNamespace(returncode=0)
 
@@ -14840,7 +14840,7 @@ class TestRunLocalDrive(unittest.TestCase):
     def test_a_failure_does_not_stop_the_rest(self):
         ran = []
 
-        def fake(argv, cwd=None, stdout=None, stderr=None):
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
             index = self._index_of(argv)
             ran.append(index)
             return SimpleNamespace(returncode=1 if index == 1 else 0)
@@ -14857,7 +14857,7 @@ class TestRunLocalDrive(unittest.TestCase):
         lock = threading.Lock()
         state = {'now': 0, 'peak': 0}
 
-        def fake(argv, cwd=None, stdout=None, stderr=None):
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
             with lock:
                 state['now'] += 1
                 state['peak'] = max(state['peak'], state['now'])
@@ -14869,8 +14869,29 @@ class TestRunLocalDrive(unittest.TestCase):
         self._drive(self._args(indices=list(range(6)), parallel=2), fake)
         self.assertEqual(state['peak'], 2)
 
+    def test_a_preset_muse_does_not_reach_the_job(self):
+        """Each job sources the cnf's own simjob_setup, and museSetup
+        refuses when MUSE_WORK_DIR is already set — a caller who ran
+        `muse setup SimJob <tag>` first would lose every job."""
+        from utils import runlocal
+        seen = {}
+
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
+            seen.update(env)
+            return SimpleNamespace(returncode=0)
+
+        with patch.dict(runlocal.os.environ,
+                        {'MUSE_WORK_DIR': '/some/other/build',
+                         'MUSE_DIR': '/muse'}):
+            self._drive(self._args(), fake)
+        self.assertNotIn('MUSE_WORK_DIR', seen)
+        # Only that one variable: MUSE_DIR carries the `muse` function's
+        # own home, and PATH carries everything else.
+        self.assertEqual(seen.get('MUSE_DIR'), '/muse')
+        self.assertIn('PATH', seen)
+
     def test_counts_the_outputs_each_job_produced(self):
-        def fake(argv, cwd=None, stdout=None, stderr=None):
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
             if self._index_of(argv) == 0:
                 Path(cwd, 'dts.mu2e.X.TestConf.001430_00000000.art').touch()
             Path(cwd, 'unrelated.txt').touch()
