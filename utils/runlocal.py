@@ -43,7 +43,6 @@ from pathlib import Path
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.job_common import Mu2eName
 from utils.jobdesc import OUTSTAGE_LOCATION
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import _fetch_file_local
@@ -66,30 +65,21 @@ _OUTPUT_TIERS = ('dts.', 'dig.', 'sim.', 'rec.', 'mcs.', 'nts.', 'cnf.')
 def output_globs(tarball):
     """Glob patterns matching what one job of this cnf writes.
 
-    Resolves the `.owner.`/`.version.` placeholders exactly as
-    `Mu2eJobBase.job_outputs` does, but wildcards the sequencer instead
-    of computing it — the sequencer of an input-driven job is not known
-    until the inputs are resolved, and the driver only needs to count
-    and report files afterwards.
+    `Mu2eJobBase.job_outputs` owns the placeholder rules — `.owner.`,
+    `.version.`, and the `.sequence.`/`.sequencer.` spelling live
+    jobpars use — so this asks it for the names with the sequencer and
+    `{desc}` wildcarded rather than resolved. The sequencer of an
+    input-driven job is not known until the inputs are resolved, and
+    the driver only needs to count and report files afterwards.
     """
     jp = Mu2eJobPars(tarball)
     globs = []
-    for template in (jp.json_data.get('tbs', {}).get('outfiles') or {}).values():
-        resolved = (template.replace('.owner.', f'.{jp.owner}.')
-                            .replace('.version.', f'.{jp.dsconf}.'))
-        # A generic cnf defers {desc} to runtime; a wildcard still matches.
-        resolved = re.sub(r'\{[^}]*\}', '*', resolved)
-        if not resolved.startswith(_OUTPUT_TIERS):
+    for name in jp.job_outputs(0, override_desc='*', override_seq='*').values():
+        # job_outputs passes non-file targets (a `/dev/null` sink)
+        # through untouched; only real datasets are worth globbing for.
+        if not name.startswith(_OUTPUT_TIERS) or name in globs:
             continue
-        try:
-            # with_sequencer, not a string replace: real jobpars spell the
-            # placeholder field '.sequence.', and mu2ejobdef is free to
-            # write anything there. job_outputs() ends the same way.
-            pattern = str(Mu2eName.parse(resolved).with_sequencer('*'))
-        except ValueError:
-            continue
-        if pattern not in globs:
-            globs.append(pattern)
+        globs.append(name)
     return globs
 
 
