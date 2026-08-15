@@ -958,13 +958,17 @@ runlocal --jobdef cnf.mu2e.STMBeamToVDTarget.MDC2025au.0.tar \
 # Produce full-length output for indices 100..107, four at a time
 runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
          --inloc tape --first 100 --num 8 -j 4
+
+# Rerun exactly the indices a grid pass lost
+runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
+         --inloc tape --indices 0,3,7-9 -j 3
 ```
 
 Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
 `--inloc` (default `tape`), `--first` / `--num` (default `0` / `1`),
-`-j/--parallel` (default 4), `--workdir` (default `.`), `--nevts`
-(default `-1` = whatever the FCL says), `--mu2e-options`,
-`--copy-input`.
+`--indices SPEC`, `-j/--parallel` (default 4), `--workdir` (default
+`.`), `--nevts` (default `-1` = whatever the FCL says),
+`--mu2e-options`, `--copy-input`.
 
 Job prep is the worker's own `process_jobdef`, so a local run exercises
 the same tarball fetch, inloc handling and `--copy-input` staging the
@@ -976,7 +980,14 @@ indir; mv *.art indir/`.
 
 `--first`/`--num` are cnf indices directly — `baseSeed = 1 + index` and
 `firstSubRun = index`, with no `firstjob` second index space to confuse
-them with. A failing index does not stop the others; the summary lists
+them with. `--indices` names those same indices one at a time instead
+of a window: a comma-separated list of `N` and inclusive `A-B` ranges
+(`0,3,7-9` = five jobs), for reruns of the exact indices a grid pass
+lost, which are rarely contiguous. The two forms are alternatives —
+`--indices` together with `--first`/`--num` is refused rather than
+silently clipped to the window — and a malformed spec is rejected
+before any job starts, since a typo there would quietly run the wrong
+jobs. A failing index does not stop the others; the summary lists
 every job's exit code and prints a paste-ready rerun command for each
 failure, and the process exits 1 if any job failed. Four concurrent
 mu2e processes is roughly 10 GB resident — the driver prints that

@@ -14654,7 +14654,7 @@ def _runlocal_args(**over):
     """A parsed-args stand-in for the runlocal driver."""
     args = SimpleNamespace(
         jobdef='cnf.mu2e.Test.TestConf.0.tar', inloc='tape',
-        first=0, num=1, parallel=1, workdir='.', nevts=-1,
+        indices=[0], parallel=1, workdir='.', nevts=-1,
         mu2e_options='', copy_input=False, one=None,
         entry_point='/repo/utils/runlocal.py')
     for key, value in over.items():
@@ -14714,7 +14714,7 @@ class TestRunLocalJobdesc(unittest.TestCase):
     def test_njobs_covers_the_window(self):
         from utils.runlocal import synth_jobdesc
         from utils.prod_utils import resolve_entry_index
-        jobdesc = synth_jobdesc(self.tar, 'tape', first=5, num=3)
+        jobdesc = synth_jobdesc(self.tar, 'tape', [5, 6, 7])
         self.assertEqual(jobdesc['njobs'], 8)
         # An index in the window maps to ITSELF — baseSeed = 1 + index.
         entry, local = resolve_entry_index(jobdesc, 7)
@@ -14728,12 +14728,21 @@ class TestRunLocalJobdesc(unittest.TestCase):
         key would shift every index and change the seeds."""
         from utils.runlocal import synth_jobdesc
         self.assertNotIn('firstjob',
-                         synth_jobdesc(self.tar, 'tape', first=5, num=3))
+                         synth_jobdesc(self.tar, 'tape', [5, 6, 7]))
+
+    def test_a_gapped_list_still_reaches_its_largest_index(self):
+        """`--indices 0,9` must not stop at njobs=2 — resolve_entry_index
+        rejects anything >= njobs, which would refuse index 9."""
+        from utils.runlocal import synth_jobdesc
+        from utils.prod_utils import resolve_entry_index
+        jobdesc = synth_jobdesc(self.tar, 'tape', [0, 9])
+        self.assertEqual(jobdesc['njobs'], 10)
+        self.assertEqual(resolve_entry_index(jobdesc, 9)[1], 9)
 
     def test_outputs_are_globs_marked_undeclared(self):
         from utils.runlocal import synth_jobdesc
         from utils.jobdesc import OUTSTAGE_LOCATION
-        outputs = synth_jobdesc(self.tar, 'tape', 0, 1)['outputs']
+        outputs = synth_jobdesc(self.tar, 'tape', [0])['outputs']
         self.assertEqual(outputs,
                          [{'dataset': 'dts.mu2e.X.TestConf.*.art',
                            'location': OUTSTAGE_LOCATION}])
@@ -14744,12 +14753,25 @@ class TestRunLocalChildArgv(unittest.TestCase):
 
     def test_carries_index_and_window(self):
         from utils.runlocal import child_argv
-        argv = child_argv(7, _runlocal_args(first=5, num=4, jobdef='/t/c.tar'))
+        argv = child_argv(7, _runlocal_args(indices=[5, 6, 7, 8],
+                                            jobdef='/t/c.tar'))
         self.assertIn('--one', argv)
         self.assertEqual(argv[argv.index('--one') + 1], '7')
-        self.assertEqual(argv[argv.index('--first') + 1], '5')
-        self.assertEqual(argv[argv.index('--num') + 1], '4')
+        # One spelling reaches the child whichever flag the user used.
+        self.assertEqual(argv[argv.index('--indices') + 1], '5-8')
+        self.assertNotIn('--first', argv)
+        self.assertNotIn('--num', argv)
         self.assertEqual(argv[argv.index('--jobdef') + 1], '/t/c.tar')
+
+    def test_a_gapped_window_survives_the_round_trip(self):
+        """The child rebuilds njobs from this spec; a collapsed range
+        that lost an index would give the rerun a different jobdesc."""
+        from utils.runlocal import child_argv, parse_indices
+        indices = [0, 3, 7, 8, 9]
+        argv = child_argv(3, _runlocal_args(indices=indices))
+        spec = argv[argv.index('--indices') + 1]
+        self.assertEqual(spec, '0,3,7-9')
+        self.assertEqual(parse_indices(spec), indices)
 
     def test_optional_flags_only_when_set(self):
         from utils.runlocal import child_argv
@@ -14799,7 +14821,7 @@ class TestRunLocalDrive(unittest.TestCase):
             Path(cwd, 'dts.mu2e.X.TestConf.001430_00000000.art').touch()
             return SimpleNamespace(returncode=0)
 
-        rc, _ = self._drive(self._args(first=3, num=2), fake)
+        rc, _ = self._drive(self._args(indices=[3, 4]), fake)
         self.assertEqual(rc, 0)
         self.assertEqual([i for i, _ in seen], [3, 4])
         self.assertEqual(sorted(Path(c).name for _, c in seen),
@@ -14810,7 +14832,7 @@ class TestRunLocalDrive(unittest.TestCase):
             stdout.write("mu2e chatter\n")
             return SimpleNamespace(returncode=0)
 
-        self._drive(self._args(num=2), fake)
+        self._drive(self._args(indices=[0, 1]), fake)
         for index in (0, 1):
             log = Path(self.workdir) / f"job_{index:06d}" / 'stdout.log'
             self.assertIn("mu2e chatter", log.read_text())
@@ -14823,7 +14845,7 @@ class TestRunLocalDrive(unittest.TestCase):
             ran.append(index)
             return SimpleNamespace(returncode=1 if index == 1 else 0)
 
-        rc, out = self._drive(self._args(num=4), fake)
+        rc, out = self._drive(self._args(indices=[0, 1, 2, 3]), fake)
         self.assertEqual(sorted(ran), [0, 1, 2, 3])
         self.assertEqual(rc, 1)
         self.assertIn('3/4 succeeded', out)
@@ -14844,7 +14866,7 @@ class TestRunLocalDrive(unittest.TestCase):
                 state['now'] -= 1
             return SimpleNamespace(returncode=0)
 
-        self._drive(self._args(num=6, parallel=2), fake)
+        self._drive(self._args(indices=list(range(6)), parallel=2), fake)
         self.assertEqual(state['peak'], 2)
 
     def test_counts_the_outputs_each_job_produced(self):
@@ -14854,7 +14876,7 @@ class TestRunLocalDrive(unittest.TestCase):
             Path(cwd, 'unrelated.txt').touch()
             return SimpleNamespace(returncode=0)
 
-        _, out = self._drive(self._args(num=2), fake)
+        _, out = self._drive(self._args(indices=[0, 1]), fake)
         # Only files matching the cnf's declared outputs count.
         self.assertIn(' 1 output(s)', out)
         self.assertIn(' 0 output(s)', out)
@@ -14879,6 +14901,50 @@ class TestRunLocalArgValidation(unittest.TestCase):
         from utils.runlocal import main
         with self.assertRaises(SystemExit):
             main(['--jobdef', 'c.tar', '-j', '0'])
+
+    def test_rejects_indices_together_with_a_window(self):
+        """Clipping a list to a window, or ignoring the window, would
+        each surprise someone — so neither is offered."""
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', 'c.tar', '--indices', '0,1', '--first', '5'])
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', 'c.tar', '--indices', '0,1', '--num', '2'])
+
+    def test_rejects_a_malformed_index_list(self):
+        from utils.runlocal import main
+        for spec in ('', '1,,2', '3-1', '1-', 'a', '-2', '1 2'):
+            with self.assertRaises(SystemExit, msg=spec):
+                main(['--jobdef', 'c.tar', '--indices', spec])
+
+
+class TestRunLocalIndexSpec(unittest.TestCase):
+    """`--indices` exists for reruns of the exact jobs a grid pass
+    lost, which are rarely contiguous."""
+
+    def test_parses_singles_ranges_and_normalizes(self):
+        from utils.runlocal import parse_indices
+        self.assertEqual(parse_indices('0,3,7-9'), [0, 3, 7, 8, 9])
+        # Inclusive at both ends, sorted, deduplicated, space-tolerant.
+        self.assertEqual(parse_indices('5-5'), [5])
+        self.assertEqual(parse_indices('4, 2 , 4'), [2, 4])
+
+    def test_formats_runs_back_into_ranges(self):
+        from utils.runlocal import format_indices
+        self.assertEqual(format_indices([0, 3, 7, 8, 9]), '0,3,7-9')
+        self.assertEqual(format_indices([5]), '5')
+        self.assertEqual(format_indices(list(range(200))), '0-199')
+
+    def test_window_flags_still_produce_a_contiguous_list(self):
+        from utils.runlocal import resolve_indices
+        self.assertEqual(
+            resolve_indices(SimpleNamespace(indices=None, first=5, num=3)),
+            [5, 6, 7])
+        # Both unset is the one-job default, not zero jobs.
+        self.assertEqual(
+            resolve_indices(SimpleNamespace(indices=None, first=None,
+                                            num=None)),
+            [0])
 
 
 # ---------------------------------------------------------------------------

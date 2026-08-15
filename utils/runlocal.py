@@ -24,8 +24,10 @@ which also means the driver can print a single command that reproduces
 any one job by hand.
 
 Index semantics: `--first`/`--num` name cnf indices directly
-(`baseSeed = 1 + index`). The synthesized jobdesc carries no
-`firstjob`, so there is no second index space to confuse it with.
+(`baseSeed = 1 + index`), and `--indices 0,3,7-9` names them one by
+one — for rerunning the exact jobs a grid pass lost, which are rarely
+contiguous. The synthesized jobdesc carries no `firstjob`, so there is
+no second index space to confuse it with.
 """
 
 import argparse
@@ -91,13 +93,81 @@ def output_globs(tarball):
     return globs
 
 
-def synth_jobdesc(tarball, inloc, first, num):
+def parse_indices(spec):
+    """`'0,3,7-9'` -> `[0, 3, 7, 8, 9]`, sorted and deduplicated.
+
+    Ranges are inclusive at both ends, matching how a recovery list
+    reads ("indices 7 through 9 failed"). Raises ValueError on
+    anything else — a typo here would silently run the wrong jobs.
+    """
+    indices = []
+    for token in spec.split(','):
+        token = token.strip()
+        match = re.fullmatch(r'(\d+)(?:-(\d+))?', token)
+        if not match:
+            raise ValueError(f"bad index token {token!r} in --indices "
+                             f"(want N or A-B, comma separated)")
+        low = int(match.group(1))
+        high = int(match.group(2)) if match.group(2) else low
+        if high < low:
+            raise ValueError(f"reversed range {token!r} in --indices")
+        indices.extend(range(low, high + 1))
+    if not indices:
+        raise ValueError("--indices selected no jobs")
+    return sorted(set(indices))
+
+
+def format_indices(indices):
+    """The inverse of `parse_indices`, collapsing runs back to `A-B`.
+
+    Children and rerun lines carry this, so a 200-index window does
+    not become a 200-token argv.
+    """
+    parts = []
+    start = prev = None
+    for index in indices:
+        if start is None:
+            start = prev = index
+        elif index == prev + 1:
+            prev = index
+        else:
+            parts.append(str(start) if start == prev else f"{start}-{prev}")
+            start = prev = index
+    if start is not None:
+        parts.append(str(start) if start == prev else f"{start}-{prev}")
+    return ','.join(parts)
+
+
+def resolve_indices(args):
+    """The list of cnf indices to run, from whichever flag named them.
+
+    `--indices` and `--first`/`--num` are alternatives, not layers: a
+    run that accepted both would have to decide whether the list is
+    clipped to the window, and either answer surprises someone.
+    """
+    if args.indices is not None:
+        if args.first is not None or args.num is not None:
+            raise ValueError("--indices and --first/--num are alternatives; "
+                             "pass one or the other")
+        return parse_indices(args.indices)
+    first = 0 if args.first is None else args.first
+    num = 1 if args.num is None else args.num
+    if first < 0:
+        raise ValueError("--first must be >= 0")
+    if num < 1:
+        raise ValueError("--num must be at least 1")
+    return list(range(first, first + num))
+
+
+def synth_jobdesc(tarball, inloc, indices):
     """The jobdesc `process_jobdef` needs, built from CLI flags.
 
-    `njobs` is `first + num` because `resolve_entry_index` rejects any
-    index >= njobs and — with no `firstjob` — maps an index to itself.
-    Deliberately no 'firstjob' key: the local runner has ONE index
-    space, the cnf's.
+    `njobs` is one past the largest index because `resolve_entry_index`
+    rejects any index >= njobs and — with no `firstjob` — maps an index
+    to itself. Gaps in `indices` are not holes in the jobdesc: it
+    describes the cnf's index space, and the driver decides which of
+    those indices actually run. Deliberately no 'firstjob' key: the
+    local runner has ONE index space, the cnf's.
 
     `outputs` is passthrough for `process_jobdef`; its location is
     never read on this path. It says `outstage` so that a jobdesc that
@@ -107,7 +177,7 @@ def synth_jobdesc(tarball, inloc, first, num):
     return {
         'tarball': str(tarball),
         'inloc': inloc,
-        'njobs': first + num,
+        'njobs': max(indices) + 1,
         'outputs': [{'dataset': g, 'location': OUTSTAGE_LOCATION}
                     for g in output_globs(tarball)],
     }
@@ -123,12 +193,13 @@ def child_argv(index, args):
 
     Printed in the summary, so it must be runnable verbatim.
     """
+    # --indices, never --first/--num: one spelling for the child means
+    # one code path, whichever flag the user reached for.
     argv = [sys.executable, str(args.entry_point),
             '--one', str(index),
             '--jobdef', str(args.jobdef),
             '--inloc', args.inloc,
-            '--first', str(args.first),
-            '--num', str(args.num),
+            '--indices', format_indices(args.indices),
             '--nevts', str(args.nevts)]
     if args.mu2e_options.strip():
         # `--opt=value`, not `--opt value`: mu2e options start with a dash
@@ -176,11 +247,11 @@ def drive(args):
     Never stops early: a failed index is reported, and the rest still
     run. Returns the process exit code (1 if any job failed).
     """
-    indices = list(range(args.first, args.first + args.num))
+    indices = args.indices
     globs = output_globs(args.jobdef)
 
     print(f"[local] {len(indices)} job(s), cnf indices "
-          f"{indices[0]}..{indices[-1]}, {args.parallel} at a time")
+          f"{format_indices(indices)}, {args.parallel} at a time")
     print(f"[local] a mu2e job is ~{GB_PER_JOB} GB resident; "
           f"{args.parallel} at a time is ~{GB_PER_JOB * args.parallel:.1f} GB")
     print(f"[local] workdir: {args.workdir}")
@@ -241,7 +312,7 @@ def run_one(index, args):
     Returns the mu2e exit code. Everything after mu2e — push, declare,
     manifest — is the worker's job and deliberately absent here.
     """
-    jobdesc = synth_jobdesc(args.jobdef, args.inloc, args.first, args.num)
+    jobdesc = synth_jobdesc(args.jobdef, args.inloc, args.indices)
     fcl, simjob_setup, _infiles, _outputs, _inloc = process_jobdef(
         jobdesc, _synthesize_direct_fname(index), args)
     cmd = build_mu2e_cmd(fcl, simjob_setup, args)
@@ -258,10 +329,13 @@ def build_parser():
     parser.add_argument('--inloc', default='tape',
                         help='where inputs live (tape|disk|resilient|stash|'
                              'dir:<path>|none), default tape')
-    parser.add_argument('--first', type=int, default=0,
+    parser.add_argument('--first', type=int, default=None,
                         help='first cnf index to run (default 0)')
-    parser.add_argument('--num', type=int, default=1,
+    parser.add_argument('--num', type=int, default=None,
                         help='how many indices to run (default 1)')
+    parser.add_argument('--indices',
+                        help='explicit cnf indices instead of a window, '
+                             'e.g. 0,3,7-9 (ranges inclusive)')
     parser.add_argument('-j', '--parallel', type=int, default=DEFAULT_PARALLEL,
                         help=f'jobs to run at once (default {DEFAULT_PARALLEL}; '
                              f'~{GB_PER_JOB} GB resident each)')
@@ -281,10 +355,10 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    if args.num < 1:
-        sys.exit("runlocal: --num must be at least 1")
-    if args.first < 0:
-        sys.exit("runlocal: --first must be >= 0")
+    try:
+        args.indices = resolve_indices(args)
+    except ValueError as exc:
+        sys.exit(f"runlocal: {exc}")
     if args.parallel < 1:
         sys.exit("runlocal: --parallel must be at least 1")
 

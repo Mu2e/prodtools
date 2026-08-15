@@ -203,6 +203,11 @@ reading the code:
   indir/`, so jobs sharing a directory would move each other's files.
   Its `--first`/`--num` are cnf indices directly (`baseSeed = 1 + index`,
   `firstSubRun = index`); there is no `firstjob` second index space.
+  `--indices 0,3,7-9` names those indices one by one instead of a window
+  — for rerunning exactly the jobs a grid pass lost, which are rarely
+  contiguous. Ranges are inclusive at both ends, and the two forms are
+  alternatives: passing `--indices` together with `--first`/`--num` is
+  refused rather than silently clipped.
 - Random sampling seed is derived from `(owner, desc, dsconf, dataset,
   count, njobs)` — same inputs always produce the same file selection.
 - The per-job seed is `baseSeed = 1 + cnf index` (flat — no version, run,
