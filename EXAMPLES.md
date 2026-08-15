@@ -51,6 +51,7 @@ Core production tools:
 - `jobfcl` — generate the per-index FCL from a jobdef tarball
 - `fcldump` — resolve a dataset/target to its producing cnf and dump the FCL
 - `runmu2e` — worker entry point: FCL generation, `mu2e` execution, pushOutput
+- `runlocal` — run cnf jobs on this node, several at a time; nothing is pushed or declared
 - `submissions` — status/run/pause/resume/cancel/complete/reconcile/resubmit
   CLI for the submission ledger (verify-and-resubmit recovery +
   sliced-campaign top-up + hand re-firing)
@@ -472,8 +473,12 @@ an "ops JSON" via dropbox, both landing under `$CONDOR_DIR_INPUT`, and
 the worker resolves its own job index from `$PROCESS` through the ops
 JSON's `jobs` lookup table.
 
-For a local smoke test, reuse the ops JSON a dry-run submission already
-writes. Since there is no standalone submit CLI any more, that means
+To simply run a cnf's jobs on this node — one index or a few dozen, with
+no ops JSON and no ledger row — use `runlocal` (section 11); it shares
+this worker's prep and stops before the push.
+
+For a local smoke test *of the worker itself*, reuse the ops JSON a
+dry-run submission already writes. Since there is no standalone submit CLI any more, that means
 dry-running against an existing ledger row — either a row already on
 the campaign (`submissions status` lists row ids), or a fresh one from
 `json2jobdef --enqueue` (section 3):
@@ -884,6 +889,44 @@ Flags: `--dataset`, `--dest {stash,resilient}` (default `stash`),
 `--source {disk,tape}` (default `disk`), `--limit N`, `--dry-run`,
 `--list DATASET`, `--quiet`. Writing under resilient requires production
 (mu2epro) permissions for new dsconf directories.
+
+### `runlocal`
+
+Run cnf jobs on the current node, several at a time. Outputs stay on
+local disk — no pushOutput, no SAM declare, no manifest:
+
+```bash
+# Smoke three indices before submitting, 10 events each
+runlocal --jobdef cnf.mu2e.STMBeamToVDTarget.MDC2025au.0.tar \
+         --inloc tape --first 0 --num 3 -j 3 --nevts 10 \
+         --workdir /exp/mu2e/data/users/$USER/localrun
+
+# Produce full-length output for indices 100..107, four at a time
+runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
+         --inloc tape --first 100 --num 8 -j 4
+```
+
+Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
+`--inloc` (default `tape`), `--first` / `--num` (default `0` / `1`),
+`-j/--parallel` (default 4), `--workdir` (default `.`), `--nevts`
+(default `-1` = whatever the FCL says), `--mu2e-options`,
+`--copy-input`.
+
+Job prep is the worker's own `process_jobdef`, so a local run exercises
+the same tarball fetch, inloc handling and `--copy-input` staging the
+grid will — only the push tail is missing. Each job runs as a child
+process in `<workdir>/job_<index>/` holding its FCL, art outputs, art
+log and `stdout.log`; the separate directories are required, because
+`process_jobdef` works in cwd and its copy-input branch runs `mkdir
+indir; mv *.art indir/`.
+
+`--first`/`--num` are cnf indices directly — `baseSeed = 1 + index` and
+`firstSubRun = index`, with no `firstjob` second index space to confuse
+them with. A failing index does not stop the others; the summary lists
+every job's exit code and prints a paste-ready rerun command for each
+failure, and the process exits 1 if any job failed. Four concurrent
+mu2e processes is roughly 10 GB resident — the driver prints that
+arithmetic for the `-j` you chose.
 
 ### `install_prodtools.sh` / `submissions_cron`
 

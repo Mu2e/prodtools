@@ -88,7 +88,7 @@ When regenerating, read in this order:
     user-facing CLI: `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `jobquery`,
-    `submissions`, `check_inputs`, `copy_to_stash`. Ops scripts
+    `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`. Ops scripts
     (`install_prodtools.sh`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
     key flags. Enumerate from the current `bin/` directory — add any new
@@ -193,6 +193,16 @@ reading the code:
   campaign: verify_row is fail-closed against SAM, so with nothing
   declared every index reads as missing and each tick would recover the
   whole row forever. Build it and submit it by hand.
+- `runlocal` runs cnf jobs on the current node, several at a time, and
+  pushes NOTHING: no pushOutput, no SAM declare, no manifest. It shares
+  the worker's own prep (`runmu2e.process_jobdef`), so a local run
+  exercises the same tarball fetch, inloc handling and `--copy-input`
+  staging the grid will; only the push tail is absent. Each job runs as
+  a child process in its own `job_<index>/` directory — `process_jobdef`
+  works in cwd and its copy-input branch runs `mkdir indir; mv *.art
+  indir/`, so jobs sharing a directory would move each other's files.
+  Its `--first`/`--num` are cnf indices directly (`baseSeed = 1 + index`,
+  `firstSubRun = index`); there is no `firstjob` second index space.
 - Random sampling seed is derived from `(owner, desc, dsconf, dataset,
   count, njobs)` — same inputs always produce the same file selection.
 - The per-job seed is `baseSeed = 1 + cnf index` (flat — no version, run,
