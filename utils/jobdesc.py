@@ -6,7 +6,7 @@ worker as `ops["jobdesc"]`, and read there by `utils/runmu2e.py`:
 
     {
         "tarball":  "cnf.mu2e.<desc>.<dsconf>.<index>.tar",   # required
-        "outputs":  [ {"dataset": "...", "location": "tape|disk|scratch"}, ... ],  # required
+        "outputs":  [ {"dataset": "...", "location": "tape|disk|scratch|outstage"}, ... ],  # required
         "njobs":    <int>,                                    # optional
         "inloc":    "tape|disk|resilient|stash|dir:<path>|none",  # optional, defaults 'none'
         "firstjob": <int>,                                    # optional, defaults 0
@@ -139,6 +139,39 @@ _LIFETIME_RE = re.compile(r'^\d+[smhd]$')
 # location_type == inloc, and jobsub_argv._LOCATION_DEFAULT_PROTOCOL
 # carries a protocol for it. EXAMPLES.md has always documented it.
 INLOC_SIMPLE = ('tape', 'disk', 'scratch', 'resilient', 'stash', 'none')
+
+# Where a job's outputs may go. The first three are pushOutput actions
+# (Util/pushOutput.py validActions) — each copies to a dataset path AND
+# declares the file to SAM.
+#
+# 'outstage' is ours, not pushOutput's: the worker copies the file to
+# `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` and declares nothing. It is
+# for test and study runs whose output should not enter SAM. pushOutput
+# offers no such mode — it sets `dosam = True` unconditionally
+# (pushOutput.py:268), and its 'scratch' action is a fully declared
+# dataset that merely lives on scratch.
+OUTSTAGE_LOCATION = 'outstage'
+OUTLOC_VALID = ('tape', 'disk', 'scratch', OUTSTAGE_LOCATION)
+
+
+def validate_outloc(outloc):
+    """Reject a malformed `outloc` map at the boundary.
+
+    Nothing checked these values before `outstage` existed, so a
+    misspelling ('presistent') survived the whole build, shipped to the
+    worker, and failed inside pushOutput after the job had already run.
+
+    Raises ValueError; both callers turn that into a one-line exit.
+    """
+    if not isinstance(outloc, dict):
+        raise ValueError(
+            f"outloc must be a dictionary of dataset pattern -> location, "
+            f"got {outloc!r}")
+    for pattern, location in outloc.items():
+        if location not in OUTLOC_VALID:
+            raise ValueError(
+                f"outloc['{pattern}'] must be one of "
+                f"{', '.join(OUTLOC_VALID)}, got {location!r}")
 
 
 def validate_entry_value(key, value):

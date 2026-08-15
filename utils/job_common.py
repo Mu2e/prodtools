@@ -196,9 +196,16 @@ def log_storage_location(outputs) -> str:
     the data lands, so they stay cheap to read without a tape recall. This
     matches push_logs()'s 'disk' default (and what the retired POMS path did).
 
-    The one exception is `scratch`: a non-mu2epro account whose data goes to
-    scratch has no storage.modify scope on /mu2e/persistent/datasets, so a
-    'disk' log push would 403. Those runs keep logs beside their data.
+    There are two exceptions, both cases where a 'disk' log is not merely
+    unconventional but wrong:
+
+    `scratch` — a non-mu2epro account whose data goes to scratch has no
+    storage.modify scope on /mu2e/persistent/datasets, so a 'disk' log
+    push would 403. Those runs keep logs beside their data.
+
+    `outstage` — the data was never declared to SAM, so a declared log
+    would list parents SAM has never heard of. The log follows the data
+    into $MU2EGRID_WFOUTSTAGE and is not declared either.
 
     Do NOT let logs inherit 'tape' from the data outputs — small log files
     on tape are wasteful and diverge from every earlier campaign's sibling
@@ -213,7 +220,8 @@ def log_storage_location(outputs) -> str:
         outputs = outputs.get('outputs')
     if not outputs:
         return 'disk'
-    return 'scratch' if outputs[0].get('location') == 'scratch' else 'disk'
+    location = outputs[0].get('location')
+    return location if location in ('scratch', 'outstage') else 'disk'
 
 def default_owner() -> str:
     """Dataset owner defaulted from $USER; mu2epro maps to mu2e (production

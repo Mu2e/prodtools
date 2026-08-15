@@ -14435,6 +14435,218 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# outstage outputs — write to $MU2EGRID_WFOUTSTAGE, declare nothing
+# ---------------------------------------------------------------------------
+
+
+class TestOutlocVocabulary(unittest.TestCase):
+    """outloc values are checked where the build config enters.
+
+    Nothing validated them before: a misspelled location travelled all
+    the way to pushOutput, which knows four actions and treats anything
+    else as an error on the worker, after the job has already run.
+    """
+
+    def test_known_locations_accepted(self):
+        from utils.jobdesc import validate_outloc
+        validate_outloc({'*.art': 'tape', '*.root': 'disk'})
+        validate_outloc({'*.art': 'scratch'})
+        validate_outloc({'*.art': 'outstage'})
+
+    def test_typo_rejected(self):
+        from utils.jobdesc import validate_outloc
+        with self.assertRaises(ValueError):
+            validate_outloc({'*.art': 'presistent'})
+
+    def test_non_dict_rejected(self):
+        from utils.jobdesc import validate_outloc
+        with self.assertRaises(ValueError):
+            validate_outloc('disk')
+
+
+class TestOutstageDir(unittest.TestCase):
+    """`$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` — the mu2egrid layout,
+    which `mu2eClusterCheckAndMove` already knows how to walk."""
+
+    def test_dir_from_env(self):
+        from utils import runmu2e
+        env = {'MU2EGRID_WFOUTSTAGE': '/pnfs/mu2e/scratch/users/o/workflow/p/outstage',
+               'CLUSTER': '12345', 'PROCESS': '7'}
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(
+                runmu2e._outstage_dir(),
+                '/pnfs/mu2e/scratch/users/o/workflow/p/outstage/12345/7')
+
+    def test_missing_wfoutstage_is_a_hard_error(self):
+        """Silently defaulting would scatter output somewhere nobody
+        looks; the submitter always exports this var."""
+        from utils import runmu2e
+        env = dict(os.environ)
+        env.pop('MU2EGRID_WFOUTSTAGE', None)
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(RuntimeError):
+                runmu2e._outstage_dir()
+
+
+class TestPushDataOutstage(unittest.TestCase):
+    """Outstage specs bypass pushOutput entirely — no copy to a dataset
+    path, no SAM declare."""
+
+    OUT = 'mcs.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_1.001430_00000000.art'
+    NTD = 'nts.mu2e.CePLeadingLogOnSpill.MDC2025au_best_v1_1.001430_00000000.root'
+
+    def _run(self, outputs, files, infiles=''):
+        from utils import runmu2e
+        seen = {'push': None, 'outstage': None}
+
+        def fake_push_output(output_specs, output_file="output.txt",
+                             simjob_setup=None):
+            seen['push'] = [s[1] for s in output_specs]
+            return 0
+
+        def fake_copy(filenames):
+            seen['outstage'] = list(filenames)
+            return 0
+
+        d = _mkdtemp()
+        for f in files:
+            (Path(d) / f).write_text('x\n')
+        cwd = os.getcwd()
+        try:
+            os.chdir(d)
+            with patch.object(runmu2e, 'push_output', fake_push_output), \
+                 patch.object(runmu2e, '_copy_to_outstage', fake_copy):
+                rc = runmu2e.push_data(outputs, infiles)
+        finally:
+            os.chdir(cwd)
+        return seen, rc, d
+
+    def test_outstage_only_never_calls_push_output(self):
+        seen, rc, _ = self._run(
+            [{'dataset': '*.art', 'location': 'outstage'}], [self.OUT])
+        self.assertEqual(seen['outstage'], [self.OUT])
+        self.assertIsNone(seen['push'])
+        self.assertEqual(rc, 0)
+
+    def test_outstage_only_writes_no_parents_list(self):
+        """parents_list.txt exists solely to feed pushOutput the SAM
+        parents for a declare. Nothing declares here."""
+        seen, _, d = self._run(
+            [{'dataset': '*.art', 'location': 'outstage'}], [self.OUT],
+            infiles='dig.mu2e.X.Y.001430_00000000.art')
+        self.assertFalse((Path(d) / 'parents_list.txt').exists())
+
+    def test_mixed_outputs_partition_by_location(self):
+        seen, rc, _ = self._run(
+            [{'dataset': '*.art', 'location': 'outstage'},
+             {'dataset': '*.root', 'location': 'disk'}],
+            [self.OUT, self.NTD])
+        self.assertEqual(seen['outstage'], [self.OUT])
+        self.assertEqual(seen['push'], [self.NTD])
+
+    def test_mixed_outputs_still_write_parents_list(self):
+        """A surviving declared output still needs its parents."""
+        infiles = 'dig.mu2e.X.Y.001430_00000000.art'
+        seen, _, d = self._run(
+            [{'dataset': '*.art', 'location': 'outstage'},
+             {'dataset': '*.root', 'location': 'disk'}],
+            [self.OUT, self.NTD], infiles=infiles)
+        self.assertEqual((Path(d) / 'parents_list.txt').read_text(),
+                         infiles + '\n')
+
+
+class TestLogFollowsOutstage(unittest.TestCase):
+    """A log declared to SAM would name outstage files as its parents —
+    files SAM has never heard of. The log goes where the data goes."""
+
+    def test_log_storage_location_outstage(self):
+        from utils.job_common import log_storage_location
+        self.assertEqual(
+            log_storage_location([{'location': 'outstage', 'dataset': '*.art'}]),
+            'outstage')
+
+    def test_push_logs_outstage_skips_push_output(self):
+        from utils import runmu2e
+        seen = {'push': False, 'outstage': None}
+
+        def fake_push_output(*a, **kw):
+            seen['push'] = True
+            return 0
+
+        d = _mkdtemp()
+        logname = 'log.mu2e.X.Y.001430_00000000.log'
+        (Path(d) / logname).write_text('log\n')
+        cwd = os.getcwd()
+        try:
+            os.chdir(d)
+            with patch.object(runmu2e, 'push_output', fake_push_output), \
+                 patch.object(runmu2e, '_copy_to_outstage',
+                              lambda fs: seen.__setitem__('outstage', list(fs)) or 0):
+                rc = runmu2e.push_logs(log_file=logname, location='outstage')
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(seen['outstage'], [logname])
+        self.assertFalse(seen['push'])
+        self.assertEqual(rc, 0)
+
+
+class TestOutstageRequestsNoDatasetScope(unittest.TestCase):
+    """The worker token already carries storage.modify on WFOUTSTAGE
+    (jobsub_argv adds it unconditionally). An outstage output must not
+    ALSO request a `/mu2e/<area>/datasets/...` scope — htvault rejects
+    scopes it has not pre-allocated, which would fail the submission."""
+
+    def test_no_scope_for_outstage_output(self):
+        from utils.jobsub_argv import output_storage_dirs
+        dirs = output_storage_dirs(
+            ['mcs.mu2e.D.C.001430_00000000.art'],
+            [{'dataset': '*.art', 'location': 'outstage'}])
+        self.assertEqual(dirs, [])
+
+
+class TestEnqueueRefusesOutstage(unittest.TestCase):
+    """verify_row is fail-closed against SAM. An outstage campaign
+    declares nothing, so every index reads as missing and the next tick
+    recovers the whole row — forever. Refuse at the door."""
+
+    def setUp(self):
+        from utils import submit
+        self.db = os.path.join(_mkdtemp(), 'submissions.db')
+        tb = patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('cnf.mu2e.O.C.0.tar'))
+        ci = patch.object(submit, 'check_inputs', return_value=(True, []))
+        tb.start()
+        ci.start()
+        self.addCleanup(tb.stop)
+        self.addCleanup(ci.stop)
+
+    def test_outstage_entry_refused(self):
+        from utils.submit import enqueue_entry
+        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10,
+                 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+        with self.assertRaises(SystemExit):
+            enqueue_entry(entry, ledger_db=self.db, slice_size=10)
+
+    def test_outstage_among_several_outputs_refused(self):
+        from utils.submit import enqueue_entry
+        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10,
+                 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.root', 'location': 'disk'},
+                             {'dataset': '*.art', 'location': 'outstage'}]}
+        with self.assertRaises(SystemExit):
+            enqueue_entry(entry, ledger_db=self.db, slice_size=10)
+
+    def test_ordinary_entry_still_enqueues(self):
+        from utils.submit import enqueue_entry
+        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10,
+                 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'disk'}]}
+        self.assertIsNotNone(
+            enqueue_entry(entry, ledger_db=self.db, slice_size=10))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

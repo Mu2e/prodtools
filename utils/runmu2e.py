@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import Mu2eName, log_storage_location
+from utils.jobdesc import OUTSTAGE_LOCATION
 from utils.jobfcl import Mu2eJobFCL
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import (
@@ -291,8 +292,53 @@ def build_mu2e_cmd(fcl, simjob_setup, args):
         inner += f" {args.mu2e_options.strip()}"
     return ['bash', '-c', inner]
 
+def _outstage_dir():
+    """`$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` — the mu2egrid outstage
+    layout, which `mu2eClusterCheckAndMove` already knows how to walk.
+
+    jobsub_argv exports MU2EGRID_WFOUTSTAGE on every submission and
+    requests `--need-storage-modify` on it, so the worker token already
+    covers this write. Missing means the caller is not a real worker;
+    raise rather than default, or the output lands where nobody looks.
+    """
+    base = os.environ.get('MU2EGRID_WFOUTSTAGE')
+    if not base:
+        raise RuntimeError(
+            "MU2EGRID_WFOUTSTAGE is not set — outstage outputs have "
+            "nowhere to go. It is exported by the submission argv; a "
+            "job seeing it unset was not launched by prodtools.")
+    cluster = os.environ.get('CLUSTER', '0')
+    process = os.environ.get('PROCESS', '0')
+    return f"{base}/{cluster}/{process}"
+
+
+def _copy_to_outstage(filenames):
+    """Copy files to the job's outstage directory. No SAM declare.
+
+    Uses ifdh rather than `mdh copy-file`: mdh resolves a destination
+    from a file's dataset name and location class, which is exactly the
+    dataset layout an outstage file is opting out of. ifdh takes a
+    literal destination directory.
+    """
+    if not filenames:
+        return 0
+    dest = _outstage_dir()
+    print(f"Copying {len(filenames)} file(s) to outstage: {dest}")
+    rc = run(f"ifdh mkdir_p {dest}", shell=True, retries=3, retry_delay=60)
+    if rc:
+        return rc
+    return run(f"ifdh cp -D {' '.join(filenames)} {dest}",
+               shell=True, retries=3, retry_delay=60)
+
+
 def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     """Handle data file management and submission using wildcard patterns from JSON outputs.
+
+    Outputs are partitioned by location. Anything bound for `outstage`
+    is copied to $MU2EGRID_WFOUTSTAGE and never reaches pushOutput —
+    pushOutput has no copy-without-declare mode (`dosam = True` is
+    unconditional at pushOutput.py:268), so opting out of SAM means
+    opting out of pushOutput.
 
     Args:
         outputs: List of output specifications (dataset pattern, location)
@@ -309,17 +355,22 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
 
     parents_field = "parents_list.txt" if track_parents else "none"
 
-    if track_parents:
-        Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
-
     # Build output specifications. A job's own inputs are never outputs:
     # in direct-input mode the fetched input art file sits in cwd, so a
     # broad outputs glob (e.g. '*.art') would otherwise declare it for
     # push — and pushOutput, finding the original already at its dataset
     # path, treats it as a stale orphan and tries to DELETE production
     # data (smoke cluster 29444911; only the token scope blocked it).
+    # Whether anything is DECLARED, read from the config rather than from
+    # the glob results: an entry with a declared output still writes
+    # parents_list.txt and still calls pushOutput when the glob matched
+    # nothing, exactly as it did before outstage existed. Only an
+    # outstage-only entry skips both.
+    declares = any(o['location'] != OUTSTAGE_LOCATION for o in outputs)
+
     parent_names = {Path(p).name for p in infiles.split()} if infiles else set()
     output_specs = []
+    outstage_files = []
     for output in outputs:
         dataset_pattern = output['dataset']
         location = output['location']
@@ -327,10 +378,21 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
                           if Path(f).name not in parent_names]
         print(f"Pattern '{dataset_pattern}' matched {len(matching_files)} files: {matching_files}")
         for filename in matching_files:
-            output_specs.append((location, filename, parents_field))
+            if location == OUTSTAGE_LOCATION:
+                outstage_files.append(filename)
+            else:
+                output_specs.append((location, filename, parents_field))
 
-    # Use generic push function
-    return push_output(output_specs, "output.txt", simjob_setup=simjob_setup)
+    # parents_list.txt exists only to give pushOutput the SAM parents for
+    # a declare, so an outstage-only job has no use for it.
+    if track_parents and declares:
+        Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
+
+    rc = _copy_to_outstage(outstage_files)
+    if declares:
+        rc = push_output(output_specs, "output.txt",
+                         simjob_setup=simjob_setup) or rc
+    return rc
 
 def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
     """Handle log file management and submission.
@@ -348,6 +410,10 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
             "scratch", or "tape". User runs may need "scratch" because
             non-mu2epro accounts typically lack `storage.modify` scope on
             `/mu2e/persistent/datasets/usr-etc/log/<owner>/`.
+            "outstage" is not a pushOutput class: the log is copied to
+            $MU2EGRID_WFOUTSTAGE and not declared, which is what a job
+            whose data went to outstage needs (a declared log would name
+            undeclared parents). log_storage_location() routes it here.
     """
 
     if log_file is not None:
@@ -372,6 +438,8 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
 
     # Push log if it exists
     if Path(logfile).exists():
+        if location == OUTSTAGE_LOCATION:
+            return _copy_to_outstage([logfile])
         # Name parents_list.txt only if it is actually on disk. pushOutput
         # reports `ERROR - parents file ... not found` and then exits 0, so
         # naming a missing file makes the log push a SILENT no-op and the

@@ -35,7 +35,8 @@ from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for)
 from utils.jobdesc import (RESOURCE_KEYS, tarball_of, outputs_of, njobs_of,
                            inloc_of, firstjob_of, validate_window,
-                           resources_of, is_draining, validate_entry_value)
+                           resources_of, is_draining, validate_entry_value,
+                           OUTSTAGE_LOCATION)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
 from utils.check_inputs import check_inputs, format_report, Problem
@@ -387,6 +388,28 @@ def _validate_entry_values(entry):
                 sys.exit(f"json2jobdef: {e}")
 
 
+def _refuse_outstage_campaign(entry):
+    """An outstage entry cannot be a campaign.
+
+    Outstage outputs are never declared to SAM, and verify_row is
+    fail-closed against SAM: it derives the expected outputs from the
+    cnf and asks SAM whether they landed. With nothing declared, every
+    index reads as missing, so each tick issues a recovery for the whole
+    row against files that already exist — forever.
+
+    Teaching verify_row to list an outstage directory instead is a real
+    feature; refusing here is the boundary that keeps it from being an
+    accident. Build and submit an outstage entry by hand.
+    """
+    for output in entry.get('outputs') or []:
+        if output.get('location') == OUTSTAGE_LOCATION:
+            sys.exit(
+                "json2jobdef: outstage outputs are not declared to SAM, so "
+                "campaign verification cannot see them and every slice "
+                "would recover forever. An outstage entry cannot be "
+                "enqueued — submit it by hand.")
+
+
 def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
                   resources=None, provenance=None):
     """Register ONE entry as a sliced-submission campaign (cursor 0);
@@ -411,6 +434,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     """
     resources = resources or {}
     _validate_entry_values(entry)
+    _refuse_outstage_campaign(entry)
     if is_draining(entry):
         err = _validate_draining_entry(entry)
         if err:

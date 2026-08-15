@@ -180,6 +180,19 @@ reading the code:
   `none`, or `dir:<path>` (locally-mounted FS, e.g. cvmfs). There is no
   `auto`. `resilient` reads via xrootd, `stash` reads via CVMFS, and
   `dir:` reads via direct POSIX (the `file:` protocol is forced).
+- `outloc` values accept `tape`, `disk`, `scratch`, `outstage`. The
+  first three are pushOutput actions — each copies the file to its
+  dataset path AND declares it to SAM. pushOutput has no
+  copy-without-declare mode (`dosam` is set unconditionally), and its
+  `scratch` action is a fully declared dataset that merely lives on
+  scratch. `outstage` is prodtools' own: the worker copies the file to
+  `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` via ifdh and declares
+  nothing — for test and study runs whose output should stay out of
+  SAM. The log follows the data there (a declared log would name
+  undeclared parents). An outstage entry CANNOT be enqueued as a
+  campaign: verify_row is fail-closed against SAM, so with nothing
+  declared every index reads as missing and each tick would recover the
+  whole row forever. Build it and submit it by hand.
 - Random sampling seed is derived from `(owner, desc, dsconf, dataset,
   count, njobs)` — same inputs always produce the same file selection.
 - The per-job seed is `baseSeed = 1 + cnf index` (flat — no version, run,

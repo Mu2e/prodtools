@@ -19,7 +19,8 @@ from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
 from utils.jobdesc import (
-    RESOURCE_KEYS, firstjob_of, validate_entry_value, validate_window)
+    RESOURCE_KEYS, firstjob_of, validate_entry_value, validate_outloc,
+    validate_window)
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -342,6 +343,10 @@ def validate_required_fields(config):
                 validate_entry_value(key, config[key])
             except ValueError as exc:
                 sys.exit(f"json2jobdef: {exc}")
+    try:
+        validate_outloc(config['outloc'])
+    except ValueError as exc:
+        sys.exit(f"json2jobdef: {exc}")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
@@ -446,10 +451,11 @@ def build_jobdesc(config):
     Pure: no filesystem writes. The one impure part is the `njobs: -1`
     branch, which asks the freshly-built cnf for its job count.
 
-    Raises ValueError if `outloc` is not a dict. Fatal, not a warning:
-    the only caller is the enqueue path, and skipping there would push
-    a cnf to SAM and create no campaign — a half-done production push
-    that reports success.
+    Raises ValueError if `outloc` is malformed (validate_outloc owns the
+    grammar). Fatal, not a warning: the only caller is the enqueue path,
+    and skipping there would push a cnf to SAM and create no campaign —
+    a half-done production push that reports success. This is a backstop;
+    validate_required_fields already checked the same config earlier.
     """
     parfile_name = get_parfile_name(config)
     is_generic = config.get('generic_tarball', False)
@@ -517,10 +523,7 @@ def build_jobdesc(config):
             print(f"Windowed entry: cnf indices {firstjob}..{firstjob + njobs - 1}")
 
     outloc = config['outloc']
-    if not isinstance(outloc, dict):
-        raise ValueError(
-            f"outloc must be a dictionary with dataset-specific "
-            f"locations for {config.get('desc', 'unknown')}")
+    validate_outloc(outloc)
     for dataset_name, location in outloc.items():
         jobdef_entry["outputs"].append({
             "dataset": dataset_name,
