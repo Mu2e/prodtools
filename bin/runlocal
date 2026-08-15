@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# runlocal - run cnf jobs locally, several at a time. Outputs stay on
+# local disk; nothing is pushed or declared to SAM. Wrapper for
+# utils/runlocal.py
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/runlocal.py"
+
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    exec python3 "$PYTHON_SCRIPT" "$@"
+fi
+
+# Set up Mu2e environment (mdh for the tarball/input fetch; each job
+# sources its own SimJob setup before running mu2e). Child jobs inherit
+# this environment.
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+
+exec python3 "$PYTHON_SCRIPT" "$@"

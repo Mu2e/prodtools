@@ -120,8 +120,8 @@ def topology_for_dataset(dataset_name, known=None):
 
     Walks SAM file-lineage from the first file of the dataset, aggregates
     by 5-field dataset name (no run/subrun), recurses into unique parent
-    datasets. Used by the static pomsMonitor dashboard to cache lineage
-    topology — stable per dataset, so cron only walks new datasets.
+    datasets. Written for a lineage cache — the topology is stable per
+    dataset, so a caller only has to walk datasets it has not seen.
     Returns None if the dataset has no files.
 
     Pass `known` (dataset names the caller already has cached) to stop

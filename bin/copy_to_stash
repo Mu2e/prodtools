@@ -81,6 +81,12 @@ Examples:
         '--quiet', action='store_true',
         help='Suppress per-file progress output'
     )
+    parser.add_argument(
+        '--skip-existing', action='store_true',
+        help='Skip files already at the destination with the SAM-recorded '
+             'size (resume a partial staging without re-copying, and without '
+             'opening good files for truncating write)'
+    )
 
     args = parser.parse_args()
 
@@ -118,6 +124,7 @@ Examples:
             limit=args.limit,
             dry_run=args.dry_run,
             verbose=not args.quiet,
+            skip_existing=args.skip_existing,
         )
     else:
         n_copied = copy_dataset_to_stash(
@@ -126,6 +133,7 @@ Examples:
             limit=args.limit,
             dry_run=args.dry_run,
             verbose=not args.quiet,
+            skip_existing=args.skip_existing,
         )
 
     return 0 if n_copied >= 0 else 1

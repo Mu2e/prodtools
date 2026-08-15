@@ -54,7 +54,7 @@
         },
         "resampler_name": "TargetStopResampler",
         "input_data": {"sim.mu2e.TargetStopsCat.MDC2025ac.art": 1},
-        "njobs": 1000,
+        "njobs": 4000,
         "events": 1000000,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",

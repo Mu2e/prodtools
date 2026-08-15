@@ -1217,3 +1217,65 @@ MDC2025-NNN.json), and `json2jobdef --prod` is idempotent so re-running
 it is the correct way to add an already-pushed cnf to a map — hand-
 editing skips the index-definition rebuild. Both /mu2epro-run and
 /mu2epro-submit amended accordingly. See [[2026-07-25-mdc2025au-mix-round]].
+
+## [2026-08-08] update | POMS-removal final-review polish (index/log entries, stale comment, dead code)
+
+Pages updated: index.md (new Decisions entry for
+[[2026-08-08-retire-poms-backend]]; superseded-by pointers added to the
+three older bullets — `2026-07-02-jobdef-arithmetic-and-tbs-njobs`,
+`2026-07-10-firstjob-index-windows`, `justin-vs-prodtools` — that still
+described mkrecovery/db_builder as live mechanics).
+
+Reason: the whole-branch final review of the POMS-removal work
+(`.superpowers/sdd/2026-08-08-poms-removal/final-review.md`) flagged
+that `wiki/pages/2026-08-08-retire-poms-backend.md` was unindexed and
+unlogged — a SCHEMA.md obligation triggered by adding the page, not
+pre-existing drift — plus three index summaries still presenting
+retired tools as live. Same commit also fixed the code-side minors the
+review named: reworded the present-tense `DEFAULT_POMS_DIR`/
+`POMS_MAP_PATTERN` comment in `utils/map_entry.py` to document the
+external mu2epro convention as intentionally unreferenced; deleted the
+now consumer-less `q_dataset_below_sequencer`/`q_dataset_files_named`
+query builders from `utils/samweb_wrapper.py` (verified zero remaining
+references repo-wide); realigned the `map_entry` import continuation
+indentation in `utils/submit.py` (stale from the `poms_entry` rename,
+one column short/long); de-duplicated the `--indices-file` help text's
+double "ignored". `[[slug]]` cross-ref additions and the EXAMPLES.md
+tag-pointer bullet remain deferred per the review's own triage.
+Source: .superpowers/sdd/2026-08-08-poms-removal/final-review.md
+
+## [2026-08-12] update | Run1B consolidation landed; branch retirement prepared
+Added [[2026-08-12-run1b-consolidation]]. Offline #1923 merged 2026-08-12
+(main @ 38f6943d5), joining #1927; Production #565 and 1dacb738 also on
+main, so all four pieces of the consolidation are in. Verified on main:
+all three production geometries present; v40 differs from the branch copy
+only in commented-out dead lines; v01 differs FUNCTIONALLY (branch adds
+mu2e.detectorSystemZ0 and the EMC source VD positions) and no code on
+main reads inDS2Vacuum, so a re-run of a v01 campaign exits 0 with the
+wrong world. Recorded the freeze in data/Run1B/README.md. Archive tag
+run1b-archive-2026-08-08 created locally on the branch tip
+(5122019310278bbfada64ec68098ce6bf6bb5f66); push and branch deletion are
+the user's to run.
+Source: docs/superpowers/plans/2026-08-08-run1b-consolidation.md Task 7
+
+## [2026-08-12] update | Run1B branch kept, not deleted
+Correction to the entry above: the user declined branch deletion. The
+`Run1B` branch stays in Mu2e/Offline, frozen — consolidation is complete
+so nothing further lands on it, and it remains the source-code record of
+v02-v06, the fuller v01, and the un-ported Mu2eWorld.cc /
+constructVirtualDetectors.cc changes. The tag run1b-archive-2026-08-08
+was NOT pushed; it exists only in the local scratch clone at
+5122019310278bbfada64ec68098ce6bf6bb5f66 and is redundant while the
+branch lives. Push it first if the branch is ever deleted. Updated
+data/Run1B/README.md, the wiki page, and the index accordingly.
+
+## [2026-08-12] update | Merged Run1B consolidation verified on main
+Built and ran Offline main (38f6943d5) with Production 5aa34efb and
+mu2e-trig-config 51b30e6 in a scratch Muse workspace, because CI never
+built the merged result (pending, no statuses on the merge commit).
+muse build exit 0; gdmldump_run1_b_v40 exit 0 with no overlaps or G4
+exceptions; Run1BReco.fcl -n 1 exit 0 over a prestaged real digi from
+dig.mu2e.CosmicCRYAllMix1BB.Run1Ban_best_v1_4-000. fhicl-dump confirmed
+the smoke resolved to geom_run1_b_v40.txt + bfgeom_no_field.txt, so it
+exercised the newly-landed geometry and not a default.
+Source: docs/superpowers/plans/2026-08-08-run1b-consolidation.md Task 7 step 2

@@ -1,6 +1,6 @@
 # Mu2e Production Tools — Usage Examples
 
-Python-based tools for building, running, and monitoring Mu2e production
+Python-based tools for building, submitting, and running Mu2e production
 jobs. Every command below is a real invocation you can paste into a shell
 with an active Mu2e environment.
 
@@ -32,42 +32,40 @@ Optional helper:
 source bin/setup.sh   # adds prodtools bin/ to PATH, repo root to PYTHONPATH
 ```
 
-`muse setup ops` provides Python 3, `samweb`, and `fhicl-get`. `muse setup
-SimJob <tag>` is optional for most tools; only `muse setup ops` is
-required. Building job definitions (`json2jobdef`, `jobdef`) needs an
-Offline environment for `fhicl-get`, so source the SimJob musing that the
-entry's `simjob_setup` names.
+`muse setup ops` provides Python 3, `samweb`, `mdh`, and `fhicl-get`.
+`muse setup SimJob <tag>` is optional for most tools; only `muse setup
+ops` is required. Building job definitions (`json2jobdef`, `jobdef`)
+needs an Offline environment for `fhicl-get`, so source the SimJob musing
+that the entry's `simjob_setup` names.
 
-Tools that read the POMS SQLite database (`pomsMonitor`,
-`listNewDatasets --completeness`) additionally need SQLAlchemy:
-
-```bash
-source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana
-```
+No tool in this repo needs SQLAlchemy or a `pyenv ana` shell — the
+submission ledger and the completeness check read plain sqlite3 from the
+standard library.
 
 ## 2. Overview
 
 Core production tools:
 
-- `json2jobdef` — build cnf jobdef tarballs from JSON configs (recommended path)
+- `json2jobdef` — build cnf jobdef tarballs from JSON configs (recommended path); `--prod --enqueue` also registers a production campaign
 - `jobdef` — build a single jobdef directly from CLI flags
 - `jobfcl` — generate the per-index FCL from a jobdef tarball
 - `fcldump` — resolve a dataset/target to its producing cnf and dump the FCL
 - `runmu2e` — worker entry point: FCL generation, `mu2e` execution, pushOutput
-- `submit_map` — submit all entries of a POMS-map JSON to the grid (single-backend direct)
-- `mkrecovery` — find job indices whose outputs are missing from SAM
-- `submissions` — status/run/pause/resume/cancel CLI for the direct-submission ledger (verify-and-resubmit recovery + sliced-campaign top-up)
+- `runlocal` — run cnf jobs on this node, several at a time; nothing is pushed or declared
+- `submissions` — status/run/pause/resume/cancel/complete/reconcile/resubmit
+  CLI for the submission ledger (verify-and-resubmit recovery +
+  sliced-campaign top-up + hand re-firing)
+- `check_inputs` — pre-flight readability check on a campaign's inputs
 
 Analysis / diagnostic tools:
 
-- `jobquery` — inspect a cnf tarball (njobs, inputs, outputs, setup)
+- `jobquery` — inspect a cnf tarball (njobs, inputs, outputs, setup, recipe)
 - `famtree` — dataset ancestry as a Mermaid diagram
 - `logparser` — aggregate metrics from production log files
 - `genFilterEff` — filter efficiencies in Proditions table format
 - `datasetFileList` — physical file paths for a dataset or SAM definition
 - `listNewDatasets` — recently produced datasets, with completeness
 - `latestDatasets` — latest dsconf per description; chain-emit configs
-- `pomsMonitor` — campaign status from the POMS DB
 - `copy_to_stash` — copy a dataset into stash (CVMFS) or resilient dCache
 
 ## 3. Creating Job Definitions (`json2jobdef`, `jobdef`)
@@ -76,7 +74,7 @@ Analysis / diagnostic tools:
 
 ```bash
 # One entry, selected by desc + dsconf
-json2jobdef --json data/Run1B/stage1.json --desc PiBeam --dsconf Run1Bah
+json2jobdef --json data/Run1B/stage1.json --desc POT_Run1_a --dsconf MDC2025ac
 
 # Bulk: every entry at a dsconf
 json2jobdef --json data/Run1B/mix.json --dsconf Run1Ban_best_v1_5-000
@@ -84,23 +82,55 @@ json2jobdef --json data/Run1B/mix.json --dsconf Run1Ban_best_v1_5-000
 # By index into the flattened entry expansion
 json2jobdef --json data/Run1B/primary_muon.json --index 0
 
-# Production push: registers the cnf in SAM and refreshes the index definition
-json2jobdef --json data/mdc2025/evntuple.json --desc CosmicSignalOffSpillTriggered-LH \
-    --dsconf MDC2025-003 --prod \
-    --jobdefs /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-032.json
+# Production push + campaign registration -- the whole flow, one command
+json2jobdef --json data/mdc2025/evntuple.json --desc evnt \
+    --dsconf MDC2025au_best_v1_5 --prod --enqueue --slice-size 1000
 ```
 
 Flags: `--json` (required), `--desc`, `--dsconf`, `--index`, `--pushout`,
-`--prod`, `--jobdefs FILE`, `--extend`, `--ignore-empty`,
-`--event-count-positive`, `--no-cleanup`, `--verbose`.
+`--prod`, `--enqueue`, `--slice-size N` (default 1000), `--extend`,
+`--ignore-empty`, `--event-count-positive`, `--no-cleanup`, `--verbose`.
 
 Notes:
 
 - `--index N` indexes the *flattened* (entry × list-field) expansion, not
   the JSON array position. Prefer `--dsconf` (bulk) or `--desc --dsconf`.
-- `--prod` implies `--pushout` and creates the SAM index definitions after
-  generation. Re-running `--prod` is idempotent — use it to finish a
-  partially-failed push.
+- `--prod` implies `--pushout`. Re-running `--prod` is idempotent — use
+  it to finish a partially-failed push.
+- **`json2jobdef` writes no file recording the campaign.** There is no
+  `--jobdefs` flag: a production campaign lives only in the submission
+  ledger, created directly by `--enqueue`. There is no map file anywhere
+  in this codebase.
+- `--prod` requires `--enqueue` — a bare `--prod` is refused, since
+  otherwise the cnf would push to SAM and register no campaign, a silent
+  no-op. `--enqueue` requires `--prod` in turn, because enqueue resolves
+  the tarball from SAM.
+- `inloc` and any `memory`/`disk`/`expected_lifetime` in the config are
+  validated before anything is built, by the same validator
+  (`jobdesc.validate_entry_value`) that guards `submissions set-entry`.
+  A misspelled `inloc` does not fail at runtime — `file_resolver` finds
+  no such location and falls through to SAM, so the jobs run to
+  completion reading from the wrong place. That is why it is refused at
+  the boundary.
+- A bulk `--dsconf X --prod --enqueue` that skips any entry exits **2**
+  and lists what it skipped. Entries that already processed are left
+  alone — they are in SAM and in the ledger.
+- `--enqueue` pushes the cnf to SAM, then registers the entry directly
+  as a sliced-submission campaign in the ledger — no file is written
+  or needed. The campaign's `origin` column records provenance as
+  `<json path>#<desc>@<dsconf>` — that column is never dispatched from,
+  only echoed back by status tooling. `--slice-size` (default 1000, only
+  meaningful with `--enqueue`) is frozen into the campaign row.
+- Bulk `--dsconf X --prod --enqueue` (no `--desc`) loops over every
+  matching entry, pushing and enqueueing each one in turn. A failure
+  partway through (e.g. entry 7 of 22) leaves campaigns registered for
+  the entries before it and nothing for the rest — the bulk run as a
+  whole is **not resumable**. Re-running the identical command then
+  dies immediately on the first entry's `active campaign N already
+  exists for <tarball>` refusal (section 12) — that message is the
+  double-submit guard working correctly, not ledger damage. Recover
+  per-entry: re-run just the failed and remaining entries with
+  `--desc <D> --dsconf <C> --prod --enqueue`.
 - `--extend` excludes input files already consumed by the previous version
   of the same jobdef and auto-increments the tarball version.
 - List-valued fields expand combinatorially: an entry with two `dsconf`
@@ -115,14 +145,17 @@ Stage-1 (generator) entry:
 
 ```json
 {
-  "desc": "PiBeam",
-  "dsconf": "Run1Bah",
-  "fcl": "Production/JobConfig/beam/POT_infinitepion.fcl",
-  "njobs": 5000,
-  "events": 200000,
-  "run": 1450,
+  "desc": "POT_Run1_a",
+  "dsconf": "MDC2025ac",
+  "fcl": "Production/JobConfig/beam/POT.fcl",
+  "fcl_overrides": {
+    "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+  },
+  "njobs": 20000,
+  "events": 5000,
+  "run": 1430,
   "outloc": { "*.art": "disk" },
-  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bah/setup.sh",
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ac/setup.sh",
   "owner": "mu2e"
 }
 ```
@@ -149,19 +182,73 @@ computed automatically from the dataset's event count):
 ```
 
 Merge entry: `input_data` maps a dataset to its merge factor
-(`{"dts.mu2e.NoPrimary.Run1Ban.art": 10}` = 10 input files per job).
+(`{"dts.mu2e.NoPrimary.Run1Ban-001.art": 10}` = 10 input files per job).
 The dict value form accepts `count`/`merge_factor`, plus `random` and
-`max_nfiles` (section 4), or `split_lines` for chunking a local text file.
+`max_nfiles` (section 4); `split_lines` splits a local text file into
+per-job chunks, and `chunk_lines` hands each job one N-line slice of a
+single local file.
 
 `inloc` accepts `disk`, `tape`, `scratch`, `resilient`, `stash`, `none`,
 or `dir:<path>` (locally-mounted FS, e.g. cvmfs). There is no `auto`.
 `resilient` reads via xrootd, `stash` reads via CVMFS, and `dir:` reads
 via direct POSIX (the `file` protocol is forced).
 
+`outloc` values accept `tape`, `disk`, `scratch`, `outstage`, and are
+validated when the config is read. The first three are pushOutput
+actions: each copies the file to its dataset path **and** declares it to
+SAM. pushOutput has no copy-without-declare mode (`dosam` is set
+unconditionally), and its `scratch` action is a fully declared dataset
+that merely lives on scratch.
+
+`outstage` is this repo's own, for test and study runs whose output
+should stay out of SAM. The worker copies matching files to
+`$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` with `ifdh` and declares
+nothing; the log follows the data there, because a declared log would
+otherwise name parents SAM has never heard of.
+
+```json
+{
+  "desc": "STMBeamToVDEle",
+  "dsconf": "Run1Ban-001",
+  "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
+  "resampler_name": "beamResampler",
+  "input_data": { "sim.mu2e.EleBeamCat.Run1Bai.art": 1 },
+  "njobs": 20,
+  "events": 200000,
+  "run": 1470,
+  "inloc": "tape",
+  "outloc": { "*.art": "outstage" },
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh"
+}
+```
+
+An outstage entry **cannot be enqueued as a campaign**: campaign
+verification is fail-closed against SAM, so with nothing declared every
+index reads as missing and each tick would recover the whole row,
+forever. Build it and submit it by hand — or run it on this node with
+`runlocal` (section 11), which pushes nothing at all.
+
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
 sequencer) and `generic_tarball` (build a reusable direct-input cnf with
-`{desc}` deferred to runtime).
+`{desc}` deferred to runtime):
+
+```json
+{
+  "dsconf": "MDC2025af_best_v1_3",
+  "desc": "OnSpillTriggeredReco",
+  "generic_tarball": true,
+  "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+  "fcl_overrides": {
+    "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+    "services.DbService.purpose": "Sim_best",
+    "services.DbService.version": "v1_3"
+  },
+  "inloc": "tape",
+  "outloc": { "*.art": "disk" },
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025af/setup.sh"
+}
+```
 
 Optional per-entry resource requests — `"memory"`, `"disk"`,
 `"expected_lifetime"` (jobsub-format strings, e.g. `"4000MB"`,
@@ -170,7 +257,7 @@ Optional per-entry resource requests — `"memory"`, `"disk"`,
 ```json
 {
   "desc": "MuStopPileup",
-  "dsconf": "Run1Ban",
+  "dsconf": "Run1Ban-001",
   "fcl": "Production/JobConfig/pileup/MuStopPileup.fcl",
   "njobs": 5000,
   "memory": "4000MB",
@@ -181,17 +268,64 @@ Optional per-entry resource requests — `"memory"`, `"disk"`,
 ```
 
 `json2jobdef` copies any of the three keys present in the config into
-the map entry verbatim (`append_jobdef`). `submit_map` (section 11)
-reads them back at submission time: a CLI flag always overrides the
-entry key, which overrides the built-in default (`2500MB` / `30GB` /
-`24h`).
+the ledger entry verbatim on `--enqueue`. There is no operator-facing
+CLI flag for these — the entry key (set here, or retuned on a live
+campaign with `submissions set-memory`/`set-entry`, section 11) is the
+only way to set them, and it always wins over the built-in default
+(`2500MB` / `30GB` / `24h`). The *effective* values are frozen into the
+ledger row and campaign snapshot at submission time, so a later recovery
+or cron-fed slice reproduces exactly what the jobs originally ran with.
 
 The memory default sits above mu2egrid's `2000MB` deliberately: Mu2e
 primaries measure just over that line (VmHWM 2266 MB for
-`PiTargetStops`, 2377 MB for the RPC primaries, both base-10), so
-entries naming no memory key were being OOM-held. Prefer leaving the
-key unset — naming it forfeits the `4000MB` recovery floor, which
-`recovery_resource_argv` applies only when the key is absent.
+`PiTargetStops`, 2377 MB for the RPC primaries), so entries naming no
+memory key were being OOM-held. Prefer leaving the key unset — naming it
+forfeits the `4000MB` recovery floor, which applies only when the key is
+absent.
+
+The draining keys `input_pattern` and `prestage` also pass straight
+through to the submission entry, so a draining campaign is enqueued
+directly from its config — same `--enqueue` path as an indexed
+campaign, no hand-edit:
+
+```json
+{
+  "dsconf": "MDC2025au_best_v1_5",
+  "desc": "evnt",
+  "generic_tarball": true,
+  "input_pattern": "mcs.mu2e.%OnSpill.MDC2025au_best_v1_5.art",
+  "prestage": true,
+  "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+  "fcl_overrides": {
+    "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+  },
+  "inloc": "tape",
+  "outloc": { "nts.*.root": "tape" },
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh"
+}
+```
+
+```bash
+json2jobdef --json data/mdc2025/evntuple.json --desc evnt \
+    --dsconf MDC2025au_best_v1_5 --prod --enqueue --slice-size 500
+```
+
+A draining entry names a 5-field dataset pattern (`%` wildcards) and NO
+`njobs`: it drains a growing dataset 1:1 through a generic cnf instead
+of a fixed index range. `input_pattern` requires `generic_tarball: true`
+— an entry cannot claim both an input pattern and a fixed index window.
+`enqueue_entry` (the code behind `--enqueue`) detects the draining shape
+from `input_pattern` and registers a file-keyed campaign instead of an
+index-keyed one. Optional draining keys: `exclude_desc` (exact desc
+matches to skip), `min_age_minutes` (default 60 — a SAM `create_date`
+age gate before a file is eligible), `prestage` (default false, opt-in
+tape recall for tape-only candidates).
+
+A draining entry's `outloc` globs must be tier-specific (`nts.*.root`,
+`mcs.*.art` — never `*.art`): a glob that also matches the input pattern
+is refused at enqueue, because the worker's push manifest would
+otherwise declare the fetched input copy as an output, and pushOutput
+would then try to delete the production input at its own dataset path.
 
 ### Direct `jobdef` invocation
 
@@ -216,7 +350,7 @@ jobdef --setup /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh \
     --embed template.fcl
 ```
 
-Flags: `--setup` or `--code` (one required), `--dsconf`, `--dsowner`
+Flags: `--setup` or `--code` (one required), `--dsconf` and `--dsowner`
 (required), `--desc` or `--auto-description`, `--embed FCL` or
 `--include FCL` (one required), `--run-number`, `--events-per-job`,
 `--inputs FILE`, `--merge-factor N`, `--auxinput SPEC` (repeatable),
@@ -260,12 +394,13 @@ jobfcl --jobdef cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar --index 0
 jobfcl --jobdef cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar \
     --target dig.mu2e.NoPrimaryMix1BBTriggered.Run1Ban_best_v1_5-000.001470_00000042.art
 jobfcl --jobdef cnf.mu2e.NoPrimaryCat.Run1Ban.0.tar \
-    --source dts.mu2e.NoPrimary.Run1Ban.001470_00000000.art
+    --source dts.mu2e.NoPrimary.Run1Ban-001.001470_00000000.art
 ```
 
 Flags: `--jobdef` (required), one of `--index N` / `--target FILE` /
-`--source FILE`, `--default-location` (default `tape`),
-`--default-protocol` (default `file`; use `root` for xrootd URLs).
+`--source FILE`, `--default-location` (alias `--default-loc`, default
+`tape`), `--default-protocol` (alias `--default-proto`, default `file`;
+use `root` for xrootd URLs).
 
 `fcldump` resolves the producing cnf for you and writes the FCL to a
 file (defaults: `--loc tape --proto root`):
@@ -281,8 +416,8 @@ fcldump --dataset dig.mu2e.NoPrimaryMix1BBTriggered.Run1Ban_best_v1_5-000.art
 fcldump --target dig.mu2e.NoPrimaryMix1BBTriggered.Run1Ban_best_v1_5-000.001470_00000042.art
 
 # Generic (direct-input) cnf: supply the input file explicitly
-fcldump --local-jobdef cnf.mu2e.reco.Run1Ban_best_v1_4-000.0.tar \
-    --fname mcs.mu2e.NoPrimaryMix1BBTriggered-KL.Run1Ban_best_v1_4-000.001470_00000042.art
+fcldump --local-jobdef cnf.mu2e.OnSpillTriggeredReco.MDC2025af_best_v1_3.0.tar \
+    --fname dig.mu2e.NoPrimaryMix1BBTriggered.MDC2025af_best_v1_1.001430_00000042.art
 
 # List all cnfs at a dsconf
 fcldump --list-dsconf Run1Ban_best_v1_5-000
@@ -303,7 +438,7 @@ Mixing entries add `pbeam` and `pileup_datasets` (list-of-dict form):
 
 ```json
 {
-  "input_data": [ { "dts.mu2e.NoPrimary.Run1Ban.art": 10 } ],
+  "input_data": [ { "dts.mu2e.NoPrimary.Run1Ban-001.art": 10 } ],
   "pileup_datasets": [ {
     "dts.mu2e.MuBeamFlashCat.Run1Ban.art": 1,
     "dts.mu2e.EleBeamFlashCat.Run1Ban.art": 25,
@@ -320,14 +455,18 @@ Mixing entries add `pbeam` and `pileup_datasets` (list-of-dict form):
 }
 ```
 
-- Each pileup dataset maps to its mixer automatically by name pattern:
-  `*MuBeam*` → `MuBeamFlashMixer`, `*EleBeam*` → `EleBeamFlashMixer`,
-  `*Neutral*` → `NeutralsFlashMixer`, `*MuStop*` → `MuStopPileupMixer`.
-  The value is the per-job file count for that mixer.
+- Each pileup dataset maps to its mixer automatically, by
+  case-insensitive substring of the dataset name: `mubeam`/`muonbeam` →
+  `MuBeamFlashMixer`, `elebeam`/`electronbeam` → `EleBeamFlashMixer`,
+  `neutral` → `NeutralsFlashMixer`, `mustop`/`muonstop` →
+  `MuStopPileupMixer`. The value is the per-job file count for that
+  mixer.
 - `pbeam` selects the intensity include (`Mix1BB` → `mixing/OneBB.fcl`,
   `Mix2BB` → `TwoBB.fcl`, `MixLow` → `LowIntensity.fcl`, `MixSeq` →
   `NoPrimaryPBISequence.fcl`, `MixFlat` → `FlatPBI.fcl`) and is appended
   to the desc (`NoPrimary` → `NoPrimaryMix1BB`).
+- The include is emitted *before* `fcl_overrides`, so overrides still win
+  over the intensity settings.
 - `MaxEventsToSkip` per mixer is computed from the first dataset's event
   count and written before `fcl_overrides`, so overrides can still adjust
   it.
@@ -337,34 +476,64 @@ Mixing entries add `pbeam` and `pileup_datasets` (list-of-dict form):
 json2jobdef --json data/Run1B/mix.json --dsconf Run1Ban_best_v1_5-000
 ```
 
+Mixing pileup is read from `resilient` dCache, so both the `inloc` and
+the staged pileup `*Cat` datasets have to be there before submission —
+`check_inputs` (section 11) is the pre-flight that proves it.
+
 ## 7. Production Execution (`runmu2e`)
 
-Grid workers run `runmu2e`, which generates the FCL for this job's index,
-runs `mu2e`, and pushes outputs. In POMS mode the job index arrives in the
-`fname` environment variable:
+`runmu2e` is the grid worker entry point, and it runs only under the
+direct backend: it exits immediately unless `MU2EGRID_JOBDEF` is set by
+the `jobsub_submit` argv the direct backend builds
+(`utils/jobsub_argv.py`, invoked from `utils/submit.py`). There is no
+operator-facing invocation — the submission ships the cnf tarball plus
+an "ops JSON" via dropbox, both landing under `$CONDOR_DIR_INPUT`, and
+the worker resolves its own job index from `$PROCESS` through the ops
+JSON's `jobs` lookup table.
+
+To simply run a cnf's jobs on this node — one index or a few dozen, with
+no ops JSON and no ledger row — use `runlocal` (section 11); it shares
+this worker's prep and stops before the push.
+
+For a local smoke test *of the worker itself*, reuse the ops JSON a
+dry-run submission already writes. Since there is no standalone submit
+CLI any more, that means dry-running against an existing ledger row —
+either a row already on the campaign (`submissions status` lists row
+ids), or a fresh one from `json2jobdef --enqueue` (section 3):
 
 ```bash
-fname=etc.mu2e.index.000.0000042.txt runmu2e --jobdesc jobdefs_list.json
-fname=etc.mu2e.index.000.0000042.txt runmu2e --jobdesc jobdefs_list.json --dry-run --nevts 10
+submissions resubmit 4231 --indices 0 --dry-run   # prints "Wrote ops JSON: /tmp/ops-...json"
+
+cd /tmp && MU2EGRID_JOBDEF=cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar \
+    MU2EGRID_OPSJSON=ops-$USER-NoPrimaryMix1BB-12345.json PROCESS=0 \
+    runmu2e --dry-run --nevts 10
 ```
 
-Flags: `--jobdesc FILE` (required in POMS mode), `--dry-run` (print
-pushOutput commands without running them), `--nevts N` (default -1 = all),
-`--mu2e-options "..."` (extra `mu2e` arguments), `--copy-input` (stage
-inputs locally with `mdh` instead of streaming).
+Flags: `--dry-run` (print pushOutput commands without running them),
+`--nevts N` (default -1 = all), `--mu2e-options "..."` (extra `mu2e`
+arguments), `--copy-input` (stage inputs locally with `mdh` instead of
+streaming).
 
-- The `etc.mu2e.index.000.NNNNNNN.txt` filename encodes the job index:
-  the seventh-field `NNNNNNN` (the sequencer) is the global job index,
-  zero-padded to 7 digits. `mkrecovery` writes these as
-  `etc.mu2e.index.000.{idx:07d}.txt`. The `000` field is a fixed
-  description placeholder, not the index.
-- The global index is mapped across the entries of the jobdesc JSON in
-  order; each entry consumes `njobs` indices. Within an entry,
-  `local = global - cumulative + firstjob`.
-- Direct mode (no `fname`): `submit_map` sets `MU2EGRID_JOBDEF` and
-  related environment variables; workers derive the index from
-  `$PROCESS` via the ops JSON's `jobs` lookup table. See section 11,
-  `submit_map`.
+- The resolved index is carried internally as an `fname` whose sequencer
+  field holds it: `etc.mu2e.index.000.NNNNNNN.txt`, seventh field
+  `NNNNNNN` zero-padded to 7 digits. `000` is a fixed description
+  placeholder, not the index. Nothing sets `fname` from outside any
+  more — the worker synthesizes it.
+- Inputs stream via xroot by default. A JSON config entry sets
+  `"copy_input": true` to stage inputs locally with `mdh` instead —
+  worth it only for descs with fat runtime tails, where a mid-job
+  xroot drop wastes the most CPU. The entry key wins over the
+  `--copy-input` CLI flag; `stash`/`resilient`/`dir:` inlocs always
+  stream regardless.
+- Outputs are pushed only when `mu2e` exits 0; the log is pushed always,
+  including when the data push itself raises.
+- Outputs are partitioned by their entry's `outloc` location. Anything
+  bound for `outstage` (section 3) is copied to
+  `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` with `ifdh` and never reaches
+  pushOutput; `parents_list.txt` is written only when something is
+  actually declared.
+- `direct_input` entries are not index-submittable — they run as
+  draining batches (`submissions resubmit ROW_ID --files LIST.txt`).
 
 ## 8. Sequential vs. Pseudo-Random Auxiliary Input Selection
 
@@ -415,36 +584,17 @@ Unit tests: `python3 test/test_unit.py`. Tarball comparison helper:
 
 ## 11. Additional Tools
 
-### `pomsMonitor`
-
-Campaign status from the POMS-map SQLite DB (default: `poms_data.db` at
-the repo root; needs SQLAlchemy — see section 1).
-
-```bash
-pomsMonitor --campaign MDC2025ap --outputs --incomplete
-pomsMonitor --build-db --list
-pomsMonitor --needs-processing
-```
-
-Key flags: `--pattern`, `--db`, `--build-db`, `--list`, `--campaign`,
-`--outputs`, `--complete`, `--incomplete`, `--datasets-only`, `--sort`,
-`--since DURATION`, `--needs-processing`, `--ignore DATASET`
-(`--ignore-reason`), `--unignore DATASET`, `--list-ignored`,
-`--uniformity` (`--target`, `--round`).
-
-The static production dashboard is rendered from the same DB by
-`update_pomsmonitor_web` (see the ops scripts note below).
-
 ### `famtree`
 
 Dataset ancestry as a Mermaid diagram (auto-excludes `etc*.txt` files):
 
 ```bash
 famtree dts.mu2e.MuStopPileupCat.Run1Ban.art
-famtree mcs.mu2e.CeEndpointMix1BBTriggered.Run1Ban_best_v1_5-000.art --stats --max-files 20
+famtree mcs.mu2e.NoPrimaryMix1BBTriggered.MDC2025an_best_v1_3.art --stats --max-files 20
 ```
 
-Flags: `--png`, `--svg` (require `mmdc`), `--stats`, `--max-files N`.
+Flags: `--png`, `--svg` (require `mmdc`), `--stats`, `--max-files N`
+(default 10).
 
 ### `logparser`
 
@@ -452,46 +602,58 @@ Aggregate metrics (CPU, memory, throughput) from production logs:
 
 ```bash
 logparser log.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.log
-logparser log.mu2e.PiBeam.Run1Bah.log -n 50
+logparser log.mu2e.POT_Run1_a.MDC2025ac.log -n 50
 ```
 
-Flags: `-n/--max-logs N` (default: all logs in the dataset).
+Flags: one or more dataset names (positional), `-n/--max-logs N`
+(default: all logs in the dataset).
 
 ### `genFilterEff`
 
 Filter efficiencies in Proditions format (`TABLE SimEfficiencies2`):
 
 ```bash
-genFilterEff sim.mu2e.PiTargetStops.Run1Bah.art --out SimEfficiencies2_Run1B.txt
+genFilterEff sim.mu2e.PiTargetStops.MDC2025ac.art --out SimEfficiencies2_MDC2025.txt
 ```
 
-Flags: `--out` (required), `--firstLine`, `--writeFullDatasetName`,
-`--chunksize N`, `--maxFilesToProcess N`, `--verbosity N`.
+Flags: one or more dataset names (positional), `--out`/`--outfile`
+(required), `--firstLine` (default `TABLE SimEfficiencies2`),
+`--writeFullDatasetName`, `--chunksize N` (default 100),
+`--maxFilesToProcess N`, `--verbosity N` (default 2).
 
 ### `datasetFileList`
 
 Physical /pnfs paths for a dataset or SAM definition:
 
 ```bash
-datasetFileList dts.mu2e.NoPrimary.Run1Ban.art
-datasetFileList dts.mu2e.NoPrimary.Run1Ban.art --tape --basename
-datasetFileList idsrecovery_xyz --defname
+datasetFileList dts.mu2e.NoPrimary.Run1Ban-001.art
+datasetFileList dts.mu2e.NoPrimary.Run1Ban-001.art --tape --basename
+datasetFileList some_sam_definition --defname
 ```
 
 Flags: `--basename`, `--disk`, `--tape`, `--scratch`, `--defname`.
 
 ### `listNewDatasets`
 
-Recently produced datasets, optionally with completeness against the
-POMS DB:
+Recently produced datasets, optionally with a completeness column
+computed against the submission ledger:
 
 ```bash
 listNewDatasets --days 1 --completeness
-listNewDatasets --query "dh.dataset like '%.Run1Ban_best_v1_5-000.%'" --no-rebuild
+listNewDatasets --query "dh.dataset like '%.Run1Ban_best_v1_5-000.%'"
 ```
 
-Flags: `--filetype`, `--days N`, `--user`, `--size`, `--query`,
-`--completeness`, `--no-rebuild`, `--db`, `--poms-dir`.
+Flags: `--filetype` (default `art`), `--days N` (default 7), `--user`
+(default `mu2epro`), `--size`, `--query`, `--completeness`,
+`--ledger-db PATH` (default
+`/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`, env
+`MU2E_SUBMISSION_DB`), `--color {auto,always,never}`.
+
+`--completeness` compares each dataset's SAM file count against the
+expected job count recorded in the ledger, so only datasets that went
+through the direct backend get a verdict. Legacy POMS-launched datasets
+are never in the ledger — the POMS backend was removed 2026-08 (legacy
+stages recover from the `pre-poms-removal` git tag).
 
 ### `latestDatasets`
 
@@ -503,7 +665,7 @@ latestDatasets --defname 'dig.mu2e.%.MDC2025%.art' --show-count
 latestDatasets --emit reco --campaign MDC2025ap --skip-produced
 
 # Datasets replaced by a newer dsconf, instead of the latest
-latestDatasets --defname 'nts.mu2e.%.MDC2020%.root' --superseded
+latestDatasets --defname 'nts.mu2e.%.MDC2025%.root' --superseded
 
 # Order within a description by SAM creation date instead of dsconf lex order
 latestDatasets --defname 'nts.mu2e.CeEndpointMix1BBTriggered.MDC2020%.root' --latest-by time
@@ -511,8 +673,8 @@ latestDatasets --defname 'nts.mu2e.CeEndpointMix1BBTriggered.MDC2020%.root' --la
 
 Flags: `--defname`, `--user`, `--stdin`, `--show-count`, `--superseded`,
 `--latest-by {dsconf,time}`, `--emit {digi,reco,ntuple,mix}`,
-`--campaign`, `--templates-dir`, `--dsconf`, `--complete-only`,
-`--skip-produced`, `-v/--verbose`.
+`--campaign`, `--templates-dir` (default `<repo>/templates`), `--dsconf`,
+`--complete-only`, `--skip-produced`, `-v/--verbose`.
 
 - `--superseded` prints the inverse of the default listing: every
   non-latest version per description (the datasets a newer dsconf
@@ -541,43 +703,6 @@ Flags: `--defname`, `--user`, `--stdin`, `--show-count`, `--superseded`,
   either) have no release-narrowing step, so `time` mode there behaves
   as the paragraph above describes with no caveat.
 
-### `mkrecovery`
-
-Find job indices whose outputs are missing from SAM. Expected filenames
-come from the cnf itself, diffed against the dataset in SAM — so it is
-robust to naming and multi-output stages in a way a filename scan is not.
-
-```bash
-# Whole POMS-map JSON — creates a recovery SAM definition
-mkrecovery /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-032.json --jobdesc
-
-# Single tarball, windowed entry
-mkrecovery cnf.mu2e.MuStopPileup.Run1Ban-001.0.tar \
-    --dataset dts.mu2e.MuStopPileup.Run1Ban-001.art --njobs 5000 --firstjob 15000
-
-# Print the missing cnf indices instead (read-only — makes no SAM writes)
-mkrecovery /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-032.json \
-    --jobdesc --print-indices > gaps.txt
-```
-
-Flags: `input` (tarball path or jobdesc JSON), `--dataset` and `--njobs`
-(both required in single-tarball mode), `--firstjob F` (cnf-index window
-start, default 0), `--jobdesc`, `--print-indices`.
-
-Two index spaces — pick the one your submission path consumes:
-
-- Default writes `etc.mu2e.index.000.{idx:07d}.txt` entries into a
-  `<name>-recovery` SAM definition carrying **global** indices (cumulative
-  across jobdesc entries), for the POMS `fname` path (section 7).
-- `--print-indices` prints **absolute cnf** indices (`firstjob + relative`),
-  one per line under a `# <tarball>` header, for `submit_map
-  --indices-file`. Diagnostics go to stderr so stdout stays pipeable.
-
-This is also the machinery `submissions run` (below) reuses internally
-to SAM-verify a ledger row — `mkrecovery` itself is unchanged and
-remains POMS's own recovery path (POMS-launched entries are never in
-the ledger; `submit_map` is single-backend direct).
-
 ### `jobquery`
 
 Inspect a cnf tarball:
@@ -585,154 +710,58 @@ Inspect a cnf tarball:
 ```bash
 jobquery --njobs cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar
 jobquery --input-datasets --output-datasets cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar
+jobquery --recipe cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar
 ```
 
 Flags: `--jobname`, `--njobs`, `--input-datasets`, `--input-files`,
 `--output-datasets`, `--output-files DATASET[:size]`, `--codesize`,
-`--extract-code`, `--setup`.
+`--extract-code`, `--setup`, `--recipe`, and the positional `.tar`.
 
-`--njobs` reports the cnf's own capacity from `tbs.njobs`; `0` means
-open-ended (the POMS-map entry is authoritative).
-
-### `submit_map`
-
-Submit all (or selected) entries of a POMS-map JSON via the direct
-jobsub backend — single-backend, no `--backend` flag. No `mu2ejobsub`
-involved: `submit_map` builds the `jobsub_submit` argv itself, ships
-the repo's `utils/` + `bin/` as a dropbox tarball, and runs per-job
-`pushOutput` on the worker:
-
-```bash
-submit_map --map MDC2025-032.json --dry-run
-submit_map --map MDC2025-032.json --entry 3
-submit_map --map MDC2025-032.json --first 0 --num 10
-
-# Recovery: exactly these cnf indices, one cluster, one job per index
-submit_map --map Run1Ban-pileuprecover.json \
-    --indices-file gaps.txt --expected-lifetime 48h --memory 4000MB
-
-# Register a sliced campaign — submits nothing; `submissions run` feeds it
-submit_map --map MDC2025-032.json \
-    --enqueue --slice-size 2000
-```
-
-Flags: `--map` (required), `--entry N`, `--first N` / `--num M`,
-`--indices K1,K2,...` / `--indices-file FILE`, `--ledger-db PATH`
-(default `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`, env
-`MU2E_SUBMISSION_DB`), `--ledger-parent ID`, `--no-ledger`, `--enqueue`
-(register a sliced campaign instead of submitting), `--slice-size N`
-(default 1000, only meaningful with `--enqueue`), `--wftop`,
-`--wfproject`, `--role`, `--disk` (default `30GB`), `--memory` (default
-`2500MB`), `--expected-lifetime` (default `24h`), `--prodtools-tar`,
-`--dry-run`, `--verbose`.
-
-Entries `submit_map` cannot submit — `template`/`direct_input`/`g4bl`
-modes, and HPC — go through POMS campaigns or the upstream
-`mu2ejobsub`/`mu2eg4bl` CLIs directly; `submit_map` never touches those.
-
-Every successful submission (one that produced a cluster ID) is
-recorded in the submission ledger (sqlite3, `--ledger-db`) — the
-tarball, a verbatim entry snapshot, and the ABSOLUTE cnf indices
-submitted. `submissions run` (below) reads this ledger to drain-check,
-SAM-verify, and resubmit missing indices. `--ledger-parent ID` is set
-automatically by `submissions run` when it resubmits (chains the
-attempt count for that recovery lineage); `--no-ledger` opts an ad-hoc
-or test submission out of the ledger entirely — the recovery loop then
-never sees it. Entries launched via POMS or the upstream
-`mu2ejobsub`/`mu2eg4bl` CLIs never touch this ledger — they never go
-through `submit_map` at all.
-
-`--enqueue` combined with `--no-ledger` is refused (`submit_map:
---enqueue registers a campaign in the ledger DB; --no-ledger
-contradicts it`) — a campaign has nowhere to track its cursor without
-the ledger.
-
-Every submission **attempt** — manual, cron-fed slice, or recovery
-resubmit, success or failure — also appends a block to
-`submit-YYYYMMDD.log` beside the ledger DB (UTC day, plain appends, no
-rotation): timestamp, user, map, tarball, requested range or indices,
-outcome, and the raw `jobsub_submit` output. `--no-ledger` skips this
-log too; `--dry-run` and `--enqueue` write nothing (nothing was
-submitted).
-
-Resource requests (`--disk`/`--memory`/`--expected-lifetime`) resolve as
-CLI flag > entry key (section 3: `"memory"`/`"disk"`/
-`"expected_lifetime"`) > built-in default. Whatever resolves is what
-gets recorded in the ledger/campaign snapshot, so a `submissions run`
-resubmit or a cron-fed slice reruns with the same resources the
-original jobs had — a CLI `--memory 4000MB` no longer downgrades to the
-2500MB built-in default on resubmit.
-
-Sliced campaigns (`--enqueue`): snapshots the selected entries (all, or
-`--entry N`) into the campaigns table at cursor 0 and submits nothing.
-`--slice-size` is frozen into the campaign row. Mutually exclusive with
-`--first`/`--num`/`--indices`/`--indices-file`. An entry with no fixed
-`njobs`, or `njobs < 1`, (a `generic_tarball` entry, or `njobs: 0`)
-cannot be enqueued — a campaign needs a positive job count to slice.
-Enqueueing a tarball that already has an *active or paused* campaign is
-a hard error — a paused campaign still owns its index space, so pausing
-does not free the tarball for a new campaign; only `submissions cancel
-<ID>` does (see Troubleshooting). Before a campaign row is written,
-`--enqueue` runs the `check_inputs` pre-flight (below) on the entry's
-tarball: if a resilient pileup file is missing/truncated or a tape
-input is not staged, the entry is refused (exit 2) with a grouped
-report and no campaign is created — fix the inputs (e.g. `/prestage`)
-and re-run. `submissions run`'s top-up phase
-(below) then feeds whole slices to the grid on its own, hourly, until
-the campaign is fully submitted. Before every slice, top-up also checks
-the ledger for indices that already cover the slice's absolute window
-(any ledger state counts as proof of submission) — an overlap means a
-crash likely happened between a prior submission and its own
-ledger/cursor write, so the campaign is paused with a crash-window note
-instead of resubmitting. A campaign whose cursor already equals its
-`njobs` but is still `active` (the same class of crash, between the
-last slice's cursor advance and its completion write) self-heals to
-`complete` on the next tick rather than staying stuck forever.
-
-Statistics expansion (`firstjob` windows):
-
-- The per-job seed is `baseSeed = 1 + cnf index` (flat — no version, run,
-  or dsconf term). To extend a dataset's statistics, reuse the existing
-  tarball at fresh indices via a window: a POMS-map entry with
-  `"firstjob": F, "njobs": M` runs cnf indices `[F, F+M)`, giving fresh
-  seeds `F+1..` and fresh sequencers.
-- Do NOT bump `version`/`run` for a same-input expansion — that restarts
-  the cnf index at 0 and duplicates physics.
-- Only open-ended cnfs (no `tbs.njobs` cap) can be windowed past their
-  original count; closed cnfs are capacity-checked.
-
-Job selection within an entry:
-
-- `--first`/`--num` carve a contiguous slice, **entry-relative**: the
-  entry's `firstjob` is added worker-side, so `--first 944` on a
-  `firstjob=15000` entry runs cnf index 15944. Sliced campaigns submit
-  their slices this way, so a windowed entry's `firstjob` survives
-  untouched in the campaign snapshot.
-- `--indices` takes **absolute cnf indices** for a scattered recovery set
-  that no contiguous range can express, and requires a non-windowed entry.
-  It submits one cluster with one job per index.
+- `--njobs` reports the cnf's own capacity from `tbs.njobs`; `0` means
+  open-ended (the ledger entry is authoritative).
+- `--recipe` reconstructs the build config — setup, njobs, output
+  patterns, and the embedded `mu2e.fcl` (the json2jobdef `fcl` plus its
+  `fcl_overrides`).
 
 ### `submissions`
 
 Direct-submission subsystem CLI: read-only status (default verb — no
-verb needed), the hourly verify/resubmit/top-up tick (`run`), and
-campaign management (`pause`/`resume`/`cancel`). Reads the submission
-ledger (same sqlite3 DB `submit_map` writes to).
+verb needed), the hourly verify/resubmit/top-up tick (`run`), campaign
+management (`pause`/`resume`/`cancel`/`complete`, plus the two retune
+verbs), a stuck-row unblock (`reconcile`), and hand re-firing
+(`resubmit`). Reads the submission ledger — the same sqlite3 DB
+`json2jobdef --enqueue`, a cron-fed slice, or a `resubmit` writes rows
+to.
 
 ```bash
-submissions                       # read-only ledger + campaigns + cap (any account)
+submissions                        # read-only ledger + campaigns + cap (any account)
 submissions status                 # same, explicit form
+submissions --mine status          # your own ledger instead of production
 submissions run --dry-run          # verify + top-up report, no submissions
 submissions run                    # full pass (mu2epro; cron entry point)
 submissions run --row 42 --max-attempts 5
 submissions run --max-queued 5000  # override the top-up cap for this pass
+submissions run --campaign 7       # top up only campaign 7 (recovery pass still runs)
 submissions pause 7 --note "investigating OOM"
 submissions resume 7               # paused -> active; preserves the pause note
 submissions cancel 7               # close; already-submitted rows still recovered
+submissions complete 7 --note "upstream production finished"
+submissions set-slice 7 500        # retune the batch size from the next tick
+submissions set-memory 7 3000MB    # retune the memory request from the next tick
+submissions set-entry 7 inloc resilient --include-open-rows  # also fix open rows' recoveries
+submissions reconcile 123 --note "checked jobsub_q, window free"
+submissions resubmit 4231 --indices 4000,4001,4055             # named indices
+submissions resubmit 4231 --indices-file gaps.txt --dry-run   # preview first
+submissions resubmit 4198 --files parked.txt                  # draining row
 ```
 
-Global flag: `--db PATH` (default: the submission-ledger path above,
-env `MU2E_SUBMISSION_DB`), valid before the verb.
+Global flags (before the verb): `--db PATH` — the ledger to act on
+(default: the production ledger
+`/exp/mu2e/data/users/mu2epro/prodtools/submissions.db` for `status`,
+your own ledger for every mutating verb; env `MU2E_SUBMISSION_DB`
+overrides the production default) — and `--mine`, a shorthand for your
+own ledger at `/exp/mu2e/data/users/$USER/prodtools/submissions.db`
+instead of the per-verb default.
 
 Verbs:
 
@@ -742,33 +771,90 @@ Verbs:
 - `run` — the tick: a recovery pass over active ledger rows (drain-check
   via `jobsub_q`; report and skip held jobs — the loop never runs
   `condor_rm`/`condor_release`; SAM-verify the row's cnf indices using
-  the cnf's own expected output filenames, `mkrecovery`'s file-map
-  machinery scoped to the row's indices; then close `complete`,
-  resubmit the missing indices as a child row (`attempt`+1, via
-  `submit_map`), or mark `exhausted` at the attempt cap), followed by
-  campaign top-up (counts total mu2epro idle+running jobs via `jobsub_q
-  --user mu2epro -af JobStatus`, then round-robins whole slices to
-  active campaigns, oldest first, while `count + slice <= cap`; skipped
-  entirely when there is no active campaign, and for `--row`). Flags:
-  `--dry-run` (report would-* actions only; no submissions, no state
-  changes; also takes no lock), `--row N` (process only this ledger row
-  id, skips top-up), `--max-attempts N` (default 3; a row closes
-  `exhausted` once its attempt count reaches this cap), `--max-queued N`
-  (top-up cap for this pass; default: env `MU2E_MAX_QUEUED`, then
-  `10000`).
+  the cnf's own expected output filenames; then close `complete`,
+  resubmit the missing indices as a child row (`attempt`+1, in-process
+  via `submit.submit_entry`), or mark `exhausted` at the attempt cap),
+  followed by campaign top-up (counts total mu2epro idle+running jobs,
+  then round-robins whole slices to active campaigns, oldest first,
+  while `count + slice <= cap`; skipped entirely when there is no
+  active campaign, and for `--row`) and the draining tick (file-keyed
+  batches sharing the same cap). Flags: `--dry-run` (report would-*
+  actions only; no submissions, no state changes; also takes no lock),
+  `--row N` (process only this ledger row id, skips top-up),
+  `--max-attempts N` (default 3; a row closes `exhausted` once its
+  attempt count reaches this cap), `--max-queued N` (top-up cap for
+  this pass; default: env `MU2E_MAX_QUEUED`, then `5000`),
+  `--campaign ID` (top up only this campaign; the recovery pass still
+  runs over all rows; omit for the cron behavior of ticking every
+  active campaign).
 - `pause CAMP_ID [--note TEXT]` — pause an active campaign (default
   note: `"operator pause"`).
 - `resume CAMP_ID` — reactivate a paused campaign; the note recorded
   when it was paused is preserved, not cleared.
 - `cancel CAMP_ID` — cancel a campaign; already-submitted ledger rows
   still get recovered normally.
+- `complete CAMP_ID [--note TEXT]` — the operator close-out for a
+  draining campaign (default note: `"operator complete"`).
+  Already-submitted rows still get verified and recovered. A draining
+  campaign never auto-completes: its input set keeps growing until the
+  upstream production finishes, and only the operator knows when that
+  point has been reached.
+- `set-slice CAMP_ID N` / `set-memory CAMP_ID MEM` — retune a live
+  campaign's slice size or memory request. Both take effect on the next
+  tick and reach only future slices, never already-submitted rows.
+- `set-entry CAMP_ID KEY VALUE [--include-open-rows]` — the general form
+  of the two retune verbs above: set one of `inloc`/`memory`/`disk`/
+  `expected_lifetime` on a live campaign's entry. Without
+  `--include-open-rows` the change reaches future slices only (same as
+  `set-slice`/`set-memory`) — a resubmit builds its options from the
+  row's own frozen entry snapshot, not the campaign's current one, so an
+  already-submitted row keeps what it was submitted with. With the flag,
+  every not-yet-closed row on the campaign's tarball is rewritten too,
+  which is what makes an in-flight RECOVERY pick up the new value. The
+  flag defaults off because an *unset* `memory` is what earns a recovery
+  the `4000MB` floor (section 3) — cascading a memory value would
+  forfeit it; an `inloc` fix, which has no floor to lose, normally wants
+  the flag on. The value goes through the same validator
+  `json2jobdef --enqueue` uses, so a spelling you cannot enqueue is also
+  one you cannot set here.
+- `reconcile ROW_ID [--note TEXT]` — close a ledger row stuck in
+  `failed` or `submitting` so its index window stops blocking a
+  campaign's slice progress, marking it `reconciled` (kept for audit,
+  never revisited by the recovery pass). By running this you assert you
+  have checked `jobsub_q` yourself and the jobs for this window are
+  genuinely absent — a `jobsub_submit` that exits non-zero can still
+  have created a cluster, and reconciling a window that is actually
+  running duplicates physics (deterministic payloads). Never touches a
+  campaign's cursor — run `submissions resume <ID>` afterward to
+  restart it.
+- `resubmit ROW_ID (--indices SPEC | --indices-file F | --files F)
+  [--dry-run]` — hand re-fire a named set of indices or input files
+  from an *existing* ledger row, as a child submission (attempt+1). The
+  entry comes from the row itself — nothing to hand-edit, no file to
+  write. `--indices` is a comma/space-separated list of absolute cnf
+  indices (`4000,4001,4055`) — integers only, no `N-M` range syntax;
+  for a large or scattered set use `--indices-file` instead (same
+  grammar, one entry per line, `#`-comments ignored); `--files` is a
+  file of input art filenames, one per line, for a draining row (the
+  parked-file list a `submissions run` tick writes). `--files` only
+  works against a draining (file-keyed) row, and `--indices`/
+  `--indices-file` only against an index row — the CLI refuses the
+  mismatch by name. REFUSES when any named index/file is still covered
+  by an unsettled row for the same tarball: payloads are deterministic,
+  so re-sending live work duplicates physics; the refusal names the
+  blocking row and points at `submissions reconcile`. The reconstructed
+  entry drops any `firstjob` window — `--indices`/`--files` values are
+  absolute (cnf index or input filename), not window-relative.
+
+Notes:
 
 - `status` and `run --dry-run` are the only read-only invocations —
-  safe under any account, no lock, no grid writes.
-- `run` (without `--dry-run`) and `pause`/`resume`/`cancel` all take the
-  same per-DB lock (`submissions.lock` beside the DB); an overlapping
-  mutating run exits with "another submissions run holds ... —
-  exiting" instead of racing.
+  safe under any account, no lock, no grid writes. `resubmit --dry-run`
+  also takes no lock and submits nothing.
+- `run` (without `--dry-run`), `resubmit` (without `--dry-run`), and
+  the mutating verbs all take the same per-DB lock (`submissions.lock`
+  beside the DB); an overlapping mutating run exits with "another
+  submissions run holds ... — exiting" instead of racing.
 - `run` exits 2 when anything this pass needed human attention — a
   cron-visible "needs a look" signal — and 0 otherwise. The
   needs-attention set: a row with **held** jobs; a row that went (or,
@@ -776,27 +862,40 @@ Verbs:
   **child-missing** row (a resubmit succeeded but no child ledger row
   was recorded); a campaign **paused** this tick by a submit failure or
   the crash-window overlap guard (or would be, under `--dry-run`); a
-  **queue-count failure** (`jobsub_q` itself unreadable — top-up is
-  skipped, not just under-counted); or a **lingering paused campaign**
-  — any campaign still `paused` when `run` executes, not just the tick
-  that paused it, so the signal repeats every tick until a human
-  `resume`s or `cancel`s it. `status` never exits 2 — it is a display,
-  not a monitor.
+  **queue-count failure** (the queue query itself unreadable — top-up is
+  skipped, not just under-counted); a **drain error**; or a **lingering
+  paused campaign** — any campaign still `paused` when `run` executes,
+  not just the tick that paused it, so the signal repeats every tick
+  until a human `resume`s or `cancel`s it. `status` never exits 2 — it
+  is a display, not a monitor.
 - Deterministic cnf payloads re-run identical events, so a systematic
   failure re-fails every attempt; `exhausted` is where a human takes
   over, not something blind retry fixes.
-- POMS-launched entries never appear in the ledger and are out of scope
-  by construction — `submit_map` is single-backend direct, so a
-  POMS-launched job (or one submitted via the upstream `mu2ejobsub`/
-  `mu2eg4bl` CLIs) simply never passes through it; POMS owns its own
-  recovery via `mkrecovery`.
+- Every submission attempt — a `json2jobdef --enqueue`, a cron-fed
+  slice, or a `resubmit` — appends a block to `submit-YYYYMMDD.log`
+  beside the ledger DB (one file per UTC day, plain appends, no
+  rotation).
 - Campaign states: `active` (loop feeds it) → `complete` (fully
-  submitted; jobs may still be running — verification continues per
-  ledger row), `paused` (submit failure, crash-window overlap, or
-  `pause`; a human clears it with `resume` or `cancel`), or `cancelled`
-  (`cancel`; already-submitted rows still get recovered).
+  submitted, or operator-closed; jobs may still be running —
+  verification continues per ledger row), `paused` (submit failure,
+  crash-window overlap, or `pause`; a human clears it with `resume` or
+  `cancel`), or `cancelled` (`cancel`; already-submitted rows still get
+  recovered).
+- `--enqueue` refuses a second campaign for the same tarball while an
+  `active` OR `paused` one exists. A paused campaign still owns its
+  index space, so "pause then enqueue" is not a workaround — only
+  `submissions cancel <ID>` frees the tarball (section 12).
+- Before every slice, top-up also checks the ledger for indices already
+  covering the slice's window, in any state — evidence that a submission
+  happened even if the campaign row's cursor advance was lost to a
+  crash. An overlap pauses the campaign with a crash-window note instead
+  of resubmitting.
+- Draining campaigns track pending work in SAM, not a cursor: pending =
+  inputs whose expected outputs (computed per-file from the cnf's own
+  `job_outputs` mapping) don't exist yet, minus files already in-flight
+  or parked. Nothing counts as done until its output exists.
 - Cap resolution is `--max-queued` flag > `MU2E_MAX_QUEUED` env >
-  `10000`, resolved once per invocation; nothing persists between runs
+  `5000`, resolved once per invocation; nothing persists between runs
   — the effective cap is always readable off the crontab line via
   `submissions status`.
 
@@ -812,14 +911,14 @@ to run. Exits 0 when every input is readable, 2 when any is missing,
 truncated, or unstaged.
 
 ```bash
-check_inputs cnf.mu2e.RMCPhaseSpace0NExternalMix1BB.MDC2025ar_best_v1_3.0.tar
-check_inputs --inloc resilient cnf.mu2e.RMCPhaseSpace1NExternalMix1BB.MDC2025ar_best_v1_3.0.tar
+check_inputs cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar
+check_inputs --inloc resilient cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar
 ```
 
-Flags: `--inloc {resilient,...}` (input location the jobs read from,
-default `resilient` — the mixing default), and one or more positional
+Flags: `--inloc LOC` (input location the jobs read from, default
+`resilient` — the mixing default), and one or more positional
 `cnf.*.tar` tarballs. Needs no mu2epro — it is a status check, safe to
-run as yourself. `submit_map --enqueue` runs this same check
+run as yourself. `json2jobdef --enqueue` runs this same check
 automatically as a gate, so a campaign is never created with unreadable
 inputs; run it by hand before launching, or when a monthly resilient
 purge is suspected mid-campaign (the enqueue gate only fires at campaign
@@ -831,30 +930,84 @@ Copy a dataset into stash (CVMFS-readable) or resilient dCache:
 
 ```bash
 copy_to_stash --dataset dts.mu2e.MuBeamFlashCat.Run1Ban.art --dest resilient
-copy_to_stash --dataset dts.mu2e.CeEndpoint.Run1Bab.art --source disk --limit 10 --dry-run
-copy_to_stash --list dts.mu2e.CeEndpoint.Run1Bab.art
+copy_to_stash --dataset dts.mu2e.CeEndpoint.MDC2025ac.art --source disk --limit 10 --dry-run
+copy_to_stash --dataset dts.mu2e.MuBeamFlashCat.Run1Ban.art --dest resilient --skip-existing
+copy_to_stash --list dts.mu2e.CeEndpoint.MDC2025ac.art
 ```
 
-Flags: `--dataset`, `--dest {stash,resilient}`, `--source {disk,tape}`,
-`--limit N`, `--dry-run`, `--list DATASET`, `--quiet`. Writing under
-resilient requires production (mu2epro) permissions for new dsconf
-directories.
+Flags: `--dataset`, `--dest {stash,resilient}` (default `stash`),
+`--source {disk,tape}` (default `disk`), `--limit N`, `--dry-run`,
+`--list DATASET`, `--quiet`, `--skip-existing`. Writing under resilient
+requires production (mu2epro) permissions for new dsconf directories.
 
-### `install_prodtools.sh` / `update_pomsmonitor_web` / `submissions_cron`
+`--skip-existing` resumes a partial staging: files already at the
+destination with the SAM-recorded size are left alone, so a re-run
+neither re-copies them nor opens a good file for a truncating write.
 
-Operations scripts: `install_prodtools.sh` packages a versioned prodtools
-release for cvmfs publication; `update_pomsmonitor_web` rebuilds the POMS
-DB and regenerates the static dashboard site (the dashboard is a static
-page — `web/pomsMonitor/render_static.py` stamps `monitor_static.html`
-and builds `jobs.json` directly from the DB); `submissions_cron` sets up
-a quiet Mu2e environment, checks for a valid bearer token (report-only —
-it never fetches or refreshes one), then runs `submissions run` (the
-per-DB lock is taken inside `run` itself, not by the cron wrapper) for
-mu2epro's crontab, appending output to a `submissions-YYYYMMDD.log`
-beside the ledger DB. Drives both the recovery pass and the
-sliced-campaign top-up pass every tick. Not installed into any crontab
-by this repo — that is a one-time operator step (section 11
-`submissions`, wiki page `2026-07-18-direct-recovery-loop`).
+### `runlocal`
+
+Run cnf jobs on the current node, several at a time. Outputs stay on
+local disk — no pushOutput, no SAM declare, no manifest:
+
+```bash
+# Smoke three indices before submitting, 10 events each
+runlocal --jobdef cnf.mu2e.STMBeamToVDTarget.MDC2025au.0.tar \
+         --inloc tape --first 0 --num 3 -j 3 --nevts 10 \
+         --workdir /exp/mu2e/data/users/$USER/localrun
+
+# Produce full-length output for indices 100..107, four at a time
+runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
+         --inloc tape --first 100 --num 8 -j 4
+
+# Rerun exactly the indices a grid pass lost
+runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
+         --inloc tape --indices 0,3,7-9 -j 3
+```
+
+Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
+`--inloc` (default `tape`), `--first` / `--num` (default `0` / `1`),
+`--indices SPEC`, `-j/--parallel` (default 4), `--workdir` (default
+`.`), `--nevts` (default `-1` = whatever the FCL says),
+`--mu2e-options`, `--copy-input`.
+
+Job prep is the worker's own `process_jobdef`, so a local run exercises
+the same tarball fetch, inloc handling and `--copy-input` staging the
+grid will — only the push tail is missing. Each job runs as a child
+process in `<workdir>/job_<index>/` holding its FCL, art outputs, art
+log and `stdout.log`; the separate directories are required, because
+`process_jobdef` works in cwd and its copy-input branch runs `mkdir
+indir; mv *.art indir/`.
+
+`--first`/`--num` are cnf indices directly — `baseSeed = 1 + index` and
+`firstSubRun = index`, with no `firstjob` second index space to confuse
+them with. `--indices` names those same indices one at a time instead
+of a window: a comma-separated list of `N` and inclusive `A-B` ranges
+(`0,3,7-9` = five jobs), for reruns of the exact indices a grid pass
+lost, which are rarely contiguous. The two forms are alternatives —
+`--indices` together with `--first`/`--num` is refused rather than
+silently clipped to the window — and a malformed spec is rejected
+before any job starts, since a typo there would quietly run the wrong
+jobs. A failing index does not stop the others; the summary lists
+every job's exit code and prints a paste-ready rerun command for each
+failure, and the process exits 1 if any job failed. Four concurrent
+mu2e processes is roughly 10 GB resident — the driver prints that
+arithmetic for the `-j` you chose.
+
+### `install_prodtools.sh` / `submissions_cron`
+
+Operations scripts. `install_prodtools.sh` installs a versioned prodtools
+release on CVMFS from a GitHub tag — run it directly on
+`cvmfsmu2e@oasiscfs.fnal.gov`; `-n` is a dry run and `-t [DIR]` installs
+into a local writable dir instead of touching CVMFS.
+`submissions_cron` sets up a quiet Mu2e environment, checks for a valid
+bearer token (report-only — it never fetches or refreshes one), then runs
+`submissions run` (the per-DB lock is taken inside `run` itself, not by
+the cron wrapper) for mu2epro's crontab, appending output to a
+`submissions-YYYYMMDD.log` beside the ledger DB. One tick drives the
+recovery pass, the sliced-campaign top-up, and the draining tick. Not
+installed into any crontab by this repo — that is a one-time operator
+step (section 11 `submissions`, wiki page
+`2026-07-18-direct-recovery-loop`).
 
 ## 12. Troubleshooting
 
@@ -862,9 +1015,47 @@ by this repo — that is a one-time operator step (section 11
   `simjob_setup`, `fcl`, `dsconf`, `outloc`.
 - `Please specify either --desc AND --dsconf, --dsconf only, or --index only`
   — json2jobdef entry selection is exactly one of those three forms.
+- `json2jobdef: --prod requires --enqueue (otherwise a bare --prod
+  pushes the cnf to SAM and registers no campaign -- a silent no-op)`
+  — add `--enqueue`. There is no `--jobdefs` alternative any more.
+- `json2jobdef: --enqueue requires --prod (a campaign needs the cnf in
+  SAM)` — `--enqueue` resolves the tarball from SAM, so the cnf must
+  have been pushed first.
+- `json2jobdef: --slice-size requires --enqueue` — `--slice-size` only
+  has meaning for the campaign `--enqueue` registers.
+- `json2jobdef: inloc must be one of tape, disk, scratch, resilient,
+  stash, none or 'dir:/<absolute path>', got '<value>'` — a config
+  typo, refused before the cnf is built (same validator fires on
+  `submissions set-entry`, prefixed `submissions:` there instead).
+  A misspelled `inloc` does NOT fail at runtime — it silently falls
+  through to SAM — which is why it is refused at the boundary.
+- ``json2jobdef: outloc['<pattern>'] must be one of tape, disk, scratch,
+  outstage, got '<value>'`` — a misspelled output location, refused
+  before the cnf is built. Unlike a bad `inloc`, a bad `outloc` would
+  have reached pushOutput on the worker and failed there, after the job
+  had already run.
+- `json2jobdef: outloc must be a dictionary of dataset pattern ->
+  location, got '<value>'` — `outloc` is a map, e.g.
+  `{"*.art": "disk"}`, not a bare string.
+- `json2jobdef: outstage outputs are not declared to SAM, so campaign
+  verification cannot see them and every slice would recover forever. An
+  outstage entry cannot be enqueued — submit it by hand.` — drop
+  `--enqueue` (and `--prod`) for an outstage entry, or change `outloc`
+  to a declared location if you did want a campaign.
+- `<N> of <M> entries were SKIPPED and no campaign exists for them`
+  (exit 2) — a bulk `--dsconf` run dropped entries. The listed ones
+  need fixing and re-running individually with `--desc --dsconf`; the
+  others are already done.
 - `njobs=N exceeds the M jobs supported by the input file list` — the
   declared `njobs` is larger than `ceil(nfiles / merge_factor)`; fix
   `njobs` or the input selection.
+- `Error: input_pattern requires generic_tarball: true (a draining entry
+  has no fixed job count)` — a draining config must also set
+  `"generic_tarball": true`; an entry cannot claim both an input
+  pattern and a fixed index window.
+- `outputs dataset glob '<glob>' matches ...` — a draining entry's output
+  glob also matches its input pattern; make the glob tier-specific
+  (`mcs.*.art`, never `*.art`).
 - `contains unsubstituted placeholder` (from jobfcl / the build-time
   guard) — an `outputs.*.fileName` still carries a literal
   `description`/`owner`/`version`/`sequencer` token after substitution;
@@ -873,44 +1064,42 @@ by this repo — that is a one-time operator step (section 11
 - `window [F, F+M) exceeds cnf capacity N` — a `firstjob` window runs past
   a closed cnf's `tbs.njobs`. Only open-ended cnfs (capacity 0) accept any
   window.
-- `--first N --num M out of range for jobset size=S` — the carve falls
-  outside the entry's window (`size` is the entry's `njobs` when windowed,
-  else the cnf capacity).
 - `--indices takes absolute cnf indices and cannot be combined with a
-  windowed entry` — drop `firstjob` from the recovery map entry; `--indices`
-  values are already absolute.
+  windowed entry (firstjob=F); drop firstjob ...` — drop `firstjob` from
+  the JSON config entry before recovering with `--indices`; the values
+  are already absolute.
 - `Could not locate file: <name>` — SAM has no location for an input
   file; check the entry's `inloc` against where the files actually live
   (`samweb locate-file <name>`).
-- `error: SQLAlchemy not found. Run 'pyenv ana' after 'muse setup ops'.` —
-  run `source /cvmfs/mu2e.opensciencegrid.org/bin/pyenv.sh ana` after
-  `muse setup ops` (needed by pomsMonitor and listNewDatasets
-  --completeness).
-- `submissions run`: `row N: no full jobsub id recorded — cannot
-  drain-check` — the ledger row's `jobsub_id` lacks a schedd
-  (numeric-only cluster parse); update the row manually, `submissions
-  run` will not guess a schedd.
-- `submissions run`: `row N: HELD jobs ... human decision needed` — the
-  loop never releases or removes held jobs; resolve with
-  `condor_release`/`condor_rm` (or `jobsub_rm`) yourself, then re-run
-  `submissions run`.
+- `Error: MU2EGRID_JOBDEF is not set. runmu2e runs only as the
+  direct-backend worker ...` — `runmu2e` was invoked outside a
+  direct-backend job. To run a cnf's jobs locally use `runlocal`
+  (section 11); to smoke the worker itself, set the direct-mode
+  environment by hand from a dry-run's ops JSON (section 7).
+- `submissions run`: `row N: no cluster id recorded — cannot drain-check;
+  update the row manually` — the ledger row has no cluster to query;
+  `submissions run` will not guess one.
+- `submissions run`: `row N: HELD jobs in cluster C — human decision
+  needed (release or rm); loop will not act` — the loop never releases or
+  removes held jobs; resolve with `condor_release`/`condor_rm` (or
+  `jobsub_rm`) yourself, then re-run `submissions run`.
 - `another submissions run holds <path>/submissions.lock — exiting` —
-  an overlapping mutating invocation (manual `run`/`pause`/`resume`/
-  `cancel` racing the cron, or two cron ticks overlapping); let the
-  first one finish, then retry.
-- `Error: --enqueue submits nothing — it cannot be combined with
-  --first/--num/--indices` — enqueue and immediate submission are
-  mutually exclusive; drop `--enqueue` to submit now, or drop the
-  selection flags to register a campaign.
-- `submit_map: --enqueue registers a campaign in the ledger DB;
-  --no-ledger contradicts it` — a campaign has nowhere to track its
-  cursor without the ledger; drop one of the two flags.
-- `submit_map: entry N has no njobs (generic tarball) — a campaign
-  needs a job count to slice` — `--enqueue` requires a fixed-`njobs`
-  entry; `generic_tarball` entries have no pre-determined job count.
-- `submit_map: entry N has njobs=0 — a campaign needs a positive job
-  count` — `--enqueue` also refuses `njobs: 0` (and any non-positive
-  value): a zero-job campaign cannot be sliced.
+  an overlapping mutating invocation (manual `run`/`resubmit`/`pause`/
+  `resume`/`cancel` racing the cron, or two cron ticks overlapping); let
+  the first one finish, then retry.
+- `submissions: no ledger row <N> in <db>` — `resubmit` was given a
+  row id that doesn't exist in the target DB; check `submissions
+  status` (or pass `--db`/`--mine` if you meant a different ledger).
+- `submissions: refusing — row <N> (state=...) already covers part of
+  this selection for <tarball>` — `resubmit`'s selection overlaps an
+  unsettled row for the same tarball. Check `jobsub_q` yourself, then
+  `submissions reconcile <N>` if the window is genuinely free — never
+  resubmit past this without checking, since deterministic payloads mean
+  live work gets duplicated, not just wasted.
+- `submissions: row <N> is a draining (file-keyed) row — use --files,
+  not --indices` / `submissions: row <N> is an index row — use
+  --indices, not --files` — `resubmit`'s selector must match the row's
+  kind.
 - `active campaign N already exists for <tarball>` / `paused campaign N
   already exists for <tarball>` — `--enqueue` refuses a second
   active-or-paused campaign for the same tarball. Use `submissions
@@ -922,15 +1111,20 @@ by this repo — that is a one-time operator step (section 11
   no memory of what the cancelled one already fed — check `submissions
   status` (or the ledger directly) for that tarball before
   re-enqueueing, so you don't resubmit indices already covered.
-- `campaign N: ledger already covers indices in this slice — PAUSED
-  (crash-window suspected...)` — top-up found ledger rows for this
-  campaign's tarball whose indices already fall inside the next slice
-  window, meaning a prior submission likely succeeded but its cursor
-  advance or ledger write was lost to a crash. Reconcile manually:
-  compare the ledger rows for the tarball (`submissions status` /
-  `sqlite3`) against the campaign's `cursor`, adjust the cursor if
-  needed, then `submissions resume <ID>`. Do not resume blind —
-  resuming without reconciling can still double-submit.
+- `campaign N: ledger row R already covers indices in this slice — PAUSED
+  (crash-window suspected; check jobsub_q, then submissions reconcile R
+  and submissions resume N)` — top-up found a ledger row (`R`) whose
+  indices already fall inside the campaign's next slice window, meaning
+  a prior submission likely succeeded but its cursor advance or ledger
+  write was lost to a crash. Check `jobsub_q` yourself to confirm the
+  window is genuinely free (a `jobsub_submit` that exited non-zero can
+  still have created a cluster), then `submissions reconcile R` to close
+  the blocking row and `submissions resume N` to restart the campaign.
+  Do not resume without reconciling first — the same row keeps
+  overlapping and the very next tick re-pauses the campaign. If row `R`
+  is not in a reconcilable state (`failed`/`submitting`), the message
+  instead says to reconcile the campaign cursor by hand before
+  resuming.
 - `MU2E_MAX_QUEUED is not an integer: '<value>'` — the env var must
   parse as an int; unset it or fix the value, or pass `--max-queued`
   directly to override it for one run.

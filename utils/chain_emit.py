@@ -3,7 +3,7 @@
 dataset + a per-campaign stage template into a ``json2jobdef`` config entry,
 and derive the discovery defname for a stage from its template's input pattern.
 
-POMS-free chain dts→digi→reco→ntuple, walked as per-tier hops. Templates live
+Chain dts→digi→reco→ntuple, walked as per-tier hops. Templates live
 in ``<templates_dir>/<campaign>/<stage>.json`` and carry the curated physics
 (geom, DbService version, nearestMatch, fcl, dsconf, simjob_setup). The only
 per-primary substitution done here is ``{desc}`` and ``{input}`` — everything

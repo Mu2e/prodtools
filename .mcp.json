@@ -5,6 +5,9 @@
     },
     "prodtools": {
       "command": "/exp/mu2e/app/users/oksuzian/muse_050125/prodtools/mcp/scripts/start_mcp.sh"
+    },
+    "prodtools-write": {
+      "command": "/exp/mu2e/app/users/oksuzian/muse_050125/prodtools/mcp/scripts/start_write_mcp.sh"
     }
   }
 }

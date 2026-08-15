@@ -10,17 +10,27 @@ live_clusters parses) has the one-letter state but never the hold
 reason.
 
 Why this is possible now: the system RPM htcondor is py3.9-only, but
-PyPI ships a cp310 manylinux wheel, and htcondor==23.0.28 matches the
-pool's running version (verified 2026-07-26). mcp/pyproject.toml pins
-htcondor==23.0.* as a venv dependency for exactly this reason.
+PyPI ships a cp310 manylinux wheel. The wheel version is NOT pinned to
+a literal here or in pyproject.toml — mcp/scripts/install.sh reads
+/usr/bin/condor_version and installs the matching major.minor series,
+and start_mcp.sh --check fails when the two disagree. A literal pin
+lived here once (23.0.*), went stale against a 25.0.12 pool upgrade,
+and the collector rejected the old client's SCITOKENS authentication —
+which surfaced as "could not reach every schedd" and cost a full
+diagnosis session.
 
-htcondor itself is imported lazily, inside the two functions that talk
-to the real pool (_locate_jobsub_schedds, _query_schedd) — never at
-module level. That keeps this module importable, and its query logic
-fully testable via injected fakes, on interpreters that never see the
-real htcondor package (e.g. the plain-python3.9 unit-test run).
+Condor 25 ships the v2 bindings: the module is `htcondor2` and the
+enum is DaemonType, not DaemonTypes. htcondor2 is imported lazily,
+inside the three functions that talk to the real pool
+(_locate_jobsub_schedds, _query_schedd, _client_version_banner) —
+never at module level. That keeps this module importable, and its
+query logic fully testable via injected fakes, on interpreters that
+never see the real htcondor package (e.g. the plain-python3.9 unit-test
+run).
 """
 import concurrent.futures
+import re
+import subprocess
 
 OWNER = 'mu2epro'
 
@@ -51,8 +61,8 @@ _CONSTRAINT_TEMPLATE = (
 def _is_jobsub_schedd(ad):
     """True for a schedd ClassAd whose Name starts with 'jobsub' — the
     pool advertises 8 daemons total (collector, negotiator, other
-    schedds, ...); only ~5 are the jobsub_lite schedds that actually
-    carry mu2epro's jobs (verified 2026-07-26). A pure predicate, split
+    schedds, ...); only ~6 are the jobsub_lite schedds that actually
+    carry mu2epro's jobs (verified 2026-08-09). A pure predicate, split
     out from _locate_jobsub_schedds so the filter is testable without a
     real htcondor.Collector."""
     return str(ad.get('Name', '')).startswith('jobsub')
@@ -61,9 +71,9 @@ def _is_jobsub_schedd(ad):
 def _locate_jobsub_schedds():
     """Schedd location ClassAds for the pool's jobsub_lite schedds
     (see _is_jobsub_schedd)."""
-    import htcondor
+    import htcondor2 as htcondor
     coll = htcondor.Collector()
-    ads = coll.locateAll(htcondor.DaemonTypes.Schedd)
+    ads = coll.locateAll(htcondor.DaemonType.Schedd)
     return [ad for ad in ads if _is_jobsub_schedd(ad)]
 
 
@@ -72,7 +82,7 @@ def _query_schedd(schedd_ad, owner):
     dicts (never htcondor ClassAd objects — those don't belong outside
     this module). Filtering happens SERVER-SIDE in the constraint, not
     by fetching everything and filtering in Python."""
-    import htcondor
+    import htcondor2 as htcondor
     schedd = htcondor.Schedd(schedd_ad)
     constraint = _CONSTRAINT_TEMPLATE.format(
         owner=owner, idle=IDLE, running=RUNNING, held=HELD)
@@ -83,12 +93,37 @@ def _query_schedd(schedd_ad, owner):
              'HoldReason': ad.get('HoldReason')} for ad in ads]
 
 
+def _schedd_label(sd):
+    """Best-effort display name for a schedd handle, for error text.
+
+    `schedds_fn()` returns plain strings under the test fakes, but
+    `_locate_jobsub_schedds()` returns real htcondor2 location ClassAds
+    in production, whose str() dumps the WHOLE ad (Name, MyAddress,
+    CondorVersion, ...) — hundreds of bytes that would otherwise land in
+    `reason` and get serialized straight into the MCP payload instead of
+    a short 'sched-b: TimeoutError: ...' line. ClassAds support `.get`;
+    plain strings don't, so that's the dispatch."""
+    get = getattr(sd, 'get', None)
+    return get('Name', sd) if get else sd
+
+
 def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
                      schedds_fn=_locate_jobsub_schedds,
                      query_fn=_query_schedd):
-    """{cluster_id: [{'JobStatus', 'HoldReasonCode', 'HoldReason'}, ...]}
-    for every idle/running/held job `owner` has across the pool's
-    jobsub* schedds, or None when the result cannot be trusted.
+    """((clusters, reason)) for every idle/running/held job `owner` has
+    across the pool's jobsub* schedds.
+
+    `clusters` is {cluster_id: [{'JobStatus', 'HoldReasonCode',
+    'HoldReason'}, ...]} on success, or None when the result cannot be
+    trusted. `reason` is None on success, else human-readable text
+    naming what actually failed.
+
+    `clusters is None` is the ONLY signal a caller may branch on. The
+    reason exists because the previous bare `return None` threw away
+    every clue — a client/pool version mismatch surfaced as an
+    authentication failure at the collector, and the fixed text the
+    caller printed blamed the schedds instead. It is diagnostic output
+    for a human reader and must never become control flow.
 
     Trust rules, matching the convention queue_block already
     understands (None -> 'unknown', never a zero):
@@ -109,13 +144,14 @@ def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
     """
     try:
         schedds = schedds_fn()
-    except Exception:
-        return None
+    except Exception as exc:
+        return None, (f'schedd discovery failed: '
+                      f'{type(exc).__name__}: {exc}')
     if not schedds:
-        return None
+        return None, 'the collector advertised no jobsub schedds'
 
     clusters = {}
-    untrustworthy = False
+    errors = []
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=len(schedds))
     try:
@@ -127,19 +163,20 @@ def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
                     for ad in fut.result():
                         cid = str(ad.get('ClusterId'))
                         clusters.setdefault(cid, []).append(ad)
-                except Exception:
-                    untrustworthy = True
+                except Exception as exc:
+                    errors.append(f'{_schedd_label(futures[fut])}: '
+                                  f'{type(exc).__name__}: {exc}')
         except concurrent.futures.TimeoutError:
-            untrustworthy = True
+            errors.append(f'the query timed out after {timeout}s')
     finally:
         # wait=False: don't block server shutdown-of-this-call on a
         # straggler thread stuck inside a slow/hung schedd query — the
         # timeout above already decided the result is untrustworthy.
         executor.shutdown(wait=False)
 
-    if untrustworthy:
-        return None
-    return clusters
+    if errors:
+        return None, '; '.join(errors)
+    return clusters, None
 
 
 def hold_reasons(jobs):
@@ -161,3 +198,99 @@ def hold_reasons(jobs):
             if reason:
                 entry['example'] = reason[:200]
     return sorted(by_code.values(), key=lambda e: e['count'], reverse=True)
+
+
+CONDOR_VERSION_BIN = '/usr/bin/condor_version'
+
+_VERSION_RE = re.compile(r'\$CondorVersion:\s*(\d+\.\d+\.\d+)')
+
+
+def parse_version(text):
+    """'25.0.12' out of a `$CondorVersion: ... $` banner, or None.
+
+    None rather than a guess: an unreadable version must stay unknown.
+    A plausible default is what let a stale pin sit undetected."""
+    if not text:
+        return None
+    match = _VERSION_RE.search(text)
+    return match.group(1) if match else None
+
+
+def series(version):
+    """'25.0' out of '25.0.12' — the major.minor the wheel pin uses.
+    None in, None out."""
+    if not version:
+        return None
+    return '.'.join(version.split('.')[:2])
+
+
+def _client_version_banner():
+    """The bindings' own version banner. Imported lazily like every
+    other htcondor use in this module, so the unit suite still runs
+    where no wheel is installed."""
+    import htcondor2
+    return htcondor2.version()
+
+
+def _node_version_banner():
+    """condor_version(1) from its ABSOLUTE path.
+
+    Absolute because `muse setup ops` rewrites PATH, and the version
+    that matters is the node's own client RPM — the one jobsub_lite
+    uses and the best local proxy for what the pool will accept.
+
+    stdin=DEVNULL is mandatory, not tidiness: this can run inside an
+    MCP server whose stdin IS the JSON-RPC channel, and a child that
+    inherits it can consume protocol bytes."""
+    completed = subprocess.run(
+        [CONDOR_VERSION_BIN], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        timeout=10, check=True)
+    return completed.stdout.decode('utf-8', 'replace')
+
+
+def _read_version(fn, label):
+    """(version or None, error text or None) for one side."""
+    try:
+        banner = fn()
+    except Exception as exc:
+        return None, f'{label}: {type(exc).__name__}: {exc}'
+    version = parse_version(banner)
+    if version is None:
+        return None, f'{label}: unparseable version banner {banner!r}'
+    return version, None
+
+
+def version_report(client_fn=_client_version_banner,
+                   node_fn=_node_version_banner):
+    """{'client', 'node', 'series_match', 'reason'} comparing the
+    installed bindings against this node's condor client.
+
+    `series_match` is True/False only when BOTH versions are known;
+    when either side is unreadable it is None — never True. Claiming an
+    agreement that was not verified is the exact failure this reporting
+    exists to prevent.
+
+    `reason` is None when both are known and the series agree; otherwise
+    human-readable text naming what is wrong. It is diagnostic output,
+    never a control-flow signal."""
+    client, client_err = _read_version(client_fn, 'client bindings')
+    node, node_err = _read_version(node_fn, CONDOR_VERSION_BIN)
+
+    if client is None or node is None:
+        errs = [e for e in (client_err, node_err) if e]
+        return {'client': client, 'node': node, 'series_match': None,
+                'reason': 'cannot compare HTCondor versions — '
+                          + '; '.join(errs)}
+
+    if series(client) == series(node):
+        return {'client': client, 'node': node, 'series_match': True,
+                'reason': None}
+
+    return {
+        'client': client, 'node': node, 'series_match': False,
+        'reason': (f'HTCondor client bindings {client} do not match this '
+                   f'node\'s condor {node}; the pool rejects the older '
+                   f'client\'s authentication. Rerun mcp/scripts/install.sh '
+                   f'to reinstall the matching wheel series.'),
+    }

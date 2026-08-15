@@ -9,6 +9,7 @@ import os
 import sys
 from typing import Optional
 
+from prodtools_mcp import condor
 from prodtools_mcp.adapters import safe_tool
 from prodtools_mcp.tools import discovery, lineage, status
 
@@ -31,17 +32,25 @@ WHAT IT ANSWERS:
 READING THE RESULTS:
 - campaign_status called with NO argument is ledger-only and cheap. Name
   a campaign to include queue and output counts, which hit the network.
+- campaign_status and list_campaigns default to production; omitting
+  `mine` means production. Every reply names what it read: `db_path` at
+  the top level is the ledger, and `queue.owner` inside each campaign is
+  the grid account the counts came from.
 - A queue or outputs block with state="unknown" has NO count keys. Do
   NOT read a missing count as zero: the query failed, and the campaign
   may well be running. Never start a recovery pass on an "unknown".
 - The queue block comes from live HTCondor ClassAd queries (in-process,
-  via the htcondor Python bindings — no jobsub_q table parsing), so held
+  via the htcondor2 Python bindings — no jobsub_q table parsing), so held
   jobs carry a reason, not just a count. When held > 0 the block also
   has `hold_reasons`: entries {code, count, example}, grouped by
   HoldReasonCode and sorted by count descending. `example` is ONE
   representative HoldReason string (truncated) — never sum/average
   against it, and never group by the HoldReason text yourself, since
   that text embeds the slot and host and is unique per job.
+  When the queue block is "unknown" its `reason` names what actually
+  failed; `get_server_info` reports the client and node HTCondor
+  versions, and a `series_match: false` there is the cause to fix
+  first.
 - find_datasets reports a samweb DEFINITION listing (see its `basis`
   field): zero-file definitions appear and -LH/-CH variants do not. Pass
   require_files=True when you need existence.
@@ -85,6 +94,20 @@ TOOL_FUNCTIONS = {
 TOOL_NAMES = sorted(list(TOOL_FUNCTIONS) + ['get_server_info'])
 
 
+def _condor_block():
+    """Client/node HTCondor versions for get_server_info.
+
+    Never raises: this is the tool a reader reaches for when something
+    is already broken, and a version probe that takes the whole call
+    down with it would be worse than useless."""
+    try:
+        return condor.version_report()
+    except Exception as exc:
+        return {'client': None, 'node': None, 'series_match': None,
+                'reason': f'version probe failed: '
+                          f'{type(exc).__name__}: {exc}'}
+
+
 def get_server_info():
     """Capabilities and safe-usage guidance for this server."""
     return {
@@ -93,9 +116,20 @@ def get_server_info():
                        'status and dataset discovery.',
         'writes': False,
         'tools': TOOL_NAMES,
+        'condor': _condor_block(),
         'ledger_db': os.environ.get(
             'MU2E_SUBMISSION_DB',
             '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'),
+        'identity': {
+            'parameter': 'mine (campaign_status, list_campaigns)',
+            'default': 'production — the ledger in ledger_db and '
+                       'mu2epro\'s grid queue',
+            'mine_true': "your own ledger at "
+                         "/exp/mu2e/data/users/$USER/prodtools/"
+                         "submissions.db, and your own grid queue",
+            'other_accounts': 'not available through MCP — use '
+                              '`submissions --db <path> status`',
+        },
         'guidance': INSTRUCTIONS.strip(),
     }
 
@@ -119,19 +153,24 @@ def create_mcp_server():
     # layers) reject it, which defeats the "reach other clients" goal.
     @mcp.tool(description='Status of one campaign, or a cheap ledger-only '
                           'summary of all of them when called with no '
-                          'argument.')
+                          'argument. Pass mine=true to read YOUR ledger '
+                          'and queue instead of production\'s.')
     def campaign_status(campaign: Optional[str] = None,
                         campaign_id: Optional[int] = None,
                         include_queue: bool = True,
-                        include_outputs: bool = True) -> dict:
+                        include_outputs: bool = True,
+                        mine: bool = False) -> dict:
         return TOOL_FUNCTIONS['campaign_status'](
             campaign=campaign, campaign_id=campaign_id,
-            include_queue=include_queue, include_outputs=include_outputs)
+            include_queue=include_queue, include_outputs=include_outputs,
+            mine=mine)
 
     @mcp.tool(description='List submission campaigns, optionally filtered '
-                          'by state (active/complete/paused/cancelled).')
-    def list_campaigns(state: Optional[str] = None) -> dict:
-        return TOOL_FUNCTIONS['list_campaigns'](state=state)
+                          'by state (active/complete/paused/cancelled). '
+                          'Pass mine=true for your own ledger.')
+    def list_campaigns(state: Optional[str] = None,
+                       mine: bool = False) -> dict:
+        return TOOL_FUNCTIONS['list_campaigns'](state=state, mine=mine)
 
     @mcp.tool(description='Find datasets by campaign, tier, description, '
                           'or SAM defname pattern (* or % both work). '

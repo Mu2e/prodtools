@@ -189,31 +189,39 @@ class Mu2eName:
 
 
 def log_storage_location(outputs) -> str:
-    """Where a job's log dataset goes, given its POMS-map outputs list.
+    """Where a job's log dataset goes, given its map-entry outputs list.
 
     Mu2e convention: logs live on persistent disk
     (`/pnfs/mu2e/persistent/datasets/phy-etc/log/...`) regardless of where
     the data lands, so they stay cheap to read without a tape recall. This
-    matches the POMS path, which calls push_logs() with its 'disk' default.
+    matches push_logs()'s 'disk' default (and what the retired POMS path did).
 
-    The one exception is `scratch`: a non-mu2epro account whose data goes to
-    scratch has no storage.modify scope on /mu2e/persistent/datasets, so a
-    'disk' log push would 403. Those runs keep logs beside their data.
+    There are two exceptions, both cases where a 'disk' log is not merely
+    unconventional but wrong:
+
+    `scratch` — a non-mu2epro account whose data goes to scratch has no
+    storage.modify scope on /mu2e/persistent/datasets, so a 'disk' log
+    push would 403. Those runs keep logs beside their data.
+
+    `outstage` — the data was never declared to SAM, so a declared log
+    would list parents SAM has never heard of. The log follows the data
+    into $MU2EGRID_WFOUTSTAGE and is not declared either.
 
     Do NOT let logs inherit 'tape' from the data outputs — small log files
-    on tape are wasteful and diverge from every POMS-submitted sibling
+    on tape are wasteful and diverge from every earlier campaign's sibling
     dataset. (Regression fixed 2026-07-21 after the first direct campaign
     put 500 logs on tape.)
 
     Accepts the bare outputs list (`[{'location': ..., 'dataset': ...}, ...]`)
-    or a POMS-map entry dict containing one. Used by submit.py (to scope the
+    or a map-entry dict containing one. Used by submit.py (to scope the
     worker token) and runmu2e.py (to place the push).
     """
     if isinstance(outputs, dict):
         outputs = outputs.get('outputs')
     if not outputs:
         return 'disk'
-    return 'scratch' if outputs[0].get('location') == 'scratch' else 'disk'
+    location = outputs[0].get('location')
+    return location if location in ('scratch', 'outstage') else 'disk'
 
 def default_owner() -> str:
     """Dataset owner defaulted from $USER; mu2epro maps to mu2e (production
@@ -433,8 +441,8 @@ class Mu2eJobBase:
     # ------------------------------------------------------------------
     # Per-index job arithmetic. These are THE single implementation —
     # the worker names its actual output files through them (via
-    # Mu2eJobFCL.generate_fcl), so every other consumer (mkrecovery,
-    # submit, db_builder, jobdef_lookup) must get identical answers.
+    # Mu2eJobFCL.generate_fcl), so every other consumer (submit,
+    # submissions, jobdef_lookup) must get identical answers.
     # Formerly duplicated (divergently) in the deleted jobiodetail.py and in jobquery.py.
     # ------------------------------------------------------------------
 
@@ -577,7 +585,7 @@ class Mu2eJobBase:
         0 means "open-ended": a legacy generator tarball built before
         tbs.njobs existed, or a generic tarball (1 job per input fname).
         For those the job count is a submit-time decision, authoritative
-        in the POMS map — 0 is deliberately not a guess.
+        in the submission map — 0 is deliberately not a guess.
         """
         tbs = self.json_data.get('tbs', {})
 

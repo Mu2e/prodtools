@@ -37,7 +37,7 @@ happens under the `mu2epro` account.
     (entry × input_data) list**, not the JSON array index. Easy to
     miscount with array-shape entries; prefer the other two.
 - All other flags pass through verbatim (`--verbose`, `--no-cleanup`,
-  `--extend`, `--ignore-empty`, `--jobdefs`, `--json-output`).
+  `--extend`, `--ignore-empty`, `--enqueue`, `--slice-size N`).
 
 ## Examples
 

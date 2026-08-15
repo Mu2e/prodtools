@@ -104,8 +104,9 @@ is degraded.
 - Read-only by design — no SAM writes, no ledger writes.
   `--completeness` reads `submissions.db` directly; there is no DB
   rebuild step of any kind.
-- For "what's *not yet* in production", use `pomsMonitor
-  --campaign <name> --outputs --incomplete` directly instead;
-  this skill is for the "what landed in SAM" angle.
+- For "what's *not yet* in production", use the prodtools MCP
+  `campaign_status(campaign="<name>")` (or `submissions status` for
+  the raw ledger) instead; this skill is for the "what landed in
+  SAM" angle.
 - For per-dataset family trees use `famtree`; for per-dataset
   log metrics use `logparser`. This skill is intentionally narrow.

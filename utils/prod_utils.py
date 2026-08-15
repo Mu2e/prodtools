@@ -10,14 +10,10 @@ from pathlib import Path
 from .config_utils import normalize_input_data
 from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
-from .poms_entry import firstjob_of, inloc_of, njobs_of, outputs_of, tarball_of
+from .jobdesc import firstjob_of, njobs_of
 from .samweb_wrapper import (
-    create_definition,
-    delete_definition,
-    describe_definition,
     dataset_summary,
     definition_file_count,
-    q_dataset_below_sequencer,
 )
 
 def setup_logging(verbose: bool) -> None:
@@ -205,49 +201,6 @@ def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
         for line in post_lines:
             f.write(line + '\n')
 
-def summarize_and_index(jobdefs_file, prod=True):
-    """Print the per-entry summary of a jobdefs/POMS-map JSON and (when
-    `prod`) recreate its SAM index definition. Shared by `json2jobdef
-    --prod`. Tolerates njobs-less (generic) entries — they contribute 0
-    to the index size."""
-    with open(jobdefs_file, 'r') as f:
-        jobdefs = json.load(f)
-
-    total_jobs = sum(j.get('njobs', 0) for j in jobdefs)
-
-    for i, j in enumerate(jobdefs):
-        outputs = ", ".join(f"{o['dataset']}→{o['location']}" for o in outputs_of(j))
-        njobs = njobs_of(j, 0)
-        firstjob = firstjob_of(j)
-        window = f", cnf window={firstjob}..{firstjob + njobs - 1}" if firstjob else ""
-        print(f"[{i}] {tarball_of(j)}: {njobs} jobs, input={inloc_of(j)}, outputs={outputs}{window}")
-
-    print(f"\nTotal: {total_jobs} jobs")
-
-    if prod:
-        map_stem = Path(jobdefs_file).stem
-        create_index_definition(map_stem, total_jobs, "etc.mu2e.index.000.txt")
-
-
-def create_index_definition(output_index_dataset, job_count, input_index_dataset):
-    idx_name = f"i{output_index_dataset}"
-    idx_format = f"{job_count:07d}"
-    
-    # Check if definition exists before trying to delete it.
-    # samweb_wrapper.describe_definition catches errors internally and
-    # returns "" for a missing definition — check truthiness, don't
-    # try/except (the wrapper never raises).
-    if describe_definition(idx_name):
-        print(f"Definition {idx_name} exists, deleting...")
-        delete_definition(idx_name)
-    else:
-        print(f"Definition {idx_name} does not exist, skipping deletion")
-
-    # Create the new definition
-    print(f"Creating definition {idx_name}...")
-    create_definition(idx_name, q_dataset_below_sequencer(input_index_dataset, idx_format))
-    describe_definition(idx_name)
-
 def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False):
     """Write the direct-input FCL for `fname` from a generic cnf's base FCL:
     base content + appended source.fileNames and per-output filename
@@ -294,29 +247,22 @@ def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False
     return fcl
 
 
-def resolve_map_index(jobdesc, job_index):
-    """Map a global (index-dataset) job index to its POMS-map entry and
-    the cnf-local job index.
+def resolve_entry_index(entry, job_index):
+    """Map a global job index to the entry's cnf-local index.
 
-    Each njobs-bearing entry occupies the next `njobs` slots of the global
-    index space (generic entries occupy none); within an entry
-    `local = global - cumulative + firstjob`, so a windowed entry runs cnf
-    indices [firstjob, firstjob+njobs). Window semantics (statistics
-    expansion, seed safety): see utils/poms_entry.py.
+    `local = job_index + firstjob`, so a windowed entry runs cnf indices
+    [firstjob, firstjob+njobs). Window semantics (statistics expansion,
+    seed safety): see utils/jobdesc.py. A generic entry (no njobs)
+    occupies no index space.
 
     Returns:
-        tuple: (entry, entry_index, local_job_index), or (None, None, None)
-               if job_index is beyond the map's total njobs.
+        tuple: (entry, local_job_index), or (None, None) if job_index is
+               beyond the entry's njobs.
     """
-    cumulative_jobs = 0
-    for i, entry in enumerate(jobdesc):
-        njobs = njobs_of(entry)
-        if njobs is None:
-            continue  # skip generic tarball entries
-        if job_index < cumulative_jobs + njobs:
-            return entry, i, job_index - cumulative_jobs + firstjob_of(entry)
-        cumulative_jobs += njobs
-    return None, None, None
+    njobs = njobs_of(entry)
+    if njobs is None or job_index >= njobs:
+        return None, None
+    return entry, job_index + firstjob_of(entry)
 
 
 def push_output(output_specs, output_file="output.txt", simjob_setup=None):

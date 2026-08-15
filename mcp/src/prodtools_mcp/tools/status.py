@@ -8,10 +8,38 @@ exceed the client's timeout.
 from prodtools_mcp import condor, ledger_ro
 from prodtools_mcp.adapters import ToolError
 
+import getpass
+
+from utils import submission_ledger
+
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
 
-def queue_block(cluster_ids, clusters):
+def _resolve_identity(mine):
+    """(ledger path, condor owner) for one call.
+
+    ONE resolution feeds BOTH axes. `ledger_for()` with no argument uses
+    getpass.getuser() internally, so asking it for the path and asking
+    getpass for the queue owner cannot disagree. Reaching for
+    os.environ['USER'] on one side only is exactly how the ledger and the
+    queue come to report different accounts — the failure 171517f fixed
+    on the write side.
+
+    The two halves are deliberately asymmetric when mine is False. The
+    ledger returns None so `ledger_ro.DEFAULT_DB` still applies, and that
+    constant is os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB): a
+    resolved path here would silently destroy the override. The condor
+    owner has no such override, so it is returned concrete and the
+    payload can always name it.
+
+    Creates nothing: `ensure_ledger_dir` is the CLI's, not this server's.
+    """
+    if not mine:
+        return None, condor.OWNER
+    return submission_ledger.ledger_for(), getpass.getuser()
+
+
+def queue_block(cluster_ids, clusters, owner=condor.OWNER, reason=None):
     """Queue counts for a campaign's clusters from a
     condor.query_owner_jobs() snapshot: {cluster_id: [{'JobStatus',
     'HoldReasonCode', 'HoldReason'}, ...]}.
@@ -24,14 +52,27 @@ def queue_block(cluster_ids, clusters):
     pass against live jobs. condor.query_owner_jobs() preserves this same
     fail-closed contract (timeout or any unreachable schedd -> None).
 
+    `reason` is that query's own account of what went wrong, passed
+    through unchanged. The fixed fallback text below is only for callers
+    that supply none — it once blamed the schedds for a failure that
+    happened at the collector, before any schedd was contacted, and sent
+    an investigation to the wrong layer.
+
     When held > 0, adds `hold_reasons`: the held jobs' HoldReasonCode
     breakdown (see condor.hold_reasons — grouped by CODE, never by the
     HoldReason text, which embeds a unique slot/host per job).
+
+    `owner` is carried into the result so a reader can tell whose queue
+    was counted. A count that is correct for an account nobody asked
+    about is the recurring bug in this subsystem; naming it in the
+    payload is what makes it checkable.
     """
     if clusters is None:
         return {'state': 'unknown',
-                'reason': 'HTCondor queue query failed, timed out, or '
-                          'could not reach every schedd'}
+                'owner': owner,
+                'reason': reason or (
+                    'HTCondor queue query failed, timed out, or could '
+                    'not reach every schedd')}
     running = idle = held = 0
     seen = []
     held_jobs = []
@@ -51,11 +92,34 @@ def queue_block(cluster_ids, clusters):
                 held_jobs.append(job)
             # Anything else (removed/completed/transferring/suspended)
             # is neither a live nor a held job — not counted.
-    block = {'state': 'known', 'running': running, 'idle': idle,
-            'held': held, 'clusters': seen}
+    block = {'state': 'known', 'owner': owner, 'running': running,
+            'idle': idle, 'held': held, 'clusters': seen}
     if held:
         block['hold_reasons'] = condor.hold_reasons(held_jobs)
     return block
+
+
+def _dataset_of(fname):
+    """Dataset name for an output FILE name.
+
+    Mu2eName (the path-grammar owner), NOT utils.submissions._dataset_of:
+    importing the submission engine into a read-only server would drag in
+    the whole submit/recovery stack for a one-line name parse.
+    """
+    from utils.job_common import Mu2eName
+    return str(Mu2eName.parse(fname).dataset)
+
+
+def _cnf_output_datasets(tarball, job_pars_fn):
+    """Output dataset names for an INDEXED campaign, read from its cnf.
+
+    The dataset name is index-independent — only the sequencer varies per
+    job — so index 0 names every output stream the campaign will write.
+    This is the same cnf-owned `tbs.outfiles` substitution `verify_row`
+    checks against, so status and verification cannot drift.
+    """
+    job_pars = job_pars_fn(tarball)
+    return sorted({_dataset_of(f) for f in job_pars.job_outputs(0).values()})
 
 
 def _draining_outputs_block(rows, tarball, count_fn, job_pars_fn):
@@ -79,13 +143,8 @@ def _draining_outputs_block(rows, tarball, count_fn, job_pars_fn):
     Cost: one SAM count per output dataset DISPATCHED SO FAR (3 early in
     a campaign, one per desc by the end). include_outputs=False skips it.
     """
-    # Mu2eName (the path-grammar owner), NOT utils.submissions._dataset_of:
-    # importing the submission engine into a read-only server would drag in
-    # the whole submit/recovery stack for a one-line name parse.
-    from utils.job_common import Mu2eName, expected_outputs_for
-
-    def dataset_of(fname):
-        return str(Mu2eName.parse(fname).dataset)
+    from utils.job_common import expected_outputs_for
+    dataset_of = _dataset_of
 
     dispatched = [f for row in (rows or []) for f in (row['indices'] or [])]
     if not dispatched:
@@ -137,18 +196,26 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
     Draining campaigns take a different path entirely — see
     _draining_outputs_block.
 
+    The dataset NAMES come from the cnf (_cnf_output_datasets), not from
+    the entry's `outputs[].dataset`. That field is a worker-side filename
+    glob for an indexed entry exactly as it is for a draining one — every
+    production map writes `*.art` — so feeding it to a SAM dimension
+    raised a parse error and this block read `state: unknown` for every
+    indexed campaign ever run. The draining branch already had to learn
+    this; the indexed branch was left behind (fixed 2026-08-09).
+
     Two denominators, because one is misleading on its own:
 
     - `expected_at_completion` is njobs — one output file per job per
-      stream. Derived this way deliberately, to avoid a /pnfs cnf read on
-      every status call.
+      stream. Taken from the entry rather than the cnf's own capacity, so
+      a windowed campaign is measured against its window.
     - `submitted` is the campaign cursor: how many indices have actually
       been handed to the grid. EVERY direct campaign is sliced, so at
       cursor 500 of njobs 4000 with all 500 landed, comparing produced
       against njobs alone reports 12.5% when the truth is 100% of what is
       in flight.
     """
-    from utils.poms_entry import is_draining, outputs_of
+    from utils.jobdesc import is_draining, outputs_of
     if is_draining(entry):
         return _draining_outputs_block(
             rows, tarball, count_fn, job_pars_fn or _default_job_pars_fn)
@@ -156,11 +223,16 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
         outputs = outputs_of(entry)
     except ValueError as exc:
         return {'state': 'unknown', 'reason': str(exc)}
+    if not outputs:
+        return {'state': 'known', 'datasets': []}
+    try:
+        names = _cnf_output_datasets(tarball, job_pars_fn or
+                                     _default_job_pars_fn)
+    except Exception as exc:
+        return {'state': 'unknown',
+                'reason': f'cannot name outputs from cnf {tarball}: {exc}'}
     datasets = []
-    for out in outputs:
-        dataset = out.get('dataset')
-        if not dataset:
-            continue
+    for dataset in names:
         try:
             produced = count_fn(dataset)
         except Exception as exc:
@@ -173,13 +245,28 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
     return {'state': 'known', 'datasets': datasets}
 
 
-def _default_clusters_fn():
+def _default_clusters_fn(owner=None):
     """condor.query_owner_jobs(), the MCP server's own path — direct
     ClassAd queries, independent of utils.submissions.live_clusters()
     (which backs the live production cron and stays untouched). Already
     bounded and already fail-closed to None on any timeout or
-    unreachable schedd; nothing to add here."""
-    return condor.query_owner_jobs()
+    unreachable schedd.
+
+    Returns (clusters, reason). On failure the reason is enriched here,
+    once per request, with a client/node version mismatch when there is
+    one: that mismatch is the cause that looks least like itself — it
+    surfaces as an authentication failure at the collector — and this is
+    the single place a per-request subprocess for it is affordable.
+
+    `owner` is threaded rather than left to condor.OWNER so the queue is
+    always read for the SAME account as the ledger (see
+    _resolve_identity)."""
+    clusters, reason = condor.query_owner_jobs(owner or condor.OWNER)
+    if reason is not None:
+        report = condor.version_report()
+        if report['series_match'] is False:
+            reason = f'{reason} [{report["reason"]}]'
+    return clusters, reason
 
 
 def _default_count_fn(dataset):
@@ -193,8 +280,8 @@ def _default_job_pars_fn(tarball):
     state='unknown', never a zero count."""
     import os
     from utils.jobquery import Mu2eJobPars
-    from utils.mkrecovery import locate_tarball
-    path = locate_tarball(tarball)
+    from utils.file_resolver import sam_physical_path_or_none
+    path = sam_physical_path_or_none(tarball)
     if not path or not os.path.exists(path):
         raise RuntimeError('tarball not locatable in SAM')
     return Mu2eJobPars(path)
@@ -226,14 +313,26 @@ def _matches(camp, campaign, campaign_id):
 
 
 def campaign_status(campaign=None, campaign_id=None, include_queue=True,
-                    include_outputs=True, db_path=None,
+                    include_outputs=True, mine=False, db_path=None,
                     clusters_fn=None, count_fn=None, job_pars_fn=None):
     """Status of one campaign, or a ledger-only summary of all of them.
 
     With neither `campaign` nor `campaign_id`, this is ledger-only: local
     sqlite, no network, and the queue/outputs blocks are omitted.
     """
-    from utils.poms_entry import njobs_of
+    from utils.jobdesc import njobs_of
+
+    resolved_db, owner = _resolve_identity(mine)
+    # db_path is test-only: it is not exposed through MCP (server.py
+    # offers no such parameter). It wins over the ledger `mine` derived,
+    # but leaves `owner` (the queue axis) alone -- `owner` only ever
+    # comes from `mine` via _resolve_identity, never from db_path. That
+    # makes db_path the one way to split the two identity axes on
+    # purpose: point the ledger anywhere while the queue still follows
+    # `mine`, which is exactly what lets the tests probe each axis
+    # independently. `mine` only supplies a default for db_path when
+    # db_path is absent.
+    db_path = db_path or resolved_db
 
     # One snapshot, one connection: campaigns and rows must agree. See
     # ledger_ro.snapshot.
@@ -255,8 +354,9 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     want_outputs = named and include_outputs
 
     clusters = None
+    queue_reason = None
     if want_queue:
-        clusters = (clusters_fn or _default_clusters_fn)()
+        clusters, queue_reason = (clusters_fn or _default_clusters_fn)(owner)
 
     tarball_counts = {}
     for camp in all_camps:
@@ -270,7 +370,7 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
             'id': camp['id'],
             'state': camp['state'],
             'tarball': camp['tarball'],
-            'map_path': camp['map_path'],
+            'origin': camp['origin'],
             'slice_size': camp['slice_size'],
             'cursor': camp['cursor'],
             'njobs': njobs,
@@ -283,39 +383,50 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
         # Rows back both blocks: the queue reads their cluster ids, and a
         # draining campaign's output DATASETS are only discoverable from
         # the input filenames they dispatched.
-        mine = ([r for r in all_rows if r['tarball'] == camp['tarball']]
-                if (want_queue or want_outputs) else [])
+        camp_rows = ([r for r in all_rows if r['tarball'] == camp['tarball']]
+                     if (want_queue or want_outputs) else [])
         if want_queue:
-            rec['rows'] = _row_counts(mine)
-            cluster_ids = [r['cluster_id'] for r in mine if r['cluster_id']]
-            rec['queue'] = queue_block(cluster_ids, clusters)
+            rec['rows'] = _row_counts(camp_rows)
+            cluster_ids = [r['cluster_id'] for r in camp_rows
+                           if r['cluster_id']]
+            rec['queue'] = queue_block(cluster_ids, clusters, owner,
+                                       reason=queue_reason)
         if want_outputs:
             rec['outputs'] = _outputs_block(
                 camp['entry'], njobs, camp['cursor'],
-                count_fn or _default_count_fn, rows=mine,
+                count_fn or _default_count_fn, rows=camp_rows,
                 tarball=camp['tarball'], job_pars_fn=job_pars_fn)
         out.append(rec)
 
     return {'db_path': db_path or ledger_ro.DEFAULT_DB, 'campaigns': out}
 
 
-def list_campaigns(state=None, db_path=None):
-    """Ledger-only campaign listing. No network."""
+def list_campaigns(state=None, mine=False, db_path=None):
+    """Ledger-only campaign listing. No network.
+
+    `db_path` is echoed back for the same reason campaign_status echoes
+    it: with `mine` there is more than one possible ledger, and a listing
+    that does not say which one it read cannot be checked by its reader.
+    """
     if state is not None and state not in CAMPAIGN_STATES:
         raise ToolError(
             'invalid_argument',
             f'unknown state {state!r}',
             f'Expected one of {CAMPAIGN_STATES}.')
+    resolved_db, _ = _resolve_identity(mine)
+    db_path = db_path or resolved_db
     camps = ledger_ro.campaigns(db_path, state=state)
-    from utils.poms_entry import njobs_of
+    from utils.jobdesc import njobs_of
     listing = [{
         'id': c['id'],
         'state': c['state'],
         'tarball': c['tarball'],
-        'map_path': c['map_path'],
+        'origin': c['origin'],
         'cursor': c['cursor'],
         'njobs': njobs_of(c['entry']),
         'slice_size': c['slice_size'],
         'created_utc': c['created_utc'],
     } for c in camps]
-    return {'count': len(listing), 'campaigns': listing}
+    return {'count': len(listing),
+            'db_path': db_path or ledger_ro.DEFAULT_DB,
+            'campaigns': listing}

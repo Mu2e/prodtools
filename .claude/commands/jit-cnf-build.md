@@ -12,7 +12,7 @@ take a hand-written `template.fcl`, run `jobdef` (prodtools wrapper
 around upstream `mu2ejobdef`), and smoke-test with `fcldump
 --local-jobdef --index 0`. The output is a
 `cnf.<owner>.<desc>.<dsconf>.0.tar` ready for submission via
-`/mu2ejobsub-submit`, `submit_map`, or POMS.
+`/mu2ejobsub-submit`.
 
 This skill is for **one-off / ad-hoc cnf construction** from a
 hand-rolled template. For the declared-entries flow
@@ -37,7 +37,8 @@ documented in `wiki/pages/json2jobdef-staging-workflow.md`.
   these — `mu2e -c` will crash at PBTFSD if they're missing for a
   reco/digi/mix job.
 - **Submit anything.** Build + smoke only. Submission is a separate
-  step via `/mu2ejobsub-submit` (or `submit_map` for production).
+  step via `/mu2ejobsub-submit` (one-off) — see the notes below on why
+  a JIT-built cnf cannot go through the production campaign flow.
 
 ## Usage
 
@@ -224,9 +225,9 @@ You are given `$ARGUMENTS`. Follow these steps:
 - Once the cnf is built and smoke-tested, the natural next steps are:
   - `/mu2ejobsub-submit <cnf>.tar --firstjob 0 --njobs N` for a
     one-off / smoke cluster.
-  - A POMS campaign if you've added a corresponding POMS-map entry.
-  - `submit_map` (the prodtools direct backend) rejects direct-input /
-    template / g4bl modes per ADR
+  - The prodtools direct backend (`json2jobdef --enqueue` +
+    `submissions run`) does not handle template/g4bl modes — those run
+    via the upstream `mu2ejobsub`/`mu2eg4bl` CLIs per ADR
     `2026-04-30-phase2-direct-jobsub-implementation.md` §CB10 —
-    JIT-cnfs must go via the upstream `/mu2ejobsub-submit` skill or a
-    POMS campaign until that scope cut is lifted.
+    JIT-cnfs must go via the upstream `/mu2ejobsub-submit` skill until
+    that scope cut is lifted.

@@ -374,5 +374,20 @@
 			"*.art": "tape"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh"
+	},
+	{
+		"desc": "NeutralsFlashCat",
+		"dsconf": "Run1Baq",
+		"input_data": {"dts.mu2e.NeutralsFlash.Run1Baq.art": 500},
+		"fcl": "Production/JobConfig/common/artcat.fcl",
+		"inloc": "disk",
+		"sequencer_from_index": true,
+		"fcl_overrides": {
+			"outputs.out.fileName": "dts.owner.NeutralsFlashCat.version.sequence.art"
+		},
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh"
 	}
 ]

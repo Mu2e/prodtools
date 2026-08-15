@@ -2,9 +2,10 @@
 """
 json2jobdef.py: JSON to jobdef generator.
 
-Usage:
-  - As module:   python3 -m mu2e_poms_util.json2jobdef --help
-  - Direct file: python3 mu2e_poms_util/json2jobdef.py --help
+Usage (from the repo root, with `muse setup ops` sourced):
+  - Wrapper:     bin/json2jobdef --help          # sets up the Mu2e env itself
+  - As module:   python3 -m utils.json2jobdef --help
+  - Direct file: python3 utils/json2jobdef.py --help
 """
 import os, sys
 import random
@@ -17,7 +18,9 @@ from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
-from utils.poms_entry import firstjob_of, validate_window
+from utils.jobdesc import (
+    RESOURCE_KEYS, firstjob_of, validate_entry_value, validate_outloc,
+    validate_window)
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -53,7 +56,7 @@ def _configure_chunk_mode(config):
     `config['chunk_mode']` so the tarball carries it into jobpars;
     at grid runtime, `runmu2e` extracts the per-job slice from the
     cvmfs source before invoking mu2e. njobs = ceil(lines/chunk_lines)
-    is computed here and written into the jobdefs_list.json entry.
+    is computed here and carried into the submission entry.
 
     Every job's FCL points at the same local filename (default:
     `chunk.txt`) via fcl_overrides; the per-job content is created
@@ -317,10 +320,33 @@ def get_parfile_name(config):
     return cnf_name(config, 'tar')
 
 def validate_required_fields(config):
-    """Validate that config has all required fields."""
+    """Validate that config has all required fields, and that the entry
+    values it supplies are well formed.
+
+    The value check shares utils/jobdesc.validate_entry_value with
+    `submissions set-entry`, so a spelling the operator cannot set on a
+    live campaign is also one they cannot enqueue. Unconditional, not
+    gated on --enqueue: a misspelled inloc makes file_resolver fall
+    through to SAM without complaint, which is just as wrong on a local
+    smoke and far harder to notice there.
+
+    Keys are validated only when present — inloc is optional
+    (process_single_entry defaults it to 'none'), and the resource keys
+    usually come from CLI flags instead.
+    """
     for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
         if not config.get(req):
             sys.exit(f"Missing required field: {req}")
+    for key in ('inloc',) + RESOURCE_KEYS:
+        if key in config:
+            try:
+                validate_entry_value(key, config[key])
+            except ValueError as exc:
+                sys.exit(f"json2jobdef: {exc}")
+    try:
+        validate_outloc(config['outloc'])
+    except ValueError as exc:
+        sys.exit(f"json2jobdef: {exc}")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
@@ -419,48 +445,55 @@ def build_jobdef(config, job_args):
         ]
     }
 
-def append_jobdef(config, jobdefs_file=None):
-    """
-    Append job information to a jobdefs file in JSON format.
-    Handles both simple and complex outloc structures.
+def build_jobdesc(config):
+    """Project a build config onto the submission entry (the `jobdesc`).
+
+    Pure: no filesystem writes. The one impure part is the `njobs: -1`
+    branch, which asks the freshly-built cnf for its job count.
+
+    Raises ValueError if `outloc` is malformed (validate_outloc owns the
+    grammar). Fatal, not a warning: the only caller is the enqueue path,
+    and skipping there would push a cnf to SAM and create no campaign —
+    a half-done production push that reports success. This is a backstop;
+    validate_required_fields already checked the same config earlier.
     """
     parfile_name = get_parfile_name(config)
     is_generic = config.get('generic_tarball', False)
 
-    # Create JSON structure for the job definition
     jobdef_entry = {
         "tarball": parfile_name,
         "inloc": config['inloc'],
         "outputs": []
     }
 
-    # Optional per-entry resource requests pass through to the map entry;
-    # the submit path reads them via poms_entry.resources_of
+    # Optional per-entry resource requests pass through to the entry;
+    # the submit path reads them via jobdesc.resources_of
     # (CLI flag > entry key > built-in default).
-    for key in ('memory', 'disk', 'expected_lifetime'):
+    for key in RESOURCE_KEYS:
         if key in config:
             jobdef_entry[key] = config[key]
 
-    # Draining configuration passes through too, so a draining map comes out
-    # of --jobdefs ready to enqueue instead of needing a hand-edit: the
-    # submit path reads `input_pattern` (poms_entry.is_draining, the kind
-    # discriminator) and `prestage` (submit._validate_draining_entry, and
-    # the tape-residency gate in submissions.drain_tick) off the MAP entry,
-    # so a value left behind in the JSON config would silently do nothing.
+    # Draining configuration passes through too, so a draining campaign
+    # is enqueued straight from its config with no hand-edit: the submit
+    # path reads `input_pattern` (jobdesc.is_draining, the
+    # kind discriminator) and `prestage` (submit._validate_draining_entry,
+    # and the tape-residency gate in submissions.drain_tick) off the
+    # ENTRY, so a value left behind in the JSON config would silently do
+    # nothing.
     for key in ('input_pattern', 'prestage'):
         if key in config:
             jobdef_entry[key] = config[key]
 
     # A draining entry is defined by having an input_pattern and NO index
-    # space. Emitting both would leave the map self-contradictory --
-    # is_draining() would say draining while njobs claimed a fixed window --
-    # so refuse rather than write it.
+    # space. Emitting both would leave the entry self-contradictory --
+    # is_draining() would say draining while njobs claimed a fixed window
+    # -- so refuse rather than write it.
     if 'input_pattern' in config and not is_generic:
         fail("Error: input_pattern requires generic_tarball: true "
              "(a draining entry has no fixed job count)")
 
     # Optional cnf-index window start (statistics expansion; semantics
-    # in utils/poms_entry.py). firstjob_of/validate_window are the single
+    # in utils/jobdesc.py). firstjob_of/validate_window are the single
     # validation authority — shared with the submit path.
     try:
         firstjob = firstjob_of(config)
@@ -488,63 +521,16 @@ def append_jobdef(config, jobdefs_file=None):
                 fail(f"Error: {e} for {parfile_name}")
             jobdef_entry["firstjob"] = firstjob
             print(f"Windowed entry: cnf indices {firstjob}..{firstjob + njobs - 1}")
-    
-    # Handle outloc - must be dict with dataset-specific locations
+
     outloc = config['outloc']
-    
-    if not isinstance(outloc, dict):
-        print(f"Warning: outloc must be a dictionary with dataset-specific locations for {config.get('desc', 'unknown')}")
-        return
-    
-    # Add each dataset with its location
+    validate_outloc(outloc)
     for dataset_name, location in outloc.items():
         jobdef_entry["outputs"].append({
             "dataset": dataset_name,
             "location": location
         })
-    
-    # Write JSON entry to file
-    _write_jobdef_json_entry(jobdef_entry, jobdefs_file)
+    return jobdef_entry
 
-def _write_jobdef_json_entry(jobdef_entry, jobdefs_file=None):
-    """Helper function to write jobdef entries in JSON format."""
-    # Use provided jobdefs file or default to jobdefs_list.json
-    if jobdefs_file:
-        dsconf_file = Path(jobdefs_file)
-    else:
-        dsconf_file = Path("jobdefs_list.json")
-    
-    # Check if file exists and load existing entries
-    existing_entries = []
-    if dsconf_file.exists():
-        try:
-            existing_content = dsconf_file.read_text()
-            if existing_content.strip():
-                existing_entries = json.loads(existing_content)
-                if not isinstance(existing_entries, list):
-                    existing_entries = [existing_entries]
-        except json.JSONDecodeError:
-            print(f"Warning: Could not parse existing {dsconf_file}, starting fresh")
-            existing_entries = []
-    
-    # Check for duplicate (tarball, firstjob) entries — the same tarball
-    # may legitimately appear once per index window (statistics expansion),
-    # but the same window must not be dispatched twice.
-    tarball_name = jobdef_entry["tarball"]
-    new_firstjob = firstjob_of(jobdef_entry)
-    for existing in existing_entries:
-        if (existing.get("tarball") == tarball_name
-                and firstjob_of(existing) == new_firstjob):
-            print(f"Entry already exists in {dsconf_file}")
-            return
-    
-    # Add new entry and write back to file
-    existing_entries.append(jobdef_entry)
-    
-    with open(dsconf_file, 'w') as f:
-        json.dump(existing_entries, f, indent=2)
-    
-    print(f"Added JSON entry for {tarball_name} to {dsconf_file}")
 
 def main():
     p = argparse.ArgumentParser(description='Generate Mu2e job definitions from JSON configuration')
@@ -553,10 +539,15 @@ def main():
     p.add_argument('--dsconf', type=str, help='Dataset configuration')
     p.add_argument('--index', type=int, help='Entry index in JSON list')
     p.add_argument('--pushout', action='store_true', help='Enable SAM pushOutput')
-    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout and create SAM index definitions after generation')
+    p.add_argument('--prod', action='store_true', help='Production mode: enable pushout (SAM registration). Requires --enqueue, which registers a sliced-submission campaign in the ledger and prints its campaign id.')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
-    p.add_argument('--jobdefs', help='Custom filename for jobdefs list (default: jobdefs_list.json)')
+    p.add_argument('--enqueue', action='store_true',
+                   help='After pushing the cnf, register the entry as a '
+                        'sliced campaign in the ledger. Requires --prod.')
+    p.add_argument('--slice-size', type=int, default=None,
+                   help='Jobs per slice for --enqueue (default 1000; '
+                        'frozen into the campaign).')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
                         'Auto-increments tarball version.')
@@ -566,7 +557,19 @@ def main():
     p.add_argument('--ignore-empty', action='store_true',
                    help='Skip entries whose input datasets have no files instead of failing')
     args = p.parse_args()
-    
+
+    if args.enqueue and not args.prod:
+        sys.exit("json2jobdef: --enqueue requires --prod (a campaign "
+                 "needs the cnf in SAM)")
+    if args.slice_size is not None and not args.enqueue:
+        sys.exit("json2jobdef: --slice-size requires --enqueue")
+    if args.slice_size is None:
+        args.slice_size = 1000
+    if args.prod and not args.enqueue:
+        sys.exit("json2jobdef: --prod requires --enqueue (otherwise a "
+                 "bare --prod pushes the cnf to SAM and registers no "
+                 "campaign -- a silent no-op)")
+
     # If --prod is specified, enable pushout
     if args.prod:
         args.pushout = True
@@ -592,19 +595,12 @@ def main():
             config,
             pushout=args.pushout,
             no_cleanup=args.no_cleanup,
-            jobdefs_list=args.jobdefs,
             extend=args.extend,
             ignore_empty=args.ignore_empty,
+            enqueue=args.enqueue,
+            slice_size=args.slice_size,
+            json_path=args.json,
         )
-    
-    # If --prod mode, create index definition after generation
-    if args.prod:
-
-        jobdefs_file = args.jobdefs if args.jobdefs else 'jobdefs_list.json'
-        print(f"\n{'='*60}")
-        print(f"Creating index definition from {jobdefs_file}")
-        print(f"{'='*60}")
-        summarize_and_index(jobdefs_file, prod=True)
 
 def _build_job_args(config):
     """Dispatch on `determine_job_type(config)` and return the per-mode
@@ -638,7 +634,26 @@ def _build_job_args(config):
     return []
 
 
-def _pushout_to_sam(parfile_name):
+def cnf_location(owner):
+    """Which storage class the cnf tarball is pushed to.
+
+    Production cnfs live in the persistent `datasets` area
+    (/pnfs/mu2e/persistent/datasets/usr-etc/cnf/...), and only the
+    production account can write there. An ordinary user's token grants
+    `storage.modify:/mu2e/scratch/datasets/usr-etc/cnf/<user>` but NOT
+    anything under `/mu2e/persistent/datasets`, so pushing a
+    user-owned cnf to 'disk' dies after three gfal retries with
+    `DESTINATION MAKE_PARENT HTTP 403 : Permission refused` — which is
+    what made `json2jobdef --prod` unusable for anyone but mu2epro.
+
+    Owner 'mu2e' keeps 'disk', so production is bit-for-bit unchanged;
+    every other owner gets the scratch datasets area its own token
+    actually covers.
+    """
+    return 'disk' if owner == 'mu2e' else 'scratch'
+
+
+def _pushout_to_sam(parfile_name, owner):
     """If `parfile_name` exists locally and isn't already in SAM, push it.
     Idempotent — repeat calls are no-ops once SAM has the file."""
     if not Path(parfile_name).exists():
@@ -649,8 +664,9 @@ def _pushout_to_sam(parfile_name):
         print(f"File {parfile_name} already exists on SAM, skipping push")
         return
 
-    print(f"Pushing {parfile_name} to SAM...")
-    push_output([('disk', parfile_name, 'none')], 'outputs.txt')
+    location = cnf_location(owner)
+    print(f"Pushing {parfile_name} to SAM ({location})...")
+    push_output([(location, parfile_name, 'none')], 'outputs.txt')
 
 
 def _cleanup_temp_files():
@@ -664,8 +680,18 @@ def _cleanup_temp_files():
             print(f"Cleanup: {temp_file}")
 
 
+def _provenance(json_path, config):
+    """Free-text origin recorded as the campaign's origin column. It is
+    never dispatched from — only the MCP status tools echo it — so it
+    records where the entry CAME FROM rather than a filename that no
+    longer exists."""
+    return (f"{json_path}#{config.get('desc', '?')}"
+            f"@{config.get('dsconf', '?')}")
+
+
 def process_single_entry(config, pushout=False, no_cleanup=True,
-                         jobdefs_list=None, extend=False, ignore_empty=False):
+                         extend=False, ignore_empty=False,
+                         enqueue=False, slice_size=1000, json_path=None):
     """Process a single configuration entry (original behavior)"""
     validate_required_fields(config)
     config['owner'] = config.get('owner', default_owner())
@@ -707,11 +733,23 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     # build_jobdef handles FCL template creation for non-mixing jobs
     result = build_jobdef(config, job_args)
 
-    append_jobdef(config, jobdefs_list)
     parfile_name = get_parfile_name(config)
 
     if pushout:
-        _pushout_to_sam(parfile_name)
+        _pushout_to_sam(parfile_name, config['owner'])
+
+    # AFTER pushout, always: enqueue_entry resolves the tarball from SAM
+    # and check_inputs reads it, so a campaign created before the push
+    # would be broken from birth.
+    if enqueue:
+        from types import SimpleNamespace
+        from utils.submit import enqueue_entry, _resolve_ledger_db
+        entry = build_jobdesc(config)
+        enqueue_entry(
+            entry,
+            ledger_db=_resolve_ledger_db(SimpleNamespace(ledger_db=None)),
+            slice_size=slice_size,
+            provenance=_provenance(json_path, config))
 
     if no_cleanup:
         print("Temporary files kept (--no-cleanup specified)")
@@ -772,7 +810,8 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
         sys.exit(f"No entries found matching dsconf: {dsconf}")
     
     print(f"Found {len(matching_configs)} entries matching dsconf: {dsconf}")
-    
+
+    skipped = []
     # Process each matching configuration using the existing process_single_entry function
     for i, config in enumerate(matching_configs):
         # Get display desc: use get_tarball_desc (handles tarball_append), or existing desc, or extract from input_data
@@ -788,6 +827,7 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             validate_required_fields(config)
         except SystemExit as e:
             print(f"Warning: {e}, skipping entry")
+            skipped.append(f"{display_desc}: {e}")
             continue
         
         # Propagate CLI options that affect input selection onto the config
@@ -798,13 +838,28 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             config,
             pushout=args.pushout,
             no_cleanup=True,
-            jobdefs_list=args.jobdefs,
             ignore_empty=args.ignore_empty,
+            enqueue=args.enqueue,
+            slice_size=args.slice_size,
+            json_path=args.json,
         )
         
         # Clean up template.fcl for next iteration (since process_single_entry cleans up)
         if Path('template.fcl').exists():
             Path('template.fcl').unlink()
+
+    # A bulk run that silently dropped entries must NOT report success.
+    # The per-entry warning scrolls past in a long log, and the MCP write
+    # server (and any cron) reads only the exit code -- so a typo'd inloc
+    # in entry 7 of 22 would be reported as "all 22 done". The entries
+    # that DID process are left alone: they are already in SAM and in the
+    # ledger, and undoing them is not this function's call.
+    if skipped:
+        print(f"\n{len(skipped)} of {len(matching_configs)} entries were "
+              f"SKIPPED and no campaign exists for them:")
+        for note in skipped:
+            print(f"  - {note}")
+        sys.exit(2)
 
 if __name__ == '__main__':
     main()

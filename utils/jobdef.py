@@ -121,8 +121,8 @@ def _seed_needed(template_path: str) -> bool:
         svclist = _run_fhicl_get(template_path, '--names-in', 'services')
         # Count of exact matches (like Perl's 0 + grep)
         return sum(1 for service in svclist.split('\n') if service == 'SeedService')
-    except Exception:
-        # If fhicl-get fails, return 0 (like Perl's 2>/dev/null behavior)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # If fhicl-get fails or is absent, return 0 (Perl's 2>/dev/null behavior)
         return 0
 
 
@@ -162,7 +162,7 @@ def _get_output_modules(template_path: str) -> List[str]:
             for m in mods:
                 if m:  # Skip empty entries
                     endmodules.add(m)
-        except Exception:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             # If this fails, skip this end path
             continue
     
@@ -238,7 +238,7 @@ def _resolve_njobs(config: Dict, tbs: Dict) -> Optional[int]:
     Returns None when the count is unknowable (generator without a declared
     njobs, generic tarball) — the key is then omitted and readers treat the
     jobdef as open-ended (job count is a submit-time decision, authoritative
-    in the POMS map).
+    in the submission map).
     """
     if config.get('generic_tarball'):
         return None
@@ -495,7 +495,7 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
             # Add via shared helper (Perl adds it to %outtable)
             defer_keys = config.get('_defer_keys', set()) if config else set()
             _add_outfile(tbs, 'services.TFileService.fileName', tfileservice_filename, config, defer_keys=defer_keys)
-    except:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         # If TFileService.fileName is not defined, skip it
         pass
 
@@ -664,7 +664,7 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
 
     # Embed the resolved job count so the tarball is self-descriptive.
     # Absent tbs.njobs = open-ended (generic tarball, or generator with no
-    # declared count); readers then fall back to the POMS map.
+    # declared count); readers then fall back to the submission map.
     embedded_njobs = _resolve_njobs(config, tbs)
     if embedded_njobs is not None:
         tbs['njobs'] = embedded_njobs
@@ -728,7 +728,7 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     for filepath in temp_files.values():
         try:
             filepath.unlink()
-        except Exception:
+        except OSError:
             pass
 
     return out

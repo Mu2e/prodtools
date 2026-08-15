@@ -360,3 +360,16 @@ invariant test); `samweb_wrapper` (the completed SAM ADR — dimension grammar
 composed in one place, explicit fail-loud vs legacy-swallow policy);
 `config_utils.normalize_input_data` (the one part of the stage config that
 does have an owner).
+
+## Post-review update (2026-08-08)
+
+The POMS backend was removed (spec
+`docs/superpowers/specs/2026-08-08-poms-removal-design.md`, tag
+`pre-poms-removal`). Consequences for the candidates above:
+
+- Candidate 1 (campaign completeness): the sixth implementation
+  (`mkrecovery.find_missing_indices`) is deleted; five remain.
+- Honourable mention (runmu2e's two dispatch tails): resolved —
+  `_dispatch_and_execute` is deleted; only the direct tail remains.
+- Candidate 9 note: `resolve_map_index`'s proposed home is now
+  `utils/map_entry.py` (renamed from `poms_entry.py`).

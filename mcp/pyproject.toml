@@ -9,19 +9,24 @@ description = "Read-only MCP stdio server for Mu2e prodtools status and discover
 requires-python = ">=3.10"
 dependencies = [
   "mcp>=1.2.0",
-  # Pinned to the pool's major.minor (23.0.x), not a loose range: a pool
-  # upgrade needs a matching bump here, deliberately, rather than a
-  # silent ClassAd/wire-protocol mismatch. The system RPM htcondor is
-  # py3.9-only; PyPI ships a cp310 manylinux wheel, which is why this
-  # dependency lives in the venv, not on the ops PYTHONPATH.
-  "htcondor==23.0.*"
+  # Floor only. The EXACT version is chosen at install time by
+  # mcp/scripts/install.sh, which reads /usr/bin/condor_version and
+  # installs the matching major.minor series. A literal pin lived here
+  # once and went stale against a pool upgrade (23.0.* vs a 25.0.12
+  # pool); the client was then rejected by the collector and every
+  # queue block read "unknown". install.sh is the authority; this floor
+  # exists so the dependency is still declared. The system RPM htcondor
+  # is py3.9-only, which is why this lives in the venv at all.
+  "htcondor>=23"
 ]
 
 [project.scripts]
 prodtools-mcp = "prodtools_mcp.server:main"
+prodtools-mcp-write = "prodtools_mcp_write.server:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["prodtools_mcp", "prodtools_mcp.*", "prodtools_mcp_write", "prodtools_mcp_write.*"]

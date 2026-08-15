@@ -154,30 +154,47 @@ table (`campaigns`, same sqlite3 DB) and one new phase inside
 `submissions run` — no new daemons, no new cron entries, no worker-side
 changes.
 
-**Enqueue workflow.** An operator registers a campaign instead of
-submitting directly:
+> **superseded 2026-08-11 — see EXAMPLES.md §submissions.** The
+> `map-file-removal` branch retired the submission map entirely:
+> `bin/submit_map` is deleted, `--jobdefs` no longer exists, and there
+> is now exactly one way to create a campaign. The paragraphs below
+> describe that current, single path — kept here (rather than deleted)
+> because the surrounding rationale (why enqueue submits nothing, the
+> active/paused double-feed guard, the crash-window discussion further
+> down) still applies verbatim; only the "two doors" framing is gone.
+
+**Enqueue workflow.** There is one command: build the cnf, push it to
+SAM, and register the campaign, all in one invocation, no map file
+involved:
 
 ```bash
-submit_map --map MDC2025-032.json --enqueue --slice-size 2000
+json2jobdef --json <config>.json --desc <D> --dsconf <C> \
+    --prod --enqueue --slice-size 1000
 ```
 
-This snapshots the selected entries (all, or `--entry N`) into the
-`campaigns` table at `cursor=0` and **submits nothing** — same
-"hard error, not a fallback" discipline as the ledger write in the
-normal submit path, but inverted: here nothing has gone to the grid
-yet, so a DB failure at enqueue time is a hard error rather than a
-warn-and-continue. `--slice-size` (default 1000) is frozen into the
-row. `submit_map` is single-backend (direct) — no `--backend` flag
-exists. Mutually exclusive with
-`--first`/`--num`/`--indices`/`--indices-file`. An entry with no fixed
-`njobs`, or `njobs < 1`, (`generic_tarball`, or `njobs: 0`) can't be
-enqueued — a campaign needs a positive job count to slice against. A
-second `--enqueue` for a tarball that already has an *active OR
-paused* campaign is refused outright — no silent double-feed. *(added
-at final review: the guard originally checked `active` only; a paused
-campaign still owns its index space, so "pause then enqueue" would have
-been an undetected double-submit path — see the crash-window discussion
-below for the closely related overlap guard.)*
+`--enqueue` requires `--prod` (the cnf must land in SAM first —
+enqueue resolves the tarball from there, not from a file on disk).
+The campaign's ledger row records provenance in its `origin` column
+(renamed from `map_path` 2026-08-11 — the column is free-text
+provenance; the file it used to name no longer exists) as
+`<config>.json#<desc>@<dsconf>`.
+
+The snapshotted entry lands in the `campaigns` table at `cursor=0` and
+**submits nothing** — same "hard error, not a fallback" discipline as
+the ledger write in the normal submit path, but inverted: here nothing
+has gone to the grid yet, so a DB failure at enqueue time is a hard
+error rather than a warn-and-continue. `--slice-size` (default 1000)
+is frozen into the row. The direct backend is the only backend — no
+`--backend` flag exists anywhere in this workflow. An entry with no
+fixed `njobs`, or `njobs < 1`, (`generic_tarball`, or `njobs: 0`)
+can't be enqueued — a campaign needs a positive job count to slice
+against. A second `--enqueue` for a tarball that already has an
+*active OR paused* campaign is refused outright — no silent
+double-feed. *(added at final review: the guard originally checked
+`active` only; a paused campaign still owns its index space, so
+"pause then enqueue" would have been an undetected double-submit path
+— see the crash-window discussion below for the closely related
+overlap guard.)*
 
 **Top-up semantics.** Every `submissions run` invocation (the same
 hourly cron tick that does recovery) runs the top-up phase *after* the
@@ -566,6 +583,39 @@ would this pass) leave something needing a human. One line per cause:
   this tick ran, not just the tick that paused it — the signal repeats
   every hour until a human runs `submissions resume <ID>` or
   `submissions cancel <ID>`.
+
+### 5. Fixing a live campaign's settings
+
+```bash
+submissions set-entry <CAMP_ID> <key> <value> [--include-open-rows]
+```
+
+`set-entry` edits one of `inloc`, `memory`, `disk`, or
+`expected_lifetime` on a live campaign's entry. Without
+`--include-open-rows` the change reaches future slices only —
+`resubmit()` rebuilds a recovery from the row's own frozen snapshot,
+not the campaign's current entry, so a row already submitted keeps
+whatever it was submitted with. With `--include-open-rows`, every
+not-yet-closed row on that campaign's tarball is rewritten too, which
+is what makes an in-flight RECOVERY actually pick up the new value.
+
+The flag defaults off because an *unset* `memory` is what earns a
+recovery the `4000MB` floor (see the resource-key caveat above); pushing
+a memory value onto every open row would forfeit that floor for indices
+that hadn't needed it yet. An `inloc` fix, by contrast, normally wants
+the flag on — a bad `inloc` (e.g. a resilient copy that was never
+staged) breaks every open row identically, and there is no floor to
+lose by cascading it.
+
+Worked example — campaign 54 (`sim.mu2e.PiTargetStops.Run1Bap.art`
+input, 500 files, 14.95 GB, needed staging to resilient first):
+
+```bash
+submissions set-entry 54 inloc resilient --include-open-rows
+```
+
+prints the changed row ids; confirm the new value stuck with
+`campaign_status` (MCP) or `submissions status`.
 
 ## Semantics and limits
 

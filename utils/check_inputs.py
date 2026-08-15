@@ -1,6 +1,6 @@
 """Pre-flight verification of a campaign's input files.
 
-See docs/superpowers/specs/2026-07-21-input-preflight-check-design.md.
+See wiki/pages/2026-07-21-input-preflight-check.md.
 Read-only: reports problems, never remediates. Blocks (exit 2) when any
 input is unreadable so a slice of jobs is not launched to die in bulk.
 """

@@ -1,5 +1,0 @@
-#!/bin/bash
-# Create recovery dataset definition for missing files
-
-DIR="$(dirname "$(readlink -f "$0")")"
-python3 "$DIR/../utils/mkrecovery.py" "$@"

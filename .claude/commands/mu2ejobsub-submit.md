@@ -1,5 +1,5 @@
 ---
-description: Submit art jobs via upstream mu2ejobsub (mu2egrid v8) with sensible 2026 defaults — useful for smoke tests, recoveries, and ad-hoc JIT-cnf submissions outside the POMS-map / submit_map flow
+description: Submit art jobs via upstream mu2ejobsub (mu2egrid v8) with sensible 2026 defaults — useful for smoke tests, recoveries, and ad-hoc JIT-cnf submissions outside the direct-backend campaign flow
 argument-hint: <cnf-tarball> [--all | --firstjob N --njobs M | --jobs i,j,...] [--inloc tape|disk|...] [--proto root|ifdh] [extra mu2ejobsub flags]
 allowed-tools: Bash
 ---
@@ -13,9 +13,11 @@ consumes a cnf tarball (`cnf.mu2e.*.tar`) built by `mu2ejobdef` /
 materialize per-index fcl via `mu2ejobfcl` and run `mu2e -c`.
 
 This skill is for **direct, one-off invocations** — smoke tests, single
-recoveries, ad-hoc JIT-fcl submissions — where the full
-POMS-map → `submit_map` workflow is overkill. For production-style runs
-of many cnfs at once, use `submit_map` (or `/mu2epro-run submit_map …`).
+recoveries, ad-hoc JIT-fcl submissions — where the full production
+campaign machinery is overkill. For production-style runs of many
+cnfs at once, use `/mu2epro-run json2jobdef --prod --enqueue
+--slice-size N` to register a campaign (`submissions run` then feeds
+it, on cron or via `/mu2epro-submit run`).
 
 ## ⚠️ Important caveat: no SAM registration
 
@@ -24,13 +26,15 @@ outputs to outstage but does **not** run `pushOutput` — the resulting
 art files are NOT SAM-registered. They sit in
 `$WFTOP/<user>/workflow/<wfproject>/outstage/<cluster>/…/<index>/` and
 no `samweb get-metadata` query will find them. This is exactly the gap
-the prodtools Phase 2 direct backend (`submit_map` →
-`runmu2e.py` direct mode) was built to close. See ADR
+the prodtools Phase 2 direct backend (`utils/submit.py` →
+`runmu2e.py` direct mode, driven by `json2jobdef --enqueue` +
+`submissions run`) was built to close. See ADR
 `2026-04-30-phase2-direct-jobsub-implementation.md` for the full
 "what mu2ejobsub does vs what we need" comparison.
 
 If you need SAM-registered outputs, use `/stage-entry <stage> …` (via
-the prodtools chain) or `submit_map`, not this skill.
+the prodtools chain) or the direct-backend campaign flow, not this
+skill.
 
 ## Usage
 
@@ -159,8 +163,8 @@ You are given `$ARGUMENTS`. Follow these steps:
      return misleading "0 total").
    - **Reminder that outputs will NOT be SAM-registered.** Suggest
      `samweb declare-file` / `pushOutput` post-hoc if the user actually
-     needs SAM presence, or point them at `submit_map`
-     for the right path.
+     needs SAM presence, or point them at the direct-backend campaign
+     flow (`json2jobdef --prod --enqueue`) for the right path.
 
    Don't auto-monitor or auto-fetch logs.
 
@@ -178,8 +182,9 @@ You are given `$ARGUMENTS`. Follow these steps:
   wiki). The cnf must have been built with the right `--auxinput=…`
   list referencing basenames present in that dir.
 - This skill submits as the **current user**. For production runs as
-  `mu2epro`, do not use this skill — use `/mu2epro-run` + the
-  POMS-map / `submit_map` chain.
+  `mu2epro`, do not use this skill — use `/mu2epro-run json2jobdef
+  --prod --enqueue` to register a campaign, and `/mu2epro-submit` for
+  hand re-firing or a manual tick.
 - If the cnf was built with the prodtools chain, the
   `services.DbService.{purpose,version}` overrides are already in
   jobpars.json (per memory `reference_reco_dbservice_overrides.md`).

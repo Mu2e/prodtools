@@ -6,8 +6,8 @@ Instructions for Claude Code when working in this repo.
 
 Before answering any question about running the prodtools commands
 (`json2jobdef`, `jobfcl`, `fcldump`, `runmu2e`, `jobdef`,
-`jobquery`, `pomsMonitor`, `famtree`, `logparser`,
-`genFilterEff`, `datasetFileList`, `listNewDatasets`, `mkrecovery`,
+`jobquery`, `famtree`, `logparser`,
+`genFilterEff`, `datasetFileList`, `listNewDatasets`,
 `copy_to_stash`), read `EXAMPLES.md` at the repo
 root. It is the authoritative reference for CLI flags, JSON config
 shapes, and canonical invocations. Do not guess flags or copy patterns
@@ -34,6 +34,13 @@ before proceeding.
   production account. The skill warns before executing such flags and
   asks for explicit confirmation.
 
+Production campaigns are created in one command:
+`json2jobdef --prod --enqueue --slice-size N` builds the cnf, pushes it
+to SAM, and registers the campaign in the submission ledger. A wrong
+setting on a live campaign is fixed with
+`submissions set-entry <ID> <key> <value> [--include-open-rows]` — the
+flag is what reaches recoveries.
+
 ## MCP server
 
 A read-only MCP server at `mcp/` exposes campaign status and dataset
@@ -48,8 +55,34 @@ A queue or outputs block with `state: "unknown"` has **no count keys**.
 Never read a missing count as zero: the query failed and the campaign
 may still be running. Do not start a recovery pass on an `unknown`.
 
+`campaign_status` and `list_campaigns` read PRODUCTION by default. For a
+campaign you submitted yourself (`run_as="self"`), pass `mine=true` — it
+switches both the ledger and the grid queue to your account. Omitting it
+against a personal campaign returns an empty result that looks exactly
+like "no campaigns". Every reply names the ledger (`db_path`) and the
+queue account (`queue.owner`); check them when a count surprises you.
+Another user's ledger is not reachable here — use
+`submissions --db <path> status`.
+
 Setup: `bash mcp/scripts/install.sh`. Health check:
 `bash mcp/scripts/start_mcp.sh --check`.
+
+A second, write-capable server (`prodtools-write`) exposes submission:
+`push_cnf`, `run_submissions`. A campaign takes two
+calls — `push_cnf(..., slice_size=N)` (builds the cnf, registers it,
+creates the campaign, returns `campaign_id`) then `run_submissions`.
+Every tool takes a required `run_as`:
+
+- `run_as="self"` needs no privilege and writes only your own scratch,
+  datasets and ledger (`/exp/mu2e/data/users/$USER/prodtools/`). No
+  prompt.
+- `run_as="mu2epro"` registers artifacts in production SAM and submits
+  production grid jobs. It is refused unless `confirm=true`, AND a
+  PreToolUse hook prompts. Both gates are deliberate: a hook can be
+  un-armed by a settings reload.
+
+The read-only `prodtools` server still performs NO writes. Keep it that
+way — that claim is why its tools are called without deliberation.
 
 ## Memory discipline
 

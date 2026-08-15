@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import time
 from pathlib import Path
 
@@ -18,13 +17,14 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import Mu2eName, log_storage_location
+from utils.jobdesc import OUTSTAGE_LOCATION
 from utils.jobfcl import Mu2eJobFCL
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import (
     run,
     fail,
     _fetch_file_local,
-    resolve_map_index,
+    resolve_entry_index,
     write_fcl,
     write_direct_input_fcl,
     push_output,
@@ -34,9 +34,10 @@ from utils.samweb_wrapper import locate_file_strict, locate_files_strict
 
 # ============================================================
 # Runner implementation (relocated from prod_utils, 2026-07-17):
-# jobdesc validation, per-mode prep (template / direct-input /
-# normal / g4bl), mu2e command build, and the data/log pushes.
-# runmu2e is the only consumer.
+# jobdesc validation, per-mode prep (direct-input / normal),
+# mu2e command build, and the data/log pushes.
+# runmu2e is the only consumer. The template and g4bl runner
+# modes were deleted with the POMS backend (tag pre-poms-removal).
 # ============================================================
 
 def _job_index_from_fname(fname):
@@ -79,158 +80,39 @@ def replace_file_extensions(input_str, first_field, last_field):
     return str(Mu2eName.parse(input_str).as_tier(first_field).with_extension(last_field))
 
 def validate_jobdesc(jobdesc):
-    """Validate job descriptions list structure and required fields.
+    """Validate the job description and pick the dispatch mode.
 
     Args:
-        jobdesc: List of job description dictionaries
+        jobdesc: One job description dictionary
 
     Returns:
-        str or False: 'template' if template mode, 'direct_input' if direct-input mode,
-                      False if normal mode
+        str or False: 'direct_input' if direct-input mode, False if
+                      normal mode
 
     Raises:
         SystemExit: If validation fails
     """
-    # Validate list is not empty
     if not jobdesc:
-        fail("Error: No job descriptions found in jobdesc file")
+        fail("Error: No job description found in ops")
 
-    # firstjob (cnf-index window) is only meaningful on njobs-bearing
-    # entries — anywhere else it would be silently ignored and the entry
-    # would re-run cnf indices [0, N), duplicating physics. Maps are
-    # hand-edited in practice, so enforce this at the dispatch boundary
-    # for every mode, not just at map-write time.
-    for i, entry in enumerate(jobdesc):
-        if 'firstjob' in entry and 'njobs' not in entry:
-            fail(f"Error: jobdesc entry {i} has 'firstjob' but no 'njobs' — "
-                 f"index windows require a fixed job count")
+    # firstjob (cnf-index window) is only meaningful on an njobs-bearing
+    # entry — anywhere else it would be silently ignored and the entry
+    # would re-run cnf indices [0, N), duplicating physics.
+    if 'firstjob' in jobdesc and 'njobs' not in jobdesc:
+        fail("Error: jobdesc has 'firstjob' but no 'njobs' — "
+             "index windows require a fixed job count")
 
-    # Check if g4bl runner (has runner: 'g4bl' field)
-    if jobdesc[0].get('runner') == 'g4bl':
-        if len(jobdesc) > 1:
-            fail("Error: g4bl runner requires exactly one entry in jobdesc list")
-        entry = jobdesc[0]
-        # The map (jobdesc) only carries dispatch fields. The runtime config
-        # (desc/dsconf/main_input/events_per_job) lives inside the tarball's
-        # `jobpars.json` for grid mode — the tarball is self-describing.
-        # Embed_dir mode (local smoke) has no tarball, so the entry must
-        # carry the runtime config directly.
-        if entry.get('tarball'):
-            required_fields = ['outputs']  # runtime config in tarball/jobpars.json
-        elif entry.get('embed_dir'):
-            required_fields = ['desc', 'dsconf', 'main_input', 'events_per_job', 'outputs']
-        else:
-            fail("Error: g4bl runner requires either 'tarball' or 'embed_dir'")
-        _require_fields(entry, required_fields, 'g4bl runner')
-        return 'g4bl'
-
-    # Check if template mode (has fcl_template field)
-    if 'fcl_template' in jobdesc[0]:
-        if len(jobdesc) > 1:
-            fail("Error: Template mode (fcl_template) requires exactly one entry in jobdesc list\n"
-                 f"Found {len(jobdesc)} entries. Template mode processes one file at a time.")
-        entry = jobdesc[0]
-        _require_fields(jobdesc[0],
-                        ['fcl_template', 'setup_script', 'inloc', 'outputs'],
-                        'Template mode')
-        return 'template'
-
-    # Check if direct-input mode: tarball present but no njobs
-    if 'tarball' in jobdesc[0] and 'njobs' not in jobdesc[0]:
-        if len(jobdesc) > 1:
-            fail("Error: Direct-input mode requires exactly one entry in jobdesc list\n"
-                 f"Found {len(jobdesc)} entries.")
-        _require_fields(jobdesc[0],
-                        ['tarball', 'inloc', 'outputs'],
+    # Direct-input mode: tarball present but no njobs.
+    if 'tarball' in jobdesc and 'njobs' not in jobdesc:
+        _require_fields(jobdesc, ['tarball', 'inloc', 'outputs'],
                         'Direct-input mode')
         return 'direct_input'
 
-    # Normal mode validation
-    # Entries with tarball but no njobs are generic tarballs - skip in normal dispatch
-    # Entries missing tarball entirely are invalid
-    for i, entry in enumerate(jobdesc):
-        if 'njobs' not in entry:
-            if 'tarball' in entry:
-                print(f"[INFO] entry {i} ({entry['tarball']}) has no njobs (generic tarball) - skipped in normal dispatch")
-                continue
-            fail(f"Error: Normal mode requires 'njobs' field in jobdesc entry {i}")
-        _require_fields(entry, ['tarball', 'inloc', 'outputs'], f'Normal mode (jobdesc entry {i})')
-
+    if 'njobs' not in jobdesc:
+        fail("Error: Normal mode requires 'njobs' in the jobdesc")
+    _require_fields(jobdesc, ['tarball', 'inloc', 'outputs'],
+                    'Normal mode')
     return False
-
-def process_template(jobdesc_entry, fname):
-    """Process a job in template mode.
-    
-    Args:
-        jobdesc_entry: Job description dictionary
-        fname: Input filename
-        
-    Returns:
-        tuple: (fcl, simjob_setup)
-    """
-
-    print(f"Template mode: using fcl_template job definition")
-    
-    # Get FCL template path and validate
-    fcl_template_path = jobdesc_entry['fcl_template']
-    if not Path(fcl_template_path).is_file():
-        raise RuntimeError(f"FCL template not found: {fcl_template_path}")
-    print(f"Using FCL template: {fcl_template_path}")
-    
-    # Read FCL template from file
-    with open(fcl_template_path, 'r') as f:
-        fcl_content = f.read()
-    fcl_basename = Path(fcl_template_path).stem
-    
-    # Parse variables from input filename (format: tier.owner.desc.dsconf.sequencer.ext)
-    fname_base = Path(fname).name
-    try:
-        n = Mu2eName.parse(fname_base)
-    except ValueError as exc:
-        raise RuntimeError(f"Invalid filename format: {fname_base}: {exc}")
-    if not n.is_file:
-        raise RuntimeError(f"Invalid filename format: {fname_base}. Expected a 6-field file name.")
-
-    template_vars = {
-        'owner': n.owner,
-        'desc': n.description,
-        'dsconf': n.dsconf,
-        'sequencer': n.sequencer,
-    }
-    
-    # Allow overriding template variables from jobdesc
-    if 'template_overrides' in jobdesc_entry:
-        template_vars.update(jobdesc_entry['template_overrides'])
-        print(f"Applied template overrides: {jobdesc_entry['template_overrides']}")
-    
-    # Parse output patterns from template
-    output_patterns = {}
-    for line in fcl_content.split('\n'):
-        match = re.match(r'(\S+\.fileName):\s*"([^"]+)"', line)
-        if match and '{' in match.group(2):
-            output_patterns[match.group(1)] = match.group(2)
-    
-    # Write FCL: template + overrides (based on input filename)
-    # Extract base name from input file (e.g., dig.mu2e.CosmicSignalTriggered.MDC2025ad.001430_00000000.art -> dig.mu2e.CosmicSignalTriggered.MDC2025ad.001430_00000000)
-    input_basename = Path(fname).stem  # Remove .art extension
-    fcl = f'{input_basename}.fcl'
-    with open(fcl, 'w') as f:
-        f.write(fcl_content)
-        f.write("\n# Template overrides:\n")
-        f.write(f'source.fileNames: ["{fname}"]\n')
-        for key, pattern in output_patterns.items():
-            # Replace all template variables in the pattern
-            output_filename = pattern.format(**template_vars)
-            f.write(f'{key}: "{output_filename}"\n')
-    
-    print(f"Template vars: {template_vars}")
-    print(f"FCL: {fcl}")
-    
-    # Use setup_script from JSON
-    simjob_setup = jobdesc_entry['setup_script']
-    print(f"Job setup script: {simjob_setup}")
-    
-    return fcl, simjob_setup
 
 def process_direct_input(jobdesc, fname, args):
     """Process a job in direct-input mode.
@@ -239,7 +121,7 @@ def process_direct_input(jobdesc, fname, args):
     Output filenames are derived from fname's desc and sequencer fields.
 
     Args:
-        jobdesc: List with exactly one job description dictionary
+        jobdesc: The job description dictionary
         fname: Input art filename (full name, e.g. dig.mu2e.CeEndpoint....art)
         args: Command line arguments (unused but kept for API consistency)
 
@@ -247,7 +129,7 @@ def process_direct_input(jobdesc, fname, args):
         tuple: (fcl, simjob_setup, fname, outputs)
     """
 
-    jobdesc_entry = jobdesc[0]
+    jobdesc_entry = jobdesc
     tarball = jobdesc_entry['tarball']
 
     # Parse fname components: tier.owner.desc.dsconf.sequencer.ext
@@ -277,7 +159,7 @@ def process_jobdef(jobdesc, fname, args):
     """Process a job in normal mode.
 
     Args:
-        jobdesc: List of job descriptions
+        jobdesc: The job description dictionary
         fname: Index filename
         args: Command line arguments (needs copy_input attribute; the
             resolved entry's 'copy_input' key overrides it when present)
@@ -292,15 +174,15 @@ def process_jobdef(jobdesc, fname, args):
     except RuntimeError as e:
         fail(f"Error: {e}")
 
-    # Find which job description this job index belongs to
-    jobdesc_entry, jobdesc_index, job_index_num = resolve_map_index(jobdesc, job_index)
+    # Resolve the global job index to the entry's cnf-local index
+    jobdesc_entry, job_index_num = resolve_entry_index(jobdesc, job_index)
 
     if jobdesc_entry is None:
-        total_jobs = sum(d.get('njobs', 0) for d in jobdesc)
-        fail(f"Error: Job index {job_index} out of range. Total jobs available: {total_jobs}")
+        fail(f"Error: Job index {job_index} out of range. "
+             f"Total jobs available: {jobdesc.get('njobs', 0)}")
 
-    print(f"Job {job_index} uses definition {jobdesc_index}")
-    print(f"Global job index: {job_index}, Local job index within definition: {job_index_num}")
+    print(f"Global job index: {job_index}, "
+          f"Local job index within definition: {job_index_num}")
 
     # Extract fields from JSON structure
     inloc = jobdesc_entry['inloc']
@@ -410,129 +292,53 @@ def build_mu2e_cmd(fcl, simjob_setup, args):
         inner += f" {args.mu2e_options.strip()}"
     return ['bash', '-c', inner]
 
-def process_g4bl_jobdef(jobdesc_entry, fname, args):
-    """Run a G4Beamline simulation job. Returns
-    (outputs, log_file, succeeded) — the histogram file is picked up by
-    the outputs glob patterns, not returned.
+def _outstage_dir():
+    """`$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` — the mu2egrid outstage
+    layout, which `mu2eClusterCheckAndMove` already knows how to walk.
 
-    Two source modes:
-    - `tarball`: extract the cnf.*.tar (built by g4bl_jobdef build tool) to a
-      scratch dir; treat extracted `work/` as embed_dir. This is the grid path
-      since /exp/mu2e/app is not mounted on workers.
-    - `embed_dir`: read the lattice files directly from local fs. Local-only
-      smoke path; prefer tarball mode for any real run.
-
-    Streams g4bl stdout/stderr to a SAM-named log file
-    (`log.mu2e.<desc>.<dsconf>.<sequencer>.log`) in addition to the runner's
-    stdout. The log file is always returned (and exists) if exec started, even
-    on g4bl failure — push it via push_logs(log_file=...) so failed jobs are
-    debuggable in SAM. Raises RuntimeError on prep failures (missing tarball,
-    missing embed_dir, missing main_input) — no log produced in those cases.
-
-    Sequencer: First_Event = job_index * events_per_job + 1 (0-based).
+    jobsub_argv exports MU2EGRID_WFOUTSTAGE on every submission and
+    requests `--need-storage-modify` on it, so the worker token already
+    covers this write. Missing means the caller is not a real worker;
+    raise rather than default, or the output lands where nobody looks.
     """
-    job_index, sequencer = _job_index_from_fname(fname)
+    base = os.environ.get('MU2EGRID_WFOUTSTAGE')
+    if not base:
+        raise RuntimeError(
+            "MU2EGRID_WFOUTSTAGE is not set — outstage outputs have "
+            "nowhere to go. It is exported by the submission argv; a "
+            "job seeing it unset was not launched by prodtools.")
+    cluster = os.environ.get('CLUSTER', '0')
+    process = os.environ.get('PROCESS', '0')
+    return f"{base}/{cluster}/{process}"
 
-    # Tarball mode (grid path): runtime config lives in jobpars.json INSIDE
-    # the tarball — the tarball is self-describing. Embed_dir mode (local
-    # smoke) has no tarball, so config is on the jobdesc entry.
-    tarball = jobdesc_entry.get('tarball')
-    if tarball:
-        # On grid workers the tarball arrives only as a basename in the POMS
-        # map; _fetch_file_local mdh-copies it from dCache when not local.
-        _fetch_file_local(tarball)
-        extract_dir = tempfile.mkdtemp(prefix='g4bl_extract_')
-        with tarfile.open(tarball) as t:
-            t.extractall(extract_dir)
-        embed_dir = os.path.join(extract_dir, 'work')
-        if not Path(embed_dir).is_dir():
-            raise RuntimeError(f"tarball missing 'work/' subdir: {tarball}")
-        jobpars_path = os.path.join(extract_dir, 'jobpars.json')
-        if not Path(jobpars_path).is_file():
-            raise RuntimeError(f"tarball missing jobpars.json: {tarball}")
-        with open(jobpars_path) as f:
-            jobpars = json.load(f)
-        # Required keys in jobpars.json — fail loudly if any is missing.
-        desc = jobpars['desc']
-        dsconf = jobpars['dsconf']
-        main_input = jobpars['main_input']
-        events_per_job = int(jobpars['events_per_job'])
-    else:
-        embed_dir = jobdesc_entry['embed_dir']
-        desc = jobdesc_entry['desc']
-        dsconf = jobdesc_entry['dsconf']
-        main_input = jobdesc_entry['main_input']
-        events_per_job = int(jobdesc_entry['events_per_job'])
-        if not Path(embed_dir).is_dir():
-            raise RuntimeError(f"embed_dir not found: {embed_dir}")
 
-    if not (Path(embed_dir) / main_input).is_file():
-        raise RuntimeError(f"main_input not found: {embed_dir}/{main_input}")
+def _copy_to_outstage(filenames):
+    """Copy files to the job's outstage directory. No SAM declare.
 
-    first_event = job_index * events_per_job + 1
+    Uses ifdh rather than `mdh copy-file`: mdh resolves a destination
+    from a file's dataset name and location class, which is exactly the
+    dataset layout an outstage file is opting out of. ifdh takes a
+    literal destination directory.
+    """
+    if not filenames:
+        return 0
+    dest = _outstage_dir()
+    print(f"Copying {len(filenames)} file(s) to outstage: {dest}")
+    rc = run(f"ifdh mkdir_p {dest}", shell=True, retries=3, retry_delay=60)
+    if rc:
+        return rc
+    return run(f"ifdh cp -D {' '.join(filenames)} {dest}",
+               shell=True, retries=3, retry_delay=60)
 
-    # SAM-named histogram + log files. `nts.` (simulation ntuple) is the
-    # canonical Mu2e tier for ROOT TTrees from a sim job; matches the
-    # metacat naming convention used everywhere else.
-    histo_file = str(Mu2eName.build(tier='nts', owner='mu2e', description=desc,
-                                    dsconf=dsconf, sequencer=sequencer, extension='root'))
-    histo_path = os.path.abspath(histo_file)
-    log_file = str(Mu2eName.build(tier='log', owner='mu2e', description=desc,
-                                  dsconf=dsconf, sequencer=sequencer, extension='log'))
-    log_path = os.path.abspath(log_file)
-
-    # Native AL9 g4bl via spack. spack is a shell function defined by
-    # setupmu2e-art.sh; `spack load g4beamline` directly fails to propagate
-    # PATH in non-interactive shells, so use `eval $(spack load --sh ...)`.
-    # No apptainer wrap, no SL7 container — workers already run on AL9
-    # (fnal-wn-el9) per the standard fermigrid.cfg outer container.
-    # `unset PYTHON*` avoids subprocess-leaked vars (PYTHONHOME/PATH from
-    # the runmu2e Python) confusing spack (which is itself Python and looks
-    # up packages via its own site-packages). Same class of leak we hit
-    # with apptainer; fixed there with --cleanenv, here by selective unset.
-    # CLI keyword syntax: plain `key=value`, NOT `param key=value` (the
-    # `param` form is input-file syntax; g4bl 3.08b rejects it on the
-    # command line, unlike the older 3.08 SL7 build that was lenient).
-    inner_script = (
-        # Unset SPACK_ENV first: if the parent shell did `muse setup ops`
-        # (the typical art-runner setup), SPACK_ENV=...ops-019... is
-        # inherited via subprocess. `spack load g4beamline` then searches
-        # only the ops-019 environment — which doesn't contain g4beamline —
-        # and fails with "Spec 'g4beamline' matches no installed packages".
-        # The Mu2e wiki notes this as a known limitation ("after muse setup
-        # it is no longer possible to spack load a package"). Discovered
-        # 2026-04-28 after env-leak debugging.
-        "unset SPACK_ENV PYTHONHOME PYTHONPATH PYTHONNOUSERSITE\n"
-        "source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1\n"
-        'eval "$(spack load --sh g4beamline)"\n'
-        f"cd {shlex.quote(embed_dir)}\n"
-        f"g4bl {shlex.quote(main_input)} viewer=none "
-        f"First_Event={first_event} Num_Events={events_per_job} "
-        f"histoFile={shlex.quote(histo_path)}"
-    )
-    cmd_list = ['bash', '-c', inner_script]
-
-    print(f"g4bl: running natively (spack-loaded g4beamline on AL9)")
-    print(f"  events_per_job={events_per_job}, first_event={first_event}")
-    print(f"  histo_file={histo_path}")
-    print(f"  log_file={log_path}")
-
-    # Stream g4bl stdout/stderr to BOTH the runner's stdout AND the SAM log
-    # file. Real-time visibility for the operator + persisted log for SAM push.
-    proc = subprocess.Popen(cmd_list, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
-    with open(log_path, 'w') as log_f:
-        for line in proc.stdout:
-            log_f.write(line)
-            sys.stdout.write(line)
-            sys.stdout.flush()
-    proc.stdout.close()
-    rc = proc.wait()
-
-    return jobdesc_entry['outputs'], log_file, (rc == 0)
 
 def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     """Handle data file management and submission using wildcard patterns from JSON outputs.
+
+    Outputs are partitioned by location. Anything bound for `outstage`
+    is copied to $MU2EGRID_WFOUTSTAGE and never reaches pushOutput —
+    pushOutput has no copy-without-declare mode (`dosam = True` is
+    unconditional at pushOutput.py:268), so opting out of SAM means
+    opting out of pushOutput.
 
     Args:
         outputs: List of output specifications (dataset pattern, location)
@@ -549,17 +355,22 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
 
     parents_field = "parents_list.txt" if track_parents else "none"
 
-    if track_parents:
-        Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
-
     # Build output specifications. A job's own inputs are never outputs:
     # in direct-input mode the fetched input art file sits in cwd, so a
     # broad outputs glob (e.g. '*.art') would otherwise declare it for
     # push — and pushOutput, finding the original already at its dataset
     # path, treats it as a stale orphan and tries to DELETE production
     # data (smoke cluster 29444911; only the token scope blocked it).
+    # Whether anything is DECLARED, read from the config rather than from
+    # the glob results: an entry with a declared output still writes
+    # parents_list.txt and still calls pushOutput when the glob matched
+    # nothing, exactly as it did before outstage existed. Only an
+    # outstage-only entry skips both.
+    declares = any(o['location'] != OUTSTAGE_LOCATION for o in outputs)
+
     parent_names = {Path(p).name for p in infiles.split()} if infiles else set()
     output_specs = []
+    outstage_files = []
     for output in outputs:
         dataset_pattern = output['dataset']
         location = output['location']
@@ -567,27 +378,42 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
                           if Path(f).name not in parent_names]
         print(f"Pattern '{dataset_pattern}' matched {len(matching_files)} files: {matching_files}")
         for filename in matching_files:
-            output_specs.append((location, filename, parents_field))
+            if location == OUTSTAGE_LOCATION:
+                outstage_files.append(filename)
+            else:
+                output_specs.append((location, filename, parents_field))
 
-    # Use generic push function
-    return push_output(output_specs, "output.txt", simjob_setup=simjob_setup)
+    # parents_list.txt exists only to give pushOutput the SAM parents for
+    # a declare, so an outstage-only job has no use for it.
+    if track_parents and declares:
+        Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
+
+    rc = _copy_to_outstage(outstage_files)
+    if declares:
+        rc = push_output(output_specs, "output.txt",
+                         simjob_setup=simjob_setup) or rc
+    return rc
 
 def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
     """Handle log file management and submission.
 
     Either pass `fcl` (log filename derived via replace_file_extensions, the
-    art-side convention) or `log_file` directly (g4bl runner provides the SAM
-    name explicitly). At least one must be set.
+    art-side convention) or `log_file` directly (a caller that already
+    holds the SAM name). At least one must be set.
 
     Args:
         fcl: FCL filename to derive log filename from (art convention).
         simjob_setup: Path to SimJob setup script for art environment.
-        log_file: Explicit log filename. Wins over `fcl` if both given. The
-            g4bl path uses this since there's no FCL.
+        log_file: Explicit log filename. Wins over `fcl` if both given —
+            for runners with no FCL (historically the g4bl runner).
         location: pushOutput destination class — "disk" (default, persistent),
             "scratch", or "tape". User runs may need "scratch" because
             non-mu2epro accounts typically lack `storage.modify` scope on
             `/mu2e/persistent/datasets/usr-etc/log/<owner>/`.
+            "outstage" is not a pushOutput class: the log is copied to
+            $MU2EGRID_WFOUTSTAGE and not declared, which is what a job
+            whose data went to outstage needs (a declared log would name
+            undeclared parents). log_storage_location() routes it here.
     """
 
     if log_file is not None:
@@ -612,6 +438,8 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
 
     # Push log if it exists
     if Path(logfile).exists():
+        if location == OUTSTAGE_LOCATION:
+            return _copy_to_outstage([logfile])
         # Name parents_list.txt only if it is actually on disk. pushOutput
         # reports `ERROR - parents file ... not found` and then exits 0, so
         # naming a missing file makes the log push a SILENT no-op and the
@@ -634,14 +462,13 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
 
 
 # ============================================================
-# Direct mode (jobsub_submit, no POMS) — Phase 2 v1
+# Direct mode (jobsub_submit) — Phase 2 v1, and the only worker mode
 #
-# POMS mode is invoked with --jobdesc <json> and the per-job index
-# encoded in the `fname` env var (sequencer field).
 # Direct mode is detected by presence of MU2EGRID_JOBDEF in the
-# environment (set by the jobsub_submit argv). The submitter ships
-# the cnf tarball + an "ops JSON" via dropbox, both landing under
-# $CONDOR_DIR_INPUT. Index resolves via ops['jobs'][PROCESS].
+# environment (set by the jobsub_submit argv); runmu2e refuses to run
+# without it. The submitter ships the cnf tarball + an "ops JSON" via
+# dropbox, both landing under $CONDOR_DIR_INPUT. The per-job index
+# resolves via ops['jobs'][PROCESS].
 # ============================================================
 
 
@@ -658,8 +485,8 @@ def _direct_input_dir():
 
 def _load_direct_ops():
     """Load the ops JSON shipped via dropbox. Contains: jobs (PROCESS→index
-    array), inspec (dataset → [protocol, location]), jobdesc (a one-element
-    list mirroring the POMS-map entry shape for reuse via process_jobdef)."""
+    array), inspec (dataset → [protocol, location]), jobdesc (the
+    submission-map entry, consumed via process_jobdef)."""
     ops_basename = os.environ['MU2EGRID_OPSJSON']
     ops_path = os.path.join(_direct_input_dir(), ops_basename)
     with open(ops_path) as f:
@@ -798,7 +625,7 @@ def _push_with_retry(push_fn, *args, retries=3, base_delay=30, **kwargs):
     raise last_exc
 
 
-def _push_all(data_push, log_push, prefix=''):
+def _push_all(data_push, log_push):
     """Run `data_push`, then `log_push` — and run `log_push` even when
     `data_push` raises.
 
@@ -822,7 +649,7 @@ def _push_all(data_push, log_push, prefix=''):
         data_push()
     except subprocess.CalledProcessError as exc:
         data_exc = exc
-        print(f"{prefix}data push failed (rc={exc.returncode}) — pushing the "
+        print(f"[direct] data push failed (rc={exc.returncode}) — pushing the "
               f"log before failing the job")
 
     try:
@@ -830,22 +657,21 @@ def _push_all(data_push, log_push, prefix=''):
     except subprocess.CalledProcessError as exc:
         if data_exc is None:
             raise
-        print(f"{prefix}WARNING: log push also failed (rc={exc.returncode}); "
+        print(f"[direct] WARNING: log push also failed (rc={exc.returncode}); "
               f"re-raising the data-push failure")
 
     if data_exc is not None:
         raise data_exc
 
 
-def _execute_mu2e(fcl, simjob_setup, args, prefix=''):
-    """Shared execute step for both backends: build the mu2e command, run
+def _execute_mu2e(fcl, simjob_setup, args):
+    """Execute step for the direct worker: build the mu2e command, run
     it, return True iff it failed. Callers push data only on success but
-    always push logs (so failures stay debuggable) — that split, and the
-    direct-mode extras (retry, manifest, log location), stay caller-side
-    because they differ by design."""
+    always push logs (so failures stay debuggable) — that split, plus
+    retry/manifest/log-location, stay caller-side by design."""
     cmd = build_mu2e_cmd(fcl, simjob_setup, args)
-    print(f"{prefix}Executing: {cmd}")
-    print(f"{prefix}Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
+    print(f"[direct] Executing: {cmd}")
+    print(f"[direct] Working dir: {os.getcwd()}, FCL exists: {os.path.exists(fcl)}")
     print("=== Starting Mu2e execution ===")
     try:
         run(cmd, shell=False)
@@ -858,7 +684,7 @@ def _execute_mu2e(fcl, simjob_setup, args, prefix=''):
 
 
 def _direct_dispatch(args, ops, index):
-    """Direct-mode equivalent of _dispatch_and_execute: run the entry's
+    """Dispatch one direct-mode job: run the entry's
     prep — normal index mode via process_jobdef, or a draining batch
     (ops ships a `files` list) via process_direct_input — then the
     shared mu2e -c → manifest → push (with retries) tail."""
@@ -879,8 +705,8 @@ def _direct_dispatch(args, ops, index):
             sys.exit(1)
         fname = files[index]
         print(f"[direct] files[{index}] = {fname}")
-        inloc = jobdesc[0].get('inloc')
-        # Stage the input locally (direct mode has no POMS pre-staging, and
+        inloc = jobdesc.get('inloc')
+        # Stage the input locally (nothing pre-stages for the worker, and
         # direct-input FCL has no xroot streaming fallback — it writes the
         # bare local filename, so every draining input must be fetched).
         # Resolve the file's REAL location via SAM rather than trusting
@@ -900,18 +726,17 @@ def _direct_dispatch(args, ops, index):
         if mode != False:  # noqa: E712 — validate_jobdesc returns False for normal
             print(f"ERROR: direct mode supports normal-mode jobdescs "
                   f"only, got '{mode}'. direct_input entries run as "
-                  f"draining batches (submit_map --files); template/"
-                  f"g4bl via the upstream mu2ejobsub/mu2eg4bl CLIs.")
+                  f"draining batches (submissions resubmit --files).")
             sys.exit(1)
         fname = _synthesize_direct_fname(index)
         fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(
             jobdesc, fname, args)
 
     # `dir:<path>` inloc means inputs come from a locally-mounted FS and
-    # have no SAM parents — match the POMS-mode logic in _dispatch_and_execute.
+    # have no SAM parents.
     track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
 
-    job_failed = _execute_mu2e(fcl, simjob_setup, args, prefix='[direct] ')
+    job_failed = _execute_mu2e(fcl, simjob_setup, args)
 
     # Append SHA256 manifest to the log BEFORE pushing.
     # mu2eClusterCheckAndMove parses the log for `mu2egrid manifest`.
@@ -942,11 +767,18 @@ def _direct_dispatch(args, ops, index):
         _push_with_retry(push_logs, fcl, simjob_setup=simjob_setup,
                          location=log_location)
 
+    if args.dry_run:
+        datasets = ('none (job failed)' if job_failed
+                    else ', '.join(o['dataset'] for o in outputs))
+        print(f"[direct] DRY RUN — would push data: {datasets}; "
+              f"would push log to '{log_location}'. Skipping pushes.")
+        return job_failed
+
     if job_failed:
         print("[direct] mu2e failed — skipping data push, still pushing log")
     # Push outputs only on success; the log ALWAYS — including when the
     # data push itself raises (see _push_all).
-    _push_all(data_push, log_push, prefix='[direct] ')
+    _push_all(data_push, log_push)
 
     return job_failed
 
@@ -979,109 +811,21 @@ def _direct_main(args):
         sys.exit(1)
 
 
-
-def _dispatch_and_execute(mode, jobdesc, fname, args):
-    """Dispatch on runner mode, prep, execute, push. Returns True iff the
-    execute step failed (so main can exit nonzero).
-
-    Encapsulates the per-runner asymmetry in one place:
-    - art runners (template / direct_input / normal) return an FCL which
-      this function then executes via `mu2e -c`.
-    - g4bl runner executes inside `process_g4bl_jobdef`; this function
-      only pushes its outputs.
-    """
-    # G4Beamline: process_g4bl_jobdef both prepares and executes; it
-    # streams stdout to a SAM-named .log file. Push data only on success
-    # but always push the log if it exists, so failed grid jobs are
-    # debuggable in SAM.
-    if mode == 'g4bl':
-        try:
-            outputs, log_file, succeeded = process_g4bl_jobdef(jobdesc[0], fname, args)
-        except RuntimeError as e:
-            print(f"=== g4bl prep failed: {e} ===")
-            return True
-
-        if not succeeded:
-            print("=== g4bl execution failed ===")
-
-        if args.dry_run:
-            print("[DRY RUN] Would run: pushOutput output.txt")
-        else:
-            if succeeded:
-                push_data(outputs, infiles="", simjob_setup=None, track_parents=False)
-            else:
-                print("g4bl failed - skipping data push, attempting log push")
-            if log_file and Path(log_file).is_file():
-                push_logs(log_file=log_file, simjob_setup=None)
-
-        return not succeeded
-
-    # Art runners: prep returns FCL; execute `mu2e -c` here.
-    inloc = None  # populated by process_jobdef; None for template/direct_input
-    if mode == 'template':
-        fcl, simjob_setup = process_template(jobdesc[0], fname)
-        infiles = fname
-        outputs = jobdesc[0]['outputs']
-    elif mode == 'direct_input':
-        fcl, simjob_setup, infiles, outputs = process_direct_input(jobdesc, fname, args)
-    else:
-        fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(jobdesc, fname, args)
-
-    # dir:<path> inloc means inputs are on a locally-mounted filesystem
-    # (typically cvmfs) and aren't SAM-registered — skip parent tracking
-    # on the push. All other cases (including None for template / direct
-    # input) default to tracking parents.
-    track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
-
-    job_failed = _execute_mu2e(fcl, simjob_setup, args)
-
-    if not args.dry_run:
-        def data_push():
-            if job_failed:
-                return
-            push_data(outputs, infiles, simjob_setup=simjob_setup,
-                      track_parents=track_parents)
-
-        if job_failed:
-            print("Job failed - skipping data file push, but uploading logs")
-        # Always upload logs, even on failure — including when push_data
-        # itself raises, which used to skip this entirely (see _push_all).
-        _push_all(data_push, lambda: push_logs(fcl, simjob_setup=simjob_setup))
-    else:
-        print("[DRY RUN] Would run: pushOutput output.txt")
-
-    return job_failed
-
-
 def main():
     parser = argparse.ArgumentParser(description="Execute production jobs from job definitions.")
     parser.add_argument("--copy-input", action="store_true", help="Copy input files using mdh")
     parser.add_argument('--dry-run', action='store_true', help='Print commands without actually running pushOutput')
     parser.add_argument('--nevts', type=int, default=-1, help='Number of events to process (-1 for all events, default: -1)')
     parser.add_argument('--mu2e-options', type=str, default='', help='Extra options to pass to mu2e command (e.g., "--no-timing --debug")')
-    parser.add_argument('--jobdesc', help='Path to the job descriptions JSON file (e.g., jobdefs_list.json). Required for POMS mode; ignored in direct mode (MU2EGRID_JOBDEF set).')
 
     args = parser.parse_args()
 
-    if _is_direct_mode():
-        _direct_main(args)
-        return
-
-    if not args.jobdesc:
-        print("Error: --jobdesc is required (or set MU2EGRID_JOBDEF for direct mode)")
+    if not _is_direct_mode():
+        print("Error: MU2EGRID_JOBDEF is not set. runmu2e runs only as the "
+              "direct-backend worker; the POMS --jobdesc mode was removed "
+              "(recover it from the pre-poms-removal git tag).")
         sys.exit(1)
-
-    with open(args.jobdesc, 'r') as f:
-        jobdesc = json.load(f)
-    mode = validate_jobdesc(jobdesc)
-
-    fname = os.getenv("fname")
-    if not fname:
-        print("Error: fname environment variable is not set.")
-        sys.exit(1)
-
-    if _dispatch_and_execute(mode, jobdesc, fname, args):
-        sys.exit(1)
+    _direct_main(args)
 
 
 if __name__ == "__main__":

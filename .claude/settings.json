@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "enabledMcpjsonServers": ["metacat-readonly", "prodtools"],
+  "enabledMcpjsonServers": ["metacat-readonly", "prodtools", "prodtools-write"],
   "hooks": {
     "PreToolUse": [
       {
@@ -9,6 +9,16 @@
           {
             "type": "command",
             "command": "bash /exp/mu2e/app/users/oksuzian/muse_050125/prodtools/.claude/hooks/mu2epro-guard.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__prodtools-write__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /exp/mu2e/app/users/oksuzian/muse_050125/prodtools/.claude/hooks/mcp-write-guard.sh",
             "timeout": 5
           }
         ]

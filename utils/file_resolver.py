@@ -14,7 +14,6 @@ pure-function consumers (jobsub_argv, unit tests) and dir:-mode
 resolution work without the Mu2e ops environment.
 """
 
-import hashlib
 import os
 import re
 import sys
@@ -100,23 +99,6 @@ def dataset_dir(dsname: str, location: str) -> str:
     if location == 'scratch':
         return f"/pnfs/mu2e/scratch/datasets/{base_path}/{ds_path}"
     return ""
-
-
-def tape_file_path(filename: str) -> str:
-    """Absolute /pnfs tape path for a file, including pushOutput's hash
-    fan-out directories.
-
-    pushOutput spreads files into `<sha256(filename)[0:2]>/<[2:4]>`
-    subdirectories beneath the dataset dir. Deriving that from the
-    filename alone is what makes an UNDECLARED file locatable: a file
-    sitting on tape with no SAM record has no other locator, and that is
-    exactly what a partly-completed push leaves behind (verified
-    2026-07-27 against the two real CeMLeadingLog orphans).
-    """
-    digest = hashlib.sha256(filename.encode()).hexdigest()
-    dsname = str(Mu2eName.parse(filename).dataset)
-    return (f"{dataset_dir(dsname, 'tape')}/"
-            f"{digest[0:2]}/{digest[2:4]}/{filename}")
 
 
 # Mu2e standard location → dCache area name (under `/pnfs/mu2e/<area>/`).
@@ -234,6 +216,18 @@ def sam_physical_path(filename, prefer_location=None):
     from .samweb_wrapper import locate_file_strict
     return path_from_sam_locations(filename, locate_file_strict(filename),
                                    prefer_location)
+
+
+def sam_physical_path_or_none(filename, prefer_location=None):
+    """sam_physical_path, but returns None instead of raising when SAM
+    has no usable location. For swallow-and-skip consumers (submissions
+    verify loop, MCP status) — formerly utils.mkrecovery.locate_tarball.
+    NOT the same as jobdef_lookup.locate_tarball, which takes a cnf
+    DEFNAME and raises."""
+    try:
+        return sam_physical_path(filename, prefer_location)
+    except Exception:
+        return None
 
 
 def classify_sam_location(raw: Optional[str]) -> str:

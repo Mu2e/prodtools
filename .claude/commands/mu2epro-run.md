@@ -23,7 +23,7 @@ or `--prod` for SAM registration.
   - Bare tag like `Run1Bag`, `MDC2025af`, `MDC2025an` → treated as `SimJob/<tag>`.
   - `<Musing>/<Version>` form like `AnalysisMDC2025/v02_00_00` → sources that musing's `setup.sh` directly.
   - Omitted → defaults to `SimJob/Run1Bag`.
-- `command` — the prodtools command, e.g. `json2jobdef`, `mkrecovery`.
+- `command` — the prodtools command, e.g. `json2jobdef`, `jobfcl`.
 
 Relative paths in arguments are resolved against the repo root, because
 the command runs in `/tmp`. `/cvmfs/...` and other absolute paths pass
@@ -33,8 +33,8 @@ through unchanged.
 
 ```
 /mu2epro-run json2jobdef --json data/Run1B/stage1.json --index 0 --verbose
-/mu2epro-run MDC2025af json2jobdef --json data/mdc2025/mix.json --dsconf MDC2025af_best_v1_1 --prod
-/mu2epro-run AnalysisMDC2025/v02_00_00 json2jobdef --json data/mdc2025/evntuple.json --dsconf MDC2025-003 --prod --jobdefs /exp/mu2e/app/users/mu2epro/production_manager/poms_map/MDC2025-025.json
+/mu2epro-run MDC2025af json2jobdef --json data/mdc2025/mix.json --dsconf MDC2025af_best_v1_1 --prod --enqueue --slice-size 1000
+/mu2epro-run AnalysisMDC2025/v02_00_00 json2jobdef --json data/mdc2025/evntuple.json --desc evnt --dsconf MDC2025-003 --prod --enqueue
 ```
 
 ## Instructions
@@ -62,51 +62,24 @@ You are given `$ARGUMENTS`. Follow these steps:
    Then ask the user to confirm (reply "yes" to proceed). Do not run
    until they confirm. If they decline, stop.
 
-   **HARD RULE for `json2jobdef --prod`:** `--jobdefs` is mandatory.
-   If the user invokes `json2jobdef --prod` without it, **do not run** —
-   refuse and explain. The unflagged default produces a SAM-polluting
-   `ijobdefs_list` definition (incident 2026-05-19).
+   **HARD RULE for `json2jobdef --prod`:** `--prod` REQUIRES `--enqueue`
+   (and `--enqueue` requires `--prod`), and `argparse` now enforces it.
+   There is no `--jobdefs` flag — `json2jobdef` writes no file
+   recording the campaign; `--enqueue` pushes the cnf to SAM and
+   registers the sliced-submission campaign directly in the submission
+   ledger. A bare `--prod` with no `--enqueue` would push the cnf and
+   register nothing, so it is refused up front.
 
-   **Where `--jobdefs` points depends on the submission backend. Decide
-   this FIRST — the two answers are different files in different
-   places, and picking the wrong one is not cosmetic.**
-
-   *If the jobs will be submitted by POMS:* the absolute path to the
-   latest plain `MDC2025-NNN.json` under
-   `/exp/mu2e/app/users/mu2epro/production_manager/poms_map/`.
-   - `ls .../poms_map/MDC2025-*.json` and take the highest plain-`MDC2025-NNN.json` (ignore variants like `MDC2025ad-NNN.json`, `RecoMDC2025*`, `old_*`, `test*`).
-   - Sum `njobs` across entries: `jq '[.[].njobs] | add' <map>`.
-   - If `current_total + new_entry_njobs ≤ 100000`, extend it; else allocate `MDC2025-(NNN+1).json`.
-   - Never invent a per-campaign name here (`Run1Bak-001.json`, `MDC2025ad-NNN.json`) — POMS reads the numbered maps.
-
-   *If the jobs will be submitted directly* (`submit_map --enqueue` +
-   `submissions run`): a **throwaway `/tmp` map, one per campaign** —
-   e.g. `/tmp/map_noprimary_au.json`. Pass the same path to
-   `submit_map --enqueue` afterwards.
-   - **Do NOT create a persistent file under `poms_map/`.** The
-     directory name is historical; it does not mean every map there is
-     a POMS map, and a new file there is a file the direct workflow
-     neither reads nor wants.
-   - The map is consumed once at enqueue to create the campaign row;
-     `campaigns.entry_json` snapshots the entry, so the file is
-     disposable afterwards.
-   - **Never append a direct campaign to a POMS-active `MDC2025-NNN.json`.**
-     POMS would dispatch those entries while `submissions run` feeds
-     slices from the same tarball → duplicate jobs and duplicate SAM
-     registration.
-
-   **If you do not know which backend, ASK.** Do not infer it from the
-   dsconf, the desc, or the log name (see
-   `reference_log_name_not_backend_tell`).
-
-   **Check the precedent before inventing anything.** The ledger records
-   what every past campaign actually used:
-   ```bash
-   python3 -c "import sqlite3;c=sqlite3.connect('file:/exp/mu2e/data/users/mu2epro/prodtools/submissions.db?mode=ro',uri=True);[print(r) for r in c.execute('SELECT id,tarball,map_path FROM campaigns ORDER BY id')]"
-   ```
-   As of 2026-07-25 every direct campaign but the first used a `/tmp`
-   map. If a sibling campaign already exists, copy its shape rather than
-   minting a new convention.
+   **Known limitation, bulk `--dsconf X --prod --enqueue` (no `--desc`,
+   line 36 above):** this processes every matching entry in one loop,
+   and a failure partway through (e.g. entry 7 of 22) leaves campaigns
+   registered for the entries before it and nothing for the rest — the
+   bulk run as a whole is not resumable. Re-running the identical
+   command then exits immediately on the FIRST entry's "active campaign
+   already exists" refusal — that message is the double-submit guard
+   doing its job, not ledger damage. Recovery is per-entry: re-run just
+   the failed and remaining entries with `--desc <D> --dsconf <C>
+   --prod --enqueue`.
 
 4. **Run** the following as a single Bash command. Everything runs
    inside one `ksu` invocation so the sourced environment is live when
@@ -174,11 +147,15 @@ You are given `$ARGUMENTS`. Follow these steps:
 
 ## Notes
 
-- **For grid submission (`submit_map`), use
-  `/mu2epro-submit` instead** — this skill does NOT set
+- **For hand re-firing specific work (`submissions resubmit`) or a
+  manual campaign tick (`submissions run`), use `/mu2epro-submit`
+  instead** — this skill does NOT set
   `USER`/`LOGNAME`/`HOME`/`XDG_RUNTIME_DIR`, which the direct backend
   requires (else `condor_vault_storer` fails / wrong submitter). `/mu2epro-submit`
-  bakes in that env fix plus dry-run + jobsub_q verification.
+  bakes in that env fix plus dry-run + jobsub_q verification. New
+  campaigns (including firstjob-window statistics expansions) go
+  through `json2jobdef --prod --enqueue` here instead — there is no
+  separate submit step.
 - `ksu` requires that `oksuzian@FNAL.GOV` is listed in
   `~mu2epro/.k5users` for `/bin/bash`. If auth fails, report the error
   verbatim — do not retry automatically.
