@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Run cnf jobs locally, several at a time.
+
+Two uses, one driver: smoking a handful of indices before submitting
+(`--nevts 10`), and producing art files on a local disk for study (full
+events, no grid). Nothing here touches SAM: no pushOutput, no declare,
+no manifest. Outputs stay in the job's directory.
+
+Job prep is the worker's own `runmu2e.process_jobdef`, so a local run
+exercises the same tarball fetch, inloc handling, chunk-mode
+materialization and `--copy-input` staging the grid will do. The only
+part not shared is the tail (push), which is exactly the part a local
+run must not have.
+
+Layout — one directory per job:
+
+    <workdir>/job_<index>/       fcl, art outputs, art log, stdout.log
+
+The per-job directory is not cosmetic. `process_jobdef` works in cwd,
+and its `--copy-input` branch runs `mkdir indir; mv *.art indir/`;
+jobs sharing a directory would move each other's files. Each job
+therefore runs as a child process with `cwd=` its own directory —
+which also means the driver can print a single command that reproduces
+any one job by hand.
+
+Index semantics: `--first`/`--num` name cnf indices directly
+(`baseSeed = 1 + index`). The synthesized jobdesc carries no
+`firstjob`, so there is no second index space to confuse it with.
+"""
+
+import argparse
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+# Allow running this file directly: make package root importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utils.job_common import Mu2eName
+from utils.jobdesc import OUTSTAGE_LOCATION
+from utils.jobquery import Mu2eJobPars
+from utils.prod_utils import _fetch_file_local
+from utils.runmu2e import (
+    _synthesize_direct_fname,
+    build_mu2e_cmd,
+    process_jobdef,
+)
+
+# Four concurrent mu2e processes is ~10 GB resident. The driver prints
+# that arithmetic rather than guessing a node's free memory.
+DEFAULT_PARALLEL = 4
+GB_PER_JOB = 2.5
+
+# Same tier whitelist job_outputs() uses to tell a real output file from
+# a sink like /dev/null.
+_OUTPUT_TIERS = ('dts.', 'dig.', 'sim.', 'rec.', 'mcs.', 'nts.', 'cnf.')
+
+
+def output_globs(tarball):
+    """Glob patterns matching what one job of this cnf writes.
+
+    Resolves the `.owner.`/`.version.` placeholders exactly as
+    `Mu2eJobBase.job_outputs` does, but wildcards the sequencer instead
+    of computing it — the sequencer of an input-driven job is not known
+    until the inputs are resolved, and the driver only needs to count
+    and report files afterwards.
+    """
+    jp = Mu2eJobPars(tarball)
+    globs = []
+    for template in (jp.json_data.get('tbs', {}).get('outfiles') or {}).values():
+        resolved = (template.replace('.owner.', f'.{jp.owner}.')
+                            .replace('.version.', f'.{jp.dsconf}.'))
+        # A generic cnf defers {desc} to runtime; a wildcard still matches.
+        resolved = re.sub(r'\{[^}]*\}', '*', resolved)
+        if not resolved.startswith(_OUTPUT_TIERS):
+            continue
+        try:
+            # with_sequencer, not a string replace: real jobpars spell the
+            # placeholder field '.sequence.', and mu2ejobdef is free to
+            # write anything there. job_outputs() ends the same way.
+            pattern = str(Mu2eName.parse(resolved).with_sequencer('*'))
+        except ValueError:
+            continue
+        if pattern not in globs:
+            globs.append(pattern)
+    return globs
+
+
+def synth_jobdesc(tarball, inloc, first, num):
+    """The jobdesc `process_jobdef` needs, built from CLI flags.
+
+    `njobs` is `first + num` because `resolve_entry_index` rejects any
+    index >= njobs and — with no `firstjob` — maps an index to itself.
+    Deliberately no 'firstjob' key: the local runner has ONE index
+    space, the cnf's.
+
+    `outputs` is passthrough for `process_jobdef`; its location is
+    never read on this path. It says `outstage` so that a jobdesc that
+    escapes into the submission path is refused by `enqueue_entry`
+    rather than quietly declaring local test output to SAM.
+    """
+    return {
+        'tarball': str(tarball),
+        'inloc': inloc,
+        'njobs': first + num,
+        'outputs': [{'dataset': g, 'location': OUTSTAGE_LOCATION}
+                    for g in output_globs(tarball)],
+    }
+
+
+def job_dir(workdir, index):
+    """`<workdir>/job_<index>` — zero-padded so `ls` sorts numerically."""
+    return Path(workdir) / f"job_{index:06d}"
+
+
+def child_argv(index, args):
+    """argv that re-execs this entry point for a single job.
+
+    Printed in the summary, so it must be runnable verbatim.
+    """
+    argv = [sys.executable, str(args.entry_point),
+            '--one', str(index),
+            '--jobdef', str(args.jobdef),
+            '--inloc', args.inloc,
+            '--first', str(args.first),
+            '--num', str(args.num),
+            '--nevts', str(args.nevts)]
+    if args.mu2e_options.strip():
+        # `--opt=value`, not `--opt value`: mu2e options start with a dash
+        # and argparse would read the next token as another flag.
+        argv.append(f'--mu2e-options={args.mu2e_options}')
+    if args.copy_input:
+        argv.append('--copy-input')
+    return argv
+
+
+class JobResult:
+    """One finished job: what ran, how it ended, what it left behind."""
+
+    def __init__(self, index, rc, seconds, directory, outputs):
+        self.index = index
+        self.rc = rc
+        self.seconds = seconds
+        self.directory = directory
+        self.outputs = outputs
+
+    @property
+    def ok(self):
+        return self.rc == 0
+
+
+def _run_child(index, args, globs):
+    """Launch one job in its own directory, capturing its output."""
+    directory = job_dir(args.workdir, index)
+    directory.mkdir(parents=True, exist_ok=True)
+    argv = child_argv(index, args)
+    start = time.time()
+    with open(directory / 'stdout.log', 'w') as log:
+        log.write(shlex.join(argv) + '\n')
+        log.flush()
+        rc = subprocess.run(argv, cwd=str(directory),
+                            stdout=log, stderr=subprocess.STDOUT).returncode
+    elapsed = time.time() - start
+    produced = sorted(p.name for g in globs for p in directory.glob(g))
+    return JobResult(index, rc, elapsed, directory, produced)
+
+
+def drive(args):
+    """Run every index in the window, `args.parallel` at a time.
+
+    Never stops early: a failed index is reported, and the rest still
+    run. Returns the process exit code (1 if any job failed).
+    """
+    indices = list(range(args.first, args.first + args.num))
+    globs = output_globs(args.jobdef)
+
+    print(f"[local] {len(indices)} job(s), cnf indices "
+          f"{indices[0]}..{indices[-1]}, {args.parallel} at a time")
+    print(f"[local] a mu2e job is ~{GB_PER_JOB} GB resident; "
+          f"{args.parallel} at a time is ~{GB_PER_JOB * args.parallel:.1f} GB")
+    print(f"[local] workdir: {args.workdir}")
+
+    results = []
+    with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+        futures = [pool.submit(_run_child, i, args, globs) for i in indices]
+        # as_completed, not submission order: a slow index 0 must not
+        # sit on the progress lines of the jobs that already finished.
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            state = 'ok  ' if result.ok else f'FAIL({result.rc})'
+            print(f"[local] index {result.index}: {state} "
+                  f"{result.seconds:.0f}s  {len(result.outputs)} output(s)")
+
+    return report(results, args)
+
+
+def report(results, args):
+    """Print the end-of-run table; return the exit code."""
+    failed = [r for r in sorted(results, key=lambda r: r.index) if not r.ok]
+    print("\n=== local run summary ===")
+    for result in sorted(results, key=lambda r: r.index):
+        print(f"  index {result.index:>6}  rc={result.rc:<3} "
+              f"{result.seconds:>7.0f}s  {len(result.outputs):>2} output(s)  "
+              f"{result.directory}")
+    total = len(results)
+    print(f"{total - len(failed)}/{total} succeeded")
+    for result in failed:
+        print(f"  rerun index {result.index}: "
+              f"cd {result.directory} && "
+              f"{shlex.join(child_argv(result.index, args))}")
+    return 1 if failed else 0
+
+
+def resolve_jobdef(name_or_path, workdir):
+    """Absolute path to the cnf tarball, fetching it once if needed.
+
+    Children run in their own directories, so a bare SAM name would
+    otherwise be fetched once per job.
+    """
+    path = Path(name_or_path)
+    if path.is_file():
+        return str(path.resolve())
+    cwd = os.getcwd()
+    os.chdir(workdir)
+    try:
+        _fetch_file_local(path.name)
+    finally:
+        os.chdir(cwd)
+    return str((Path(workdir) / path.name).resolve())
+
+
+def run_one(index, args):
+    """The child: prep and run ONE job in the current directory.
+
+    Returns the mu2e exit code. Everything after mu2e — push, declare,
+    manifest — is the worker's job and deliberately absent here.
+    """
+    jobdesc = synth_jobdesc(args.jobdef, args.inloc, args.first, args.num)
+    fcl, simjob_setup, _infiles, _outputs, _inloc = process_jobdef(
+        jobdesc, _synthesize_direct_fname(index), args)
+    cmd = build_mu2e_cmd(fcl, simjob_setup, args)
+    print(f"[local] index {index}: {cmd}")
+    return subprocess.run(cmd).returncode
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Run cnf jobs locally, several at a time. Outputs stay "
+                    "on local disk; nothing is pushed or declared to SAM.")
+    parser.add_argument('--jobdef', required=True,
+                        help='cnf tarball (path, or a SAM name to fetch)')
+    parser.add_argument('--inloc', default='tape',
+                        help='where inputs live (tape|disk|resilient|stash|'
+                             'dir:<path>|none), default tape')
+    parser.add_argument('--first', type=int, default=0,
+                        help='first cnf index to run (default 0)')
+    parser.add_argument('--num', type=int, default=1,
+                        help='how many indices to run (default 1)')
+    parser.add_argument('-j', '--parallel', type=int, default=DEFAULT_PARALLEL,
+                        help=f'jobs to run at once (default {DEFAULT_PARALLEL}; '
+                             f'~{GB_PER_JOB} GB resident each)')
+    parser.add_argument('--workdir', default='.',
+                        help='where the per-job directories go (default .)')
+    parser.add_argument('--nevts', type=int, default=-1,
+                        help='events per job (-1 = whatever the fcl says)')
+    parser.add_argument('--mu2e-options', default='',
+                        help='extra options passed through to mu2e')
+    parser.add_argument('--copy-input', action='store_true',
+                        help='stage inputs locally with mdh instead of '
+                             'streaming them (worker --copy-input parity)')
+    parser.add_argument('--one', type=int,
+                        help=argparse.SUPPRESS)  # internal: run a single index
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.num < 1:
+        sys.exit("runlocal: --num must be at least 1")
+    if args.first < 0:
+        sys.exit("runlocal: --first must be >= 0")
+    if args.parallel < 1:
+        sys.exit("runlocal: --parallel must be at least 1")
+
+    if args.one is not None:
+        # Child: cwd is already this job's directory.
+        return run_one(args.one, args)
+
+    args.workdir = str(Path(args.workdir).resolve())
+    Path(args.workdir).mkdir(parents=True, exist_ok=True)
+    args.jobdef = resolve_jobdef(args.jobdef, args.workdir)
+    # The module, not bin/runlocal: that wrapper sources the Mu2e
+    # environment, which this process already has and children inherit.
+    args.entry_point = Path(__file__).resolve()
+    return drive(args)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

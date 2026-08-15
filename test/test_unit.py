@@ -14647,6 +14647,241 @@ class TestEnqueueRefusesOutstage(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# runlocal — running cnf jobs on this node, several at a time
+# ---------------------------------------------------------------------------
+
+def _runlocal_args(**over):
+    """A parsed-args stand-in for the runlocal driver."""
+    args = SimpleNamespace(
+        jobdef='cnf.mu2e.Test.TestConf.0.tar', inloc='tape',
+        first=0, num=1, parallel=1, workdir='.', nevts=-1,
+        mu2e_options='', copy_input=False, one=None,
+        entry_point='/repo/utils/runlocal.py')
+    for key, value in over.items():
+        setattr(args, key, value)
+    return args
+
+
+class TestRunLocalOutputGlobs(unittest.TestCase):
+    """A job's outputs are globbed, not computed: the sequencer of an
+    input-driven job isn't known until its inputs resolve."""
+
+    def _tarball(self, outfiles):
+        return _make_tarball({'owner': 'mu2e', 'dsconf': 'TestConf',
+                              'tbs': {'outfiles': outfiles}})
+
+    def test_resolves_owner_and_version_wildcards_sequencer(self):
+        from utils.runlocal import output_globs
+        tar = self._tarball({'o': 'dts.owner.CeEndpoint.version.sequencer.art'})
+        self.assertEqual(output_globs(tar),
+                         ['dts.mu2e.CeEndpoint.TestConf.*.art'])
+
+    def test_real_jobpars_spell_the_placeholder_sequence(self):
+        """Live cnfs write '.sequence.', not '.sequencer.' — a string
+        replace on one spelling silently reported zero outputs."""
+        from utils.runlocal import output_globs
+        tar = self._tarball(
+            {'outputs.compressedOutput101.fileName':
+             'dts.mu2e.STMBeamToVDTarget101.MDC2025au.sequence.art'})
+        self.assertEqual(output_globs(tar),
+                         ['dts.mu2e.STMBeamToVDTarget101.MDC2025au.*.art'])
+
+    def test_skips_sinks(self):
+        """/dev/null is a legal outfile target and produces no file."""
+        from utils.runlocal import output_globs
+        tar = self._tarball({'o': 'dts.owner.X.version.sequencer.art',
+                             'n': '/dev/null'})
+        self.assertEqual(output_globs(tar), ['dts.mu2e.X.TestConf.*.art'])
+
+    def test_generic_desc_placeholder_becomes_a_wildcard(self):
+        from utils.runlocal import output_globs
+        tar = self._tarball({'o': 'dts.owner.{desc}.version.sequencer.art'})
+        self.assertEqual(output_globs(tar), ['dts.mu2e.*.TestConf.*.art'])
+
+    def test_no_outfiles_is_not_an_error(self):
+        from utils.runlocal import output_globs
+        self.assertEqual(output_globs(self._tarball({})), [])
+
+
+class TestRunLocalJobdesc(unittest.TestCase):
+    """The synthesized jobdesc has ONE index space — the cnf's."""
+
+    def setUp(self):
+        self.tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+
+    def test_njobs_covers_the_window(self):
+        from utils.runlocal import synth_jobdesc
+        from utils.prod_utils import resolve_entry_index
+        jobdesc = synth_jobdesc(self.tar, 'tape', first=5, num=3)
+        self.assertEqual(jobdesc['njobs'], 8)
+        # An index in the window maps to ITSELF — baseSeed = 1 + index.
+        entry, local = resolve_entry_index(jobdesc, 7)
+        self.assertIsNotNone(entry)
+        self.assertEqual(local, 7)
+        # And one past it is refused rather than silently rerunning index 0.
+        self.assertEqual(resolve_entry_index(jobdesc, 8), (None, None))
+
+    def test_carries_no_firstjob(self):
+        """Two index spaces is the trap this runner avoids; a firstjob
+        key would shift every index and change the seeds."""
+        from utils.runlocal import synth_jobdesc
+        self.assertNotIn('firstjob',
+                         synth_jobdesc(self.tar, 'tape', first=5, num=3))
+
+    def test_outputs_are_globs_marked_undeclared(self):
+        from utils.runlocal import synth_jobdesc
+        from utils.jobdesc import OUTSTAGE_LOCATION
+        outputs = synth_jobdesc(self.tar, 'tape', 0, 1)['outputs']
+        self.assertEqual(outputs,
+                         [{'dataset': 'dts.mu2e.X.TestConf.*.art',
+                           'location': OUTSTAGE_LOCATION}])
+
+
+class TestRunLocalChildArgv(unittest.TestCase):
+    """The rerun command printed for a failed job must be runnable."""
+
+    def test_carries_index_and_window(self):
+        from utils.runlocal import child_argv
+        argv = child_argv(7, _runlocal_args(first=5, num=4, jobdef='/t/c.tar'))
+        self.assertIn('--one', argv)
+        self.assertEqual(argv[argv.index('--one') + 1], '7')
+        self.assertEqual(argv[argv.index('--first') + 1], '5')
+        self.assertEqual(argv[argv.index('--num') + 1], '4')
+        self.assertEqual(argv[argv.index('--jobdef') + 1], '/t/c.tar')
+
+    def test_optional_flags_only_when_set(self):
+        from utils.runlocal import child_argv
+        self.assertNotIn('--copy-input', child_argv(0, _runlocal_args()))
+        self.assertNotIn('--mu2e-options', child_argv(0, _runlocal_args()))
+        argv = child_argv(0, _runlocal_args(copy_input=True,
+                                            mu2e_options='--no-timing'))
+        self.assertIn('--copy-input', argv)
+        # `=` form: mu2e options start with a dash, and argparse would
+        # otherwise read the value as the next flag and reject it.
+        self.assertIn('--mu2e-options=--no-timing', argv)
+
+
+class TestRunLocalDrive(unittest.TestCase):
+    """Each job runs as a child in its own directory."""
+
+    def setUp(self):
+        self.workdir = _mkdtemp()
+        self.tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+
+    def _args(self, **over):
+        over.setdefault('jobdef', self.tar)
+        over.setdefault('workdir', self.workdir)
+        return _runlocal_args(**over)
+
+    @staticmethod
+    def _index_of(argv):
+        return int(argv[argv.index('--one') + 1])
+
+    def _drive(self, args, fake):
+        from utils import runlocal
+        buf = io.StringIO()
+        with patch.object(runlocal.subprocess, 'run', fake):
+            with contextlib.redirect_stdout(buf):
+                rc = runlocal.drive(args)
+        return rc, buf.getvalue()
+
+    def test_each_job_gets_its_own_directory(self):
+        """process_jobdef works in cwd and its copy-input branch runs
+        `mv *.art indir/` — shared directories would cross-contaminate."""
+        seen = []
+
+        def fake(argv, cwd=None, stdout=None, stderr=None):
+            seen.append((self._index_of(argv), cwd))
+            Path(cwd, 'dts.mu2e.X.TestConf.001430_00000000.art').touch()
+            return SimpleNamespace(returncode=0)
+
+        rc, _ = self._drive(self._args(first=3, num=2), fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual([i for i, _ in seen], [3, 4])
+        self.assertEqual(sorted(Path(c).name for _, c in seen),
+                         ['job_000003', 'job_000004'])
+
+    def test_child_output_is_captured_per_job(self):
+        def fake(argv, cwd=None, stdout=None, stderr=None):
+            stdout.write("mu2e chatter\n")
+            return SimpleNamespace(returncode=0)
+
+        self._drive(self._args(num=2), fake)
+        for index in (0, 1):
+            log = Path(self.workdir) / f"job_{index:06d}" / 'stdout.log'
+            self.assertIn("mu2e chatter", log.read_text())
+
+    def test_a_failure_does_not_stop_the_rest(self):
+        ran = []
+
+        def fake(argv, cwd=None, stdout=None, stderr=None):
+            index = self._index_of(argv)
+            ran.append(index)
+            return SimpleNamespace(returncode=1 if index == 1 else 0)
+
+        rc, out = self._drive(self._args(num=4), fake)
+        self.assertEqual(sorted(ran), [0, 1, 2, 3])
+        self.assertEqual(rc, 1)
+        self.assertIn('3/4 succeeded', out)
+        self.assertIn('rerun index 1', out)
+
+    def test_never_exceeds_the_parallel_limit(self):
+        import threading
+        import time
+        lock = threading.Lock()
+        state = {'now': 0, 'peak': 0}
+
+        def fake(argv, cwd=None, stdout=None, stderr=None):
+            with lock:
+                state['now'] += 1
+                state['peak'] = max(state['peak'], state['now'])
+            time.sleep(0.05)
+            with lock:
+                state['now'] -= 1
+            return SimpleNamespace(returncode=0)
+
+        self._drive(self._args(num=6, parallel=2), fake)
+        self.assertEqual(state['peak'], 2)
+
+    def test_counts_the_outputs_each_job_produced(self):
+        def fake(argv, cwd=None, stdout=None, stderr=None):
+            if self._index_of(argv) == 0:
+                Path(cwd, 'dts.mu2e.X.TestConf.001430_00000000.art').touch()
+            Path(cwd, 'unrelated.txt').touch()
+            return SimpleNamespace(returncode=0)
+
+        _, out = self._drive(self._args(num=2), fake)
+        # Only files matching the cnf's declared outputs count.
+        self.assertIn(' 1 output(s)', out)
+        self.assertIn(' 0 output(s)', out)
+        self.assertNotIn('unrelated.txt', out)
+
+
+class TestRunLocalArgValidation(unittest.TestCase):
+    """Windows that would run nothing, or a nonsense pool size, are
+    rejected up front rather than producing an empty summary."""
+
+    def test_rejects_empty_window(self):
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', 'c.tar', '--num', '0'])
+
+    def test_rejects_negative_first(self):
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', 'c.tar', '--first', '-1'])
+
+    def test_rejects_zero_parallel(self):
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', 'c.tar', '-j', '0'])
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
