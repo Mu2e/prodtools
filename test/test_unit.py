@@ -15039,6 +15039,60 @@ class TestRunLocalChildArgv(unittest.TestCase):
         self.assertIn('--mu2e-options=--no-timing', argv)
 
 
+class TestRunlocalCode(unittest.TestCase):
+    """The driver unpacks the code tarball ONCE and hands children the
+    directory. 3.6 GB per job times four parallel jobs is not viable."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+
+    def test_unpack_creates_code_setup(self):
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        self.assertTrue(os.path.isfile(os.path.join(root, 'Code', 'setup.sh')))
+
+    def test_unpack_is_idempotent(self):
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        marker = os.path.join(root, 'Code', 'setup.sh')
+        with open(marker, 'a') as fh:
+            fh.write('# touched\n')
+        before = os.path.getsize(marker)
+        self.assertEqual(unpack_code(self.code, self.dir), root)
+        # Second call must not re-extract over an existing tree.
+        self.assertEqual(os.path.getsize(marker), before)
+
+    def test_child_argv_carries_code_root(self):
+        from utils.runlocal import child_argv
+        args = SimpleNamespace(entry_point='/repo/utils/runlocal.py',
+                               jobdef='/tmp/cnf.tar', inloc='tape',
+                               indices=[0, 1], nevts=10, mu2e_options='',
+                               copy_input=False, code_root='/w/code')
+        argv = child_argv(0, args)
+        self.assertIn('--code-root', argv)
+        self.assertEqual(argv[argv.index('--code-root') + 1], '/w/code')
+
+    def test_child_argv_omits_code_root_when_absent(self):
+        from utils.runlocal import child_argv
+        args = SimpleNamespace(entry_point='/repo/utils/runlocal.py',
+                               jobdef='/tmp/cnf.tar', inloc='tape',
+                               indices=[0, 1], nevts=10, mu2e_options='',
+                               copy_input=False, code_root=None)
+        self.assertNotIn('--code-root', child_argv(0, args))
+
+    def test_parser_accepts_both_flags(self):
+        from utils.runlocal import build_parser
+        args = build_parser().parse_args(
+            ['--jobdef', 'cnf.tar', '--code', '/exp/Code.tar.bz2'])
+        self.assertEqual(args.code, '/exp/Code.tar.bz2')
+        self.assertIsNone(args.code_root)
+        child = build_parser().parse_args(
+            ['--jobdef', 'cnf.tar', '--one', '3', '--code-root', '/w/code'])
+        self.assertEqual(child.code_root, '/w/code')
+
+
 class TestRunLocalDrive(unittest.TestCase):
     """Each job runs as a child in its own directory."""
 

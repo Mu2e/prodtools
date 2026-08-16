@@ -36,6 +36,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tarfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -197,6 +198,11 @@ def child_argv(index, args):
         argv.append(f'--mu2e-options={args.mu2e_options}')
     if args.copy_input:
         argv.append('--copy-input')
+    if getattr(args, 'code_root', None):
+        # Children get the already-unpacked directory, never --code:
+        # one unpack serves all of them, and the printed command must
+        # reproduce the job without redoing several GB of extraction.
+        argv.extend(['--code-root', args.code_root])
     return argv
 
 
@@ -312,6 +318,32 @@ def resolve_jobdef(name_or_path, workdir):
     return str((Path(workdir) / path.name).resolve())
 
 
+def unpack_code(tarball, workdir):
+    """Unpack a `muse tarball` Code.tar.bz2 once, for every child to share.
+
+    Returns the directory holding `Code/` — what `resolve_setup` wants as
+    its code root, and what the grid gets from $INPUT_TAR_DIR_LOCAL.
+
+    ONE unpack, not one per job: the build tree runs to several GB and
+    the driver launches four jobs at a time by default. Re-running is
+    cheap because an already-unpacked tree is detected and left alone.
+    """
+    root = Path(workdir) / 'code'
+    marker = root / 'Code' / 'setup.sh'
+    if marker.is_file():
+        print(f"[local] code already unpacked at {root}")
+        return str(root)
+    root.mkdir(parents=True, exist_ok=True)
+    print(f"[local] unpacking {tarball} into {root} "
+          f"(several GB — this takes a while)")
+    with tarfile.open(tarball, 'r:bz2') as tar:
+        tar.extractall(root)
+    if not marker.is_file():
+        sys.exit(f"runlocal: {tarball} has no Code/setup.sh — "
+                 f"build it with `muse tarball`")
+    return str(root)
+
+
 def run_one(index, args):
     """The child: prep and run ONE job in the current directory.
 
@@ -354,6 +386,12 @@ def build_parser():
     parser.add_argument('--copy-input', action='store_true',
                         help='stage inputs locally with mdh instead of '
                              'streaming them (worker --copy-input parity)')
+    parser.add_argument('--code', default=None,
+                        help='muse tarball Code.tar.bz2 to run against '
+                             'instead of the cnf\'s /cvmfs setup; unpacked '
+                             'once into <workdir>/code')
+    parser.add_argument('--code-root', default=None,
+                        help=argparse.SUPPRESS)
     parser.add_argument('--one', type=int,
                         help=argparse.SUPPRESS)  # internal: run a single index
     return parser
@@ -375,6 +413,8 @@ def main(argv=None):
     args.workdir = str(Path(args.workdir).resolve())
     Path(args.workdir).mkdir(parents=True, exist_ok=True)
     args.jobdef = resolve_jobdef(args.jobdef, args.workdir)
+    if args.code:
+        args.code_root = unpack_code(args.code, args.workdir)
     # The module, not bin/runlocal: that wrapper sources the Mu2e
     # environment, which this process already has and children inherit.
     args.entry_point = Path(__file__).resolve()
