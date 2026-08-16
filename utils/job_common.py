@@ -14,6 +14,12 @@ import hashlib
 from typing import Dict, Optional, Union
 
 
+# The relative setup path a code-mode cnf carries, and the layout
+# `muse tarball` produces. Same string upstream uses: mu2ejobdef:45
+# (filename_tarsetup) and mu2eprodsys:337 (MU2EGRID_USERSETUP).
+CODE_SETUP_REL = 'Code/setup.sh'
+
+
 # Mu2e dataset path puts every tier under one of four umbrella owner-classes.
 # Single source of truth — folded in from jobsub_argv._TIER_TO_OWNER_CLASS.
 _TIER_TO_OWNER_CLASS = {

@@ -14968,6 +14968,48 @@ class TestRunLocalIndexSpec(unittest.TestCase):
             [0])
 
 
+class TestResolveSetup(unittest.TestCase):
+    """resolve_setup is the single relative->absolute step for a
+    code-mode cnf. Absolute setup = a /cvmfs Musing; relative setup =
+    the Offline build travels as a separate tarball."""
+
+    def test_absolute_setup_passes_through(self):
+        from utils.runmu2e import resolve_setup
+        path = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh'
+        self.assertEqual(resolve_setup(path), path)
+
+    def test_absolute_setup_ignores_code_root(self):
+        from utils.runmu2e import resolve_setup
+        path = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh'
+        self.assertEqual(resolve_setup(path, code_root='/srv/rcds'), path)
+
+    def test_relative_setup_joins_code_root(self):
+        from utils.runmu2e import resolve_setup
+        self.assertEqual(resolve_setup('Code/setup.sh', code_root='/srv/rcds'),
+                         '/srv/rcds/Code/setup.sh')
+
+    def test_relative_setup_without_code_root_raises(self):
+        from utils.runmu2e import resolve_setup
+        with self.assertRaises(ValueError) as ctx:
+            resolve_setup('Code/setup.sh')
+        # The message must name both recovery paths, because the two
+        # callers fail for different reasons.
+        self.assertIn('INPUT_TAR_DIR_LOCAL', str(ctx.exception))
+        self.assertIn('--code', str(ctx.exception))
+
+    def test_relative_setup_with_empty_code_root_raises(self):
+        # os.environ.get returns '' for an exported-but-empty variable;
+        # that must fail like a missing one, not join to 'Code/setup.sh'.
+        from utils.runmu2e import resolve_setup
+        with self.assertRaises(ValueError):
+            resolve_setup('Code/setup.sh', code_root='')
+
+    def test_empty_setup_raises(self):
+        from utils.runmu2e import resolve_setup
+        with self.assertRaises(ValueError):
+            resolve_setup('')
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

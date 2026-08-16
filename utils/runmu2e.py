@@ -16,7 +16,7 @@ from pathlib import Path
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.job_common import Mu2eName, log_storage_location
+from utils.job_common import CODE_SETUP_REL, Mu2eName, log_storage_location
 from utils.jobdesc import OUTSTAGE_LOCATION
 from utils.jobfcl import Mu2eJobFCL
 from utils.jobquery import Mu2eJobPars
@@ -61,14 +61,55 @@ def _require_fields(entry, required_fields, mode_name):
         if field not in entry:
             fail(f"Error: {mode_name} requires '{field}' field")
 
-def _extract_simjob_setup(tarball, jp=None):
-    """Read the SimJob setup-script path from a cnf.*.tar's jobpars.json
-    via Mu2eJobPars (pass a pre-built instance to avoid re-parsing the
-    tarball). Re-raises with a clear context line on the realistic
-    failure modes (bad tarball, missing key, missing file)."""
+def resolve_setup(jp_setup, code_root=None):
+    """The absolute path of the script to source for this job.
+
+    An ABSOLUTE `jp_setup` is a /cvmfs Musing: returned unchanged, and
+    `code_root` is ignored. A RELATIVE one means the cnf was built with
+    `--code` and its Offline build ships as a separate tarball; it needs
+    `code_root` and is joined onto it.
+
+    Raises rather than falling back. A code-mode job that quietly
+    sourced some /cvmfs release would run the WRONG Offline and report
+    success, which is the failure this whole feature exists to avoid.
+    """
+    if not jp_setup:
+        raise ValueError(
+            "cnf jobpars carries no 'setup' — the tarball is malformed")
+    if os.path.isabs(jp_setup):
+        return jp_setup
+    if not code_root:
+        raise ValueError(
+            f"cnf setup {jp_setup!r} is relative, so this cnf was built "
+            f"with --code and its Offline build travels as a separate "
+            f"tarball, but no code root was given. On the grid that "
+            f"means $INPUT_TAR_DIR_LOCAL is unset — was --tar_file_name "
+            f"passed to jobsub_submit? Locally, pass --code to "
+            f"bin/runlocal.")
+    return os.path.join(code_root, jp_setup)
+
+def _code_root_from(args):
+    """Where an unpacked code tarball lives, for this caller.
+
+    The grid worker learns it from jobsub, which exports
+    $INPUT_TAR_DIR_LOCAL when --tar_file_name was passed. The local
+    runner passes --code-root and it arrives on `args`. Checked in that
+    order so a local run inside a grid-like environment still wins.
+    """
+    return (getattr(args, 'code_root', None)
+            or os.environ.get('INPUT_TAR_DIR_LOCAL'))
+
+def _extract_simjob_setup(tarball, jp=None, code_root=None):
+    """Read the setup-script path from a cnf.*.tar's jobpars.json via
+    Mu2eJobPars (pass a pre-built instance to avoid re-parsing the
+    tarball) and resolve it through `resolve_setup`.
+
+    Re-raises with a clear context line on the realistic failure modes
+    (bad tarball, missing key, missing file).
+    """
     try:
         jp = jp if jp is not None else Mu2eJobPars(tarball)
-        setup = jp.setup()
+        setup = resolve_setup(jp.setup(), code_root=code_root)
         print(f"Job setup script: {setup}")
         return setup
     except (tarfile.TarError, KeyError, FileNotFoundError, OSError) as e:
@@ -150,7 +191,8 @@ def process_direct_input(jobdesc, fname, args):
     # Extract setup script from the already-parsed tarball (setup() lives
     # on Mu2eJobBase, so the Mu2eJobFCL instance serves — no second
     # gunzip+parse of jobpars.json)
-    simjob_setup = _extract_simjob_setup(tarball, jp=job_fcl)
+    simjob_setup = _extract_simjob_setup(tarball, jp=job_fcl,
+                                         code_root=_code_root_from(args))
 
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, fname, outputs
@@ -270,7 +312,8 @@ def process_jobdef(jobdesc, fname, args):
         print(f"FCL: {fcl}")
     
     # Extract setup script from tarball
-    simjob_setup = _extract_simjob_setup(tarball, jp=jp)
+    simjob_setup = _extract_simjob_setup(tarball, jp=jp,
+                                         code_root=_code_root_from(args))
 
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, infiles, outputs, inloc
