@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for)
-from utils.jobdesc import (RESOURCE_KEYS, tarball_of, outputs_of, njobs_of,
+from utils.jobdesc import (ENTRY_VALUE_KEYS, tarball_of, outputs_of, njobs_of,
                            inloc_of, firstjob_of, validate_window,
                            resources_of, is_draining, validate_entry_value,
                            OUTSTAGE_LOCATION, code_of)
@@ -381,12 +381,30 @@ def _validate_entry_values(entry):
     Checking the merged result instead would mean re-validating the
     entry's own values on every path that merges.
     """
-    for key in ('inloc',) + RESOURCE_KEYS:
+    for key in ENTRY_VALUE_KEYS:
         if key in entry:
             try:
                 validate_entry_value(key, entry[key])
             except ValueError as e:
                 sys.exit(f"json2jobdef: {e}")
+
+
+def _gate_code_tarball(entry, tarball_path, note=None):
+    """Refuse to create a campaign whose code tarball no longer matches
+    the cnf. Exits 2; returns only when the entry passes.
+
+    Draining and normal entries ask the same question of the same
+    artifact, so they share one gate — the branch-local copies this
+    replaces differed only by the trailing note, which is exactly the
+    kind of difference that drifts into a real one.
+    """
+    ok, problems = check_code_tarball(entry, str(tarball_path))
+    if ok:
+        return
+    print(format_report(str(tarball_path), problems))
+    if note:
+        print(note)
+    sys.exit(2)
 
 
 def _refuse_outstage_campaign(entry):
@@ -444,10 +462,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
         # No check_inputs: a generic cnf bakes no inputs — the tick
         # gates every batch (residency + settling age) at dispatch.
         # The code tarball still has to match, though.
-        ok, problems = check_code_tarball(entry, str(tarball_path))
-        if not ok:
-            print(format_report(str(tarball_path), problems))
-            sys.exit(2)
+        _gate_code_tarball(entry, tarball_path)
         snap = _snapshot_entry(entry, resources)
         if dry_run:
             print(f"[DRY RUN] would enqueue draining campaign: "
@@ -474,12 +489,9 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
               f"({len(problems)} problem(s)) — fix and re-run; "
               f"no campaign created")
         sys.exit(2)
-    ok, problems = check_code_tarball(entry, str(tarball_path))
-    if not ok:
-        print(format_report(str(tarball_path), problems))
-        print("json2jobdef: code tarball does not match the cnf — "
-              "no campaign created")
-        sys.exit(2)
+    _gate_code_tarball(entry, tarball_path,
+                       note="json2jobdef: code tarball does not match "
+                            "the cnf — no campaign created")
     njobs = njobs_of(entry)
     if njobs is None:
         sys.exit("json2jobdef: entry has no njobs (generic tarball) — "

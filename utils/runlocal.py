@@ -45,6 +45,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.jobdesc import OUTSTAGE_LOCATION
+from utils.job_common import OUTPUT_TIERS
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import _fetch_file_local
 from utils.runmu2e import (
@@ -57,11 +58,6 @@ from utils.runmu2e import (
 # that arithmetic rather than guessing a node's free memory.
 DEFAULT_PARALLEL = 4
 GB_PER_JOB = 2.5
-
-# Same tier whitelist job_outputs() uses to tell a real output file from
-# a sink like /dev/null.
-_OUTPUT_TIERS = ('dts.', 'dig.', 'sim.', 'rec.', 'mcs.', 'nts.', 'cnf.')
-
 
 def output_globs(tarball):
     """Glob patterns matching what one job of this cnf writes.
@@ -78,13 +74,13 @@ def output_globs(tarball):
     for name in jp.job_outputs(0, override_desc='*', override_seq='*').values():
         # job_outputs passes non-file targets (a `/dev/null` sink)
         # through untouched; only real datasets are worth globbing for.
-        if not name.startswith(_OUTPUT_TIERS) or name in globs:
+        if not name.startswith(OUTPUT_TIERS) or name in globs:
             continue
         globs.append(name)
     return globs
 
 
-def parse_indices(spec):
+def parse_index_spec(spec):
     """`'0,3,7-9'` -> `[0, 3, 7, 8, 9]`, sorted and deduplicated.
 
     Ranges are inclusive at both ends, matching how a recovery list
@@ -109,7 +105,7 @@ def parse_indices(spec):
 
 
 def format_indices(indices):
-    """The inverse of `parse_indices`, collapsing runs back to `A-B`.
+    """The inverse of `parse_index_spec`, collapsing runs back to `A-B`.
 
     Children and rerun lines carry this, so a 200-index window does
     not become a 200-token argv.
@@ -140,7 +136,7 @@ def resolve_indices(args):
         if args.first is not None or args.num is not None:
             raise ValueError("--indices and --first/--num are alternatives; "
                              "pass one or the other")
-        return parse_indices(args.indices)
+        return parse_index_spec(args.indices)
     first = 0 if args.first is None else args.first
     num = 1 if args.num is None else args.num
     if first < 0:

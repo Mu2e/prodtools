@@ -19,7 +19,8 @@ from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
 from utils.jobdesc import (
-    RESOURCE_KEYS, firstjob_of, validate_entry_value, validate_outloc,
+    ENTRY_VALUE_KEYS, RESOURCE_KEYS, firstjob_of, validate_entry_value,
+    validate_outloc,
     validate_window)
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
@@ -342,7 +343,7 @@ def validate_required_fields(config):
     # the job. Both would be ambiguous; neither cannot run.
     if bool(config.get('simjob_setup')) == bool(config.get('code')):
         sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
-    for key in ('inloc', 'code') + RESOURCE_KEYS:
+    for key in ENTRY_VALUE_KEYS:
         if key in config:
             try:
                 validate_entry_value(key, config[key])

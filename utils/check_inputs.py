@@ -17,7 +17,8 @@ from dataclasses import dataclass
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.jobquery import Mu2eJobPars
-from utils.job_common import Mu2eName
+from utils.job_common import Mu2eName, sha256_file
+from utils.jobdesc import code_of
 from utils.file_resolver import resilient_path, infer_dataset_location
 # NB: utils.samweb_wrapper (→ samweb_client) is imported lazily inside
 # check_inputs, so `--help` and the unit tests can load this module
@@ -253,9 +254,6 @@ def check_code_tarball(entry, cnf_path):
     Hashing ~1 GB costs a few seconds, negligible beside the RCDS
     publish that follows.
     """
-    from utils.jobdesc import code_of
-    from utils.job_common import sha256_file
-
     code = code_of(entry)
     try:
         ref = Mu2eJobPars(cnf_path).json_data.get('code_ref')

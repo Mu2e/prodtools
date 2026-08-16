@@ -125,6 +125,14 @@ def validate_window(firstjob: int, njobs: Optional[int], capacity: Optional[int]
 
 RESOURCE_KEYS = ('memory', 'disk', 'expected_lifetime')
 
+# Every entry key whose VALUE validate_entry_value knows how to check.
+# Single home, derived by all three boundaries that validate an entry:
+# json2jobdef (a campaign is born), submit.enqueue_entry (the safety net
+# before a campaign is created), and submission_ledger (a live campaign
+# is edited). Three restatements is how `code` reached two of them and
+# not the third.
+ENTRY_VALUE_KEYS = ('inloc', 'code') + RESOURCE_KEYS
+
 
 def resources_of(entry: dict) -> dict:
     """Optional per-entry resource requests (subset of RESOURCE_KEYS

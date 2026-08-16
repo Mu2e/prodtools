@@ -15282,12 +15282,12 @@ class TestRunLocalChildArgv(unittest.TestCase):
     def test_a_gapped_window_survives_the_round_trip(self):
         """The child rebuilds njobs from this spec; a collapsed range
         that lost an index would give the rerun a different jobdesc."""
-        from utils.runlocal import child_argv, parse_indices
+        from utils.runlocal import child_argv, parse_index_spec
         indices = [0, 3, 7, 8, 9]
         argv = child_argv(3, _runlocal_args(indices=indices))
         spec = argv[argv.index('--indices') + 1]
         self.assertEqual(spec, '0,3,7-9')
-        self.assertEqual(parse_indices(spec), indices)
+        self.assertEqual(parse_index_spec(spec), indices)
 
     def test_optional_flags_only_when_set(self):
         from utils.runlocal import child_argv
@@ -15540,11 +15540,11 @@ class TestRunLocalIndexSpec(unittest.TestCase):
     lost, which are rarely contiguous."""
 
     def test_parses_singles_ranges_and_normalizes(self):
-        from utils.runlocal import parse_indices
-        self.assertEqual(parse_indices('0,3,7-9'), [0, 3, 7, 8, 9])
+        from utils.runlocal import parse_index_spec
+        self.assertEqual(parse_index_spec('0,3,7-9'), [0, 3, 7, 8, 9])
         # Inclusive at both ends, sorted, deduplicated, space-tolerant.
-        self.assertEqual(parse_indices('5-5'), [5])
-        self.assertEqual(parse_indices('4, 2 , 4'), [2, 4])
+        self.assertEqual(parse_index_spec('5-5'), [5])
+        self.assertEqual(parse_index_spec('4, 2 , 4'), [2, 4])
 
     def test_formats_runs_back_into_ranges(self):
         from utils.runlocal import format_indices
