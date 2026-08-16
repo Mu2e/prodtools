@@ -39,7 +39,8 @@ from utils.jobdesc import (RESOURCE_KEYS, tarball_of, outputs_of, njobs_of,
                            OUTSTAGE_LOCATION, code_of)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
-from utils.check_inputs import check_inputs, format_report, Problem
+from utils.check_inputs import (check_inputs, check_code_tarball,
+                                format_report, Problem)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RUNJOB_SH = REPO_ROOT / 'bin' / 'runjob.sh'
@@ -439,9 +440,14 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
         err = _validate_draining_entry(entry)
         if err:
             sys.exit(f"json2jobdef: {err}")
-        _ensure_local_tarball(tarball_of(entry))
+        tarball_path = _ensure_local_tarball(tarball_of(entry))
         # No check_inputs: a generic cnf bakes no inputs — the tick
         # gates every batch (residency + settling age) at dispatch.
+        # The code tarball still has to match, though.
+        ok, problems = check_code_tarball(entry, str(tarball_path))
+        if not ok:
+            print(format_report(str(tarball_path), problems))
+            sys.exit(2)
         snap = _snapshot_entry(entry, resources)
         if dry_run:
             print(f"[DRY RUN] would enqueue draining campaign: "
@@ -467,6 +473,12 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
         print(f"json2jobdef: inputs not ready "
               f"({len(problems)} problem(s)) — fix and re-run; "
               f"no campaign created")
+        sys.exit(2)
+    ok, problems = check_code_tarball(entry, str(tarball_path))
+    if not ok:
+        print(format_report(str(tarball_path), problems))
+        print("json2jobdef: code tarball does not match the cnf — "
+              "no campaign created")
         sys.exit(2)
     njobs = njobs_of(entry)
     if njobs is None:

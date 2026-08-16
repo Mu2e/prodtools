@@ -5479,10 +5479,14 @@ class TestEnqueue(unittest.TestCase):
                                   return_value=Path(self.entry['tarball']))
         ci_patcher = patch.object(submit, 'check_inputs',
                                   return_value=(True, []))
+        cc_patcher = patch.object(submit, 'check_code_tarball',
+                                  return_value=(True, []))
         tb_patcher.start()
         ci_patcher.start()
+        cc_patcher.start()
         self.addCleanup(tb_patcher.stop)
         self.addCleanup(ci_patcher.stop)
+        self.addCleanup(cc_patcher.stop)
 
     def test_enqueue_writes_campaign(self):
         from utils.submit import enqueue_entry
@@ -5583,10 +5587,14 @@ class TestEnqueueErrorStyle(unittest.TestCase):
                                   return_value=Path('cnf.mu2e.E.C.0.tar'))
         ci_patcher = patch.object(submit, 'check_inputs',
                                   return_value=(True, []))
+        cc_patcher = patch.object(submit, 'check_code_tarball',
+                                  return_value=(True, []))
         tb_patcher.start()
         ci_patcher.start()
+        cc_patcher.start()
         self.addCleanup(tb_patcher.stop)
         self.addCleanup(ci_patcher.stop)
+        self.addCleanup(cc_patcher.stop)
 
     def _entry(self, tarball='cnf.mu2e.E.C.0.tar'):
         return {'tarball': tarball, 'njobs': 50}
@@ -7565,6 +7573,81 @@ class TestCheckInputs(unittest.TestCase):
         self.assertEqual([p.kind for p in probs], ["nearline"])
 
 
+class TestCheckCodeTarball(unittest.TestCase):
+    """The entry names a tarball; the cnf remembers the digest of the
+    tarball it was built against. They must still agree at submit time."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+
+    def _cnf(self, jobpars):
+        """A cnf tarball carrying just jobpars.json — enough for
+        Mu2eJobPars to read code_ref."""
+        path = os.path.join(self.dir, 'cnf.mu2e.Demo.Run1Baq.0.tar')
+        blob = json.dumps(jobpars).encode()
+        with tarfile.open(path, 'w') as tar:
+            info = tarfile.TarInfo('jobpars.json')
+            info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob))
+        return path
+
+    def test_matching_digest_passes(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertTrue(ok)
+        self.assertEqual(problems, [])
+
+    def test_musing_cnf_and_musing_entry_pass(self):
+        from utils.check_inputs import check_code_tarball
+        cnf = self._cnf({'code': '', 'setup': '/cvmfs/x/setup.sh', 'tbs': {}})
+        ok, problems = check_code_tarball({}, cnf)
+        self.assertTrue(ok)
+
+    def test_changed_bytes_refused(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        # Rebuild in place with different content, as `muse tarball` would.
+        _make_code_tarball(self.code)
+        with open(self.code, 'ab') as fh:
+            fh.write(b'\x00')
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'code_mismatch')
+
+    def test_deleted_tarball_refused(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        os.unlink(self.code)
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'missing')
+
+    def test_entry_has_code_but_cnf_does_not(self):
+        from utils.check_inputs import check_code_tarball
+        cnf = self._cnf({'code': '', 'setup': '/cvmfs/x/setup.sh', 'tbs': {}})
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'code_mismatch')
+
+    def test_cnf_has_code_but_entry_does_not(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        ok, problems = check_code_tarball({}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'code_mismatch')
+
+
 class TestCheckInputsCLI(unittest.TestCase):
     """format_report + main: grouped report, exit 0 clean / 2 on problems."""
 
@@ -7662,6 +7745,8 @@ class TestEnqueueInputGate(unittest.TestCase):
         with patch.object(submit, "_ensure_local_tarball",
                           return_value=Path("cnf.mu2e.T.C.0.tar")), \
              patch.object(submit, "check_inputs", return_value=(True, [])), \
+             patch.object(submit, "check_code_tarball",
+                          return_value=(True, [])), \
              patch.object(submit.submission_ledger, "create_campaign",
                           return_value=7):
             camp_id = submit.enqueue_entry(entry, ledger_db="/tmp/never.db",
@@ -11479,6 +11564,8 @@ class TestEnqueueDraining(unittest.TestCase):
         with patch.object(submit, '_ensure_local_tarball',
                           return_value='/tmp/t.tar'), \
              patch.object(submit, 'check_inputs') as ci, \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit.submission_ledger, 'create_campaign',
                           fake_create):
             camp_id = submit.enqueue_entry(dict(self.ENTRY),
@@ -11502,6 +11589,8 @@ class TestEnqueueDraining(unittest.TestCase):
         from utils import submit
         with patch.object(submit, '_ensure_local_tarball',
                           return_value='/tmp/t.tar'), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit.submission_ledger,
                           'create_campaign') as cc:
             result = submit.enqueue_entry(dict(self.ENTRY),
@@ -12867,6 +12956,8 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                  patch.object(submit, '_ensure_local_tarball',
                               return_value=Path(tarball)), \
                  patch.object(submit, 'check_inputs', return_value=(True, [])), \
+                 patch.object(submit, 'check_code_tarball',
+                              return_value=(True, [])), \
                  patch.object(submit, '_resolve_ledger_db',
                               return_value=db_path):
                 # Computed under the same patches process_single_entry uses,
@@ -14715,10 +14806,14 @@ class TestEnqueueRefusesOutstage(unittest.TestCase):
         tb = patch.object(submit, '_ensure_local_tarball',
                           return_value=Path('cnf.mu2e.O.C.0.tar'))
         ci = patch.object(submit, 'check_inputs', return_value=(True, []))
+        cc = patch.object(submit, 'check_code_tarball',
+                          return_value=(True, []))
         tb.start()
         ci.start()
+        cc.start()
         self.addCleanup(tb.stop)
         self.addCleanup(ci.stop)
+        self.addCleanup(cc.stop)
 
     def test_outstage_entry_refused(self):
         from utils.submit import enqueue_entry

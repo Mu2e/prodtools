@@ -27,7 +27,7 @@ from utils.file_resolver import resilient_path, infer_dataset_location
 class Problem:
     dataset: str
     filename: str
-    kind: str      # 'truncated' | 'missing' | 'nearline' | 'query_error'
+    kind: str      # 'truncated' | 'missing' | 'nearline' | 'query_error' | 'code_mismatch'
     detail: str
 
 
@@ -234,6 +234,55 @@ def check_inputs(tarball_path, inloc, *,
     for ds, files in primary.items():
         problems += check_tape(ds, files, locality, dataset_location)
     return (not problems, problems)
+
+
+def check_code_tarball(entry, cnf_path):
+    """Verify the entry's code tarball is still the one the cnf was
+    built against. Returns (ok, problems), same shape as check_inputs.
+
+    Deliberately NOT folded into check_inputs: that function means one
+    thing — input-data residency — and this is a different question
+    about a different artifact.
+
+    Sidecar delivery means the build's bytes are not in the cnf, so
+    without this gate a rebuilt or replaced tarball would ship silently
+    and the campaign's outputs would carry provenance that is simply
+    wrong. mu2eprodsys binds nothing here; we can, cheaply.
+
+    Hashing ~1 GB costs a few seconds, negligible beside the RCDS
+    publish that follows.
+    """
+    from utils.jobdesc import code_of
+    from utils.job_common import sha256_file
+
+    code = code_of(entry)
+    ref = Mu2eJobPars(cnf_path).json_data.get('code_ref')
+
+    if code is None and ref is None:
+        return (True, [])
+    if code is None or ref is None:
+        return (False, [Problem(
+            dataset='code', filename=str(code or cnf_path),
+            kind='code_mismatch',
+            detail=("entry and cnf disagree about code mode: "
+                    f"entry code={code!r}, cnf code_ref="
+                    f"{'present' if ref else 'absent'}. Rebuild the cnf "
+                    f"from the config you are enqueueing."))])
+    if not os.path.isfile(code):
+        return (False, [Problem(
+            dataset='code', filename=code, kind='missing',
+            detail="code tarball named by the entry no longer exists")])
+
+    digest, size = sha256_file(code)
+    if digest != ref.get('sha256'):
+        return (False, [Problem(
+            dataset='code', filename=code, kind='code_mismatch',
+            detail=(f"sha256 {digest[:12]} does not match the cnf's "
+                    f"code_ref {str(ref.get('sha256'))[:12]} "
+                    f"({size} bytes now, {ref.get('size')} at build). "
+                    f"Rebuild the cnf, or point the entry at the "
+                    f"original tarball."))])
+    return (True, [])
 
 
 def format_report(tarball_path, problems):
