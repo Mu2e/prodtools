@@ -15092,6 +15092,32 @@ class TestRunlocalCode(unittest.TestCase):
             ['--jobdef', 'cnf.tar', '--one', '3', '--code-root', '/w/code'])
         self.assertEqual(child.code_root, '/w/code')
 
+    def test_sentinel_not_setup_sh_gates_reuse(self):
+        """`Code/setup.sh` is payload, extracted partway through a run
+        that could still be killed. Only the sentinel — written last —
+        proves the extract finished; a run that trusted setup.sh alone
+        would silently reuse a truncated tree forever."""
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
+        self.assertTrue(os.path.isfile(lib))
+        os.remove(lib)  # simulate a partial extract that got past setup.sh
+        self.assertEqual(unpack_code(self.code, self.dir), root)
+        # Sentinel was still present, so the second call trusted it and
+        # did not re-extract -- the missing file stays missing.
+        self.assertFalse(os.path.isfile(lib))
+
+    def test_missing_sentinel_forces_re_extraction(self):
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
+        os.remove(lib)
+        os.remove(os.path.join(root, '.unpack-complete'))
+        self.assertEqual(unpack_code(self.code, self.dir), root)
+        # No sentinel meant a real re-extract, which restored the file --
+        # proving the sentinel, not setup.sh, is what actually gates.
+        self.assertTrue(os.path.isfile(lib))
+
 
 class TestRunLocalDrive(unittest.TestCase):
     """Each job runs as a child in its own directory."""

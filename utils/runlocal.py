@@ -326,11 +326,18 @@ def unpack_code(tarball, workdir):
 
     ONE unpack, not one per job: the build tree runs to several GB and
     the driver launches four jobs at a time by default. Re-running is
-    cheap because an already-unpacked tree is detected and left alone.
+    cheap because an already-unpacked tree is detected and left alone —
+    but only via the `.unpack-complete` sentinel, never via
+    `Code/setup.sh` itself. `setup.sh` is tarball *payload*, typically
+    among the first members extracted; a run killed partway through
+    `extractall` (Ctrl-C, OOM, full disk) can leave it on disk with the
+    rest of the tree missing, and keying the early return on it would
+    make every later run trust a silently incomplete Offline forever.
     """
     root = Path(workdir) / 'code'
     marker = root / 'Code' / 'setup.sh'
-    if marker.is_file():
+    sentinel = root / '.unpack-complete'
+    if sentinel.is_file():
         print(f"[local] code already unpacked at {root}")
         return str(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -341,6 +348,10 @@ def unpack_code(tarball, workdir):
     if not marker.is_file():
         sys.exit(f"runlocal: {tarball} has no Code/setup.sh — "
                  f"build it with `muse tarball`")
+    # Written last, after the setup.sh check passes: its presence means
+    # every earlier step completed, so a partial extract is never
+    # mistaken for a finished one on a later run.
+    sentinel.write_text(os.path.basename(tarball) + '\n')
     return str(root)
 
 
