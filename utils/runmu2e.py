@@ -197,6 +197,15 @@ def process_direct_input(jobdesc, fname, args):
     outputs = jobdesc_entry['outputs']
     return fcl, simjob_setup, fname, outputs
 
+def proto_for_inloc(inloc):
+    """'file' only for dir: paths a worker can POSIX-read. A dir: under
+    /pnfs is dCache -- never mounted on a grid worker -- so it streams
+    via xrootd like every other dCache location (file_resolver already
+    renders the xroot URL for dir:+root)."""
+    if inloc.startswith('dir:') and not inloc[4:].startswith('/pnfs/'):
+        return 'file'
+    return 'root'
+
 def process_jobdef(jobdesc, fname, args):
     """Process a job in normal mode.
 
@@ -303,10 +312,7 @@ def process_jobdef(jobdesc, fname, args):
         print(f"FCL: {fcl}")
     # Generate FCL - Normal mode with streaming inputs
     else:
-        # For dir:<path> inloc, inputs are on a locally-mounted filesystem
-        # (typically cvmfs). The xroot protocol only works for /pnfs paths,
-        # so use the 'file' protocol (direct POSIX read) for dir: mode.
-        proto = 'file' if inloc.startswith('dir:') else 'root'
+        proto = proto_for_inloc(inloc)
         print(f"Using streaming inputs from {inloc} (protocol: {proto})")
         fcl = write_fcl(tarball, inloc, proto, job_index_num)
         print(f"FCL: {fcl}")
