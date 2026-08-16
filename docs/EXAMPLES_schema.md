@@ -63,6 +63,28 @@ When regenerating, read in this order:
    `--enqueue`, and `--enqueue` requires `--prod`. There is no
    `--jobdefs` flag: `json2jobdef` writes no file recording the
    campaign at all.
+
+   **Code-tarball builds (`code` vs `simjob_setup`)** — a JSON config
+   entry's top-level `simjob_setup` (a `/cvmfs` Musing `setup.sh`) and
+   `code` (an absolute path to a `muse tarball` `Code.tar.bz2`) are
+   mutually exclusive: `json2jobdef` requires exactly one. `code` must
+   point at a tarball containing `Code/setup.sh` — a plain Muse work
+   directory has no such file; only `muse tarball` generates one, and
+   `json2jobdef`/`jobdef --code` refuse a tarball missing it (or
+   unreadable, or not bzip2). The resulting cnf's `jobpars.json` never
+   embeds the build: `code_ref` (`sha256`/`size`/`source_path`) is
+   recorded instead, and the entry keeps the tarball path (read back via
+   `utils.jobdesc.code_of`) so a later slice or recovery can still find
+   it and `check_inputs` can re-verify the digest still matches before
+   jobs launch. Direct `jobdef` invocation takes the same choice as
+   `--setup SCRIPT` / `--code TARBALL` on one mutually-exclusive group.
+   Nothing else about the entry changes — grid submission adds the
+   `--tar_file_name dropbox://` sidecar automatically from the entry's
+   `code` key (see the Production Execution section for the worker
+   side). For a local smoke run without touching the grid, `bin/runlocal
+   --code <tarball>` unpacks the build once into `<workdir>/code/`; a
+   `runlocal` child process takes the already-unpacked tree via
+   `--code-root` instead of re-extracting it.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -78,7 +100,13 @@ When regenerating, read in this order:
    index from `$PROCESS` via the ops JSON's `jobs` table, and carries
    that index internally in a synthesized `fname` (sequencer field).
    Cover the dry-run flag. Do not document a `fname=...` invocation —
-   the POMS `--jobdesc` mode was removed 2026-08.
+   the POMS `--jobdesc` mode was removed 2026-08. For a code-mode cnf,
+   note that `runmu2e` reads the Offline build from `$INPUT_TAR_DIR_LOCAL`
+   (the directory jobsub itself populates from `--tar_file_name` on the
+   worker) rather than from a `/cvmfs` Musing path; an unset value there
+   on a failed job means `--tar_file_name` never reached the worker, and
+   `bin/runjob.sh`'s diagnostic echo block reports it for exactly that
+   reason.
 8. **Sequential vs. pseudo-random auxiliary input selection** — the
    `tbs.sequential_aux` flag.
 9. **FCL overrides** — `fcl_overrides` dict, how template + `--embed`
@@ -137,6 +165,19 @@ When regenerating, read in this order:
       as a gate (a failing entry blocks with no campaign created). Note
       it needs no mu2epro — it is a status check, safe to run as
       yourself.
+    - `jobquery` — cover `--codesize` returning `0` unconditionally
+      (code ships as a jobsub sidecar, never embedded in the cnf — 0 is
+      the honest answer, not a placeholder) and that `--recipe` prints
+      `code:` / `code sha256:` lines from the cnf's `code_ref` for a
+      code-mode cnf (nothing printed for an ordinary Musing cnf). Do
+      NOT document `--extract-code` — it was removed (it extracted any
+      tar member ending in `.tar`, which under sidecar delivery is not
+      code at all).
+    - `runlocal` — mention `--code <tarball>` as an alternative to a cnf
+      built from `simjob_setup`: unpacks the build once into
+      `<workdir>/code/` before any jobs run, and each spawned child
+      takes the already-unpacked tree via `--code-root` rather than
+      re-extracting it.
 12. **Troubleshooting** — only entries that correspond to real error
     messages produced by current code. Remove stale ones.
 
@@ -351,6 +392,26 @@ reading the code:
   pushOutput then tries to delete the production input at its own
   dataset path (2026-08-02 smoke incident; the worker also excludes
   its inputs as the authoritative defense).
+- RCDS publication of a `--tar_file_name` sidecar is not instant —
+  jobsub_submit's own `--skip-check rcds` flag must NOT be used with a
+  code tarball. It exists to let a submission through before the RCDS
+  check would otherwise block it, and using it here is exactly how jobs
+  land on a worker before their code has actually propagated: the job
+  starts, finds no build, and fails in a way that looks unrelated to
+  code delivery.
+- A code tarball is not in SAM — sidecar delivery means the bytes never
+  pass through `pushOutput`/SAM at all. Delete the tarball a `--prod`
+  campaign's `code` entry key points at and the campaign becomes
+  unreproducible even though its cnf (and the cnf's `code_ref` digest)
+  survives in SAM forever: the digest proves what the build WAS, it
+  cannot regenerate it. A `--prod` code tarball must therefore live on
+  a durable, mu2epro-readable path for the campaign's lifetime — not a
+  personal scratch area that can be cleaned up, and not `/tmp`.
+- A plain Muse work directory has no `setup.sh` — only `muse tarball`
+  packages one (`Code/setup.sh`). Pointing `code`/`--code` at a Muse
+  work directory tarred up by hand fails `validate_code_tarball`'s
+  `Code/setup.sh` check; the fix is to run `muse tarball`, not to
+  reshape the archive by hand.
 - Workers stream inputs via xroot by default (POMS-era parity). A JSON
   config entry sets `"copy_input": true` to stage inputs locally via mdh
   instead — worth it only for descs with fat runtime tails, where a

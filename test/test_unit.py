@@ -3791,6 +3791,52 @@ class TestJobParsRecipe(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 32c. jobquery code-mode honesty (Task 7: sidecar delivery, no embedding)
+# ---------------------------------------------------------------------------
+
+class TestJobqueryCodeMode(unittest.TestCase):
+    """Delivery is by jobsub sidecar (--tar_file_name); nothing is embedded
+    in the cnf. codesize() returning 0 is the honest answer, and the old
+    extract_code() — which pulled out any tar member ending in .tar — is
+    actively wrong under sidecar delivery and must be gone."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def _cnf(self, jobpars):
+        path = os.path.join(self.dir, 'cnf.mu2e.Demo.Run1Baq.0.tar')
+        blob = json.dumps(jobpars).encode()
+        with tarfile.open(path, 'w') as tar:
+            info = tarfile.TarInfo('jobpars.json')
+            info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob))
+        return path
+
+    def test_recipe_reports_code_mode(self):
+        from utils.jobquery import Mu2eJobPars
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': {'sha256': 'a' * 64, 'size': 12,
+                                      'source_path': '/exp/Code.tar.bz2'},
+                         'tbs': {'outfiles': {}}, 'jobname': 'demo'})
+        text = Mu2eJobPars(cnf).recipe()
+        self.assertIn('/exp/Code.tar.bz2', text)
+        self.assertIn('a' * 64, text)
+
+    def test_recipe_omits_code_line_for_musing_cnf(self):
+        from utils.jobquery import Mu2eJobPars
+        cnf = self._cnf({'code': '', 'setup': '/cvmfs/x/setup.sh',
+                         'tbs': {'outfiles': {}}, 'jobname': 'demo'})
+        self.assertNotIn('code:', Mu2eJobPars(cnf).recipe())
+
+    def test_extract_code_is_gone(self):
+        # It extracted any member ending in .tar, which under sidecar
+        # delivery would pull out something that is not code at all.
+        from utils.jobquery import Mu2eJobPars
+        self.assertFalse(hasattr(Mu2eJobPars, 'extract_code'))
+
+
+# ---------------------------------------------------------------------------
 # 33. jobdef._resolve_njobs (build-time tbs.njobs embedding)
 # ---------------------------------------------------------------------------
 

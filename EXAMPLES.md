@@ -136,10 +136,62 @@ Notes:
 - List-valued fields expand combinatorially: an entry with two `dsconf`
   values and three `desc` values yields six jobs.
 
-Required JSON fields per entry: `simjob_setup`, `fcl`, `dsconf`, `outloc`.
-`desc` is derived from `input_data` when omitted; `owner` defaults to the
-current user (mapped to `mu2e` for mu2epro); `inloc` defaults to `none`;
-`njobs: -1` means "derive from the input file list".
+Required JSON fields per entry: exactly one of `simjob_setup` / `code`,
+plus `fcl`, `dsconf`, `outloc`. `desc` is derived from `input_data` when
+omitted; `owner` defaults to the current user (mapped to `mu2e` for
+mu2epro); `inloc` defaults to `none`; `njobs: -1` means "derive from the
+input file list".
+
+### Building against a code tarball instead of a Musing
+
+An entry's `simjob_setup` (a `/cvmfs` Musing `setup.sh`) and `code` (an
+absolute path to a `muse tarball` build) are mutually exclusive —
+`json2jobdef` requires exactly one:
+
+```json
+{
+  "desc": "POT_Run1_a",
+  "dsconf": "MDC2025ac",
+  "fcl": "Production/JobConfig/beam/POT.fcl",
+  "njobs": 20,
+  "events": 5000,
+  "run": 1430,
+  "outloc": { "*.art": "disk" },
+  "code": "/exp/mu2e/data/users/mu2epro/code_tarballs/Code.tar.bz2",
+  "owner": "mu2e"
+}
+```
+
+- `code` must be a `muse tarball` output: a bzip2-compressed tar
+  containing `Code/setup.sh`. A plain Muse work directory has no
+  `setup.sh` at all — only `muse tarball` generates one; `json2jobdef`
+  (and `jobdef --code`) refuse a tarball that is unreadable, not
+  bzip2-compressed, or missing `Code/setup.sh`, at build time rather
+  than on a worker.
+- Nothing is embedded in the cnf (sidecar delivery): `jobpars.json`
+  carries `code_ref` (`sha256`/`size`/`source_path`) as provenance
+  instead of the build's bytes, and the entry keeps `code` (the tarball
+  path) so a later slice, recovery, or `check_inputs` can find the same
+  tarball and re-verify its digest still matches before jobs launch.
+- The grid path needs nothing extra beyond the entry key — submission
+  adds jobsub's `--tar_file_name dropbox://<tarball>` sidecar
+  automatically from `code` (see section 7 for the worker side).
+- For a local smoke run with no grid involved, `bin/runlocal --code
+  <tarball>` unpacks the build once into `<workdir>/code/` before any
+  job starts (section 11); every job it spawns shares that one unpack.
+- **A `--prod` code tarball is not in SAM.** Sidecar delivery means the
+  bytes never pass through `pushOutput`; only the cnf (and its
+  `code_ref` digest) reaches SAM. Delete the tarball and the campaign
+  becomes unreproducible even though the cnf survives — the digest
+  proves what the build *was*, it cannot regenerate it. Keep a `--prod`
+  code tarball on a durable, mu2epro-readable path for the campaign's
+  lifetime, never personal scratch or `/tmp`.
+- **Do not pass jobsub_submit's `--skip-check rcds` for a code-mode
+  submission.** RCDS publication of the sidecar is not instant;
+  `--skip-check rcds` lets a submission through before that check would
+  otherwise block it, which is exactly how a job lands on a worker
+  before its code has actually propagated — it starts, finds no build,
+  and fails in a way that looks unrelated to code delivery.
 
 Stage-1 (generator) entry:
 
@@ -534,6 +586,14 @@ streaming).
   actually declared.
 - `direct_input` entries are not index-submittable — they run as
   draining batches (`submissions resubmit ROW_ID --files LIST.txt`).
+- For a code-mode cnf (section 3), the worker reads the Offline build
+  from `$INPUT_TAR_DIR_LOCAL` — the directory jobsub itself populates
+  when `--tar_file_name` was passed — instead of sourcing a `/cvmfs`
+  Musing path. `bin/runjob.sh`'s startup diagnostics echo
+  `INPUT_TAR_DIR_LOCAL` alongside `CONDOR_DIR_INPUT`; an `unset` value
+  there on a failed job is the first thing to check — it means
+  `--tar_file_name` never reached the worker (see the RCDS caveat in
+  section 3).
 
 ## 8. Sequential vs. Pseudo-Random Auxiliary Input Selection
 
@@ -715,13 +775,21 @@ jobquery --recipe cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar
 
 Flags: `--jobname`, `--njobs`, `--input-datasets`, `--input-files`,
 `--output-datasets`, `--output-files DATASET[:size]`, `--codesize`,
-`--extract-code`, `--setup`, `--recipe`, and the positional `.tar`.
+`--setup`, `--recipe`, and the positional `.tar`.
 
 - `--njobs` reports the cnf's own capacity from `tbs.njobs`; `0` means
   open-ended (the ledger entry is authoritative).
 - `--recipe` reconstructs the build config — setup, njobs, output
   patterns, and the embedded `mu2e.fcl` (the json2jobdef `fcl` plus its
-  `fcl_overrides`).
+  `fcl_overrides`). For a code-mode cnf it also prints `code:` and
+  `code sha256:` lines from the cnf's `code_ref`, since there is no
+  embedded `mu2e.fcl` to fall back on for a generic direct-input
+  tarball; nothing extra prints for an ordinary Musing cnf.
+- `--codesize` always prints `0`: code ships as a jobsub sidecar
+  (`--tar_file_name`), never embedded in the cnf, so `0` is the honest
+  answer rather than a placeholder. There is no `--extract-code` —
+  it used to extract any tar member ending in `.tar`, which under
+  sidecar delivery is not code at all, and was removed.
 
 ### `submissions`
 
@@ -962,13 +1030,23 @@ runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
 # Rerun exactly the indices a grid pass lost
 runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
          --inloc tape --indices 0,3,7-9 -j 3
+
+# Smoke a code-mode cnf: unpack the build once, run three indices against it
+runlocal --jobdef cnf.mu2e.Custom.MDC2025au.0.tar \
+         --code /exp/mu2e/data/users/$USER/code_tarballs/Code.tar.bz2 \
+         --inloc tape --first 0 --num 3 -j 3 --nevts 10
 ```
 
 Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
 `--inloc` (default `tape`), `--first` / `--num` (default `0` / `1`),
 `--indices SPEC`, `-j/--parallel` (default 4), `--workdir` (default
 `.`), `--nevts` (default `-1` = whatever the FCL says),
-`--mu2e-options`, `--copy-input`.
+`--mu2e-options`, `--copy-input`, `--code TARBALL` (unpack a `muse
+tarball` build once into `<workdir>/code/` before any job starts —
+alternative to a cnf built from `simjob_setup`), `--code-root DIR`
+(internal — the already-unpacked directory a spawned child reuses
+instead of re-extracting `--code`; printed in the rerun command
+`runlocal` writes for each job, not something to pass by hand).
 
 Job prep is the worker's own `process_jobdef`, so a local run exercises
 the same tarball fetch, inloc handling and `--copy-input` staging the
@@ -1012,7 +1090,25 @@ step (section 11 `submissions`, wiki page
 ## 12. Troubleshooting
 
 - `Missing required field: <name>` — the JSON entry lacks one of
-  `simjob_setup`, `fcl`, `dsconf`, `outloc`.
+  `fcl`, `dsconf`, `outloc`.
+- `Exactly one of 'simjob_setup' and 'code' is required` — the entry
+  set both keys, or neither; pick exactly one source of Offline.
+- `code tarball is not readable: <path>` / `code tarball is not a
+  bzip2-compressed tar archive: <path> (<reason>)` / `code tarball has
+  no Code/setup.sh: <path> — build it with muse tarball` —
+  `json2jobdef`/`jobdef --code` validate the tarball before building
+  anything, so a broken build costs one command instead of a thousand
+  grid jobs. The last one is what a hand-tarred Muse work directory
+  produces — only `muse tarball` writes `Code/setup.sh`.
+- `check_inputs`: `entry and cnf disagree about code mode` — the entry's
+  `code` key and the cnf's `code_ref` presence do not match; rebuild the
+  cnf from the config being enqueued. `code tarball named by the entry
+  no longer exists` — the path the entry's `code` key names was deleted
+  or moved; a `--prod` code tarball must live on a durable,
+  mu2epro-readable path for the campaign's lifetime (section 3).
+  `sha256 ... does not match the cnf's code_ref ...` — the tarball at
+  that path was rebuilt or replaced since the cnf was made; rebuild the
+  cnf, or point the entry back at the original tarball.
 - `Please specify either --desc AND --dsconf, --dsconf only, or --index only`
   — json2jobdef entry selection is exactly one of those three forms.
 - `json2jobdef: --prod requires --enqueue (otherwise a bare --prod
