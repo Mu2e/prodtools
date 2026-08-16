@@ -87,8 +87,9 @@ When regenerating, read in this order:
    `--code-root` instead of re-extracting it. A code-mode campaign
    cannot be built through the MCP `push_cnf` tool — it requires
    `simjob_setup` and rejects an entry carrying `code` — so use the
-   `json2jobdef --code ... --enqueue` CLI path for those campaigns
-   instead.
+   `json2jobdef --prod --enqueue` CLI path for those campaigns instead,
+   with `code` set in the JSON entry (`json2jobdef` has no `--code`
+   flag of its own; it passes the entry's value down to `jobdef`).
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;

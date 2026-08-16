@@ -390,8 +390,10 @@ jobdef --code /exp/mu2e/data/users/$USER/code_tarballs/Code.tar.bz2 \
   moving it to its durable home.
 - A code-mode campaign cannot be built through the write-MCP `push_cnf`
   tool — it requires a `simjob_setup` field and rejects an entry
-  carrying `code`. Use the `json2jobdef --code ... --prod --enqueue`
-  CLI path (above) for those campaigns instead.
+  carrying `code`. Use the `json2jobdef --prod --enqueue` CLI path
+  (above) for those campaigns instead, with `code` set in the JSON
+  entry — `json2jobdef` has no `--code` flag of its own, it reads the
+  key and passes it down to `jobdef`.
 - **A `--prod` code tarball is not in SAM.** Sidecar delivery means the
   bytes never pass through `pushOutput`; only the cnf (and its
   `code_ref` digest) reaches SAM. Delete the tarball a `--prod`

@@ -6668,6 +6668,26 @@ class TestDirectPathPreflight(unittest.TestCase):
         self.assertEqual(problems, bad)
         chk.assert_not_called()
 
+    def test_bad_code_tarball_blocks_a_draining_entry(self):
+        # The ordering case the previous test cannot cover: a draining
+        # (generic) entry returns True before check_inputs is ever
+        # consulted, so the code gate is the ONLY gate it has. Moving
+        # check_code_tarball below the draining early-return fails here
+        # and nowhere else.
+        from utils.check_inputs import Problem
+        draining = dict(self.entry)
+        draining['input_pattern'] = 'dig.mu2e.%OnSpill.X.art'
+        bad = [Problem(dataset='code', filename='/some/Code.tar.bz2',
+                       kind='code_mismatch', detail='sha256 does not match')]
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(False, bad)), \
+             patch('utils.submit.check_inputs') as chk:
+            ok, problems = self.submit._preflight_inputs(
+                draining, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
+        self.assertFalse(ok)
+        self.assertEqual(problems, bad)
+        chk.assert_not_called()
+
     def test_musing_entry_real_cnf_passes_code_gate_unaffected(self):
         # The REAL check_code_tarball (not mocked) against a real cnf
         # tarball carrying no code_ref, and an entry carrying no 'code'
