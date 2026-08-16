@@ -446,7 +446,7 @@ def build_jobdef(config, job_args):
                 'type': 'mu2ejobdef',
                 'command': ' '.join(cmd_parts),
                 'desc': config['desc'],
-                'simjob_setup': config['simjob_setup']
+                'simjob_setup': config.get('simjob_setup')
             }
         ]
     }

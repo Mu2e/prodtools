@@ -15200,6 +15200,30 @@ class TestJson2JobdefCodeConfig(unittest.TestCase):
         self.assertNotIn('code', build_jobdesc(config))
 
 
+class TestBuildJobdefCodeModeReturnValue(unittest.TestCase):
+    """build_jobdef's diagnostic perl_commands dict must not KeyError on
+    a code-mode config (no simjob_setup). That dict is metadata for
+    test/parity_test.py's Perl comparison, which only runs in --setup
+    mode, so `None` is the truthful value for simjob_setup in code
+    mode -- not a placeholder and not the code path's own value."""
+
+    def test_code_mode_reaches_return_without_keyerror(self):
+        from unittest.mock import patch
+        from utils import json2jobdef
+        with patch.object(json2jobdef, 'write_fcl_template'), \
+             patch.object(json2jobdef, 'create_jobdef'), \
+             patch.object(json2jobdef, 'get_parfile_name',
+                          return_value='cnf.x.0.tar'), \
+             patch.object(json2jobdef, 'validate_output_filenames'):
+            cfg = {'desc': 'reco', 'dsconf': 'D', 'owner': 'mu2e',
+                   'code': '/exp/build/Code.tar.bz2', 'inloc': 'tape',
+                   'fcl': 'f.fcl', 'outloc': {'*.art': 'tape'}}
+            result = json2jobdef.build_jobdef(cfg, job_args=[])
+        entry = result['perl_commands'][0]
+        self.assertIsNone(entry['simjob_setup'])
+        self.assertIn('--code', entry['command'])
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
