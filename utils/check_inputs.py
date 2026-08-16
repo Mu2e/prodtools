@@ -7,6 +7,7 @@ input is unreadable so a slice of jobs is not launched to die in bulk.
 import argparse
 import os
 import sys
+import tarfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -256,7 +257,12 @@ def check_code_tarball(entry, cnf_path):
     from utils.job_common import sha256_file
 
     code = code_of(entry)
-    ref = Mu2eJobPars(cnf_path).json_data.get('code_ref')
+    try:
+        ref = Mu2eJobPars(cnf_path).json_data.get('code_ref')
+    except (tarfile.TarError, FileNotFoundError, OSError, ValueError) as e:
+        return (False, [Problem(
+            dataset='code', filename=cnf_path, kind='query_error',
+            detail=f"could not read cnf {cnf_path}: {e}")])
 
     if code is None and ref is None:
         return (True, [])

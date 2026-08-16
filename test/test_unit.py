@@ -7647,6 +7647,20 @@ class TestCheckCodeTarball(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(problems[0].kind, 'code_mismatch')
 
+    def test_corrupt_cnf_reports_query_error_instead_of_raising(self):
+        """Mu2eJobBase.__init__ opens the cnf with tarfile.open unguarded;
+        a garbage/truncated cnf raises tarfile.ReadError there. That must
+        surface as a Problem, not an uncaught traceback -- the draining
+        branch never used to parse the cnf at all, so this is the only
+        thing standing between a half-staged cnf and a crash mid-enqueue."""
+        from utils.check_inputs import check_code_tarball
+        corrupt = os.path.join(self.dir, 'cnf.mu2e.Bad.Conf.0.tar')
+        with open(corrupt, 'wb') as fh:
+            fh.write(b'not a tarball, just garbage bytes')
+        ok, problems = check_code_tarball({'code': self.code}, corrupt)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'query_error')
+
 
 class TestCheckInputsCLI(unittest.TestCase):
     """format_report + main: grouped report, exit 0 clean / 2 on problems."""
@@ -7752,6 +7766,30 @@ class TestEnqueueInputGate(unittest.TestCase):
             camp_id = submit.enqueue_entry(entry, ledger_db="/tmp/never.db",
                                            slice_size=500)
         self.assertEqual(camp_id, 7)
+
+    def test_failing_code_check_blocks_and_creates_no_campaign(self):
+        """A code_mismatch from check_code_tarball must gate the NORMAL
+        branch exactly like a check_inputs failure does -- exit 2, no
+        ledger row -- even though check_inputs itself passed clean."""
+        from utils import submit
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+                 "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
+                                            "location": "tape"}]}
+        created = []
+        with patch.object(submit, "_ensure_local_tarball",
+                          return_value=Path("cnf.mu2e.T.C.0.tar")), \
+             patch.object(submit, "check_inputs", return_value=(True, [])), \
+             patch.object(submit, "check_code_tarball",
+                          return_value=(False, [submit.Problem(
+                              "code", "cnf.mu2e.T.C.0.tar",
+                              "code_mismatch", "digest mismatch")])), \
+             patch.object(submit.submission_ledger, "create_campaign",
+                          side_effect=lambda *a, **k: created.append(1)):
+            with self.assertRaises(SystemExit) as cm:
+                submit.enqueue_entry(entry, ledger_db="/tmp/never.db",
+                                     slice_size=500)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(created, [])   # no campaign row
 
 
 # ---------------------------------------------------------------------------
@@ -11584,6 +11622,27 @@ class TestEnqueueDraining(unittest.TestCase):
                           return_value='/tmp/t.tar'):
             with self.assertRaises(SystemExit):
                 submit.enqueue_entry(bad, ledger_db='/x.db', slice_size=500)
+
+    def test_failing_code_check_blocks_draining_campaign(self):
+        """The draining branch skips check_inputs entirely (a generic
+        cnf bakes no inputs), so check_code_tarball is the ONLY gate
+        standing between a code-mismatched cnf and a live campaign row.
+        A (False, ...) result must exit 2 and create nothing."""
+        from utils import submit
+        created = []
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(False, [submit.Problem(
+                              'code', '/tmp/t.tar', 'code_mismatch',
+                              'digest mismatch')])), \
+             patch.object(submit.submission_ledger, 'create_campaign',
+                          side_effect=lambda *a, **k: created.append(1)):
+            with self.assertRaises(SystemExit) as cm:
+                submit.enqueue_entry(dict(self.ENTRY), ledger_db='/x.db',
+                                     slice_size=500)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(created, [])   # no campaign row
 
     def test_dry_run_creates_nothing(self):
         from utils import submit
