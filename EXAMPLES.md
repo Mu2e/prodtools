@@ -370,9 +370,13 @@ jobdef --code /exp/mu2e/data/users/$USER/code_tarballs/Code.tar.bz2 \
   jobsub sidecar (`--tar_file_name`), never inside the tarball. The
   cnf's `jobpars.json` instead carries `code_ref`
   (`sha256`/`size`/`source_path`) as provenance, and the entry keeps
-  the tarball's own path (`code`) so a later slice, recovery, or the
-  enqueue gate can find the same file and confirm its digest still
-  matches.
+  the tarball's own path (`code`) so the digest gate
+  (`check_code_tarball`) can find the same file and re-hash it. That
+  gate runs at `--enqueue` AND again immediately before every submit —
+  every cron-fed slice, every direct `--first`/`--num` submit, and
+  every `submissions resubmit` recovery — so a tarball rebuilt or
+  replaced after the first slice is caught before the new bytes ship,
+  not just at campaign creation.
 - The grid path needs nothing beyond the entry key — submission adds
   jobsub's `--tar_file_name dropbox://<tarball>` automatically from
   `code`; see section 7 for how the worker reads it back.
@@ -384,6 +388,10 @@ jobdef --code /exp/mu2e/data/users/$USER/code_tarballs/Code.tar.bz2 \
   campaign (`submissions set-entry CAMP_ID code /new/path/Code.tar.bz2`)
   — useful for pointing an existing campaign at the same build after
   moving it to its durable home.
+- A code-mode campaign cannot be built through the write-MCP `push_cnf`
+  tool — it requires a `simjob_setup` field and rejects an entry
+  carrying `code`. Use the `json2jobdef --code ... --prod --enqueue`
+  CLI path (above) for those campaigns instead.
 - **A `--prod` code tarball is not in SAM.** Sidecar delivery means the
   bytes never pass through `pushOutput`; only the cnf (and its
   `code_ref` digest) reaches SAM. Delete the tarball a `--prod`
@@ -1010,12 +1018,19 @@ Flags: `--inloc LOC` (input location the jobs read from, default
 `resilient` — the mixing default), and one or more positional
 `cnf.*.tar` tarballs. Needs no mu2epro — it is a status check, safe to
 run as yourself. `json2jobdef --enqueue` runs this same check
-automatically as a gate — and, for a code-mode entry, also re-verifies
-the code tarball's digest against the cnf's `code_ref` — so a campaign
-is never created with unreadable inputs or a code mismatch; run it by
-hand before launching, or when a monthly resilient purge is suspected
-mid-campaign (the enqueue gate only fires at campaign creation, not per
-slice).
+automatically as a gate, so a campaign is never created with unreadable
+inputs; run it by hand before launching, or when a monthly resilient
+purge is suspected mid-campaign (this input-residency gate only fires
+at campaign creation, not per slice).
+
+For a code-mode entry there is a second, separate gate
+(`check_code_tarball`) that re-hashes the entry's `code` tarball
+against the cnf's `code_ref`. Unlike the input-residency check above,
+this one is NOT enqueue-only: it runs at `--enqueue` and again
+immediately before every submit — every cron-fed slice, every direct
+`--first`/`--num` submit, and every `submissions resubmit` recovery —
+so a tarball rebuilt or replaced mid-campaign is caught before the new
+bytes ship, not just at campaign creation.
 
 ### `copy_to_stash`
 
@@ -1157,7 +1172,12 @@ step (section 11 `submissions`, wiki page
   tarball named by the entry no longer exists at all, or when the
   entry and the cnf disagree about code mode (one has `code`/`code_ref`
   and the other doesn't) — both are reasons to keep a `--prod` code
-  tarball on a durable path (section 3) rather than scratch.
+  tarball on a durable path (section 3) rather than scratch. This gate
+  is not enqueue-only — the identical check runs again immediately
+  before every submit (cron-fed slice, direct `--first`/`--num`, or
+  `submissions resubmit` recovery), so `input pre-flight FAILED ... —
+  refusing to submit` with a `code_mismatch`/`missing` problem is the
+  same message surfacing at submit time instead of enqueue time.
 - ``json2jobdef: outloc['<pattern>'] must be one of tape, disk, scratch,
   outstage, got '<value>'`` — a misspelled output location, refused
   before the cnf is built. Unlike a bad `inloc`, a bad `outloc` would

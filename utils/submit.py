@@ -660,7 +660,21 @@ def _preflight_inputs(entry, tarball_path):
     exactly the bulk-death failure check_inputs exists to prevent.
     A draining/generic cnf bakes no inputs and is skipped, the same
     carve-out enqueue_entry makes.
+
+    check_code_tarball runs FIRST, above the draining early-return,
+    because it is not an input-residency check — it is the digest gate
+    that binds a code-mode campaign to the Offline build the cnf was
+    made against. enqueue_entry only runs once per campaign, so without
+    this call here every later slice and every recovery resubmit (both
+    draining and normal) would ship whatever bytes currently sit at the
+    entry's `code` path with no verification at all. For a Musing entry
+    (no `code`, cnf with no `code_ref`) it short-circuits immediately —
+    one cheap cnf-parse, no sha256 — so the production path is
+    unaffected; on the code path it costs one sha256 pass per submit.
     """
+    ok, problems = check_code_tarball(entry, str(tarball_path))
+    if not ok:
+        return ok, problems
     if is_draining(entry):
         return True, []
     return check_inputs(str(tarball_path), inloc_of(entry))

@@ -16,7 +16,7 @@ from pathlib import Path
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.job_common import CODE_SETUP_REL, Mu2eName, log_storage_location
+from utils.job_common import Mu2eName, log_storage_location
 from utils.jobdesc import OUTSTAGE_LOCATION
 from utils.jobfcl import Mu2eJobFCL
 from utils.jobquery import Mu2eJobPars

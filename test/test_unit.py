@@ -1569,6 +1569,54 @@ class TestProcessJobdefCopyInputFlip(unittest.TestCase):
             self._run(entry_extra={'copy_input': 'yes'})
 
 
+class TestProcessJobdefCodeRoot(unittest.TestCase):
+    """$INPUT_TAR_DIR_LOCAL / args.code_root is the entire mechanism by
+    which a grid worker resolves a code-mode cnf's relative `setup`
+    (utils/runmu2e.py:_code_root_from, wired into process_jobdef at
+    `code_root=_code_root_from(args)`). Deleting that wiring breaks
+    every code-mode grid job with a ValueError and costs zero test
+    failures unless something exercises it with a REAL relative-setup
+    jobpars and a real SimpleNamespace `args` — MagicMock() makes
+    getattr(args, 'code_root', None) return a truthy Mock and never
+    reaches this code at all."""
+
+    def setUp(self):
+        files = ["sim.mu2e.Test.TestConf.001440_00000000.art"]
+        jp = _root_input_jobpars(files, merge=1)
+        jp['setup'] = 'Code/setup.sh'
+        self.tar = _make_tarball(jp, "module_type : RootInput\n")
+        self.addCleanup(os.unlink, self.tar)
+        self.jobdesc = {
+            'tarball': self.tar,
+            'njobs': 1,
+            'inloc': 'stash',
+            'outputs': [],
+        }
+        self.fname = "cnf.mu2e.Test.TestConf.0.fcl"
+
+    def test_input_tar_dir_local_env_resolves_setup(self):
+        from utils import runmu2e
+        code_root = _mkdtemp()
+        args = SimpleNamespace(copy_input=False)
+        with patch.dict(os.environ, {'INPUT_TAR_DIR_LOCAL': code_root}), \
+             patch('utils.runmu2e.write_fcl', return_value='x.fcl'), \
+             patch('utils.runmu2e.run'):
+            fcl, simjob_setup, infiles, outputs, inloc = \
+                runmu2e.process_jobdef(self.jobdesc, self.fname, args)
+        self.assertEqual(simjob_setup,
+                         os.path.join(code_root, 'Code/setup.sh'))
+
+    def test_missing_code_root_raises(self):
+        from utils import runmu2e
+        args = SimpleNamespace(copy_input=False)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('INPUT_TAR_DIR_LOCAL', None)
+            with patch('utils.runmu2e.write_fcl', return_value='x.fcl'), \
+                 patch('utils.runmu2e.run'):
+                with self.assertRaises(ValueError):
+                    runmu2e.process_jobdef(self.jobdesc, self.fname, args)
+
+
 # ---------------------------------------------------------------------------
 # 15. version field in tarball names
 # ---------------------------------------------------------------------------
@@ -2435,6 +2483,52 @@ class TestProcessDirectInput(unittest.TestCase):
         override_pos = content.find('source.fileNames')
         include_pos = content.find('#include')
         self.assertGreater(override_pos, include_pos)
+
+
+class TestProcessDirectInputCodeRoot(unittest.TestCase):
+    """process_direct_input's own $INPUT_TAR_DIR_LOCAL / code_root
+    wiring (utils/runmu2e.py:315-316, `code_root=_code_root_from(args)`
+    inside process_direct_input). Same rationale as
+    TestProcessJobdefCodeRoot above: a real relative-setup jobpars and
+    a real SimpleNamespace `args`, not MagicMock()."""
+
+    def setUp(self):
+        self._orig_dir = os.getcwd()
+        self._tmpdir = _mkdtemp()
+        os.chdir(self._tmpdir)
+        jp = _generic_reco_jobpars()
+        jp['setup'] = 'Code/setup.sh'
+        self._tar = _make_tarball(
+            jp, "#include \"Production/JobConfig/recoMC/OnSpill.fcl\"\n")
+        self.addCleanup(os.unlink, self._tar)
+        self.fname = ("dig.mu2e.CeEndpointOnSpillTriggered."
+                      "MDC2025af_best_v1_3.001430_00000042.art")
+        self.jobdesc = {
+            'tarball': self._tar,
+            'inloc': 'tape',
+            'outputs': [{'dataset': '*.art', 'location': 'disk'}],
+        }
+
+    def tearDown(self):
+        os.chdir(self._orig_dir)
+
+    def test_input_tar_dir_local_env_resolves_setup(self):
+        from utils.runmu2e import process_direct_input
+        code_root = _mkdtemp()
+        args = SimpleNamespace()
+        with patch.dict(os.environ, {'INPUT_TAR_DIR_LOCAL': code_root}):
+            fcl, simjob_setup, fname, outputs = process_direct_input(
+                self.jobdesc, self.fname, args)
+        self.assertEqual(simjob_setup,
+                         os.path.join(code_root, 'Code/setup.sh'))
+
+    def test_missing_code_root_raises(self):
+        from utils.runmu2e import process_direct_input
+        args = SimpleNamespace()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('INPUT_TAR_DIR_LOCAL', None)
+            with self.assertRaises(ValueError):
+                process_direct_input(self.jobdesc, self.fname, args)
 
 
 # ---------------------------------------------------------------------------
@@ -5501,6 +5595,56 @@ class TestSubmitPassesCodeTarball(unittest.TestCase):
         self.assertIsNone(captured['code_tarball'])
 
 
+class TestSubmitEntryCodeGate(unittest.TestCase):
+    """The per-submit half of Finding 1's fix: submit_entry must refuse
+    when the code-tarball digest gate fails, and must never reach
+    _run_submit. Deleting the check_code_tarball call in
+    _preflight_inputs (or moving it back below the draining
+    early-return) must fail this test."""
+
+    ENTRY = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+             'njobs': 5, 'inloc': 'tape',
+             'outputs': [{'location': 'tape'}],
+             'code': '/exp/build/Code.tar.bz2'}
+
+    class FakePars:
+        def __init__(self, path):
+            pass
+
+        def njobs(self):
+            return 5
+
+        def input_datasets(self):
+            return []
+
+        def job_outputs(self, index):
+            return {}
+
+    def _opts(self, **over):
+        from utils.submit import SubmitOptions
+        base = dict(ledger_db='/tmp/unused-code-gate.db', dry_run=False,
+                    origin='/tmp/m.json')
+        base.update(over)
+        return SubmitOptions(**base)
+
+    def test_bad_code_tarball_refuses_and_does_not_submit(self):
+        from utils import submit
+        from utils.check_inputs import Problem
+        bad = [Problem(dataset='code', filename=self.ENTRY['code'],
+                       kind='code_mismatch', detail='digest does not match')]
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(False, bad)), \
+             patch.object(submit, '_bundle_prodtools',
+                          return_value=Path('/tmp/pt.tar')), \
+             patch.object(submit, '_run_submit') as rs:
+            with self.assertRaises(SystemExit):
+                submit.submit_entry(dict(self.ENTRY), 0, self._opts())
+        rs.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # submit_map --enqueue (utils/submit.py) — sliced-campaign submission
 # ---------------------------------------------------------------------------
@@ -6478,14 +6622,18 @@ class TestDirectPathPreflight(unittest.TestCase):
         from utils.check_inputs import Problem
         bad = [Problem(dataset='dts.mu2e.X.Y.art', filename='x.art',
                        kind='missing', detail='0 files')]
-        with patch('utils.submit.check_inputs', return_value=(False, bad)):
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(True, [])), \
+             patch('utils.submit.check_inputs', return_value=(False, bad)):
             ok, problems = self.submit._preflight_inputs(
                 self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
         self.assertFalse(ok)
         self.assertEqual(problems, bad)
 
     def test_direct_submit_passes_on_good_inputs(self):
-        with patch('utils.submit.check_inputs', return_value=(True, [])):
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(True, [])), \
+             patch('utils.submit.check_inputs', return_value=(True, [])):
             ok, problems = self.submit._preflight_inputs(
                 self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
         self.assertTrue(ok)
@@ -6495,11 +6643,55 @@ class TestDirectPathPreflight(unittest.TestCase):
         # nothing to pre-flight, and calling check_inputs would fail.
         generic = dict(self.entry)
         generic['input_pattern'] = 'dig.mu2e.%OnSpill.X.art'
-        with patch('utils.submit.check_inputs') as chk:
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(True, [])), \
+             patch('utils.submit.check_inputs') as chk:
             ok, problems = self.submit._preflight_inputs(
                 generic, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
         self.assertTrue(ok)
         chk.assert_not_called()
+
+    def test_bad_code_tarball_short_circuits_before_check_inputs(self):
+        # check_code_tarball runs FIRST (above the draining early-return,
+        # see _preflight_inputs' docstring) — a code mismatch must block
+        # the submit even when check_inputs would have passed, and
+        # check_inputs must never even be called.
+        from utils.check_inputs import Problem
+        bad = [Problem(dataset='code', filename='/some/Code.tar.bz2',
+                       kind='code_mismatch', detail='sha256 does not match')]
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(False, bad)), \
+             patch('utils.submit.check_inputs') as chk:
+            ok, problems = self.submit._preflight_inputs(
+                self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
+        self.assertFalse(ok)
+        self.assertEqual(problems, bad)
+        chk.assert_not_called()
+
+    def test_musing_entry_real_cnf_passes_code_gate_unaffected(self):
+        # The REAL check_code_tarball (not mocked) against a real cnf
+        # tarball carrying no code_ref, and an entry carrying no 'code'
+        # -- the common Musing-entry case. Proves the code gate added
+        # to _preflight_inputs costs nothing for the production path:
+        # one cnf parse, immediate short-circuit, no sha256.
+        tmpdir = _mkdtemp()
+        cnf_path = os.path.join(tmpdir, 'cnf.mu2e.TestDesc.TestConf.0.tar')
+        jobpars = {
+            'code': '', 'setup': '/cvmfs/mu2e.opensciencegrid.org/'
+                                  'Musings/SimJob/TestConf/setup.sh',
+            'tbs': {},
+        }
+        blob = json.dumps(jobpars).encode()
+        with tarfile.open(cnf_path, 'w') as tar:
+            info = tarfile.TarInfo('jobpars.json')
+            info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob))
+
+        with patch('utils.submit.check_inputs', return_value=(True, [])):
+            ok, problems = self.submit._preflight_inputs(
+                self.entry, cnf_path)
+        self.assertTrue(ok)
+        self.assertEqual(problems, [])
 
 
 class TestSubmitResolveLedgerDb(unittest.TestCase):
@@ -11805,6 +11997,8 @@ class TestSubmitEntryFiles(unittest.TestCase):
         with patch.object(submit, '_ensure_local_tarball',
                           return_value=Path('/tmp/t.tar')), \
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit, '_bundle_prodtools',
                           return_value=Path('/tmp/pt.tar')), \
              patch.object(submit, '_run_submit',
@@ -11870,6 +12064,8 @@ class TestSubmitEntryFiles(unittest.TestCase):
         with patch.object(submit, '_ensure_local_tarball',
                           return_value=Path('/tmp/t.tar')), \
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit, '_bundle_prodtools',
                           return_value=Path('/tmp/pt.tar')), \
              patch.object(submit, '_run_submit',

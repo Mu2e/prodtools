@@ -84,7 +84,11 @@ When regenerating, read in this order:
    side). For a local smoke run without touching the grid, `bin/runlocal
    --code <tarball>` unpacks the build once into `<workdir>/code/`; a
    `runlocal` child process takes the already-unpacked tree via
-   `--code-root` instead of re-extracting it.
+   `--code-root` instead of re-extracting it. A code-mode campaign
+   cannot be built through the MCP `push_cnf` tool — it requires
+   `simjob_setup` and rejects an entry carrying `code` — so use the
+   `json2jobdef --code ... --enqueue` CLI path for those campaigns
+   instead.
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
