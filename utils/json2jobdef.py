@@ -142,6 +142,19 @@ def _split_text_file_input(config):
     config.setdefault('sequencer_from_index', True)
 
 
+def _is_dir_inloc(config):
+    """True if `config['inloc']` is the local-dir shape (`dir:<path>`).
+
+    For that shape, `input_data` keys are bare file basenames written
+    verbatim by `_create_inputs_file` (see its docstring below) — never SAM
+    dataset names — so any SAM-dataset-name lookup keyed off the first
+    `input_data` entry (e.g. resampler MaxEventsToSkip auto-computation)
+    must be skipped rather than attempted.
+    """
+    inloc = config.get('inloc', '')
+    return isinstance(inloc, str) and inloc.startswith('dir:')
+
+
 def _create_inputs_file(config, exclude_files=None):
     """Helper: create inputs.txt file from datasets with merge factors.
 
@@ -195,8 +208,7 @@ def _create_inputs_file(config, exclude_files=None):
     # inputs that aren't in SAM:
     #     "inloc": "dir:/cvmfs/.../DataFiles/PBI/",
     #     "input_data": {"PBI_Normal_33344.txt": 1}
-    inloc = config.get('inloc', '')
-    if isinstance(inloc, str) and inloc.startswith('dir:'):
+    if _is_dir_inloc(config):
         with open('inputs.txt', 'w') as f:
             for key in input_data.keys():
                 f.write(key + '\n')
@@ -389,9 +401,13 @@ def build_jobdef(config, job_args):
     job_type = determine_job_type(config)
 
     if job_type != 'mixing':
-        # Resampler MaxEventsToSkip goes after the overrides (last wins)
+        # Resampler MaxEventsToSkip goes after the overrides (last wins).
+        # Skipped for dir:-inloc resamplers: _build_job_args never computes
+        # `_max_events_to_skip` for them (no SAM dataset to query — see
+        # _is_dir_inloc), so there is nothing to emit here, and the entry's
+        # own fcl_overrides (or the base FCL's) stands undisturbed.
         post_lines = []
-        if job_type == 'resampler':
+        if job_type == 'resampler' and not _is_dir_inloc(config):
             post_lines.append(
                 f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {config['_max_events_to_skip']}")
         write_fcl_template(fcl_path, config.get('fcl_overrides', {}),
@@ -622,11 +638,17 @@ def _build_job_args(config):
     job_type = determine_job_type(config)
 
     if job_type == 'resampler':
-        first_dataset = normalize_input_data(config['input_data'])[0].source
-        try:
-            config['_max_events_to_skip'] = max_events_to_skip(first_dataset)
-        except Exception as e:
-            print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+        # dir:-inloc resamplers key input_data by bare file basenames, not
+        # SAM dataset names (see _is_dir_inloc) — there is no dataset to
+        # query, so skip the auto-computation entirely rather than feeding
+        # a basename into a SAM dataset-definition lookup that can only
+        # fail. build_jobdef mirrors this guard when emitting post_lines.
+        if not _is_dir_inloc(config):
+            first_dataset = normalize_input_data(config['input_data'])[0].source
+            try:
+                config['_max_events_to_skip'] = max_events_to_skip(first_dataset)
+            except Exception as e:
+                print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
         merge_factor = calculate_merge_factor(config)
         return ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
 
