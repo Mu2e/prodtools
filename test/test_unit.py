@@ -15820,6 +15820,189 @@ class TestBuildJobdefCodeModeReturnValue(unittest.TestCase):
         self.assertIn('--code', entry['command'])
 
 
+class TestCommonIncludePrecedence(unittest.TestCase):
+    """A campaign default must never beat an entry that pins the key.
+
+    Reversed, `data/Run1B/common.json` would move the 42 frozen entries
+    (geom_run1_b_v01/v03/v06) onto v40 -- a job that runs to completion
+    and produces a wrong world, which is the failure this file exists to
+    make impossible. write_fcl_template owns the ordering so no caller
+    can get it wrong; dict order is not relied on."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, self.cwd)
+
+    def _write(self, overrides, **kwargs):
+        from utils.prod_utils import write_fcl_template
+        write_fcl_template('Production/JobConfig/mixing/Mix.fcl',
+                           overrides, **kwargs)
+        return Path('template.fcl').read_text().splitlines()
+
+    def test_common_include_precedes_the_entrys_own_keys(self):
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        lines = self._write({
+            COMMON_INCLUDE_KEY: ['Production/JobConfig/common/Run1B.fcl'],
+            'services.GeometryService.inputFile':
+                'Offline/Mu2eG4/geom/geom_run1_b_v06.txt',
+        })
+        common = lines.index('#include "Production/JobConfig/common/Run1B.fcl"')
+        pinned = [i for i, l in enumerate(lines) if 'geom_run1_b_v06' in l]
+        self.assertEqual(lines[0],
+                         '#include "Production/JobConfig/mixing/Mix.fcl"')
+        self.assertEqual(common, 1)
+        self.assertTrue(pinned and min(pinned) > common,
+                        'frozen v06 must be stated after the campaign default')
+        # The reserved key is a directive, never emitted as a FHiCL key.
+        self.assertNotIn(COMMON_INCLUDE_KEY, '\n'.join(lines))
+
+    def test_common_include_also_precedes_pre_lines(self):
+        """pre_lines carry the mixing pbeam include, which entries may
+        override. The campaign default sits below even that."""
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        lines = self._write(
+            {COMMON_INCLUDE_KEY: ['Production/JobConfig/common/Run1B.fcl']},
+            pre_lines=['#include "Production/JobConfig/mixing/OneBB.fcl"'])
+        self.assertLess(
+            lines.index('#include "Production/JobConfig/common/Run1B.fcl"'),
+            lines.index('#include "Production/JobConfig/mixing/OneBB.fcl"'))
+
+    def test_absent_key_writes_the_same_template_as_before(self):
+        lines = self._write({'services.GeometryService.inputFile': 'g.txt'})
+        self.assertEqual(lines, ['#include "Production/JobConfig/mixing/Mix.fcl"',
+                                 'services.GeometryService.inputFile: "g.txt"'])
+
+
+class TestCommonOverlayScope(unittest.TestCase):
+    """common.json states which stage files and which dsconf it covers.
+    Both filters are load-bearing: data/Run1B holds 15 MDC2025* entries
+    and three merge/ntuple stage files whose FCLs configure no
+    GeometryService."""
+
+    COMMON = {
+        'applies_to': ['mix.json'],
+        'dsconf_prefix': 'Run1B',
+        'fcl_overrides': {
+            '#include': ['Production/JobConfig/common/Run1B.fcl']},
+    }
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.json2jobdef = json2jobdef
+        self.dir = Path(tempfile.mkdtemp())
+        (self.dir / 'common.json').write_text(json.dumps(self.COMMON))
+
+    def _load(self, name, entries):
+        path = self.dir / name
+        path.write_text(json.dumps(entries))
+        return self.json2jobdef.load_json(path)
+
+    def _entry(self, dsconf='Run1Ban', **overrides):
+        return {'desc': 'Thing', 'dsconf': dsconf,
+                'fcl': 'Production/JobConfig/mixing/Mix.fcl',
+                'fcl_overrides': overrides}
+
+    def _includes(self, config):
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        return config['fcl_overrides'].get(COMMON_INCLUDE_KEY, [])
+
+    def test_listed_file_and_matching_dsconf_takes_the_default(self):
+        configs = self._load('mix.json', [self._entry()])
+        self.assertEqual(self._includes(configs[0]),
+                         ['Production/JobConfig/common/Run1B.fcl'])
+
+    def test_unlisted_stage_file_is_untouched(self):
+        configs = self._load('merge_filter.json', [self._entry()])
+        self.assertEqual(self._includes(configs[0]), [])
+
+    def test_foreign_dsconf_in_a_listed_file_is_untouched(self):
+        """data/Run1B/resampler_beam.json really does hold MDC2025ac and
+        MDC2025af entries; a Run1B geometry default there is wrong."""
+        configs = self._load('mix.json', [self._entry(dsconf='MDC2025ac')])
+        self.assertEqual(self._includes(configs[0]), [])
+
+    def test_entry_without_fcl_overrides_gets_the_key(self):
+        configs = self._load('mix.json', [{'desc': 'T', 'dsconf': 'Run1Ban',
+                                           'fcl': 'x.fcl'}])
+        self.assertEqual(self._includes(configs[0]),
+                         ['Production/JobConfig/common/Run1B.fcl'])
+
+    def test_pinned_key_survives_the_overlay(self):
+        pin = 'Offline/Mu2eG4/geom/geom_run1_b_v06.txt'
+        configs = self._load('mix.json', [self._entry(
+            **{'services.GeometryService.inputFile': pin})])
+        self.assertEqual(
+            configs[0]['fcl_overrides']['services.GeometryService.inputFile'],
+            pin)
+
+    def test_overlay_is_idempotent(self):
+        """Expansion can hand several expanded entries one dict; applying
+        the default twice must not stack duplicate includes."""
+        path = self.dir / 'mix.json'
+        path.write_text(json.dumps([self._entry()]))
+        configs = self.json2jobdef.load_json(path)
+        self.json2jobdef.apply_common_overlay(configs, path)
+        self.assertEqual(self._includes(configs[0]),
+                         ['Production/JobConfig/common/Run1B.fcl'])
+
+    def test_directory_without_common_json_is_untouched(self):
+        (self.dir / 'common.json').unlink()
+        configs = self._load('mix.json', [self._entry()])
+        self.assertEqual(self._includes(configs[0]), [])
+
+
+class TestRun1BCommonJson(unittest.TestCase):
+    """Pins the shipped data/Run1B/common.json against the two mistakes
+    that would make it dangerous."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def setUp(self):
+        self.common = json.loads(
+            (self.ROOT / 'data/Run1B/common.json').read_text())
+
+    def test_merge_and_ntuple_stages_are_excluded(self):
+        """artcat.fcl and the EventNtuple FCLs configure no
+        GeometryService; a detector default there is meaningless at best."""
+        for name in ('merge_filter.json', 'merge_beam_pileup.json',
+                     'evntuple.json'):
+            self.assertNotIn(name, self.common['applies_to'])
+
+    def test_every_listed_file_exists(self):
+        for name in self.common['applies_to']:
+            self.assertTrue((self.ROOT / 'data/Run1B' / name).exists(), name)
+
+    def test_no_covered_entry_leaves_the_detector_keys_implicit(self):
+        """The default must be redundant everywhere it lands, so adding it
+        changes no job. An entry that states neither key inherits one from
+        its base FCL's epilog (pileup/epilog.fcl sets bfgeom_no_tsu_ps_v01,
+        beam/POT.fcl sets bfgeom_no_ds_v01) and WOULD change -- six entries
+        did, until they were pinned. A new such entry must be pinned too,
+        or removed from applies_to."""
+        prefix = self.common['dsconf_prefix']
+        implicit = []
+        for name in self.common['applies_to']:
+            for entry in json.loads(
+                    (self.ROOT / 'data/Run1B' / name).read_text()):
+                dsconf = entry.get('dsconf')
+                dsconf = dsconf[0] if isinstance(dsconf, list) else dsconf
+                if not str(dsconf or '').startswith(prefix):
+                    continue
+                ov = entry.get('fcl_overrides') or {}
+                ov = ov[0] if isinstance(ov, list) and ov else ov
+                stated = set(ov) | ({'#include'} if '#include' in ov else set())
+                if 'services.GeometryService.bFieldFile' in stated:
+                    continue
+                # An entry may instead pull the field in via its own include
+                # (stage1's Run1Bai POT_Run1_b uses beam/epilog_1b.fcl).
+                if '#include' in ov:
+                    continue
+                implicit.append(f"{name}:{entry.get('desc')}/{dsconf}")
+        self.assertEqual(implicit, [], 'entries inheriting bFieldFile')
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

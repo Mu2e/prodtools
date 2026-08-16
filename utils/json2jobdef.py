@@ -788,17 +788,80 @@ def is_already_expanded(configs):
     # If no configs have lists, they're all already expanded
     return True
 
+#: Campaign-wide defaults, read from this file beside the stage files.
+COMMON_JSON = 'common.json'
+
+def _override_dicts(config):
+    """Every fcl_overrides dict on an entry, creating one if absent.
+    Expansion normally collapses the list-wrapped mixing shape `[{...}]`
+    to a dict, but is_already_expanded can hand back a raw config."""
+    overrides = config.setdefault('fcl_overrides', {})
+    if isinstance(overrides, list):
+        return [o for o in overrides if isinstance(o, dict)]
+    return [overrides]
+
+def apply_common_overlay(configs, json_path):
+    """Overlay `<campaign>/common.json` onto the entries `json_path` loaded.
+
+    The overlay is a DEFAULT, not an override: its includes go to
+    COMMON_INCLUDE_KEY, which write_fcl_template emits before everything
+    else, so an entry that pins a value still wins. That direction is the
+    whole safety property — reversed, the campaign default would move the
+    42 frozen Run1B entries (v01/v03/v06) onto the current geometry.
+
+    common.json states its own scope, because a campaign directory is not
+    uniform:
+
+      applies_to     stage files it covers. Merge, catalog and ntuple
+                     stages are left out — artcat.fcl configures no
+                     GeometryService, and a geometry default there would
+                     construct a service the job has no use for.
+      dsconf_prefix  optional dsconf filter. data/Run1B holds 15 MDC2025*
+                     entries that must not take a Run1B default.
+
+    A default is only safe where it is redundant. Before listing a stage
+    file here, check every entry it holds that leaves a key to the base
+    FCL's own epilog: those take the default and change. `pileup/epilog.fcl`
+    sets bfgeom_no_tsu_ps_v01 and `beam/POT.fcl` sets bfgeom_no_ds_v01, so
+    six Run1B entries had to pin their inherited value explicitly first.
+    """
+    common_path = json_path.parent / COMMON_JSON
+    if json_path.name == COMMON_JSON or not common_path.exists():
+        return configs
+
+    common = json.loads(common_path.read_text())
+    if json_path.name not in common.get('applies_to', []):
+        return configs
+
+    includes = common.get('fcl_overrides', {}).get('#include', [])
+    if not includes:
+        return configs
+    prefix = common.get('dsconf_prefix')
+
+    for config in configs:
+        dsconf = config.get('dsconf')
+        if isinstance(dsconf, list):
+            dsconf = dsconf[0] if dsconf else None
+        if prefix and not str(dsconf or '').startswith(prefix):
+            continue
+        for overrides in _override_dicts(config):
+            # Idempotent: expansion may hand several entries one dict.
+            kept = [i for i in overrides.get(COMMON_INCLUDE_KEY, [])
+                    if i not in includes]
+            overrides[COMMON_INCLUDE_KEY] = list(includes) + kept
+    return configs
+
 def load_json(json_path):
     """Load and expand JSON configuration if needed"""
     json_text = json_path.read_text()
     configs = json.loads(json_text)
-    
+
     # Check if expansion is needed
-    if is_already_expanded(configs):
-        return configs
-    
-    # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
-    return expand_configs(configs)
+    if not is_already_expanded(configs):
+        # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
+        configs = expand_configs(configs)
+
+    return apply_common_overlay(configs, json_path)
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):
     """Find a matching JSON entry from configuration list"""

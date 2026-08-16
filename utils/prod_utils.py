@@ -164,33 +164,50 @@ def calculate_merge_factor(fields):
 
 # Removed duplicate find_json_entry; use json2jobdef.load_json + json2jobdef.find_json_entry
 
+#: Reserved `fcl_overrides` key: campaign-wide default includes, emitted
+#: ahead of everything else so any entry key still beats them. Set by
+#: json2jobdef.load_json from the campaign's common.json.
+COMMON_INCLUDE_KEY = '#include_first'
+
 def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
     """
     Write template.fcl — the single writer for every jobdef stage.
 
     Layout (FHiCL last-wins, so position is semantics):
-        #include base / pre_lines / overrides / post_lines
+        #include base / COMMON_INCLUDE_KEY / pre_lines / overrides / post_lines
 
     Args:
         base: Base FCL file to include
-        overrides: Dictionary of FCL overrides
+        overrides: Dictionary of FCL overrides. The reserved
+            COMMON_INCLUDE_KEY holds campaign defaults; its position is
+            enforced here rather than left to dict order (what the plain
+            '#include' key relies on), because every caller must get the
+            same answer: a frozen entry that pins geom_run1_b_v06 has to
+            keep it when the campaign default says v40.
         pre_lines: raw FCL lines the config's overrides may still beat
             (mixing pbeam include + per-mixer MaxEventsToSkip)
         post_lines: raw FCL lines that beat the overrides
             (resampler MaxEventsToSkip, computed from SAM)
     """
+    def _includes(val):
+        return val if isinstance(val, list) else [val]
+
     with open('template.fcl', 'w') as f:
         # Write just the include directive for the base FCL
         f.write(f'#include "{base}"\n')
+
+        for inc in _includes(overrides.get(COMMON_INCLUDE_KEY, [])):
+            f.write(f'#include "{inc}"\n')
 
         for line in pre_lines:
             f.write(line + '\n')
 
         # Add overrides
         for key, val in overrides.items():
+            if key == COMMON_INCLUDE_KEY:
+                continue
             if key == '#include':
-                includes = val if isinstance(val, list) else [val]
-                for inc in includes:
+                for inc in _includes(val):
                     f.write(f'#include "{inc}"\n')
             else:
                 # Use json.dumps for all values to ensure proper FCL formatting

@@ -84,6 +84,7 @@
 		"fcl": "Production/JobConfig/beam/POT_infinitepion.fcl",
 		"fcl_overrides": {
 			"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v03.txt",
+			"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_ds_v01.txt",
 			"physics.producers.g4run.Mu2eG4CommonCut.pars[1].pars[2].pars": "[ TS2Vacuum, Coll31, Coll32, TS2InnerCryoShell, TS3InnerCryoShell, TS2CryoInsVac, TS3CryoInsVac, PbarAbsDisk, PbarAbsWedge, VirtualDetector_Coll31_In, VirtualDetector_Coll32_In, VirtualDetector_Coll31_Out, VirtualDetector_Coll32_Out, Coll31OutRecord, Coll32InRecord, Coll31OutRecord ]",
 			"physics.producers.g4run.Mu2eG4CommonCut.pars[1].pars[3].pars[0].pars[0].pars": "[ TS3Vacuum ]"
 		},

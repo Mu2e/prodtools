@@ -5,6 +5,7 @@
         "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
             "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
         },
@@ -27,6 +28,7 @@
         "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
             "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
         },
@@ -49,6 +51,7 @@
         "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD1809.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
             "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
         },
