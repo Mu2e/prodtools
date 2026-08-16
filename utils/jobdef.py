@@ -26,7 +26,7 @@ import tarfile
 from typing import Dict, List, Tuple, Optional, Any
 
 from utils.config_utils import cnf_name
-from utils.job_common import Mu2eName, default_owner, tbs_capacity
+from utils.job_common import Mu2eName, default_owner, tbs_capacity, CODE_SETUP_REL, sha256_file
 
 # Constants matching Perl mu2ejobdef exactly
 FILENAME_JSON = 'jobpars.json'
@@ -212,16 +212,76 @@ def _reorder(d: Dict, order: List[str]) -> Dict:
     return ordered
 
 
-def _build_jobpars_json(config: Dict, tbs: Dict, code: str = "") -> Dict:
-    """Construct complete jobpars.json structure matching Perl mu2ejobdef exactly."""
-    # Base structure - use Perl field ordering exactly: code, setup, tbs, jobname
-    # This matches the actual observed Perl output order
-    return {
-        "code": code,
-        "setup": config['simjob_setup'],
-        "tbs": _reorder(tbs, ['seed', 'subrunkey', 'event_id', 'outfiles']),
-        "jobname": cnf_name(config, 'tar')
+def validate_code_tarball(path):
+    """Refuse a code tarball that could not work on a worker.
+
+    Same three checks Perl mu2ejobdef makes (mu2ejobdef:808-828):
+    readable, bzip2-compressed, and containing Code/setup.sh. Done at
+    BUILD time so a broken tarball costs one command instead of a
+    thousand grid jobs.
+
+    Scanning stops at the first match. bzip2 is not seekable, so a full
+    walk of a ~1 GB archive is slow; `museTarball.sh` writes setup.sh
+    early, so the first-match exit is nearly free in practice.
+
+    Content decides, never the filename — a correctly built tarball is
+    accepted under any name.
+    """
+    if not os.path.isfile(path) or not os.access(path, os.R_OK):
+        raise ValueError(f"code tarball is not readable: {path}")
+    try:
+        with tarfile.open(path, 'r:bz2') as tar:
+            for member in tar:
+                if member.name == CODE_SETUP_REL:
+                    return
+    except tarfile.ReadError as exc:
+        raise ValueError(
+            f"code tarball is not a bzip2-compressed tar archive: "
+            f"{path} ({exc})")
+    raise ValueError(
+        f"code tarball has no {CODE_SETUP_REL}: {path} — "
+        f"build it with `muse tarball`")
+
+
+def build_code_ref(path):
+    """Provenance for a code-mode cnf: what build it was made against.
+
+    The bytes are NOT embedded (sidecar delivery), so this digest is the
+    only thing binding the cnf to a particular Offline build.
+    `check_inputs.check_code_tarball` re-derives it at submit time and
+    refuses a mismatch.
+    """
+    digest, size = sha256_file(path)
+    return {'sha256': digest, 'size': size,
+            'source_path': os.path.abspath(path)}
+
+
+def _build_jobpars_json(config: Dict, tbs: Dict) -> Dict:
+    """Construct complete jobpars.json structure matching Perl mu2ejobdef.
+
+    Perl field ordering: code, setup, tbs, jobname. `code_ref` is ours
+    and sits after `setup`, next to the field it explains.
+
+    `code` is ALWAYS empty. Upstream uses it for the name of an embedded
+    archive member; prodtools ships the code as a jobsub sidecar and
+    embeds nothing, so an empty string is the truthful answer and keeps
+    a cnf of ours readable by mu2ejobquery.
+    """
+    setup = config.get('simjob_setup')
+    code_path = config.get('code')
+    if bool(setup) == bool(code_path):
+        raise ValueError(
+            "exactly one of 'simjob_setup' and 'code' must be set "
+            f"(simjob_setup={setup!r}, code={code_path!r})")
+    pars = {
+        "code": "",
+        "setup": setup or CODE_SETUP_REL,
     }
+    if code_path:
+        pars["code_ref"] = build_code_ref(code_path)
+    pars["tbs"] = _reorder(tbs, ['seed', 'subrunkey', 'event_id', 'outfiles'])
+    pars["jobname"] = cnf_name(config, 'tar')
+    return pars
 
 
 def _read_filelist(path: str) -> List[str]:
@@ -598,8 +658,11 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
         desc = config['desc']
     
     dsconf = config['dsconf']
-    
 
+    # Fail before building anything: a bad code tarball should cost one
+    # command, not a cnf that only breaks on a worker.
+    if config.get('code'):
+        validate_code_tarball(config['code'])
 
     # Determine template path - match Perl logic exactly: for --embed, check if file exists locally first, then fall back to FHICL_FILE_PATH
     if embed and Path(fcl_path).exists():
@@ -679,7 +742,7 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
         out.unlink()
 
     # Build complete jobpars JSON
-    jobpars = _build_jobpars_json(config, tbs, code="")
+    jobpars = _build_jobpars_json(config, tbs)
 
     # Prepare temporary files
     temp_files = {}

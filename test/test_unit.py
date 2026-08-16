@@ -15010,6 +15010,127 @@ class TestResolveSetup(unittest.TestCase):
             resolve_setup('')
 
 
+def _make_code_tarball(path, with_setup=True, bzip2=True):
+    """Build a tiny stand-in for `muse tarball` output. Few KB, no
+    /cvmfs, no network — safe for the in-process suite."""
+    import tarfile as _tf
+    mode = 'w:bz2' if bzip2 else 'w'
+    with _tf.open(path, mode) as tar:
+        payload = io.BytesIO(b'# fake muse setup\n')
+        if with_setup:
+            info = _tf.TarInfo('Code/setup.sh')
+            info.size = len(payload.getvalue())
+            tar.addfile(info, io.BytesIO(payload.getvalue()))
+        other = _tf.TarInfo('Code/lib/libFake.so')
+        other.size = 3
+        tar.addfile(other, io.BytesIO(b'abc'))
+    return path
+
+
+class TestCodeTarballValidation(unittest.TestCase):
+    """jobdef refuses a code tarball that cannot work on a worker,
+    mirroring the checks Perl mu2ejobdef does at lines 808-828."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def test_good_tarball_accepted(self):
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+        validate_code_tarball(path)  # must not raise
+
+    def test_missing_file_rejected(self):
+        from utils.jobdef import validate_code_tarball
+        with self.assertRaises(ValueError) as ctx:
+            validate_code_tarball(os.path.join(self.dir, 'nope.tar.bz2'))
+        self.assertIn('readable', str(ctx.exception))
+
+    def test_uncompressed_tar_rejected(self):
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'plain.tar'),
+                                  bzip2=False)
+        with self.assertRaises(ValueError) as ctx:
+            validate_code_tarball(path)
+        self.assertIn('bzip2', str(ctx.exception))
+
+    def test_tarball_without_code_setup_rejected(self):
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'nosetup.tar.bz2'),
+                                  with_setup=False)
+        with self.assertRaises(ValueError) as ctx:
+            validate_code_tarball(path)
+        self.assertIn('Code/setup.sh', str(ctx.exception))
+        self.assertIn('muse tarball', str(ctx.exception))
+
+    def test_name_does_not_decide(self):
+        # Content decides, not the filename: a correctly built tarball
+        # under any name is accepted.
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'my-build.tbz'))
+        validate_code_tarball(path)
+
+
+class TestSha256File(unittest.TestCase):
+
+    def test_digest_and_size(self):
+        from utils.job_common import sha256_file
+        with tempfile.NamedTemporaryFile(delete=False) as fh:
+            fh.write(b'hello')
+            name = fh.name
+        self.addCleanup(os.unlink, name)
+        digest, size = sha256_file(name)
+        self.assertEqual(digest, hashlib.sha256(b'hello').hexdigest())
+        self.assertEqual(size, 5)
+
+
+class TestCodeModeJobpars(unittest.TestCase):
+    """A code-mode cnf says setup='Code/setup.sh' and carries code_ref;
+    upstream's `code` key stays empty because nothing is embedded."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.tarball = _make_code_tarball(
+            os.path.join(self.dir, 'Code.tar.bz2'))
+
+    def test_code_mode_shape(self):
+        from utils.jobdef import _build_jobpars_json
+        config = {'code': self.tarball, 'desc': 'Demo',
+                  'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        pars = _build_jobpars_json(config, {'outfiles': {}})
+        self.assertEqual(pars['setup'], 'Code/setup.sh')
+        self.assertEqual(pars['code'], '')
+        self.assertEqual(pars['code_ref']['size'],
+                         os.path.getsize(self.tarball))
+        self.assertEqual(pars['code_ref']['source_path'],
+                         os.path.abspath(self.tarball))
+        self.assertEqual(len(pars['code_ref']['sha256']), 64)
+
+    def test_setup_mode_shape_unchanged(self):
+        from utils.jobdef import _build_jobpars_json
+        setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh'
+        config = {'simjob_setup': setup, 'desc': 'Demo',
+                  'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        pars = _build_jobpars_json(config, {'outfiles': {}})
+        self.assertEqual(pars['setup'], setup)
+        self.assertEqual(pars['code'], '')
+        self.assertNotIn('code_ref', pars)
+
+    def test_both_setup_and_code_rejected(self):
+        from utils.jobdef import _build_jobpars_json
+        config = {'simjob_setup': '/cvmfs/x/setup.sh', 'code': self.tarball,
+                  'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        with self.assertRaises(ValueError):
+            _build_jobpars_json(config, {'outfiles': {}})
+
+    def test_neither_setup_nor_code_rejected(self):
+        from utils.jobdef import _build_jobpars_json
+        config = {'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        with self.assertRaises(ValueError):
+            _build_jobpars_json(config, {'outfiles': {}})
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

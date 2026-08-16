@@ -20,6 +20,23 @@ from typing import Dict, Optional, Union
 CODE_SETUP_REL = 'Code/setup.sh'
 
 
+def sha256_file(path, chunk_size=1 << 20):
+    """(hex digest, size in bytes) of a file, read in chunks.
+
+    Single home for content hashing: `jobdef` stamps a code tarball's
+    digest into the cnf at build time and `check_inputs` re-derives it
+    at submit time. Two implementations would eventually disagree on
+    chunking or encoding and turn a match into a spurious refusal.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b''):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
 # Mu2e dataset path puts every tier under one of four umbrella owner-classes.
 # Single source of truth — folded in from jobsub_argv._TIER_TO_OWNER_CLASS.
 _TIER_TO_OWNER_CLASS = {
