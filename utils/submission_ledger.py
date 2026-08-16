@@ -40,7 +40,7 @@ from utils.jobdesc import RESOURCE_KEYS, validate_entry_value
 # Derived, not restated: a key added to RESOURCE_KEYS without being
 # added here would be silently unvalidatable, and the reverse would let
 # set-entry accept a key validate_entry_value ignores entirely.
-EDITABLE_ENTRY_KEYS = ('inloc',) + RESOURCE_KEYS
+EDITABLE_ENTRY_KEYS = ('inloc', 'code') + RESOURCE_KEYS
 
 
 PRODUCTION_DB = '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'

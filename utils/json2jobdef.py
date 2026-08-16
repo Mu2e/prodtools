@@ -334,10 +334,15 @@ def validate_required_fields(config):
     (process_single_entry defaults it to 'none'), and the resource keys
     usually come from CLI flags instead.
     """
-    for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
+    for req in ('fcl', 'dsconf', 'outloc'):
         if not config.get(req):
             sys.exit(f"Missing required field: {req}")
-    for key in ('inloc',) + RESOURCE_KEYS:
+    # Exactly one source of Offline, the same rule mu2ejobdef enforces:
+    # a /cvmfs Musing setup script, or a code tarball that travels with
+    # the job. Both would be ambiguous; neither cannot run.
+    if bool(config.get('simjob_setup')) == bool(config.get('code')):
+        sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
+    for key in ('inloc', 'code') + RESOURCE_KEYS:
         if key in config:
             try:
                 validate_entry_value(key, config[key])
@@ -396,7 +401,8 @@ def build_jobdef(config, job_args):
     # result['perl_commands'] to run the Perl mu2ejobdef comparison.
     cmd_parts = [
         'mu2ejobdef',
-        '--setup', config['simjob_setup'],
+        '--setup' if config.get('simjob_setup') else '--code',
+        config.get('simjob_setup') or config['code'],
         '--dsconf', config['dsconf'],
         '--desc', config['desc'],
         '--dsowner', config['owner']
@@ -483,6 +489,12 @@ def build_jobdesc(config):
     for key in ('input_pattern', 'prestage'):
         if key in config:
             jobdef_entry[key] = config[key]
+
+    # The code tarball's path travels on the entry, not in the cnf: the
+    # submit path reads it via jobdesc.code_of to add jobsub's
+    # --tar_file_name, and the snapshot is what later slices reuse.
+    if config.get('code'):
+        jobdef_entry['code'] = config['code']
 
     # A draining entry is defined by having an input_pattern and NO index
     # space. Emitting both would leave the entry self-contradictory --

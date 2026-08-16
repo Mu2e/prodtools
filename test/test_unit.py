@@ -15131,6 +15131,75 @@ class TestCodeModeJobpars(unittest.TestCase):
             _build_jobpars_json(config, {'outfiles': {}})
 
 
+class TestEntryCodeKey(unittest.TestCase):
+    """The entry carries the code tarball's absolute path; the cnf
+    carries only the relative setup and the digest."""
+
+    def test_code_of_returns_path(self):
+        from utils.jobdesc import code_of
+        self.assertEqual(code_of({'code': '/exp/build/Code.tar.bz2'}),
+                         '/exp/build/Code.tar.bz2')
+
+    def test_code_of_none_for_musing_entry(self):
+        from utils.jobdesc import code_of
+        self.assertIsNone(code_of({'tarball': 'cnf.mu2e.X.Run1Baq.0.tar'}))
+
+    def test_absolute_path_accepted(self):
+        from utils.jobdesc import validate_entry_value
+        validate_entry_value('code', '/exp/build/Code.tar.bz2')
+
+    def test_any_suffix_accepted(self):
+        # Content decides whether a tarball is usable (jobdef checks the
+        # bzip2 magic); the name must not.
+        from utils.jobdesc import validate_entry_value
+        validate_entry_value('code', '/exp/build/my-build.tbz')
+
+    def test_relative_path_rejected(self):
+        from utils.jobdesc import validate_entry_value
+        with self.assertRaises(ValueError) as ctx:
+            validate_entry_value('code', 'Code.tar.bz2')
+        self.assertIn('absolute', str(ctx.exception))
+
+    def test_non_string_rejected(self):
+        from utils.jobdesc import validate_entry_value
+        with self.assertRaises(ValueError):
+            validate_entry_value('code', 17)
+
+    def test_code_is_editable_on_a_live_campaign(self):
+        # A rebuilt tarball must be reachable without a new cnf.
+        from utils.submission_ledger import EDITABLE_ENTRY_KEYS
+        self.assertIn('code', EDITABLE_ENTRY_KEYS)
+
+
+class TestJson2JobdefCodeConfig(unittest.TestCase):
+
+    def test_exactly_one_of_setup_and_code(self):
+        from utils.json2jobdef import validate_required_fields
+        base = {'fcl': 'x.fcl', 'dsconf': 'Run1Baq', 'outloc': {'dts.*': 'disk'}}
+        with self.assertRaises(SystemExit):
+            validate_required_fields(dict(base))                    # neither
+        with self.assertRaises(SystemExit):
+            validate_required_fields(dict(base, simjob_setup='/cvmfs/s.sh',
+                                          code='/exp/Code.tar.bz2'))  # both
+        validate_required_fields(dict(base, simjob_setup='/cvmfs/s.sh'))
+        validate_required_fields(dict(base, code='/exp/Code.tar.bz2'))
+
+    def test_code_reaches_the_entry(self):
+        from utils.json2jobdef import build_jobdesc
+        config = {'code': '/exp/build/Code.tar.bz2', 'inloc': 'tape',
+                  'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e',
+                  'fcl': 'x.fcl', 'outloc': {}, 'njobs': 5}
+        entry = build_jobdesc(config)
+        self.assertEqual(entry['code'], '/exp/build/Code.tar.bz2')
+
+    def test_musing_entry_has_no_code_key(self):
+        from utils.json2jobdef import build_jobdesc
+        config = {'simjob_setup': '/cvmfs/s.sh', 'inloc': 'tape',
+                  'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e',
+                  'fcl': 'x.fcl', 'outloc': {}, 'njobs': 5}
+        self.assertNotIn('code', build_jobdesc(config))
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
