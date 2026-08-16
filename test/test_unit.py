@@ -5355,6 +5355,106 @@ class TestSubmitEntryResourceWiring(unittest.TestCase):
         self.assertIsNone(captured['expected_lifetime'])
 
 
+class TestJobsubArgvCodeTarball(unittest.TestCase):
+    """The code tarball rides jobsub's --tar_file_name (RCDS/cvmfs,
+    published once, no per-job copy) -- NOT -f dropbox://, which
+    transfers per job. mu2eprodsys:474-475 does the same."""
+
+    def _argv(self, **extra):
+        from utils.jobsub_argv import build_jobsub_argv
+        return build_jobsub_argv(
+            entry={'tarball': 'cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
+                   'outputs': []},
+            jobset=[0, 1, 2],
+            jobdef_path='/tmp/cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
+            ops_json_path='/tmp/ops.json',
+            prodtools_tar_path='/tmp/prodtools-me.tar',
+            worker_script_path='/repo/bin/runjob.sh',
+            submitter='me',
+            **extra)
+
+    def test_no_code_tarball_no_flag(self):
+        argv = self._argv()
+        self.assertNotIn('--tar_file_name', argv)
+
+    def test_code_tarball_adds_flag(self):
+        argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
+        idx = argv.index('--tar_file_name')
+        self.assertEqual(argv[idx + 1], 'dropbox:///exp/build/Code.tar.bz2')
+
+    def test_code_tarball_does_not_displace_the_three_input_files(self):
+        # Regression guard: --tar_file_name is a DIFFERENT mechanism from
+        # -f dropbox://. The cnf, the ops JSON and the prodtools tarball
+        # must all still ship.
+        argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
+        shipped = [argv[i + 1] for i, a in enumerate(argv) if a == '-f']
+        self.assertEqual(len(shipped), 3)
+        self.assertIn('dropbox:///tmp/ops.json', shipped)
+        self.assertIn('dropbox:///tmp/cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
+                      shipped)
+        self.assertIn('dropbox:///tmp/prodtools-me.tar', shipped)
+
+    def test_executable_stays_last(self):
+        argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
+        self.assertTrue(argv[-1].startswith('file://'))
+
+
+class TestSubmitPassesCodeTarball(unittest.TestCase):
+    """submit_entry must actually wire the entry's code tarball into
+    build_jobsub_argv. Same shape as TestSubmitEntryResourceWiring
+    (test_unit.py:5323), which closes the identical gap for memory."""
+
+    def test_entry_code_reaches_build_jobsub_argv(self):
+        from utils.submit import submit_entry, SubmitOptions
+
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}],
+                 'code': '/exp/build/Code.tar.bz2'}
+        options = SubmitOptions(
+            ledger_db='/tmp/unused-code-wiring.db',
+            dry_run=True, origin='/tmp/m.json')
+
+        captured = {}
+
+        def fake_build_jobsub_argv(**kwargs):
+            captured.update(kwargs)
+            return ['--fake-argv']
+
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   side_effect=fake_build_jobsub_argv), \
+             patch('utils.submit._bundle_prodtools',
+                   return_value=Path('/tmp/fake-prodtools.tar')):
+            result = submit_entry(entry, 0, options)
+
+        self.assertEqual(result['status'], 'dry_run')
+        self.assertEqual(captured['code_tarball'], '/exp/build/Code.tar.bz2')
+
+    def test_musing_entry_passes_none(self):
+        from utils.submit import submit_entry, SubmitOptions
+
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}]}
+        options = SubmitOptions(
+            ledger_db='/tmp/unused-code-wiring.db',
+            dry_run=True, origin='/tmp/m.json')
+
+        captured = {}
+
+        def fake_build_jobsub_argv(**kwargs):
+            captured.update(kwargs)
+            return ['--fake-argv']
+
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   side_effect=fake_build_jobsub_argv), \
+             patch('utils.submit._bundle_prodtools',
+                   return_value=Path('/tmp/fake-prodtools.tar')):
+            submit_entry(entry, 0, options)
+
+        self.assertIsNone(captured['code_tarball'])
+
+
 # ---------------------------------------------------------------------------
 # submit_map --enqueue (utils/submit.py) — sliced-campaign submission
 # ---------------------------------------------------------------------------

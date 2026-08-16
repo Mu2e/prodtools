@@ -36,7 +36,7 @@ from utils.job_common import (Mu2eName, log_storage_location,
 from utils.jobdesc import (RESOURCE_KEYS, tarball_of, outputs_of, njobs_of,
                            inloc_of, firstjob_of, validate_window,
                            resources_of, is_draining, validate_entry_value,
-                           OUTSTAGE_LOCATION)
+                           OUTSTAGE_LOCATION, code_of)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
 from utils.check_inputs import check_inputs, format_report, Problem
@@ -805,6 +805,7 @@ def submit_entry(entry, idx, options):
         disk=resources['disk'],
         memory=resources['memory'],
         expected_lifetime=resources['expected_lifetime'],
+        code_tarball=code_of(entry),
     )
 
     cmd = ['jobsub_submit'] + argv
