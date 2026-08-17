@@ -340,11 +340,16 @@ Extracted is out of scope.
   directory is separate work.
 - **Offline changes.** None are required. Every file the era pin selects
   already ships on Offline main.
-- **`Scripts/gen_*.sh`.** Deleting `CampaignConfig/` (below) leaves this
-  family with no in-repo consumer, but the scripts may still be run by hand
-  or from `production_manager/`, and two of them are repaired by the rename
-  PR. They stay; whether the whole POMS-era submission path should exist is a
-  separate question.
+- **`Scripts/` — untouched, by decision (2026-08-17).** Left exactly as it is
+  on `main`: not repaired, not deleted. Deleting `CampaignConfig/` leaves the
+  `gen_*.sh` family with no in-repo consumer, but the scripts may still be
+  run by hand or from `production_manager/`.
+
+  Consequence, accepted: `gen_Digitize.sh:169-170` and `gen_Mix.sh:290-291`
+  keep four references to `TriggeredOutput`/`TriggerableOutput`, so anyone
+  running them still gets the placeholder-filename bug this work fixes
+  everywhere else. The repo will not be uniformly clean, and a future
+  `git grep` for these names will still hit.
 
 ## Added scope (2026-08-17): delete `CampaignConfig/`
 
@@ -355,7 +360,9 @@ its own PR.
 
 This shrinks the rename repair from 31 files / 110 references to **30 / 108**
 — `CampaignConfig/mdc2020_main.cfg` held one file and two references, and
-there is no point repairing a file that is about to be deleted.
+there is no point repairing a file that is about to be deleted. Excluding
+`Scripts/` as well brings it to **28 files / 104 references**, entirely
+`Validation/` plus `data/merge_filter.json`.
 
 ## Risks
 

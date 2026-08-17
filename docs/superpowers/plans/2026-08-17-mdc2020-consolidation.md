@@ -55,8 +55,8 @@ Musings on `/cvmfs`, bash.
 **Production** (PR B — delete dead POMS config, 26 files):
 - `CampaignConfig/` — the whole directory, removed.
 
-**Production** (PR C — repair, 30 files):
-- `Scripts/gen_Digitize.sh`, `Scripts/gen_Mix.sh`, `data/merge_filter.json`,
+**Production** (PR C — repair, 28 files):
+- `data/merge_filter.json`,
   `Validation/{ceDigi,ceMix,cosmicOffSpill}.fcl`,
   `Validation/nightly/CeSimReco/digitize.fcl`,
   `Validation/nightly/CosmicSimReco/digitize{OnSpill,OffSpill}.fcl`,
@@ -293,10 +293,11 @@ cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
 git grep -l 'gen_[A-Z]' -- . ':!Scripts' || echo "gen_ scripts now unreferenced in-repo"
 ```
 
-Do **not** delete them. They may be invoked by hand or from
-`production_manager/` outside this repo, and `Scripts/gen_Digitize.sh` and
-`gen_Mix.sh` are repaired by Task 3. Note the finding in the task report so
-the user can decide separately.
+Do **not** delete them and do **not** modify them. `Scripts/` is out of scope
+for this whole plan by decision — it stays exactly as it is on `main`. The
+scripts may still be invoked by hand or from `production_manager/` outside
+this repo. Note the finding in the task report so the user can decide
+separately.
 
 - [ ] **Step 4: Commit**
 
@@ -319,7 +320,6 @@ git show --stat --oneline HEAD | tail -3
 ## Task 3: Repair the output-module rename on main
 
 **Files:**
-- Modify: `Scripts/gen_Digitize.sh:169-170`, `Scripts/gen_Mix.sh:290-291`
 - Modify: `data/merge_filter.json:85-86`
 - Modify: `Validation/ceDigi.fcl`, `Validation/ceMix.fcl`,
   `Validation/cosmicOffSpill.fcl`
@@ -335,7 +335,14 @@ git show --stat --oneline HEAD | tail -3
 - Produces: a `main` on which `outputs.Output` is the only output module
   named anywhere, which Task 5's dumps rely on.
 
-**Why this is correct, so the implementer does not second-guess it:**
+**`Scripts/` is out of scope, by decision.** `gen_Digitize.sh:169-170` and
+`gen_Mix.sh:290-291` keep their four dead references. Consequence, accepted:
+anyone running those scripts gets a `digitize.fcl` / `mix.fcl` whose output
+filename assignments address a module that does not exist, so the job writes
+the prolog placeholder `dig.owner.desc.version.sequencer.art` — the same
+failure this PR fixes everywhere else. Do not "helpfully" include them.
+
+**Why the rest is correct, so the implementer does not second-guess it:**
 `JobConfig/digitize/prolog.fcl` defines `Digitize.Outputs : { Output : ... }`
 and `Digitize.EndPath : [ ..., Output ]`. `mixing/Mix.fcl` does
 `outputs : @local::Digitize.Outputs`. `TriggeredOutput` and
@@ -351,16 +358,16 @@ finishes that consolidation; it does not drop a stream.
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
 git fetch origin --quiet
 git checkout -b fix-output-module-rename drop-campaignconfig
-git grep -c 'TriggeredOutput\|TriggerableOutput' | wc -l   # expect 30
-git grep -o 'TriggeredOutput\|TriggerableOutput' | wc -l   # expect 108
+git grep -c 'TriggeredOutput\|TriggerableOutput' -- . ':!Scripts' | wc -l  # expect 28
+git grep -o 'TriggeredOutput\|TriggerableOutput' -- . ':!Scripts' | wc -l  # expect 104
 ```
 
 - [ ] **Step 2: Delete every TriggerableOutput assignment**
 
 ```bash
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git grep -l 'TriggerableOutput' | xargs sed -i '/TriggerableOutput/d'
-git grep -c 'TriggerableOutput' || echo "no TriggerableOutput left"
+git grep -l 'TriggerableOutput' -- . ':!Scripts' | xargs sed -i '/TriggerableOutput/d'
+git grep -c 'TriggerableOutput' -- . ':!Scripts' || echo "no TriggerableOutput left"
 ```
 
 Expected: `no TriggerableOutput left`.
@@ -374,8 +381,8 @@ Step 5.
 
 ```bash
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git grep -l 'TriggeredOutput' | xargs sed -i 's/TriggeredOutput/Output/g'
-git grep -c 'TriggeredOutput' || echo "no TriggeredOutput left"
+git grep -l 'TriggeredOutput' -- . ':!Scripts' | xargs sed -i 's/TriggeredOutput/Output/g'
+git grep -c 'TriggeredOutput' -- . ':!Scripts' || echo "no TriggeredOutput left"
 ```
 
 Expected: `no TriggeredOutput left`.
@@ -402,14 +409,20 @@ Expected: `mu2emetadata.fcl.outkeys: [ "outputs.Output.fileName" ]`
 
 ```bash
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git grep -c 'TriggeredOutput\|TriggerableOutput\|UntriggeredOutput' || echo "CLEAN"
+git grep -c 'TriggeredOutput\|TriggerableOutput\|UntriggeredOutput' -- . ':!Scripts' || echo "CLEAN"
+git diff --name-only | grep '^Scripts/' && echo "ERROR: Scripts touched" || echo "Scripts untouched"
 git grep -n 'outputs\.CaloOutput\|outputs\.TrkOutput\|outputs\.DiagOutput' -- Validation/ || echo "CLEAN nightly"
 git grep -c 'outputs\.Output\.fileName' -- Validation/nightly/ | head -3
 git diff --stat | tail -1
 ```
 
-Expected: `CLEAN`, `CLEAN nightly`, each nightly file reporting at least one
-`outputs.Output.fileName`, and roughly 30 files changed.
+Expected: `CLEAN`, `Scripts untouched`, `CLEAN nightly`, each nightly file
+reporting at least one `outputs.Output.fileName`, and 28 files changed.
+
+`Scripts/gen_Digitize.sh` and `gen_Mix.sh` still contain four dead references
+after this task. That is deliberate — see the scope note. If `git diff
+--name-only` lists anything under `Scripts/`, a `git grep` pathspec was
+dropped; revert those two files before committing.
 
 `JobConfig/cosmic/SpillSplitter.fcl` legitimately defines its own
 `CaloOutput` module and must be untouched — confirm it is absent from
@@ -440,12 +453,16 @@ rename did not take effect and the task is not done.
 ```bash
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
 git add -A
-git commit -m "fix(outputs): rename to the single Output module that actually exists
+git commit -m "fix(outputs): rename Validation to the single Output module that exists
 
 digitize/prolog.fcl defines one output module, Output, and EndPath lists only
 it; mixing/Mix.fcl consumes the table wholesale. TriggeredOutput and
-TriggerableOutput have not existed for some time, but 31 files still assigned
-to them.
+TriggerableOutput have not existed for some time, but many files still
+assigned to them.
+
+Scope is Validation/ and data/merge_filter.json. Scripts/gen_Digitize.sh and
+gen_Mix.sh keep their dead references deliberately and are left as they are
+on main.
 
 art only constructs output modules that appear in a path, so those
 assignments were silently ignored -- ceDigi, ceMix and cosmicOffSpill all
