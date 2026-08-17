@@ -71,17 +71,28 @@ The same mechanism makes `CaloOutput`, `TrkOutput`, `DiagOutput` and
 `UntriggeredOutput` dead in the `Validation/nightly/ceMix_NN.fcl` files;
 the branch renamed only `TriggeredOutput` and left those in place.
 
+The single stream is deliberate, not an accident to be undone. The
+Triggered and Triggerable streams were consolidated, and `Output` carries
+both selections — `JobConfig/digitize/OnSpill.fcl`:
+
+```fcl
+outputs.Output.SelectEvents : [@sequence::Digitize.SignalTriggers, @sequence::physics.TriggerablePaths ]
+```
+
+So the stale assignments are simply un-finished work, and deleting them
+completes the consolidation rather than dropping a stream.
+
 ### What is genuinely MDC2020-specific
 
-The residual 23 files:
+The residual files, after dropping Extracted (see Non-goals):
 
 | class | files | mechanism |
 |---|---|---|
-| `epilog_Extracted.fcl` consolidation | 6 | unconditional refactor |
 | Old-input compat (`MakeSS` NullProducer, `TimeClusterCollections: []`, `surfaceStepTags`) | 3 | additive, inert on new data |
-| Era pin: geometry + CRV version | 9 | the only real switch |
+| Era pin: geometry + CRV version | 7 | the only real switch |
 | `epilog_run1a_v01.fcl` removed from shared `digitize/epilog.fcl`, `reco/epilog.fcl` | 2 | un-include; needs the Run1B treatment |
 | MDC2020-era `Validation/` (retired — see Non-goals) | 3 | dropped |
+| Extracted (retired — see Non-goals) | 7 | dropped |
 
 ### The era pin is one decision
 
@@ -118,9 +129,10 @@ it can reassign the values that include produced.
 
 ## Architecture
 
-Three PRs, in order. Each is independently valuable and independently
-revertible. The branch dies at PR 3; stopping after PR 1 or PR 2 still
-leaves main better than it is now.
+Two PRs, in order. Each is independently valuable and independently
+revertible. The branch dies at PR 2; stopping after PR 1 still leaves main
+better than it is now, because PR 1 is a bug fix that has nothing to do with
+MDC2020.
 
 ### PR 1 — repair the output-module rename on main
 
@@ -133,9 +145,10 @@ own internal contradiction, not from the branch; the branch is the
 cross-check.
 
 - `TriggeredOutput` → `Output`
-- `TriggerableOutput` assignments → deleted. The second stream no longer
-  exists in the prolog; `gen_Digitize.sh` and `gen_Mix.sh` currently claim
-  to emit a `…Triggerable…` dataset that is never produced.
+- `TriggerableOutput` assignments → deleted. Triggerable is the older
+  scheme; the two streams are consolidated and `Output` carries both
+  selections. `gen_Digitize.sh` and `gen_Mix.sh` currently claim to emit a
+  `…Triggerable…` dataset that is never produced.
 - In `Validation/nightly/ceMix_NN.fcl`, `mu2emetadata.fcl.outkeys` entries
   follow the rename.
 - `CaloOutput` / `TrkOutput` / `DiagOutput` / `UntriggeredOutput`
@@ -150,40 +163,13 @@ Files: `CampaignConfig/mdc2020_main.cfg`, `Scripts/gen_Digitize.sh`,
 `Validation/nightly/MDS/digitize.fcl`,
 `Validation/nightly/ceMix_{00..19}.fcl`.
 
-**Open item to resolve before merging:** confirm with the author of
-`51d3a532` ("Add Trk and Calo digitization streams. Standardize cosmic
-resampler name") that folding `TriggerableOutput` away was intended and no
-consumer expects a `…Triggerable…` dataset. If a second stream is wanted,
-this PR restores it in the prolog instead of deleting the assignments.
-
 **Acceptance:** after the change, a nightly run produces distinct
 `dig.owner.ceDigi.*` and `dig.owner.ceMix.*` files, and
 `dig.owner.desc.version.sequencer.art` — the prolog placeholder — no longer
 appears in `nightly2/current/`. `git grep -c 'TriggeredOutput\|TriggerableOutput'`
 returns zero across the repo.
 
-### PR 2 — unconditional refactors
-
-**`JobConfig/common/epilog_Extracted.fcl`** (new, from the branch) as the
-single home for extracted geometry and field:
-
-```fcl
-services.GeometryService.inputFile  : "Production/JobConfig/cosmic/geom_cosmic_extracted.txt"
-services.GeometryService.bFieldFile : "Offline/Mu2eG4/geom/bfgeom_no_field.txt"
-```
-
-included by `cosmic/ExtractedCORSIKA.fcl`, `cosmic/ExtractedCRY.fcl`,
-`digitize/Extracted.fcl`, `reco/Extracted.fcl`, `recoMC/Extracted.fcl`,
-replacing their individual `inputFile` assignments.
-
-**Behaviour change to verify, not assume:** `digitize/Extracted.fcl`,
-`reco/Extracted.fcl` and `recoMC/Extracted.fcl` on main set only
-`inputFile`, and route it to `Offline/Mu2eG4/geom/geom_common_extracted.txt`.
-The new epilog sets `bFieldFile` as well, and points `inputFile` at
-Production's `geom_cosmic_extracted.txt`. Extracted is field-off by
-definition, so this is most likely a latent fix — but it must be
-demonstrated by dumping the resolved config before and after, per
-Verification below, and any real difference named in the PR description.
+### PR 2 — the era switch
 
 **Old-input compat** (additive, inert on inputs that already carry the
 products): `MakeSS : { module_type : NullProducer }` in
@@ -192,12 +178,6 @@ products): `MakeSS : { module_type : NullProducer }` in
 `digitize/prolog.fcl`, `reco/prolog.fcl`, `recoMC/prolog.fcl`. Main already
 carries part of this from `e907cbc4` (2026-07-20); reconcile against
 Andrew's `dffc707f` (2026-08-12) rather than applying both blindly.
-
-**Acceptance:** for one representative job per touched entry point, the
-resolved config is unchanged except for the keys this PR intends to change,
-each named in the PR description.
-
-### PR 3 — the era switch
 
 **`Production/JobConfig/common/MDC2020.fcl`** (new), structured like
 `Run1B.fcl`: geometry and CRV set together, with a header stating that they
@@ -227,9 +207,15 @@ Values are copied verbatim from `Offline/CRVResponse/fcl/prolog_v11.fcl` and
 `Offline/CRVReco/fcl/prolog_v11.fcl`; versioned prolog files are immutable
 by convention, so the copy is pinned, not drifting.
 
-The extracted variant (`JobConfig/cosmic/geom_cosmic_extracted.txt` →
-`geom_common_extracted_MDC2020.txt`) is selected the same way, through the
-`epilog_Extracted.fcl` introduced in PR 2.
+`MDC2020.fcl` sets `inputFile` only. It does **not** set `bFieldFile`, and
+this is the one place where it must not copy `Run1B.fcl`. Measured on the
+branch: the sole `bFieldFile` assignment anywhere in its diff is inside
+`epilog_Extracted.fcl`, now out of scope; `JobConfig/common/epilog.fcl` pins
+geometry alone. Adding a field key would therefore silently move every stage
+that currently inherits its field from its base FCL's epilog — the class of
+change that hides completely in the source and shows up only in a dump.
+See `reference-run1b-entries-inherit-bfieldfile`. Note this asymmetry in the
+file's header comment, so the next person does not "fix" it for symmetry.
 
 **`Production/JobConfig/common/Run1A.fcl`** (new). Main's
 `digitize/epilog.fcl` and `reco/epilog.fcl` currently include
@@ -267,13 +253,25 @@ working model: it appends a shim directory holding only the new file to
 file it already carries.
 
 Entry points to cover: `digitize/OnSpill.fcl`, `digitize/OffSpill.fcl`,
-`digitize/Extracted.fcl`, `mixing/Mix.fcl`, `reco/NoField.fcl`,
-`reco/Extracted.fcl`, `recoMC/Extracted.fcl`, and one `pileup/` and one
-`primary/` job — the five prologs that include a CRV prolog are reached
-through these.
+`mixing/Mix.fcl`, `reco/NoField.fcl`, `recoMC/` via its prolog, and one
+`pileup/` and one `primary/` job — the five prologs that include a CRV
+prolog are reached through these. No `Extracted` entry point is covered;
+Extracted is out of scope.
 
 ## Non-goals
 
+- **Extracted, in every form.** MDC2020 Extracted is not a concern, so the
+  branch's `epilog_Extracted.fcl` consolidation and its
+  `geom_common_extracted_MDC2020.txt` pin are both dropped, along with the
+  changes to `cosmic/Extracted{CORSIKA,CRY}.fcl`,
+  `{digitize,reco,recoMC}/Extracted.fcl` and
+  `cosmic/geom_cosmic_extracted.txt` — seven files. Main keeps its
+  current-era Extracted configuration untouched, and the nightly `extracted`
+  stream is unaffected. The one exception is the Extracted entry in
+  `data/merge_filter.json`, which is in PR 1 solely for the output rename.
+  Folding the three `Extracted.fcl` files into a shared epilog remains a
+  reasonable tidy-up on its own merits; it is simply not part of
+  consolidating this branch.
 - **MDC2020-era `Validation/`.** The branch carries its own validation set
   pinned to MDC2020 geometry, MDC2020 input datasets and `firstRun: 1200`.
   It is retired. Main's `Validation/` keeps validating the current era; only
@@ -292,14 +290,10 @@ through these.
 
 ## Risks
 
-- **PR 1 changes production dataset names.** `gen_Digitize.sh` and
-  `gen_Mix.sh` currently emit a `…Triggerable…` filename that goes nowhere.
-  Deleting it is correct only if nothing downstream expects that dataset.
-  Resolve the `51d3a532` open item before merging.
 - **`MDC2020.fcl` copies values out of `prolog_v11.fcl`.** Mitigated by
   convention (versioned prologs are immutable) and by the dump-based
   acceptance test, which would catch any drift the moment it appeared.
-- **`Run1A.fcl` changes the default.** After PR 3, a job that selects no era
+- **`Run1A.fcl` changes the default.** After PR 2, a job that selects no era
   no longer silently gets the Run1A CRV epilogs. Every current Run1A
   consumer must be found and switched in the same PR. This is the failure
   mode recorded in `reference-run1b-frozen-campaigns-selfcontained`: on
