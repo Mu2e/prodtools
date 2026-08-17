@@ -6,10 +6,16 @@
 
 ## Goal
 
-Delete the `MDC2020` branch. Express everything it carries either as a fix
-that belongs on `main` unconditionally, or as a per-job era selection —
-`Production/JobConfig/common/MDC2020.fcl` — in the same shape as
-`Production/JobConfig/common/Run1B.fcl` (PR #569, merged 2026-08-16).
+Delete the `MDC2020` branch by expressing the one thing it genuinely carries
+— the MDC2020 detector era — as a per-job selection,
+`Production/JobConfig/common/MDC2020.fcl`, in the same shape as
+`Production/JobConfig/common/Run1B.fcl` (PR #569, merged 2026-08-16). Also
+delete the dead POMS `CampaignConfig/` the branch was carrying alongside it.
+
+Everything else the branch contains is either main moving forward while the
+branch stood still, or a correct-but-unneeded fix that is explicitly not
+being taken. Each exclusion is recorded under Non-goals with its reasoning,
+so the branch can be deleted knowing what goes with it.
 
 ## Background
 
@@ -81,8 +87,17 @@ name distinct outputs and all three land on it:
 | `Validation/cosmicOffSpill.fcl` | `dig.owner.cosmicOffSpill.seq.art` | placeholder |
 
 None of those three filenames exists in `nightly2/current/`; the single
-placeholder file does, and the nightly reports `OK ceMix`. Exit 0, wrong
-result.
+placeholder file does.
+
+**Corrected 2026-08-17 — this is latent, not active.** An earlier draft called
+it "exit 0, wrong result", implying validation was compromised. It is not.
+Nothing consumes those art outputs: every `source.fileNames` in `Validation/`
+reads `dts.owner.ceSteps.dsconf.seq.art`, and each intended filename appears
+only on the line that writes it. `valJobCheck.sh` is a return-code smoke test
+(`mu2e -c ...; RCT=$?`) that never inspects the output, and the comparison
+plots come from the grid streams via `TFileService` (`nts.owner.val-*.root`).
+The collision is real; nothing downstream depends on it. A landmine, not a
+fire.
 
 The same mechanism makes `CaloOutput`, `TrkOutput`, `DiagOutput` and
 `UntriggeredOutput` dead in the `Validation/nightly/ceMix_NN.fcl` files;
@@ -191,45 +206,43 @@ it can reassign the values that include produced.
 
 ## Architecture
 
-Two PRs, in order. Each is independently valuable and independently
-revertible. The branch dies at PR 2; stopping after PR 1 still leaves main
-better than it is now, because PR 1 is a bug fix that has nothing to do with
-MDC2020.
+Two Production PRs plus one Offline PR. They are independent of each other
+except that the Offline PR must merge first — `MDC2020.fcl` does not resolve
+without it. The branch dies at PR 2.
 
-### PR 1 — repair the output-module rename on main
+### PR 1 — delete the dead POMS campaign config
 
-**Scope:** every file on main that names a module the prolog does not
-define — 31 files, 110 references. (28 of them are the pure-rename files the
-branch already fixed; the other three — `Validation/ceDigi.fcl`,
-`Validation/ceMix.fcl`, `Validation/cosmicOffSpill.fcl` — also carry
-MDC2020-era changes on the branch, which are not taken.) Derived from main's
-own internal contradiction, not from the branch; the branch is the
-cross-check.
+`CampaignConfig/`, 26 files and ~143 KB of POMS `.cfg`/`.ini` job
+descriptions. The POMS backend was removed from prodtools on 2026-08-08,
+nothing in Production references the directory, and it was last modified
+2025-08-01. Independent of everything else here.
 
-- `TriggeredOutput` → `Output`
-- `TriggerableOutput` assignments → deleted. Triggerable is the older
-  scheme; the two streams are consolidated and `Output` carries both
-  selections. `gen_Digitize.sh` and `gen_Mix.sh` currently claim to emit a
-  `…Triggerable…` dataset that is never produced.
-- In `Validation/nightly/ceMix_NN.fcl`, `mu2emetadata.fcl.outkeys` entries
-  follow the rename.
-- `CaloOutput` / `TrkOutput` / `DiagOutput` / `UntriggeredOutput`
-  assignments in the `ceMix_NN.fcl` files are equally dead. Remove them in
-  this pass so the files stop describing outputs that cannot exist.
+**Acceptance:** `git grep CampaignConfig -- . ':!CampaignConfig'` returns
+nothing before deletion; `git ls-files CampaignConfig/` returns nothing after.
 
-Files: `CampaignConfig/mdc2020_main.cfg`, `Scripts/gen_Digitize.sh`,
-`Scripts/gen_Mix.sh`, `data/merge_filter.json`, `Validation/ceDigi.fcl`,
-`Validation/ceMix.fcl`, `Validation/cosmicOffSpill.fcl`,
-`Validation/nightly/CeSimReco/digitize.fcl`,
-`Validation/nightly/CosmicSimReco/digitize{OnSpill,OffSpill}.fcl`,
-`Validation/nightly/MDS/digitize.fcl`,
-`Validation/nightly/ceMix_{00..19}.fcl`.
+### Not a PR — the output-module rename (dropped 2026-08-17)
 
-**Acceptance:** after the change, a nightly run produces distinct
-`dig.owner.ceDigi.*` and `dig.owner.ceMix.*` files, and
-`dig.owner.desc.version.sequencer.art` — the prolog placeholder — no longer
-appears in `nightly2/current/`. `git grep -c 'TriggeredOutput\|TriggerableOutput'`
-returns zero across the repo.
+The branch's rename of `TriggeredOutput`/`TriggerableOutput` to the single
+`Output` module is correct, and main genuinely carries 31 files / 110 dead
+references. It is still **not being taken**, by decision.
+
+The reasoning, in the order it was established:
+
+- It has **zero coupling** to the consolidation. `MDC2020.fcl`, the CRV
+  epilogs and deleting the branch all behave identically with or without it.
+  It was bundled only because the branch happened to contain the fix.
+- The dangerous consumers are out of scope. `Scripts/gen_Digitize.sh` and
+  `gen_Mix.sh` would emit genuinely misnamed production datasets if run — and
+  `Scripts/` is untouched by decision. `CampaignConfig/` is deleted by PR 1.
+- What remained was 27 `Validation/` smoke tests whose art outputs nothing
+  reads (see the correction under "The inversion"), plus one
+  `data/merge_filter.json` entry that is MDC2020 Extracted — also out of
+  scope.
+
+Consequence, accepted: `main` keeps ~110 references to output modules that do
+not exist. They stay silently inert, and a future `git grep` will still hit
+them. The trap is for whoever later adds a Validation step that consumes
+`ceDigi`'s output and silently receives `ceMix`'s file instead.
 
 ### PR 2 — the era switch
 
@@ -347,22 +360,8 @@ Extracted is out of scope.
 
   Consequence, accepted: `gen_Digitize.sh:169-170` and `gen_Mix.sh:290-291`
   keep four references to `TriggeredOutput`/`TriggerableOutput`, so anyone
-  running them still gets the placeholder-filename bug this work fixes
-  everywhere else. The repo will not be uniformly clean, and a future
-  `git grep` for these names will still hit.
-
-## Added scope (2026-08-17): delete `CampaignConfig/`
-
-26 files, ~143 KB of POMS `.cfg`/`.ini` campaign definitions. The POMS
-backend was removed from prodtools on 2026-08-08; **nothing in Production
-references the directory**, and it was last modified 2025-08-01. It goes as
-its own PR.
-
-This shrinks the rename repair from 31 files / 110 references to **30 / 108**
-— `CampaignConfig/mdc2020_main.cfg` held one file and two references, and
-there is no point repairing a file that is about to be deleted. Excluding
-`Scripts/` as well brings it to **28 files / 104 references**, entirely
-`Validation/` plus `data/merge_filter.json`.
+  running them would get the placeholder-filename bug. This is the one place
+  the rename would have mattered, and it is deliberately not fixed.
 
 ## Risks
 
@@ -372,8 +371,8 @@ there is no point repairing a file that is about to be deleted. Excluding
 - **`MDC2020.fcl` must land after `digitize/epilog.fcl` / `reco/epilog.fcl`
   to beat the run1a values.** Inside prodtools that is guaranteed by the
   `#include_first` slot, which is emitted after the whole base FCL. Outside
-  prodtools — the `CampaignConfig` / `Scripts/gen_*.sh` path — it must be
-  included last by hand, exactly as `Run1B.fcl` documents. Included too
+  prodtools — the `Scripts/gen_*.sh` path — it must be included last by hand,
+  exactly as `Run1B.fcl` documents. Included too
   early it is silently overwritten by run1a's two-sector config, and the job
   still exits 0.
 - **Do not delete the branch mid-round.** `SimJob/MDC2020bj` was cut

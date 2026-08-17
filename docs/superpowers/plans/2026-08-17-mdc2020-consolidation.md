@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Delete the `MDC2020` branch in `Mu2e/Production` by repairing a stale
-output-module rename on `main` and expressing the MDC2020 detector era as a
-single selectable epilog.
+**Goal:** Delete the `MDC2020` branch in `Mu2e/Production` by expressing the
+MDC2020 detector era as a single selectable epilog, and remove the dead POMS
+campaign config the branch was also carrying.
 
-**Architecture:** Four PRs across two repos. An Offline PR adds two CRV
-epilogs alongside the existing `epilog_run1a_v01.fcl`. A Production PR repairs
-110 stale references to output modules that no longer exist. A second
-Production PR adds `JobConfig/common/MDC2020.fcl`, which sets geometry and CRV
-together and wins on FHiCL ordering over the Run1A defaults already in
-`digitize/epilog.fcl` and `reco/epilog.fcl`.
+**Architecture:** Three PRs across two repos. An Offline PR adds two CRV
+epilogs alongside the existing `epilog_run1a_v01.fcl`. A Production PR deletes
+the dead POMS `CampaignConfig/`. A second Production PR adds
+`JobConfig/common/MDC2020.fcl`, which sets geometry and CRV together and wins
+on FHiCL ordering over the Run1A defaults already in `digitize/epilog.fcl` and
+`reco/epilog.fcl`.
 
 **Tech Stack:** FHiCL, art, Mu2e Offline/Production, `fhicl-dump`, `muse`,
 Musings on `/cvmfs`, bash.
@@ -55,15 +55,7 @@ Musings on `/cvmfs`, bash.
 **Production** (PR B — delete dead POMS config, 26 files):
 - `CampaignConfig/` — the whole directory, removed.
 
-**Production** (PR C — repair, 28 files):
-- `data/merge_filter.json`,
-  `Validation/{ceDigi,ceMix,cosmicOffSpill}.fcl`,
-  `Validation/nightly/CeSimReco/digitize.fcl`,
-  `Validation/nightly/CosmicSimReco/digitize{OnSpill,OffSpill}.fcl`,
-  `Validation/nightly/MDS/digitize.fcl`,
-  `Validation/nightly/ceMix_{00..19}.fcl`
-
-**Production** (PR D — the era, 1 file):
+**Production** (PR C — the era, 1 file):
 - `JobConfig/common/MDC2020.fcl` — new. Nothing else is modified; the five
   prolog files stay untouched because the CRV era is carried by values.
 
@@ -82,7 +74,7 @@ Musings on `/cvmfs`, bash.
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: two include paths used by Task 5 —
+- Produces: two include paths used by Task 4 —
   `Offline/CRVResponse/fcl/epilog_MDC2020_v01.fcl` and
   `Offline/CRVReco/fcl/epilog_MDC2020_v01.fcl`. Both are config-level
   epilogs (no `BEGIN_PROLOG`), assigning only
@@ -249,9 +241,7 @@ current job is affected."
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: a repo with no `CampaignConfig/`. Task 3 depends on this only in
-  that it no longer needs to repair `CampaignConfig/mdc2020_main.cfg`; the
-  counts in Task 3 (30 files, 108 references) already assume this task ran.
+- Produces: a repo with no `CampaignConfig/`. No other task depends on it.
 
 `CampaignConfig/` holds POMS campaign definitions — `.cfg` and `.ini` files
 of `job_setup.prescript_N` lines. The POMS backend was removed from prodtools
@@ -317,177 +307,7 @@ git show --stat --oneline HEAD | tail -3
 
 ---
 
-## Task 3: Repair the output-module rename on main
-
-**Files:**
-- Modify: `data/merge_filter.json:85-86`
-- Modify: `Validation/ceDigi.fcl`, `Validation/ceMix.fcl`,
-  `Validation/cosmicOffSpill.fcl`
-- Modify: `Validation/nightly/CeSimReco/digitize.fcl`,
-  `Validation/nightly/CosmicSimReco/digitize{OnSpill,OffSpill}.fcl`,
-  `Validation/nightly/MDS/digitize.fcl`,
-  `Validation/nightly/ceMix_{00..19}.fcl`
-- Repo: `/exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production`
-
-**Interfaces:**
-- Consumes: nothing from Task 1. Independent; may be done first or in
-  parallel.
-- Produces: a `main` on which `outputs.Output` is the only output module
-  named anywhere, which Task 5's dumps rely on.
-
-**`Scripts/` is out of scope, by decision.** `gen_Digitize.sh:169-170` and
-`gen_Mix.sh:290-291` keep their four dead references. Consequence, accepted:
-anyone running those scripts gets a `digitize.fcl` / `mix.fcl` whose output
-filename assignments address a module that does not exist, so the job writes
-the prolog placeholder `dig.owner.desc.version.sequencer.art` — the same
-failure this PR fixes everywhere else. Do not "helpfully" include them.
-
-**Why the rest is correct, so the implementer does not second-guess it:**
-`JobConfig/digitize/prolog.fcl` defines `Digitize.Outputs : { Output : ... }`
-and `Digitize.EndPath : [ ..., Output ]`. `mixing/Mix.fcl` does
-`outputs : @local::Digitize.Outputs`. `TriggeredOutput` and
-`TriggerableOutput` do not exist. Triggered and Triggerable were
-consolidated: `OnSpill.fcl` sets
-`outputs.Output.SelectEvents : [@sequence::Digitize.SignalTriggers, @sequence::physics.TriggerablePaths]`,
-so `Output` carries both selections. Deleting the `TriggerableOutput` lines
-finishes that consolidation; it does not drop a stream.
-
-- [ ] **Step 1: Branch and record the baseline**
-
-```bash
-cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git fetch origin --quiet
-git checkout -b fix-output-module-rename drop-campaignconfig
-git grep -c 'TriggeredOutput\|TriggerableOutput' -- . ':!Scripts' | wc -l  # expect 28
-git grep -o 'TriggeredOutput\|TriggerableOutput' -- . ':!Scripts' | wc -l  # expect 104
-```
-
-- [ ] **Step 2: Delete every TriggerableOutput assignment**
-
-```bash
-cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git grep -l 'TriggerableOutput' -- . ':!Scripts' | xargs sed -i '/TriggerableOutput/d'
-git grep -c 'TriggerableOutput' -- . ':!Scripts' || echo "no TriggerableOutput left"
-```
-
-Expected: `no TriggerableOutput left`.
-
-This deletes whole lines. In `Validation/nightly/ceMix_NN.fcl` the name also
-appears inside `mu2emetadata.fcl.outkeys`, a single-line list — Step 4 covers
-that; verify Step 2 did not delete an `outkeys` line by checking the count in
-Step 5.
-
-- [ ] **Step 3: Rename TriggeredOutput to Output**
-
-```bash
-cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git grep -l 'TriggeredOutput' -- . ':!Scripts' | xargs sed -i 's/TriggeredOutput/Output/g'
-git grep -c 'TriggeredOutput' -- . ':!Scripts' || echo "no TriggeredOutput left"
-```
-
-Expected: `no TriggeredOutput left`.
-
-- [ ] **Step 4: Remove the other dead output names from the generated nightly files**
-
-`Validation/nightly/ceMix_NN.fcl` also assigns `CaloOutput`, `TrkOutput`,
-`DiagOutput` and `UntriggeredOutput`. `Digitize.Outputs` holds only `Output`,
-so all four are inert. Remove the assignments and drop them from `outkeys`.
-
-```bash
-cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-sed -i -e '/^outputs\.\(CaloOutput\|TrkOutput\|DiagOutput\|UntriggeredOutput\)\.fileName/d' \
-       -e 's/"outputs\.\(CaloOutput\|TrkOutput\|DiagOutput\|UntriggeredOutput\)\.fileName", *//g' \
-       -e 's/, *"outputs\.\(CaloOutput\|TrkOutput\|DiagOutput\|UntriggeredOutput\)\.fileName"//g' \
-       Validation/nightly/ceMix_*.fcl
-grep -h 'mu2emetadata.fcl.outkeys' Validation/nightly/ceMix_00.fcl
-```
-
-Expected: `mu2emetadata.fcl.outkeys: [ "outputs.Output.fileName" ]`
-(bracket spacing may differ; the list must contain exactly that one entry).
-
-- [ ] **Step 5: Verify the repo is clean of dead output names**
-
-```bash
-cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git grep -c 'TriggeredOutput\|TriggerableOutput\|UntriggeredOutput' -- . ':!Scripts' || echo "CLEAN"
-git diff --name-only | grep '^Scripts/' && echo "ERROR: Scripts touched" || echo "Scripts untouched"
-git grep -n 'outputs\.CaloOutput\|outputs\.TrkOutput\|outputs\.DiagOutput' -- Validation/ || echo "CLEAN nightly"
-git grep -c 'outputs\.Output\.fileName' -- Validation/nightly/ | head -3
-git diff --stat | tail -1
-```
-
-Expected: `CLEAN`, `Scripts untouched`, `CLEAN nightly`, each nightly file
-reporting at least one `outputs.Output.fileName`, and 28 files changed.
-
-`Scripts/gen_Digitize.sh` and `gen_Mix.sh` still contain four dead references
-after this task. That is deliberate — see the scope note. If `git diff
---name-only` lists anything under `Scripts/`, a `git grep` pathspec was
-dropped; revert those two files before committing.
-
-`JobConfig/cosmic/SpillSplitter.fcl` legitimately defines its own
-`CaloOutput` module and must be untouched — confirm it is absent from
-`git diff --name-only`.
-
-- [ ] **Step 6: Prove the repaired Validation configs parse and name the right file**
-
-```bash
-cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-muse setup ops
-muse setup SimJob MDC2025au
-for f in Validation/ceDigi.fcl Validation/ceMix.fcl Validation/cosmicOffSpill.fcl; do
-  echo "--- $f"
-  FHICL_FILE_PATH="/exp/mu2e/data/users/oksuzian/claude-scratch/run1b:$FHICL_FILE_PATH" \
-    fhicl-dump $f 2>&1 | grep -E '^\s+fileName' | head -5
-done
-```
-
-Expected: each dump succeeds, and each shows its intended filename —
-`dts.owner.ceDigi.dsconf.seq.art`, `dig.owner.ceMix.dsconf.seq.art`,
-`dig.owner.cosmicOffSpill.seq.art` — instead of
-`dig.owner.desc.version.sequencer.art`. Seeing the placeholder means the
-rename did not take effect and the task is not done.
-
-- [ ] **Step 7: Commit**
-
-```bash
-cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
-git add -A
-git commit -m "fix(outputs): rename Validation to the single Output module that exists
-
-digitize/prolog.fcl defines one output module, Output, and EndPath lists only
-it; mixing/Mix.fcl consumes the table wholesale. TriggeredOutput and
-TriggerableOutput have not existed for some time, but many files still
-assigned to them.
-
-Scope is Validation/ and data/merge_filter.json. Scripts/gen_Digitize.sh and
-gen_Mix.sh keep their dead references deliberately and are left as they are
-on main.
-
-art only constructs output modules that appear in a path, so those
-assignments were silently ignored -- ceDigi, ceMix and cosmicOffSpill all
-wrote to the prolog placeholder dig.owner.desc.version.sequencer.art and
-clobbered each other while the nightly reported OK.
-
-Triggerable is the older scheme; the streams are consolidated and
-outputs.Output.SelectEvents already carries both selections, so the
-TriggerableOutput assignments are deleted rather than rehomed. CaloOutput,
-TrkOutput, DiagOutput and UntriggeredOutput in the generated ceMix_NN files
-are dead for the same reason and go with them."
-```
-
-- [ ] **Step 8: Report the one thing this task cannot verify locally**
-
-The real acceptance is a nightly run producing three distinct files instead
-of one placeholder. That happens on `mu2eprodgpvm01` at 00:17 and cannot be
-triggered from here. State this explicitly in the handoff: after the PR
-merges, check `/exp/mu2e/app/users/mu2epro/nightly2/current/` for
-`dts.owner.ceDigi.*`, `dig.owner.ceMix.*` and `dig.owner.cosmicOffSpill.*`,
-and for the **absence** of `dig.owner.desc.version.sequencer.art`.
-
----
-
-## Task 4: Build the era acceptance harness
+## Task 3: Build the era acceptance harness
 
 **Files:**
 - Create: `/exp/mu2e/data/users/oksuzian/claude-scratch/mdc2020/dump_era.sh`
@@ -615,7 +435,7 @@ and the baseline JSON in the task report so later tasks reuse it.
 
 ---
 
-## Task 5: Production MDC2020.fcl
+## Task 4: Production MDC2020.fcl
 
 **Files:**
 - Create: `JobConfig/common/MDC2020.fcl`
@@ -771,7 +591,7 @@ FHICL_FILE_PATH="$P:$FHICL_FILE_PATH" \
 diff $S/base_onspill.json $S/after_onspill.json && echo "CURRENT ERA UNCHANGED"
 ```
 
-Expected: `CURRENT ERA UNCHANGED`. `base_onspill.json` is from Task 4 Step 2.
+Expected: `CURRENT ERA UNCHANGED`. `base_onspill.json` is from Task 3 Step 2.
 
 - [ ] **Step 7: Commit**
 
@@ -799,14 +619,14 @@ recoMC/NoField."
 
 ---
 
-## Task 6: Run a real MDC2020 job, and settle MakeSS from the result
+## Task 5: Run a real MDC2020 job, and settle MakeSS from the result
 
 **Files:**
 - Modify (conditionally): `JobConfig/common/MDC2020.fcl`
 - Repo: `/exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production`
 
 **Interfaces:**
-- Consumes: `MDC2020.fcl` from Task 5.
+- Consumes: `MDC2020.fcl` from Task 4.
 - Produces: either two extra lines in `MDC2020.fcl`, or a documented finding
   that they are unnecessary.
 
@@ -815,7 +635,7 @@ This task carries two jobs at once, because one run answers both.
 **It is the end-to-end acceptance for the whole era switch.** MDC2020 is a
 live production line — `SimJob/MDC2020bi` generated about 7,000 mixing dig
 files in June 2026, and `MDC2020bj` (cut 2026-07-12) is loaded and unused.
-Task 5 proves the resolved config matches the branch, which is necessary but
+Task 4 proves the resolved config matches the branch, which is necessary but
 not sufficient: a config can resolve identically and still fail to run. With
 MDC2020 validation retired by decision, this run is the *only* execution
 evidence in the plan. It is not optional and it is not satisfied by a dump.
@@ -869,7 +689,7 @@ Substitute `<MDC2020_DTS_FILE>` with the file located in Step 1.
 - **Non-zero for any other reason** → that is a different problem, and with
   MDC2020 validation retired there is no other net to catch it. Report it and
   stop. Do not add `MakeSS` to make an unrelated error go away, and do not
-  proceed to Task 7 with a failing job: an unexplained failure here means the
+  proceed to Task 6 with a failing job: an unexplained failure here means the
   era switch is not proven and the branch is not safe to delete.
 
 - [ ] **Step 4: If needed, add MakeSS to MDC2020.fcl**
@@ -910,7 +730,7 @@ echo "exit=$?"; grep -E 'TrigReport|Art has completed' makess_on.log | tail -5
 
 Expected: exit 0 and `Art has completed and will exit with status 0`.
 
-- [ ] **Step 6: Re-run Task 5 Step 6 to confirm current-era jobs are still untouched**
+- [ ] **Step 6: Re-run Task 4 Step 6 to confirm current-era jobs are still untouched**
 
 ```bash
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
@@ -941,13 +761,13 @@ current-era OnSpill job is unchanged."
 
 ---
 
-## Task 7: Confirm the branch is fully absorbed
+## Task 6: Confirm the branch is fully absorbed
 
 **Files:**
 - Create: `/exp/mu2e/data/users/oksuzian/claude-scratch/mdc2020/residual.txt`
 
 **Interfaces:**
-- Consumes: the branches from Tasks 1, 3, 5, 6.
+- Consumes: the branches from Tasks 1, 2, 4, 5.
 - Produces: an explicit account of every remaining tip-to-tip difference,
   each classified. This is what justifies deleting the branch.
 
@@ -956,7 +776,7 @@ current-era OnSpill job is unchanged."
 ```bash
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/run1b/Production
 git checkout -b absorbed-check origin/main
-git merge --no-commit --no-ff fix-output-module-rename || true
+git merge --no-commit --no-ff drop-campaignconfig || true
 git merge --no-commit --no-ff mdc2020-era-epilog || true
 git commit -m "wip: combined view for residual check" || true
 git diff --name-only HEAD origin/MDC2020 > /exp/mu2e/data/users/oksuzian/claude-scratch/mdc2020/residual.txt
@@ -990,6 +810,13 @@ Every residual file must fall into one of these, and each `BOTH-DIFFER` and
   `JobConfig/common/epilog_Extracted.fcl`, out of scope.
 - **`CampaignConfig/*`** — deleted on main by Task 2; the branch's copies go
   with the branch. Expect 26 files in this category and no action.
+- **Output-module rename (`Validation/*`, `Scripts/gen_*.sh`,
+  `data/merge_filter.json`)** — the branch renames `TriggeredOutput` /
+  `TriggerableOutput` to the single `Output` module that actually exists.
+  Correct, but out of scope by decision: nothing consumes those Validation
+  art outputs and `valJobCheck.sh` only checks return codes, so the rename
+  buys nothing today. Expect ~30 files here and take none of them. Main keeps
+  the dead names.
 - **BOTH-DIFFER, the five prologs and two epilogs** — expected: the branch
   pins `prolog_v11` and deletes the run1a includes, which our design replaces
   with value reassignment. Confirm the *only* difference in each is the CRV
@@ -1028,22 +855,19 @@ is not the branch deletion the Global Constraints reserve for the user. The
 
 Report to the user, in this order:
 
-1. The four PRs to push, with their branches:
-   `crv-mdc2020-epilog` (Offline), `drop-campaignconfig`,
-   `fix-output-module-rename` and `mdc2020-era-epilog` (Production).
-   `fix-output-module-rename` is branched off `drop-campaignconfig`, so
-   either merge that first or rebase.
+1. The three PRs to push, with their branches:
+   `crv-mdc2020-epilog` (Offline), `drop-campaignconfig` and
+   `mdc2020-era-epilog` (Production). They are independent of each other
+   except that the Offline one must merge first.
 2. That the **Offline PR must merge first** — `MDC2020.fcl` does not resolve
    without it.
-3. The nightly check that only the user can run after the rename PR merges
-   (Task 3 Step 8).
-4. **Sequencing.** `SimJob/MDC2020bj` was cut 2026-07-12 and has produced
+3. **Sequencing.** `SimJob/MDC2020bj` was cut 2026-07-12 and has produced
    nothing; on the observed six-week cadence a round is about due. Ask
    whether one is planned before the branch is deleted, and say plainly that
    deleting it mid-round changes what a live campaign resolves against.
    MDC2020 validation is retired by decision, so there is no automated signal
    that would catch this.
-5. The residual report from Step 3, as the evidence for deleting the
+4. The residual report from Step 3, as the evidence for deleting the
    `MDC2020` branch — which remains the user's action.
 
 ---
