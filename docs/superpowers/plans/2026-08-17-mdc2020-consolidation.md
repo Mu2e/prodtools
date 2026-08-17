@@ -701,7 +701,7 @@ recoMC/NoField."
 
 ---
 
-## Task 5: MakeSS, measured rather than assumed
+## Task 5: Run a real MDC2020 job, and settle MakeSS from the result
 
 **Files:**
 - Modify (conditionally): `JobConfig/common/MDC2020.fcl`
@@ -712,12 +712,25 @@ recoMC/NoField."
 - Produces: either two extra lines in `MDC2020.fcl`, or a documented finding
   that they are unnecessary.
 
-The branch adds `MakeSS : { module_type : NullProducer }` to
-`Digitize.producers` and inserts `MakeSS` into `Digitize.DigitizeSequence`,
-commented "temporary patch for older MDC2020 output". Nothing on main
-consumes a product labelled `MakeSS` in the digitize path —
-`compressDigiMCs.surfaceStepTags` is `["compressDetStepMCs"]` — so its
-purpose cannot be determined by reading. Find out by running.
+This task carries two jobs at once, because one run answers both.
+
+**It is the end-to-end acceptance for the whole era switch.** MDC2020 is a
+live production line — `SimJob/MDC2020bi` generated about 7,000 mixing dig
+files in June 2026, and `MDC2020bj` (cut 2026-07-12) is loaded and unused.
+Task 4 proves the resolved config matches the branch, which is necessary but
+not sufficient: a config can resolve identically and still fail to run. With
+MDC2020 validation retired by decision, this run is the *only* execution
+evidence in the plan. It is not optional and it is not satisfied by a dump.
+
+**It also settles `MakeSS`.** The branch adds
+`MakeSS : { module_type : NullProducer }` to `Digitize.producers` and inserts
+`MakeSS` into `Digitize.DigitizeSequence`, commented "temporary patch for
+older MDC2020 output". Nothing on main consumes a product labelled `MakeSS`
+in the digitize path — `compressDigiMCs.surfaceStepTags` is
+`["compressDetStepMCs"]` — so its purpose cannot be determined by reading.
+
+Prefer an `MDC2020bi`-era input over an older one: it is what production
+actually last ran.
 
 - [ ] **Step 1: Find a real MDC2020 dts input**
 
@@ -755,8 +768,11 @@ Substitute `<MDC2020_DTS_FILE>` with the file located in Step 1.
   future puzzle for whoever reads it.
 - **Non-zero, complaining about a missing SurfaceStep product** → it is
   needed. Proceed to Step 4.
-- **Non-zero for any other reason** → that is a different problem. Report it
-  and stop; do not add `MakeSS` to make an unrelated error go away.
+- **Non-zero for any other reason** → that is a different problem, and with
+  MDC2020 validation retired there is no other net to catch it. Report it and
+  stop. Do not add `MakeSS` to make an unrelated error go away, and do not
+  proceed to Task 6 with a failing job: an unexplained failure here means the
+  era switch is not proven and the branch is not safe to delete.
 
 - [ ] **Step 4: If needed, add MakeSS to MDC2020.fcl**
 
@@ -919,7 +935,13 @@ Report to the user, in this order:
    without it.
 3. The nightly check that only the user can run after the rename PR merges
    (Task 2 Step 8).
-4. The residual report from Step 3, as the evidence for deleting the
+4. **Sequencing.** `SimJob/MDC2020bj` was cut 2026-07-12 and has produced
+   nothing; on the observed six-week cadence a round is about due. Ask
+   whether one is planned before the branch is deleted, and say plainly that
+   deleting it mid-round changes what a live campaign resolves against.
+   MDC2020 validation is retired by decision, so there is no automated signal
+   that would catch this.
+5. The residual report from Step 3, as the evidence for deleting the
    `MDC2020` branch — which remains the user's action.
 
 ---

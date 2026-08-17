@@ -16,10 +16,21 @@ that belongs on `main` unconditionally, or as a per-job era selection —
 `MDC2020` diverges from `main` by 51 files, 153 insertions, 152 deletions
 (merge-base `12a0eab8`, 2026-07-10). The branch is still live: its most
 recent commit (`dffc707f`, Andrew Edmonds, 2026-08-12) adds parameters so
-EventNtuple `from_dig.fcl` can read MDC2020 files. MDC2020 is being
-consumed, not generated — `prodtools/data/` holds zero MDC2020 entries, and
-MDC2020 runs through the older `CampaignConfig/mdc2020_main.cfg` +
-`Scripts/gen_Digitize.sh` / `gen_Mix.sh` path.
+EventNtuple `from_dig.fcl` can read MDC2020 files.
+
+**MDC2020 is a live production line, not an archive.** Musings are cut on a
+roughly six-week cadence — `MDC2020bg` 2026-03-02, `bh` 2026-05-06, `bi`
+2026-06-01, `bj` 2026-07-12 — and `MDC2020bi` generated about 7,000 mixing
+dig files between 2026-06-01 and 06-08 (`CeMLeadingLogMix{1,2}BB`,
+`FlateMinusMix{1,2}BB`, `CosmicCRYSignalAllMix{1,2}BB`, all at
+`MDC2020bi_best_v1_3`). `SimJob/MDC2020bj` carries this branch
+(`geom_common_MDC2020.txt`, `prolog_v11.fcl`) and has produced nothing yet.
+
+An earlier draft of this spec claimed MDC2020 was "consumed, not generated",
+inferred from `prodtools/data/` holding no MDC2020 entries. That inference
+was wrong: it shows MDC2020 is not driven from that checkout, not that
+nobody runs it. The consolidation therefore has to work for generation, and
+it lands under a line that is actively producing.
 
 Every *value* MDC2020 needs already exists on Offline `main`:
 `geom_common_MDC2020.txt`, `CRVResponse/fcl/prolog_v11.fcl`,
@@ -311,10 +322,18 @@ Extracted is out of scope.
   consolidating this branch.
 - **MDC2020-era `Validation/`.** The branch carries its own validation set
   pinned to MDC2020 geometry, MDC2020 input datasets and `firstRun: 1200`.
-  It is retired. Main's `Validation/` keeps validating the current era; only
-  the output-rename fixes are taken from the branch's copies. Consequence,
-  accepted: no automated signal if a future Offline change breaks MDC2020
-  reprocessing — which is the class of breakage `dffc707f` fixed by hand.
+  It is retired — decided by the user on 2026-08-17 and reaffirmed after the
+  live-production evidence above was presented. Main's `Validation/` keeps
+  validating the current era; only the output-rename fixes are taken from the
+  branch's copies.
+
+  Consequence, accepted knowingly: after consolidation MDC2020 runs off
+  `main` rather than off a pinned branch, and `main` took 45 commits in the
+  five weeks after `MDC2020bj` was cut. With no MDC2020 stream in the
+  nightly, an incompatibility introduced on main surfaces when the next
+  MDC2020 round runs, not before — found and fixed by hand, as `dffc707f`
+  was. The branch is currently acting as insulation and that insulation is
+  being removed deliberately.
 - **A prodtools `data/MDC2020/` campaign.** No MDC2020 entries exist, so
   there is nothing for a `common.json` overlay to attach to. MDC2020 jobs
   pick up `MDC2020.fcl` through whatever runs them. Wiring a campaign
@@ -337,6 +356,12 @@ Extracted is out of scope.
   included last by hand, exactly as `Run1B.fcl` documents. Included too
   early it is silently overwritten by run1a's two-sector config, and the job
   still exits 0.
+- **Do not delete the branch mid-round.** `SimJob/MDC2020bj` was cut
+  2026-07-12 and has produced nothing; on the observed cadence a round is
+  about due. Deleting the branch while one is in flight changes what a live
+  campaign resolves against. Land the consolidation either after the round
+  completes, or cut the round's Musing from consolidated `main` so it never
+  depended on the branch. This is independent of the validation decision.
 - **Frozen MDC2020 campaigns are unaffected either way.** They pin Musings
   (`SimJob/MDC2020aa` … `MDC2020bd`), which pin Offline and Production
   commits. Reproducibility does not run through this branch.
