@@ -21,11 +21,17 @@ consumed, not generated — `prodtools/data/` holds zero MDC2020 entries, and
 MDC2020 runs through the older `CampaignConfig/mdc2020_main.cfg` +
 `Scripts/gen_Digitize.sh` / `gen_Mix.sh` path.
 
-Everything MDC2020 needs already exists on Offline `main`:
-`geom_common_MDC2020.txt`, `geom_common_extracted_MDC2020.txt`,
-`CRVResponse/fcl/prolog_v11.fcl`, `CRVReco/fcl/prolog_v11.fcl`. **No Offline
-change is required.** The branch is pure selection among files that all ship
-on main today.
+Every *value* MDC2020 needs already exists on Offline `main`:
+`geom_common_MDC2020.txt`, `CRVResponse/fcl/prolog_v11.fcl`,
+`CRVReco/fcl/prolog_v11.fcl`. The branch is pure selection among files that
+all ship today. One small Offline PR is still needed to expose the CRV
+values as epilogs — see the correction below.
+
+All measurements here are tip-to-tip (`git diff main MDC2020`). A three-dot
+diff is the wrong tool for "what does the branch still owe main": it diffs
+from the merge-base and so hides everything main added independently. It
+initially made `TimeClusterCollections` look outstanding when main had
+already added it in `e907cbc4`.
 
 ### The inversion
 
@@ -88,11 +94,56 @@ The residual files, after dropping Extracted (see Non-goals):
 
 | class | files | mechanism |
 |---|---|---|
-| Old-input compat (`MakeSS` NullProducer, `TimeClusterCollections: []`, `surfaceStepTags`) | 3 | additive, inert on new data |
-| Era pin: geometry + CRV version | 7 | the only real switch |
-| `epilog_run1a_v01.fcl` removed from shared `digitize/epilog.fcl`, `reco/epilog.fcl` | 2 | un-include; needs the Run1B treatment |
-| MDC2020-era `Validation/` (retired — see Non-goals) | 3 | dropped |
+| CRV era values (v11's 25 sectors, vs run1a's 2) | 5 prologs | reassigned by epilog; prologs untouched |
+| Geometry pin (`geom_common_MDC2020.txt`) | 1 | reassigned by epilog |
+| `MakeSS` NullProducer + its sequence entry | 1 | MDC2020-input-specific; goes in the epilog |
+| MDC2020-era `Validation/` (retired — see Non-goals) | 8 | dropped |
 | Extracted (retired — see Non-goals) | 7 | dropped |
+
+`TimeClusterCollections: []` and `surfaceStepTags` are **not** outstanding —
+main already carries them (`e907cbc4`, 2026-07-20). Everything else in the
+tip-to-tip diff is main moving forward while the branch stood still, and is
+discarded with the branch.
+
+### Correction (2026-08-17): the baseline is Run1A, not v12
+
+Measured while planning, and it supersedes the v11-vs-v12 framing below.
+`Offline/CRVResponse/fcl/epilog_run1a_v01.fcl` and
+`Offline/CRVReco/fcl/epilog_run1a_v01.fcl` set **exactly the keys that
+separate v11 from v12**, and reduce them to two sectors:
+
+```fcl
+physics.producers.CrvPhotons.CRVSectors             : ["T1", "T2"]
+physics.producers.CrvPhotons.photonYieldScaleFactor : 0.90
+physics.producers.CrvCoincidenceClusterFinder.sectorConfig : [ {T1…}, {T2…} ]
+```
+
+Main includes them unconditionally at the end of `digitize/epilog.fcl` and
+`reco/epilog.fcl` — *after* the prolog. So for any job that uses those
+epilogs, the CRV prolog version is already overwritten and the v11/v12
+difference is invisible. The branch's prolog pin matters only because the
+branch also deletes the run1a includes.
+
+Three consequences:
+
+- **The real delta is v11's 25 sectors versus run1a's 2**, not 25 versus 23.
+- **`Run1A.fcl` is unnecessary.** `MDC2020.fcl` is emitted after the base
+  FCL, hence after `digitize/epilog.fcl`, so it wins on ordering alone. The
+  run1a includes stay exactly where they are and current-era production is
+  untouched. This removes the spec's highest-risk item.
+- **The `@sequence::` self-reference is unsafe here** — it would append to
+  run1a's 2-entry `sectorConfig`, not to a 23-entry one. `sectorConfig` must
+  be restated in full.
+- **`photonYieldScaleFactor` is a sixth key.** run1a sets `0.90`; v11 and
+  v12 both use `0.84`. Omit it and MDC2020 jobs silently inherit Run1A's
+  aging factor.
+
+Because the content is CRV configuration and `epilog_run1a_v01.fcl` is the
+established precedent, the values live in Offline as
+`CRVResponse/fcl/epilog_MDC2020_v01.fcl` and
+`CRVReco/fcl/epilog_MDC2020_v01.fcl`, and `MDC2020.fcl` includes them. That
+adds one Offline PR that must merge first — the same cross-repo ordering
+Run1B had with PR #569.
 
 ### The era pin is one decision
 
@@ -179,51 +230,37 @@ products): `MakeSS : { module_type : NullProducer }` in
 carries part of this from `e907cbc4` (2026-07-20); reconcile against
 Andrew's `dffc707f` (2026-08-12) rather than applying both blindly.
 
+**Offline, first** (one PR, must merge before the Production PR):
+`CRVResponse/fcl/epilog_MDC2020_v01.fcl` and
+`CRVReco/fcl/epilog_MDC2020_v01.fcl`, siblings of the existing
+`epilog_run1a_v01.fcl`, holding the v11 25-sector values verbatim:
+`CrvPhotons.{CRVSectors,reflectors,lookupTableFileNames,scintillationYields,photonYieldScaleFactor}`
+and `CrvCoincidenceClusterFinder.sectorConfig`.
+
 **`Production/JobConfig/common/MDC2020.fcl`** (new), structured like
-`Run1B.fcl`: geometry and CRV set together, with a header stating that they
-are one decision and why.
+`Run1B.fcl` — geometry and CRV set together, with a header stating that they
+are one decision and why:
 
 ```fcl
 services.GeometryService.inputFile : "Offline/Mu2eG4/geom/geom_common_MDC2020.txt"
-
-physics.producers.CrvPhotons.CRVSectors           : [ ... 25 entries ... ]
-physics.producers.CrvPhotons.reflectors           : [ ... 25 entries ... ]
-physics.producers.CrvPhotons.lookupTableFileNames : [ ... 25 entries ... ]
-physics.producers.CrvPhotons.scintillationYields  : [ ... 25 entries ... ]
-
-physics.producers.CrvCoincidenceClusterFinder.sectorConfig : [
-  @sequence::physics.producers.CrvCoincidenceClusterFinder.sectorConfig,
-  { CRVSector : "C3"  ... },
-  { CRVSector : "C4"  ... }
-]
+#include "Offline/CRVResponse/fcl/epilog_MDC2020_v01.fcl"
+#include "Offline/CRVReco/fcl/epilog_MDC2020_v01.fcl"
+physics.producers.MakeSS : { module_type : NullProducer }
+physics.DigitizePath : [ MakeSS, @sequence::physics.DigitizePath ]
 ```
 
-`sectorConfig` differs from v12 by exactly two appended entries, so it
-self-references rather than restating 25 tables. That pattern is already in
-use on main (`Validation/nightly/MDS/digitize.fcl`,
-`reco/Extracted.fcl`, `recoMC/Extracted.fcl`). The four `CrvPhotons` arrays
-are an insert-with-renumber, not an append, so they are restated in full.
-Values are copied verbatim from `Offline/CRVResponse/fcl/prolog_v11.fcl` and
-`Offline/CRVReco/fcl/prolog_v11.fcl`; versioned prolog files are immutable
-by convention, so the copy is pinned, not drifting.
+`MakeSS` is MDC2020-input-specific by its own comment on the branch
+("temporary patch for older MDC2020 output"), so it goes here rather than
+unconditionally into main's `digitize/prolog.fcl`. That way it cannot reach
+a current-era job at all. The last two lines apply only to digitize and
+mixing entry points; a reco-only variant omits them.
 
-`MDC2020.fcl` sets `inputFile` only. It does **not** set `bFieldFile`, and
-this is the one place where it must not copy `Run1B.fcl`. Measured on the
-branch: the sole `bFieldFile` assignment anywhere in its diff is inside
-`epilog_Extracted.fcl`, now out of scope; `JobConfig/common/epilog.fcl` pins
-geometry alone. Adding a field key would therefore silently move every stage
-that currently inherits its field from its base FCL's epilog — the class of
-change that hides completely in the source and shows up only in a dump.
-See `reference-run1b-entries-inherit-bfieldfile`. Note this asymmetry in the
-file's header comment, so the next person does not "fix" it for symmetry.
+The five Production prolog files are **not modified**. The CRV era is
+carried entirely by reassigned values, so `prolog.fcl` vs `prolog_v11.fcl`
+never enters the picture.
 
-**`Production/JobConfig/common/Run1A.fcl`** (new). Main's
-`digitize/epilog.fcl` and `reco/epilog.fcl` currently include
-`epilog_run1a_v01.fcl` unconditionally, so "no era selected" silently means
-Run1A. Move those two includes into `Run1A.fcl` and have Run1A jobs select
-it explicitly — the mirror of what `Run1B.fcl` established. Removing an
-include is not expressible as an override, which is why this has to move
-rather than be countered.
+**No `Run1A.fcl`.** See the correction above: `MDC2020.fcl` already wins on
+ordering, so the run1a includes stay where they are.
 
 **Ordering.** Both files are campaign defaults, not overrides: they are
 included ahead of a job's own keys so a job that pins a value still wins.
@@ -293,11 +330,13 @@ Extracted is out of scope.
 - **`MDC2020.fcl` copies values out of `prolog_v11.fcl`.** Mitigated by
   convention (versioned prologs are immutable) and by the dump-based
   acceptance test, which would catch any drift the moment it appeared.
-- **`Run1A.fcl` changes the default.** After PR 2, a job that selects no era
-  no longer silently gets the Run1A CRV epilogs. Every current Run1A
-  consumer must be found and switched in the same PR. This is the failure
-  mode recorded in `reference-run1b-frozen-campaigns-selfcontained`: on
-  main, a stale pin fails silently.
+- **`MDC2020.fcl` must land after `digitize/epilog.fcl` / `reco/epilog.fcl`
+  to beat the run1a values.** Inside prodtools that is guaranteed by the
+  `#include_first` slot, which is emitted after the whole base FCL. Outside
+  prodtools — the `CampaignConfig` / `Scripts/gen_*.sh` path — it must be
+  included last by hand, exactly as `Run1B.fcl` documents. Included too
+  early it is silently overwritten by run1a's two-sector config, and the job
+  still exits 0.
 - **Frozen MDC2020 campaigns are unaffected either way.** They pin Musings
   (`SimJob/MDC2020aa` … `MDC2020bd`), which pin Offline and Production
   commits. Reproducibility does not run through this branch.
