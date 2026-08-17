@@ -650,17 +650,36 @@ in the digitize path — `compressDigiMCs.surfaceStepTags` is
 Prefer an `MDC2020bi`-era input over an older one: it is what production
 actually last ran.
 
-- [ ] **Step 1: Find a real MDC2020 dts input**
+- [ ] **Step 1: Resolve a real MDC2020 dts input**
+
+Use `dts.mu2e.CeMLeadingLog.MDC2020at.art` (2000 files). CeMLeadingLog is
+what the June 2026 `MDC2020bi` round actually mixed, so it is representative
+of live production rather than an arbitrary old dataset.
 
 ```bash
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
 muse setup ops
-samweb list-definitions --defname-contains dts.mu2e.CeEndpoint 2>/dev/null | grep MDC2020 | head -5
+getToken > /dev/null
+samweb count-files 'defname: dts.mu2e.CeMLeadingLog.MDC2020at.art'   # expect 2000
+F=$(samweb list-files 'defname: dts.mu2e.CeMLeadingLog.MDC2020at.art with limit 1')
+echo "FILE=$F"
+samweb locate-file "$F"
+URL=$(samweb get-file-access-url --schema=root "$F" | head -1)
+echo "URL=$URL"
 ```
 
-Record the definition chosen. If none is listed, try
-`samweb list-files "dh.dataset dts.mu2e.CeEndpoint.MDC2020%.art with limit 1"`.
-If no MDC2020 dts file is reachable, this task is **BLOCKED** — report it;
+The correct listing syntax is `--defname` with SQL `%` wildcards, e.g.
+`samweb list-definitions --defname 'dts.mu2e.%.%MDC2020%art'` (150 results).
+There is **no** `--defname-contains` flag; passing it prints a usage error,
+and piping that to `wc -l` silently reports `0`, which reads exactly like
+"nothing exists".
+
+**Check residency before running.** These files are `enstore:...(nearline)`
+— on tape. An evicted file will stall rather than fail cleanly. If `mdh`
+reports it is not on disk, pick another file from the definition or prestage
+it; do **not** copy tape→disk.
+
+If no MDC2020 dts file can be read, this task is **BLOCKED** — report it and
 do not guess whether `MakeSS` is needed.
 
 - [ ] **Step 2: Run a digitize job on that input without MakeSS**
@@ -673,11 +692,13 @@ muse setup ops && muse setup SimJob MDC2025au
 printf '#include "Production/JobConfig/digitize/OnSpill.fcl"\n#include "Production/JobConfig/common/MDC2020.fcl"\nsource.maxEvents: 5\n' > makess_off.fcl
 P="/exp/mu2e/data/users/oksuzian/claude-scratch/run1b:/exp/mu2e/app/users/oksuzian/muse_050125"
 FHICL_FILE_PATH="$P:$FHICL_FILE_PATH" \
-  mu2e -c makess_off.fcl -s <MDC2020_DTS_FILE> > makess_off.log 2>&1
+  mu2e -c makess_off.fcl -s "$URL" -n 5 > makess_off.log 2>&1
 echo "exit=$?"; tail -20 makess_off.log
 ```
 
-Substitute `<MDC2020_DTS_FILE>` with the file located in Step 1.
+`$URL` is from Step 1 and must still be set in this shell. An
+`Auth failed: No protocols left to try` from `TNetXNGFile::Open` means the
+bearer token expired — re-run `getToken`, do not switch to a copied file.
 
 - [ ] **Step 3: Decide from the result**
 
@@ -724,7 +745,7 @@ include both — report that outcome rather than deciding silently.
 cd /exp/mu2e/data/users/oksuzian/claude-scratch/mdc2020
 P="/exp/mu2e/data/users/oksuzian/claude-scratch/run1b:/exp/mu2e/app/users/oksuzian/muse_050125"
 FHICL_FILE_PATH="$P:$FHICL_FILE_PATH" \
-  mu2e -c makess_off.fcl -s <MDC2020_DTS_FILE> > makess_on.log 2>&1
+  mu2e -c makess_off.fcl -s "$URL" -n 5 > makess_on.log 2>&1
 echo "exit=$?"; grep -E 'TrigReport|Art has completed' makess_on.log | tail -5
 ```
 
