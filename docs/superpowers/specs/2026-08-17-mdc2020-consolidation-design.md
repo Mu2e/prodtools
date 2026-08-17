@@ -340,9 +340,22 @@ Extracted is out of scope.
   directory is separate work.
 - **Offline changes.** None are required. Every file the era pin selects
   already ships on Offline main.
-- **Retiring `CampaignConfig/` and `Scripts/gen_*.sh`.** PR 1 repairs them;
-  whether the POMS-era submission path should exist at all is a separate
-  question.
+- **`Scripts/gen_*.sh`.** Deleting `CampaignConfig/` (below) leaves this
+  family with no in-repo consumer, but the scripts may still be run by hand
+  or from `production_manager/`, and two of them are repaired by the rename
+  PR. They stay; whether the whole POMS-era submission path should exist is a
+  separate question.
+
+## Added scope (2026-08-17): delete `CampaignConfig/`
+
+26 files, ~143 KB of POMS `.cfg`/`.ini` campaign definitions. The POMS
+backend was removed from prodtools on 2026-08-08; **nothing in Production
+references the directory**, and it was last modified 2025-08-01. It goes as
+its own PR.
+
+This shrinks the rename repair from 31 files / 110 references to **30 / 108**
+— `CampaignConfig/mdc2020_main.cfg` held one file and two references, and
+there is no point repairing a file that is about to be deleted.
 
 ## Risks
 
