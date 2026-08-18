@@ -33,13 +33,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for)
-from utils.jobdesc import (RESOURCE_KEYS, tarball_of, outputs_of, njobs_of,
+from utils.jobdesc import (ENTRY_VALUE_KEYS, tarball_of, outputs_of, njobs_of,
                            inloc_of, firstjob_of, validate_window,
                            resources_of, is_draining, validate_entry_value,
-                           OUTSTAGE_LOCATION)
+                           OUTSTAGE_LOCATION, code_of)
 from utils import jobsub_argv as _jobsub_argv
 from utils import submission_ledger
-from utils.check_inputs import check_inputs, format_report, Problem
+from utils.check_inputs import (check_inputs, check_code_tarball,
+                                format_report, Problem)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RUNJOB_SH = REPO_ROOT / 'bin' / 'runjob.sh'
@@ -380,12 +381,30 @@ def _validate_entry_values(entry):
     Checking the merged result instead would mean re-validating the
     entry's own values on every path that merges.
     """
-    for key in ('inloc',) + RESOURCE_KEYS:
+    for key in ENTRY_VALUE_KEYS:
         if key in entry:
             try:
                 validate_entry_value(key, entry[key])
             except ValueError as e:
                 sys.exit(f"json2jobdef: {e}")
+
+
+def _gate_code_tarball(entry, tarball_path, note=None):
+    """Refuse to create a campaign whose code tarball no longer matches
+    the cnf. Exits 2; returns only when the entry passes.
+
+    Draining and normal entries ask the same question of the same
+    artifact, so they share one gate — the branch-local copies this
+    replaces differed only by the trailing note, which is exactly the
+    kind of difference that drifts into a real one.
+    """
+    ok, problems = check_code_tarball(entry, str(tarball_path))
+    if ok:
+        return
+    print(format_report(str(tarball_path), problems))
+    if note:
+        print(note)
+    sys.exit(2)
 
 
 def _refuse_outstage_campaign(entry):
@@ -439,9 +458,11 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
         err = _validate_draining_entry(entry)
         if err:
             sys.exit(f"json2jobdef: {err}")
-        _ensure_local_tarball(tarball_of(entry))
+        tarball_path = _ensure_local_tarball(tarball_of(entry))
         # No check_inputs: a generic cnf bakes no inputs — the tick
         # gates every batch (residency + settling age) at dispatch.
+        # The code tarball still has to match, though.
+        _gate_code_tarball(entry, tarball_path)
         snap = _snapshot_entry(entry, resources)
         if dry_run:
             print(f"[DRY RUN] would enqueue draining campaign: "
@@ -468,6 +489,9 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
               f"({len(problems)} problem(s)) — fix and re-run; "
               f"no campaign created")
         sys.exit(2)
+    _gate_code_tarball(entry, tarball_path,
+                       note="json2jobdef: code tarball does not match "
+                            "the cnf — no campaign created")
     njobs = njobs_of(entry)
     if njobs is None:
         sys.exit("json2jobdef: entry has no njobs (generic tarball) — "
@@ -648,7 +672,21 @@ def _preflight_inputs(entry, tarball_path):
     exactly the bulk-death failure check_inputs exists to prevent.
     A draining/generic cnf bakes no inputs and is skipped, the same
     carve-out enqueue_entry makes.
+
+    check_code_tarball runs FIRST, above the draining early-return,
+    because it is not an input-residency check — it is the digest gate
+    that binds a code-mode campaign to the Offline build the cnf was
+    made against. enqueue_entry only runs once per campaign, so without
+    this call here every later slice and every recovery resubmit (both
+    draining and normal) would ship whatever bytes currently sit at the
+    entry's `code` path with no verification at all. For a Musing entry
+    (no `code`, cnf with no `code_ref`) it short-circuits immediately —
+    one cheap cnf-parse, no sha256 — so the production path is
+    unaffected; on the code path it costs one sha256 pass per submit.
     """
+    ok, problems = check_code_tarball(entry, str(tarball_path))
+    if not ok:
+        return ok, problems
     if is_draining(entry):
         return True, []
     return check_inputs(str(tarball_path), inloc_of(entry))
@@ -805,6 +843,7 @@ def submit_entry(entry, idx, options):
         disk=resources['disk'],
         memory=resources['memory'],
         expected_lifetime=resources['expected_lifetime'],
+        code_tarball=code_of(entry),
     )
 
     cmd = ['jobsub_submit'] + argv

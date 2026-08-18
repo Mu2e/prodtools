@@ -7,7 +7,6 @@ Extracts information from Mu2e job parameter files (.tar files containing jobpar
 import argparse
 import os
 import sys
-import tarfile
 
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -72,19 +71,15 @@ class Mu2eJobPars(Mu2eJobBase):
         return self.json_data.get('output_datasets', [])
     
     def codesize(self):
-        """Get the size of the compressed code tarball"""
-        # This would need to check for embedded code in the tar file
-        # For now, return 0 as placeholder
+        """Bytes of code embedded in this cnf: always 0.
+
+        prodtools ships an Offline build as a jobsub sidecar
+        (--tar_file_name), never inside the cnf, so nothing is embedded
+        and 0 is the honest answer rather than a placeholder. The build
+        a code-mode cnf was made against is recorded in `code_ref`;
+        `--recipe` prints it.
+        """
         return 0
-    
-    def extract_code(self):
-        """Extract embedded code tarball to current directory"""
-        with tarfile.open(self.jobdef, 'r') as tar:
-            # Look for embedded code files
-            for member in tar.getmembers():
-                if member.name.startswith('code/') or member.name.endswith('.tar'):
-                    tar.extract(member)
-                    print(f"Extracted: {member.name}")
 
     def recipe(self):
         """Reconstruct this cnf's build config as human-readable text.
@@ -98,6 +93,13 @@ class Mu2eJobPars(Mu2eJobBase):
         """
         lines = [f"# recipe: {self.jobname()}",
                  f"setup: {self.setup()}"]
+
+        code_ref = self.json_data.get('code_ref')
+        if code_ref:
+            lines.append(f"code: {code_ref.get('source_path')}")
+            lines.append(f"code sha256: {code_ref.get('sha256')}"
+                         f"    # ships via jobsub --tar_file_name, "
+                         f"not embedded")
         try:
             lines.append(f"njobs: {self.njobs()}    # 0 = generic / open-ended")
         except ValueError as e:
@@ -162,7 +164,8 @@ file cnf.tar. The possible queries are:
     --output-files <dsname>[:listsize]
         List of output files belonging to the given dataset.
     --codesize    The size of the compressed code tarball, in bytes.
-    --extract-code    Extracts embedded code tarball to current directory.
+        Always 0 — code ships as a jobsub sidecar, never embedded in
+        the cnf. --recipe prints the code_ref for a code-mode cnf.
     --setup       Prints the name of the setup file.
     --recipe      The build config: setup, njobs, output patterns, and the
         embedded mu2e.fcl (the json2jobdef `fcl` + `fcl_overrides`).
@@ -179,7 +182,6 @@ def main():
     parser.add_argument('--output-datasets', action='store_true', help='List output datasets')
     parser.add_argument('--output-files', help='List output files for dataset (format: dataset[:size])')
     parser.add_argument('--codesize', action='store_true', help='Get code size')
-    parser.add_argument('--extract-code', action='store_true', help='Extract embedded code')
     parser.add_argument('--setup', action='store_true', help='Get setup file path')
     parser.add_argument('--recipe', action='store_true',
                         help='Build config: setup, njobs, output patterns, and the '
@@ -191,7 +193,7 @@ def main():
     # Check that exactly one query is specified
     queries = [args.jobname, args.njobs, args.input_datasets, args.input_files,
                args.output_datasets, args.output_files is not None,
-               args.codesize, args.extract_code, args.setup, args.recipe]
+               args.codesize, args.setup, args.recipe]
     
     if sum(queries) != 1:
         print("Error: Exactly one query must be specified")
@@ -253,10 +255,7 @@ def main():
         
         elif args.codesize:
             print(jp.codesize())
-        
-        elif args.extract_code:
-            jp.extract_code()
-        
+
         elif args.setup:
             print(jp.setup())
 

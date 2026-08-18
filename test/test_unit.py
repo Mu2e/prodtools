@@ -1569,6 +1569,54 @@ class TestProcessJobdefCopyInputFlip(unittest.TestCase):
             self._run(entry_extra={'copy_input': 'yes'})
 
 
+class TestProcessJobdefCodeRoot(unittest.TestCase):
+    """$INPUT_TAR_DIR_LOCAL / args.code_root is the entire mechanism by
+    which a grid worker resolves a code-mode cnf's relative `setup`
+    (utils/runmu2e.py:_code_root_from, wired into process_jobdef at
+    `code_root=_code_root_from(args)`). Deleting that wiring breaks
+    every code-mode grid job with a ValueError and costs zero test
+    failures unless something exercises it with a REAL relative-setup
+    jobpars and a real SimpleNamespace `args` — MagicMock() makes
+    getattr(args, 'code_root', None) return a truthy Mock and never
+    reaches this code at all."""
+
+    def setUp(self):
+        files = ["sim.mu2e.Test.TestConf.001440_00000000.art"]
+        jp = _root_input_jobpars(files, merge=1)
+        jp['setup'] = 'Code/setup.sh'
+        self.tar = _make_tarball(jp, "module_type : RootInput\n")
+        self.addCleanup(os.unlink, self.tar)
+        self.jobdesc = {
+            'tarball': self.tar,
+            'njobs': 1,
+            'inloc': 'stash',
+            'outputs': [],
+        }
+        self.fname = "cnf.mu2e.Test.TestConf.0.fcl"
+
+    def test_input_tar_dir_local_env_resolves_setup(self):
+        from utils import runmu2e
+        code_root = _mkdtemp()
+        args = SimpleNamespace(copy_input=False)
+        with patch.dict(os.environ, {'INPUT_TAR_DIR_LOCAL': code_root}), \
+             patch('utils.runmu2e.write_fcl', return_value='x.fcl'), \
+             patch('utils.runmu2e.run'):
+            fcl, simjob_setup, infiles, outputs, inloc = \
+                runmu2e.process_jobdef(self.jobdesc, self.fname, args)
+        self.assertEqual(simjob_setup,
+                         os.path.join(code_root, 'Code/setup.sh'))
+
+    def test_missing_code_root_raises(self):
+        from utils import runmu2e
+        args = SimpleNamespace(copy_input=False)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('INPUT_TAR_DIR_LOCAL', None)
+            with patch('utils.runmu2e.write_fcl', return_value='x.fcl'), \
+                 patch('utils.runmu2e.run'):
+                with self.assertRaises(ValueError):
+                    runmu2e.process_jobdef(self.jobdesc, self.fname, args)
+
+
 # ---------------------------------------------------------------------------
 # 15. version field in tarball names
 # ---------------------------------------------------------------------------
@@ -2435,6 +2483,52 @@ class TestProcessDirectInput(unittest.TestCase):
         override_pos = content.find('source.fileNames')
         include_pos = content.find('#include')
         self.assertGreater(override_pos, include_pos)
+
+
+class TestProcessDirectInputCodeRoot(unittest.TestCase):
+    """process_direct_input's own $INPUT_TAR_DIR_LOCAL / code_root
+    wiring (utils/runmu2e.py:315-316, `code_root=_code_root_from(args)`
+    inside process_direct_input). Same rationale as
+    TestProcessJobdefCodeRoot above: a real relative-setup jobpars and
+    a real SimpleNamespace `args`, not MagicMock()."""
+
+    def setUp(self):
+        self._orig_dir = os.getcwd()
+        self._tmpdir = _mkdtemp()
+        os.chdir(self._tmpdir)
+        jp = _generic_reco_jobpars()
+        jp['setup'] = 'Code/setup.sh'
+        self._tar = _make_tarball(
+            jp, "#include \"Production/JobConfig/recoMC/OnSpill.fcl\"\n")
+        self.addCleanup(os.unlink, self._tar)
+        self.fname = ("dig.mu2e.CeEndpointOnSpillTriggered."
+                      "MDC2025af_best_v1_3.001430_00000042.art")
+        self.jobdesc = {
+            'tarball': self._tar,
+            'inloc': 'tape',
+            'outputs': [{'dataset': '*.art', 'location': 'disk'}],
+        }
+
+    def tearDown(self):
+        os.chdir(self._orig_dir)
+
+    def test_input_tar_dir_local_env_resolves_setup(self):
+        from utils.runmu2e import process_direct_input
+        code_root = _mkdtemp()
+        args = SimpleNamespace()
+        with patch.dict(os.environ, {'INPUT_TAR_DIR_LOCAL': code_root}):
+            fcl, simjob_setup, fname, outputs = process_direct_input(
+                self.jobdesc, self.fname, args)
+        self.assertEqual(simjob_setup,
+                         os.path.join(code_root, 'Code/setup.sh'))
+
+    def test_missing_code_root_raises(self):
+        from utils.runmu2e import process_direct_input
+        args = SimpleNamespace()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('INPUT_TAR_DIR_LOCAL', None)
+            with self.assertRaises(ValueError):
+                process_direct_input(self.jobdesc, self.fname, args)
 
 
 # ---------------------------------------------------------------------------
@@ -3788,6 +3882,52 @@ class TestJobParsRecipe(unittest.TestCase):
             os.unlink(tar)
         self.assertIn("cnf.mu2e.X.TC.0.tar", out)
         self.assertIn("no embedded mu2e.fcl", out)
+
+
+# ---------------------------------------------------------------------------
+# 32c. jobquery code-mode honesty (Task 7: sidecar delivery, no embedding)
+# ---------------------------------------------------------------------------
+
+class TestJobqueryCodeMode(unittest.TestCase):
+    """Delivery is by jobsub sidecar (--tar_file_name); nothing is embedded
+    in the cnf. codesize() returning 0 is the honest answer, and the old
+    extract_code() — which pulled out any tar member ending in .tar — is
+    actively wrong under sidecar delivery and must be gone."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def _cnf(self, jobpars):
+        path = os.path.join(self.dir, 'cnf.mu2e.Demo.Run1Baq.0.tar')
+        blob = json.dumps(jobpars).encode()
+        with tarfile.open(path, 'w') as tar:
+            info = tarfile.TarInfo('jobpars.json')
+            info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob))
+        return path
+
+    def test_recipe_reports_code_mode(self):
+        from utils.jobquery import Mu2eJobPars
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': {'sha256': 'a' * 64, 'size': 12,
+                                      'source_path': '/exp/Code.tar.bz2'},
+                         'tbs': {'outfiles': {}}, 'jobname': 'demo'})
+        text = Mu2eJobPars(cnf).recipe()
+        self.assertIn('/exp/Code.tar.bz2', text)
+        self.assertIn('a' * 64, text)
+
+    def test_recipe_omits_code_line_for_musing_cnf(self):
+        from utils.jobquery import Mu2eJobPars
+        cnf = self._cnf({'code': '', 'setup': '/cvmfs/x/setup.sh',
+                         'tbs': {'outfiles': {}}, 'jobname': 'demo'})
+        self.assertNotIn('code:', Mu2eJobPars(cnf).recipe())
+
+    def test_extract_code_is_gone(self):
+        # It extracted any member ending in .tar, which under sidecar
+        # delivery would pull out something that is not code at all.
+        from utils.jobquery import Mu2eJobPars
+        self.assertFalse(hasattr(Mu2eJobPars, 'extract_code'))
 
 
 # ---------------------------------------------------------------------------
@@ -5355,6 +5495,156 @@ class TestSubmitEntryResourceWiring(unittest.TestCase):
         self.assertIsNone(captured['expected_lifetime'])
 
 
+class TestJobsubArgvCodeTarball(unittest.TestCase):
+    """The code tarball rides jobsub's --tar_file_name (RCDS/cvmfs,
+    published once, no per-job copy) -- NOT -f dropbox://, which
+    transfers per job. mu2eprodsys:474-475 does the same."""
+
+    def _argv(self, **extra):
+        from utils.jobsub_argv import build_jobsub_argv
+        return build_jobsub_argv(
+            entry={'tarball': 'cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
+                   'outputs': []},
+            jobset=[0, 1, 2],
+            jobdef_path='/tmp/cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
+            ops_json_path='/tmp/ops.json',
+            prodtools_tar_path='/tmp/prodtools-me.tar',
+            worker_script_path='/repo/bin/runjob.sh',
+            submitter='me',
+            **extra)
+
+    def test_no_code_tarball_no_flag(self):
+        argv = self._argv()
+        self.assertNotIn('--tar_file_name', argv)
+
+    def test_code_tarball_adds_flag(self):
+        argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
+        idx = argv.index('--tar_file_name')
+        self.assertEqual(argv[idx + 1], 'dropbox:///exp/build/Code.tar.bz2')
+
+    def test_code_tarball_does_not_displace_the_three_input_files(self):
+        # Regression guard: --tar_file_name is a DIFFERENT mechanism from
+        # -f dropbox://. The cnf, the ops JSON and the prodtools tarball
+        # must all still ship.
+        argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
+        shipped = [argv[i + 1] for i, a in enumerate(argv) if a == '-f']
+        self.assertEqual(len(shipped), 3)
+        self.assertIn('dropbox:///tmp/ops.json', shipped)
+        self.assertIn('dropbox:///tmp/cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
+                      shipped)
+        self.assertIn('dropbox:///tmp/prodtools-me.tar', shipped)
+
+    def test_executable_stays_last(self):
+        argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
+        self.assertTrue(argv[-1].startswith('file://'))
+
+
+class TestSubmitPassesCodeTarball(unittest.TestCase):
+    """submit_entry must actually wire the entry's code tarball into
+    build_jobsub_argv. Same shape as TestSubmitEntryResourceWiring
+    (test_unit.py:5323), which closes the identical gap for memory."""
+
+    def test_entry_code_reaches_build_jobsub_argv(self):
+        from utils.submit import submit_entry, SubmitOptions
+
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}],
+                 'code': '/exp/build/Code.tar.bz2'}
+        options = SubmitOptions(
+            ledger_db='/tmp/unused-code-wiring.db',
+            dry_run=True, origin='/tmp/m.json')
+
+        captured = {}
+
+        def fake_build_jobsub_argv(**kwargs):
+            captured.update(kwargs)
+            return ['--fake-argv']
+
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   side_effect=fake_build_jobsub_argv), \
+             patch('utils.submit._bundle_prodtools',
+                   return_value=Path('/tmp/fake-prodtools.tar')):
+            result = submit_entry(entry, 0, options)
+
+        self.assertEqual(result['status'], 'dry_run')
+        self.assertEqual(captured['code_tarball'], '/exp/build/Code.tar.bz2')
+
+    def test_musing_entry_passes_none(self):
+        from utils.submit import submit_entry, SubmitOptions
+
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}]}
+        options = SubmitOptions(
+            ledger_db='/tmp/unused-code-wiring.db',
+            dry_run=True, origin='/tmp/m.json')
+
+        captured = {}
+
+        def fake_build_jobsub_argv(**kwargs):
+            captured.update(kwargs)
+            return ['--fake-argv']
+
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   side_effect=fake_build_jobsub_argv), \
+             patch('utils.submit._bundle_prodtools',
+                   return_value=Path('/tmp/fake-prodtools.tar')):
+            submit_entry(entry, 0, options)
+
+        self.assertIsNone(captured['code_tarball'])
+
+
+class TestSubmitEntryCodeGate(unittest.TestCase):
+    """The per-submit half of Finding 1's fix: submit_entry must refuse
+    when the code-tarball digest gate fails, and must never reach
+    _run_submit. Deleting the check_code_tarball call in
+    _preflight_inputs (or moving it back below the draining
+    early-return) must fail this test."""
+
+    ENTRY = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+             'njobs': 5, 'inloc': 'tape',
+             'outputs': [{'location': 'tape'}],
+             'code': '/exp/build/Code.tar.bz2'}
+
+    class FakePars:
+        def __init__(self, path):
+            pass
+
+        def njobs(self):
+            return 5
+
+        def input_datasets(self):
+            return []
+
+        def job_outputs(self, index):
+            return {}
+
+    def _opts(self, **over):
+        from utils.submit import SubmitOptions
+        base = dict(ledger_db='/tmp/unused-code-gate.db', dry_run=False,
+                    origin='/tmp/m.json')
+        base.update(over)
+        return SubmitOptions(**base)
+
+    def test_bad_code_tarball_refuses_and_does_not_submit(self):
+        from utils import submit
+        from utils.check_inputs import Problem
+        bad = [Problem(dataset='code', filename=self.ENTRY['code'],
+                       kind='code_mismatch', detail='digest does not match')]
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value=Path('/tmp/t.tar')), \
+             patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(False, bad)), \
+             patch.object(submit, '_bundle_prodtools',
+                          return_value=Path('/tmp/pt.tar')), \
+             patch.object(submit, '_run_submit') as rs:
+            with self.assertRaises(SystemExit):
+                submit.submit_entry(dict(self.ENTRY), 0, self._opts())
+        rs.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # submit_map --enqueue (utils/submit.py) — sliced-campaign submission
 # ---------------------------------------------------------------------------
@@ -5379,10 +5669,14 @@ class TestEnqueue(unittest.TestCase):
                                   return_value=Path(self.entry['tarball']))
         ci_patcher = patch.object(submit, 'check_inputs',
                                   return_value=(True, []))
+        cc_patcher = patch.object(submit, 'check_code_tarball',
+                                  return_value=(True, []))
         tb_patcher.start()
         ci_patcher.start()
+        cc_patcher.start()
         self.addCleanup(tb_patcher.stop)
         self.addCleanup(ci_patcher.stop)
+        self.addCleanup(cc_patcher.stop)
 
     def test_enqueue_writes_campaign(self):
         from utils.submit import enqueue_entry
@@ -5483,10 +5777,14 @@ class TestEnqueueErrorStyle(unittest.TestCase):
                                   return_value=Path('cnf.mu2e.E.C.0.tar'))
         ci_patcher = patch.object(submit, 'check_inputs',
                                   return_value=(True, []))
+        cc_patcher = patch.object(submit, 'check_code_tarball',
+                                  return_value=(True, []))
         tb_patcher.start()
         ci_patcher.start()
+        cc_patcher.start()
         self.addCleanup(tb_patcher.stop)
         self.addCleanup(ci_patcher.stop)
+        self.addCleanup(cc_patcher.stop)
 
     def _entry(self, tarball='cnf.mu2e.E.C.0.tar'):
         return {'tarball': tarball, 'njobs': 50}
@@ -6324,14 +6622,18 @@ class TestDirectPathPreflight(unittest.TestCase):
         from utils.check_inputs import Problem
         bad = [Problem(dataset='dts.mu2e.X.Y.art', filename='x.art',
                        kind='missing', detail='0 files')]
-        with patch('utils.submit.check_inputs', return_value=(False, bad)):
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(True, [])), \
+             patch('utils.submit.check_inputs', return_value=(False, bad)):
             ok, problems = self.submit._preflight_inputs(
                 self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
         self.assertFalse(ok)
         self.assertEqual(problems, bad)
 
     def test_direct_submit_passes_on_good_inputs(self):
-        with patch('utils.submit.check_inputs', return_value=(True, [])):
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(True, [])), \
+             patch('utils.submit.check_inputs', return_value=(True, [])):
             ok, problems = self.submit._preflight_inputs(
                 self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
         self.assertTrue(ok)
@@ -6341,11 +6643,75 @@ class TestDirectPathPreflight(unittest.TestCase):
         # nothing to pre-flight, and calling check_inputs would fail.
         generic = dict(self.entry)
         generic['input_pattern'] = 'dig.mu2e.%OnSpill.X.art'
-        with patch('utils.submit.check_inputs') as chk:
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(True, [])), \
+             patch('utils.submit.check_inputs') as chk:
             ok, problems = self.submit._preflight_inputs(
                 generic, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
         self.assertTrue(ok)
         chk.assert_not_called()
+
+    def test_bad_code_tarball_short_circuits_before_check_inputs(self):
+        # check_code_tarball runs FIRST (above the draining early-return,
+        # see _preflight_inputs' docstring) — a code mismatch must block
+        # the submit even when check_inputs would have passed, and
+        # check_inputs must never even be called.
+        from utils.check_inputs import Problem
+        bad = [Problem(dataset='code', filename='/some/Code.tar.bz2',
+                       kind='code_mismatch', detail='sha256 does not match')]
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(False, bad)), \
+             patch('utils.submit.check_inputs') as chk:
+            ok, problems = self.submit._preflight_inputs(
+                self.entry, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
+        self.assertFalse(ok)
+        self.assertEqual(problems, bad)
+        chk.assert_not_called()
+
+    def test_bad_code_tarball_blocks_a_draining_entry(self):
+        # The ordering case the previous test cannot cover: a draining
+        # (generic) entry returns True before check_inputs is ever
+        # consulted, so the code gate is the ONLY gate it has. Moving
+        # check_code_tarball below the draining early-return fails here
+        # and nowhere else.
+        from utils.check_inputs import Problem
+        draining = dict(self.entry)
+        draining['input_pattern'] = 'dig.mu2e.%OnSpill.X.art'
+        bad = [Problem(dataset='code', filename='/some/Code.tar.bz2',
+                       kind='code_mismatch', detail='sha256 does not match')]
+        with patch('utils.submit.check_code_tarball',
+                   return_value=(False, bad)), \
+             patch('utils.submit.check_inputs') as chk:
+            ok, problems = self.submit._preflight_inputs(
+                draining, '/tmp/cnf.mu2e.TestDesc.TestConf.0.tar')
+        self.assertFalse(ok)
+        self.assertEqual(problems, bad)
+        chk.assert_not_called()
+
+    def test_musing_entry_real_cnf_passes_code_gate_unaffected(self):
+        # The REAL check_code_tarball (not mocked) against a real cnf
+        # tarball carrying no code_ref, and an entry carrying no 'code'
+        # -- the common Musing-entry case. Proves the code gate added
+        # to _preflight_inputs costs nothing for the production path:
+        # one cnf parse, immediate short-circuit, no sha256.
+        tmpdir = _mkdtemp()
+        cnf_path = os.path.join(tmpdir, 'cnf.mu2e.TestDesc.TestConf.0.tar')
+        jobpars = {
+            'code': '', 'setup': '/cvmfs/mu2e.opensciencegrid.org/'
+                                  'Musings/SimJob/TestConf/setup.sh',
+            'tbs': {},
+        }
+        blob = json.dumps(jobpars).encode()
+        with tarfile.open(cnf_path, 'w') as tar:
+            info = tarfile.TarInfo('jobpars.json')
+            info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob))
+
+        with patch('utils.submit.check_inputs', return_value=(True, [])):
+            ok, problems = self.submit._preflight_inputs(
+                self.entry, cnf_path)
+        self.assertTrue(ok)
+        self.assertEqual(problems, [])
 
 
 class TestSubmitResolveLedgerDb(unittest.TestCase):
@@ -7465,6 +7831,95 @@ class TestCheckInputs(unittest.TestCase):
         self.assertEqual([p.kind for p in probs], ["nearline"])
 
 
+class TestCheckCodeTarball(unittest.TestCase):
+    """The entry names a tarball; the cnf remembers the digest of the
+    tarball it was built against. They must still agree at submit time."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+
+    def _cnf(self, jobpars):
+        """A cnf tarball carrying just jobpars.json — enough for
+        Mu2eJobPars to read code_ref."""
+        path = os.path.join(self.dir, 'cnf.mu2e.Demo.Run1Baq.0.tar')
+        blob = json.dumps(jobpars).encode()
+        with tarfile.open(path, 'w') as tar:
+            info = tarfile.TarInfo('jobpars.json')
+            info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob))
+        return path
+
+    def test_matching_digest_passes(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertTrue(ok)
+        self.assertEqual(problems, [])
+
+    def test_musing_cnf_and_musing_entry_pass(self):
+        from utils.check_inputs import check_code_tarball
+        cnf = self._cnf({'code': '', 'setup': '/cvmfs/x/setup.sh', 'tbs': {}})
+        ok, problems = check_code_tarball({}, cnf)
+        self.assertTrue(ok)
+
+    def test_changed_bytes_refused(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        # Rebuild in place with different content, as `muse tarball` would.
+        _make_code_tarball(self.code)
+        with open(self.code, 'ab') as fh:
+            fh.write(b'\x00')
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'code_mismatch')
+
+    def test_deleted_tarball_refused(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        os.unlink(self.code)
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'missing')
+
+    def test_entry_has_code_but_cnf_does_not(self):
+        from utils.check_inputs import check_code_tarball
+        cnf = self._cnf({'code': '', 'setup': '/cvmfs/x/setup.sh', 'tbs': {}})
+        ok, problems = check_code_tarball({'code': self.code}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'code_mismatch')
+
+    def test_cnf_has_code_but_entry_does_not(self):
+        from utils.check_inputs import check_code_tarball
+        from utils.jobdef import build_code_ref
+        cnf = self._cnf({'code': '', 'setup': 'Code/setup.sh',
+                         'code_ref': build_code_ref(self.code), 'tbs': {}})
+        ok, problems = check_code_tarball({}, cnf)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'code_mismatch')
+
+    def test_corrupt_cnf_reports_query_error_instead_of_raising(self):
+        """Mu2eJobBase.__init__ opens the cnf with tarfile.open unguarded;
+        a garbage/truncated cnf raises tarfile.ReadError there. That must
+        surface as a Problem, not an uncaught traceback -- the draining
+        branch never used to parse the cnf at all, so this is the only
+        thing standing between a half-staged cnf and a crash mid-enqueue."""
+        from utils.check_inputs import check_code_tarball
+        corrupt = os.path.join(self.dir, 'cnf.mu2e.Bad.Conf.0.tar')
+        with open(corrupt, 'wb') as fh:
+            fh.write(b'not a tarball, just garbage bytes')
+        ok, problems = check_code_tarball({'code': self.code}, corrupt)
+        self.assertFalse(ok)
+        self.assertEqual(problems[0].kind, 'query_error')
+
+
 class TestCheckInputsCLI(unittest.TestCase):
     """format_report + main: grouped report, exit 0 clean / 2 on problems."""
 
@@ -7562,11 +8017,37 @@ class TestEnqueueInputGate(unittest.TestCase):
         with patch.object(submit, "_ensure_local_tarball",
                           return_value=Path("cnf.mu2e.T.C.0.tar")), \
              patch.object(submit, "check_inputs", return_value=(True, [])), \
+             patch.object(submit, "check_code_tarball",
+                          return_value=(True, [])), \
              patch.object(submit.submission_ledger, "create_campaign",
                           return_value=7):
             camp_id = submit.enqueue_entry(entry, ledger_db="/tmp/never.db",
                                            slice_size=500)
         self.assertEqual(camp_id, 7)
+
+    def test_failing_code_check_blocks_and_creates_no_campaign(self):
+        """A code_mismatch from check_code_tarball must gate the NORMAL
+        branch exactly like a check_inputs failure does -- exit 2, no
+        ledger row -- even though check_inputs itself passed clean."""
+        from utils import submit
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+                 "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
+                                            "location": "tape"}]}
+        created = []
+        with patch.object(submit, "_ensure_local_tarball",
+                          return_value=Path("cnf.mu2e.T.C.0.tar")), \
+             patch.object(submit, "check_inputs", return_value=(True, [])), \
+             patch.object(submit, "check_code_tarball",
+                          return_value=(False, [submit.Problem(
+                              "code", "cnf.mu2e.T.C.0.tar",
+                              "code_mismatch", "digest mismatch")])), \
+             patch.object(submit.submission_ledger, "create_campaign",
+                          side_effect=lambda *a, **k: created.append(1)):
+            with self.assertRaises(SystemExit) as cm:
+                submit.enqueue_entry(entry, ledger_db="/tmp/never.db",
+                                     slice_size=500)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(created, [])   # no campaign row
 
 
 # ---------------------------------------------------------------------------
@@ -11379,6 +11860,8 @@ class TestEnqueueDraining(unittest.TestCase):
         with patch.object(submit, '_ensure_local_tarball',
                           return_value='/tmp/t.tar'), \
              patch.object(submit, 'check_inputs') as ci, \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit.submission_ledger, 'create_campaign',
                           fake_create):
             camp_id = submit.enqueue_entry(dict(self.ENTRY),
@@ -11398,10 +11881,33 @@ class TestEnqueueDraining(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 submit.enqueue_entry(bad, ledger_db='/x.db', slice_size=500)
 
+    def test_failing_code_check_blocks_draining_campaign(self):
+        """The draining branch skips check_inputs entirely (a generic
+        cnf bakes no inputs), so check_code_tarball is the ONLY gate
+        standing between a code-mismatched cnf and a live campaign row.
+        A (False, ...) result must exit 2 and create nothing."""
+        from utils import submit
+        created = []
+        with patch.object(submit, '_ensure_local_tarball',
+                          return_value='/tmp/t.tar'), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(False, [submit.Problem(
+                              'code', '/tmp/t.tar', 'code_mismatch',
+                              'digest mismatch')])), \
+             patch.object(submit.submission_ledger, 'create_campaign',
+                          side_effect=lambda *a, **k: created.append(1)):
+            with self.assertRaises(SystemExit) as cm:
+                submit.enqueue_entry(dict(self.ENTRY), ledger_db='/x.db',
+                                     slice_size=500)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(created, [])   # no campaign row
+
     def test_dry_run_creates_nothing(self):
         from utils import submit
         with patch.object(submit, '_ensure_local_tarball',
                           return_value='/tmp/t.tar'), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit.submission_ledger,
                           'create_campaign') as cc:
             result = submit.enqueue_entry(dict(self.ENTRY),
@@ -11511,6 +12017,8 @@ class TestSubmitEntryFiles(unittest.TestCase):
         with patch.object(submit, '_ensure_local_tarball',
                           return_value=Path('/tmp/t.tar')), \
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit, '_bundle_prodtools',
                           return_value=Path('/tmp/pt.tar')), \
              patch.object(submit, '_run_submit',
@@ -11576,6 +12084,8 @@ class TestSubmitEntryFiles(unittest.TestCase):
         with patch.object(submit, '_ensure_local_tarball',
                           return_value=Path('/tmp/t.tar')), \
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
+             patch.object(submit, 'check_code_tarball',
+                          return_value=(True, [])), \
              patch.object(submit, '_bundle_prodtools',
                           return_value=Path('/tmp/pt.tar')), \
              patch.object(submit, '_run_submit',
@@ -12767,6 +13277,8 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                  patch.object(submit, '_ensure_local_tarball',
                               return_value=Path(tarball)), \
                  patch.object(submit, 'check_inputs', return_value=(True, [])), \
+                 patch.object(submit, 'check_code_tarball',
+                              return_value=(True, [])), \
                  patch.object(submit, '_resolve_ledger_db',
                               return_value=db_path):
                 # Computed under the same patches process_single_entry uses,
@@ -14615,10 +15127,14 @@ class TestEnqueueRefusesOutstage(unittest.TestCase):
         tb = patch.object(submit, '_ensure_local_tarball',
                           return_value=Path('cnf.mu2e.O.C.0.tar'))
         ci = patch.object(submit, 'check_inputs', return_value=(True, []))
+        cc = patch.object(submit, 'check_code_tarball',
+                          return_value=(True, []))
         tb.start()
         ci.start()
+        cc.start()
         self.addCleanup(tb.stop)
         self.addCleanup(ci.stop)
+        self.addCleanup(cc.stop)
 
     def test_outstage_entry_refused(self):
         from utils.submit import enqueue_entry
@@ -14655,11 +15171,28 @@ def _runlocal_args(**over):
     args = SimpleNamespace(
         jobdef='cnf.mu2e.Test.TestConf.0.tar', inloc='tape',
         indices=[0], parallel=1, workdir='.', nevts=-1,
-        mu2e_options='', copy_input=False, one=None,
-        entry_point='/repo/utils/runlocal.py')
+        mu2e_options='', copy_input=False, one=None, json=None,
+        timeout=0, entry_point='/repo/utils/runlocal.py')
     for key, value in over.items():
         setattr(args, key, value)
     return args
+
+
+def _fake_popen(fake):
+    """Adapt a simple `(argv, cwd, env, stdout) -> returncode` stand-in
+    to the Popen object the driver drives.
+
+    The driver uses Popen, not subprocess.run, because it must be able to
+    signal a job's whole process GROUP on timeout — run() would kill the
+    launcher and leave mu2e behind. `pid` is deliberately not 0 or 1:
+    os.killpg(0, ...) signals the CALLER's own group, which in a test run
+    is the test runner.
+    """
+    def popen(argv, cwd=None, env=None, stdout=None, stderr=None, **kwargs):
+        result = fake(argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
+        return SimpleNamespace(pid=2 ** 30, returncode=result.returncode,
+                               wait=lambda timeout=None: result.returncode)
+    return popen
 
 
 class TestRunLocalOutputGlobs(unittest.TestCase):
@@ -14766,12 +15299,12 @@ class TestRunLocalChildArgv(unittest.TestCase):
     def test_a_gapped_window_survives_the_round_trip(self):
         """The child rebuilds njobs from this spec; a collapsed range
         that lost an index would give the rerun a different jobdesc."""
-        from utils.runlocal import child_argv, parse_indices
+        from utils.runlocal import child_argv, parse_index_spec
         indices = [0, 3, 7, 8, 9]
         argv = child_argv(3, _runlocal_args(indices=indices))
         spec = argv[argv.index('--indices') + 1]
         self.assertEqual(spec, '0,3,7-9')
-        self.assertEqual(parse_indices(spec), indices)
+        self.assertEqual(parse_index_spec(spec), indices)
 
     def test_optional_flags_only_when_set(self):
         from utils.runlocal import child_argv
@@ -14783,6 +15316,86 @@ class TestRunLocalChildArgv(unittest.TestCase):
         # `=` form: mu2e options start with a dash, and argparse would
         # otherwise read the value as the next flag and reject it.
         self.assertIn('--mu2e-options=--no-timing', argv)
+
+
+class TestRunlocalCode(unittest.TestCase):
+    """The driver unpacks the code tarball ONCE and hands children the
+    directory. 3.6 GB per job times four parallel jobs is not viable."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+
+    def test_unpack_creates_code_setup(self):
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        self.assertTrue(os.path.isfile(os.path.join(root, 'Code', 'setup.sh')))
+
+    def test_unpack_is_idempotent(self):
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        marker = os.path.join(root, 'Code', 'setup.sh')
+        with open(marker, 'a') as fh:
+            fh.write('# touched\n')
+        before = os.path.getsize(marker)
+        self.assertEqual(unpack_code(self.code, self.dir), root)
+        # Second call must not re-extract over an existing tree.
+        self.assertEqual(os.path.getsize(marker), before)
+
+    def test_child_argv_carries_code_root(self):
+        from utils.runlocal import child_argv
+        args = SimpleNamespace(entry_point='/repo/utils/runlocal.py',
+                               jobdef='/tmp/cnf.tar', inloc='tape',
+                               indices=[0, 1], nevts=10, mu2e_options='',
+                               copy_input=False, code_root='/w/code')
+        argv = child_argv(0, args)
+        self.assertIn('--code-root', argv)
+        self.assertEqual(argv[argv.index('--code-root') + 1], '/w/code')
+
+    def test_child_argv_omits_code_root_when_absent(self):
+        from utils.runlocal import child_argv
+        args = SimpleNamespace(entry_point='/repo/utils/runlocal.py',
+                               jobdef='/tmp/cnf.tar', inloc='tape',
+                               indices=[0, 1], nevts=10, mu2e_options='',
+                               copy_input=False, code_root=None)
+        self.assertNotIn('--code-root', child_argv(0, args))
+
+    def test_parser_accepts_both_flags(self):
+        from utils.runlocal import build_parser
+        args = build_parser().parse_args(
+            ['--jobdef', 'cnf.tar', '--code', '/exp/Code.tar.bz2'])
+        self.assertEqual(args.code, '/exp/Code.tar.bz2')
+        self.assertIsNone(args.code_root)
+        child = build_parser().parse_args(
+            ['--jobdef', 'cnf.tar', '--one', '3', '--code-root', '/w/code'])
+        self.assertEqual(child.code_root, '/w/code')
+
+    def test_sentinel_not_setup_sh_gates_reuse(self):
+        """`Code/setup.sh` is payload, extracted partway through a run
+        that could still be killed. Only the sentinel — written last —
+        proves the extract finished; a run that trusted setup.sh alone
+        would silently reuse a truncated tree forever."""
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
+        self.assertTrue(os.path.isfile(lib))
+        os.remove(lib)  # simulate a partial extract that got past setup.sh
+        self.assertEqual(unpack_code(self.code, self.dir), root)
+        # Sentinel was still present, so the second call trusted it and
+        # did not re-extract -- the missing file stays missing.
+        self.assertFalse(os.path.isfile(lib))
+
+    def test_missing_sentinel_forces_re_extraction(self):
+        from utils.runlocal import unpack_code
+        root = unpack_code(self.code, self.dir)
+        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
+        os.remove(lib)
+        os.remove(os.path.join(root, '.unpack-complete'))
+        self.assertEqual(unpack_code(self.code, self.dir), root)
+        # No sentinel meant a real re-extract, which restored the file --
+        # proving the sentinel, not setup.sh, is what actually gates.
+        self.assertTrue(os.path.isfile(lib))
 
 
 class TestRunLocalDrive(unittest.TestCase):
@@ -14806,7 +15419,7 @@ class TestRunLocalDrive(unittest.TestCase):
     def _drive(self, args, fake):
         from utils import runlocal
         buf = io.StringIO()
-        with patch.object(runlocal.subprocess, 'run', fake):
+        with patch.object(runlocal.subprocess, 'Popen', _fake_popen(fake)):
             with contextlib.redirect_stdout(buf):
                 rc = runlocal.drive(args)
         return rc, buf.getvalue()
@@ -14904,6 +15517,182 @@ class TestRunLocalDrive(unittest.TestCase):
         self.assertNotIn('unrelated.txt', out)
 
 
+class TestRunLocalTimeout(unittest.TestCase):
+    """A wedged job must not hold the driver open forever: with no
+    limit there is no summary, no exit, and nothing to distinguish a
+    hung run from a slow one."""
+
+    def setUp(self):
+        self.workdir = _mkdtemp()
+        self.tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+        self.killed = []
+
+    def _hang_popen(self, hang_indices):
+        """Popen stand-in whose listed indices never finish."""
+        import subprocess as sp
+
+        def popen(argv, cwd=None, env=None, stdout=None, stderr=None, **kw):
+            index = int(argv[argv.index('--one') + 1])
+
+            def wait(timeout=None):
+                # Stops hanging once it has been signalled — the SIGTERM
+                # half of kill_job is what a real art job answers.
+                if index in hang_indices and not self.killed:
+                    raise sp.TimeoutExpired(argv, timeout or 0)
+                return 0
+            return SimpleNamespace(pid=2 ** 30 + index, wait=wait)
+        return popen
+
+    def _drive(self, popen, **over):
+        from utils import runlocal
+        args = _runlocal_args(jobdef=self.tar, workdir=self.workdir, **over)
+        killers = []
+
+        def killpg(pid, sig):
+            killers.append((pid, sig))
+            self.killed.append((pid, sig))
+        with patch.object(runlocal.subprocess, 'Popen', popen):
+            with patch.object(runlocal.os, 'killpg', killpg):
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    rc = runlocal.drive(args)
+        return rc, buf.getvalue(), killers
+
+    def test_a_hung_job_is_killed_and_the_rest_still_run(self):
+        path = os.path.join(self.workdir, 'summary.json')
+        rc, out, _ = self._drive(self._hang_popen({1}), indices=[0, 1, 2],
+                                 timeout=0.01, json=path)
+        self.assertEqual(rc, 1)
+        self.assertIn('TIMEOUT', out)
+        with open(path) as handle:
+            data = json.load(handle)
+        self.assertEqual(data['failed'], [1])
+        self.assertEqual(data['ok'], 2)
+        hung = data['jobs'][1]
+        self.assertTrue(hung['timed_out'])
+        self.assertEqual(hung['rc'], 124)
+        self.assertFalse(data['jobs'][0]['timed_out'])
+
+    def test_the_whole_process_group_is_signalled(self):
+        """mu2e is a GRANDchild: signalling only the direct child would
+        leave it running with nothing left to reap it."""
+        import signal as sig_module
+        _, _, killers = self._drive(self._hang_popen({0}), indices=[0],
+                                    timeout=0.01)
+        self.assertTrue(killers)
+        # SIGTERM first — art traps it to close its output files.
+        self.assertEqual(killers[0][1], sig_module.SIGTERM)
+        self.assertEqual(killers[0][0], 2 ** 30)
+
+    def test_zero_disables_the_limit(self):
+        """The escape hatch for a job legitimately longer than a day."""
+        seen, waited = [], []
+
+        def popen(argv, cwd=None, env=None, stdout=None, stderr=None, **kw):
+            seen.append(kw.get('start_new_session'))
+            return SimpleNamespace(pid=2 ** 30, wait=lambda timeout=None:
+                                   waited.append(timeout) or 0)
+        rc, _, killers = self._drive(popen, timeout=0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(killers, [])
+        # 0 reaches Popen.wait as None, which is how it spells "forever".
+        self.assertIn(None, waited)
+        # Every job owns a process group, so a kill can reach mu2e.
+        self.assertEqual(seen, [True])
+
+    def test_a_negative_timeout_is_refused(self):
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', self.tar, '--timeout', '-1'])
+
+    def test_default_is_the_grid_lease(self):
+        from utils.runlocal import build_parser, DEFAULT_TIMEOUT
+        self.assertEqual(DEFAULT_TIMEOUT, 24 * 3600)
+        args = build_parser().parse_args(['--jobdef', 'c.tar'])
+        self.assertEqual(args.timeout, DEFAULT_TIMEOUT)
+
+
+class TestRunLocalJsonSummary(unittest.TestCase):
+    """`--json` exists because the printed table is lossy: it shows a
+    COUNT of outputs, never their names, and one exit code for the whole
+    run. A caller that chains stages needs the names, and a caller that
+    measures a rate needs to know which indices contributed."""
+
+    def setUp(self):
+        self.workdir = _mkdtemp()
+        self.tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+        self.path = os.path.join(self.workdir, 'summary.json')
+
+    def _run(self, fake, **over):
+        from utils import runlocal
+        args = _runlocal_args(jobdef=self.tar, workdir=self.workdir,
+                              json=self.path, **over)
+        with patch.object(runlocal.subprocess, 'Popen', _fake_popen(fake)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = runlocal.drive(args)
+        return rc
+
+    @staticmethod
+    def _index_of(argv):
+        return int(argv[argv.index('--one') + 1])
+
+    def _emit(self, index_rcs):
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
+            index = self._index_of(argv)
+            rc = index_rcs[index]
+            if rc == 0:
+                Path(cwd, f'dts.mu2e.X.TestConf.001430_{index:08d}.art').touch()
+            Path(cwd, 'unrelated.txt').touch()
+            return SimpleNamespace(returncode=rc)
+        return fake
+
+    def test_outputs_are_absolute_paths_the_next_stage_can_open(self):
+        """The driver stores basenames; a consumer must not have to know
+        the job_<index> layout to turn them into openable paths."""
+        self._run(self._emit({0: 0}))
+        with open(self.path) as handle:
+            data = json.load(handle)
+        outputs = data['jobs'][0]['outputs']
+        self.assertEqual(len(outputs), 1)
+        self.assertTrue(os.path.isabs(outputs[0]))
+        self.assertTrue(os.path.isfile(outputs[0]))
+        # Only the cnf's declared outputs, same rule the table follows.
+        self.assertNotIn('unrelated.txt', json.dumps(data))
+
+    def test_written_even_when_a_job_failed(self):
+        """The partial run is exactly the case the file exists for: 2 of
+        3 succeeded is indistinguishable from 0 of 3 by exit code."""
+        rc = self._run(self._emit({0: 0, 1: 1, 2: 0}), indices=[0, 1, 2])
+        self.assertEqual(rc, 1)
+        with open(self.path) as handle:
+            data = json.load(handle)
+        self.assertEqual(data['ok'], 2)
+        self.assertEqual(data['failed'], [1])
+        self.assertEqual([j['index'] for j in data['jobs']], [0, 1, 2])
+        self.assertEqual([j['rc'] for j in data['jobs']], [0, 1, 0])
+        self.assertEqual(data['jobs'][1]['outputs'], [])
+
+    def test_no_flag_writes_no_file(self):
+        from utils import runlocal
+        args = _runlocal_args(jobdef=self.tar, workdir=self.workdir)
+        with patch.object(runlocal.subprocess, 'Popen',
+                          _fake_popen(self._emit({0: 0}))):
+            with contextlib.redirect_stdout(io.StringIO()):
+                runlocal.drive(args)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_a_bad_directory_is_refused_before_any_job_runs(self):
+        """Losing an hour-long run's summary to a directory typo is not
+        recoverable — the path is checked up front."""
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', self.tar, '--json',
+                  os.path.join(self.workdir, 'nope', 'summary.json')])
+
+
 class TestRunLocalArgValidation(unittest.TestCase):
     """Windows that would run nothing, or a nonsense pool size, are
     rejected up front rather than producing an empty summary."""
@@ -14944,11 +15733,11 @@ class TestRunLocalIndexSpec(unittest.TestCase):
     lost, which are rarely contiguous."""
 
     def test_parses_singles_ranges_and_normalizes(self):
-        from utils.runlocal import parse_indices
-        self.assertEqual(parse_indices('0,3,7-9'), [0, 3, 7, 8, 9])
+        from utils.runlocal import parse_index_spec
+        self.assertEqual(parse_index_spec('0,3,7-9'), [0, 3, 7, 8, 9])
         # Inclusive at both ends, sorted, deduplicated, space-tolerant.
-        self.assertEqual(parse_indices('5-5'), [5])
-        self.assertEqual(parse_indices('4, 2 , 4'), [2, 4])
+        self.assertEqual(parse_index_spec('5-5'), [5])
+        self.assertEqual(parse_index_spec('4, 2 , 4'), [2, 4])
 
     def test_formats_runs_back_into_ranges(self):
         from utils.runlocal import format_indices
@@ -14966,6 +15755,512 @@ class TestRunLocalIndexSpec(unittest.TestCase):
             resolve_indices(SimpleNamespace(indices=None, first=None,
                                             num=None)),
             [0])
+
+
+class TestResolveSetup(unittest.TestCase):
+    """resolve_setup is the single relative->absolute step for a
+    code-mode cnf. Absolute setup = a /cvmfs Musing; relative setup =
+    the Offline build travels as a separate tarball."""
+
+    def test_absolute_setup_passes_through(self):
+        from utils.runmu2e import resolve_setup
+        path = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh'
+        self.assertEqual(resolve_setup(path), path)
+
+    def test_absolute_setup_ignores_code_root(self):
+        from utils.runmu2e import resolve_setup
+        path = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh'
+        self.assertEqual(resolve_setup(path, code_root='/srv/rcds'), path)
+
+    def test_relative_setup_joins_code_root(self):
+        from utils.runmu2e import resolve_setup
+        self.assertEqual(resolve_setup('Code/setup.sh', code_root='/srv/rcds'),
+                         '/srv/rcds/Code/setup.sh')
+
+    def test_relative_setup_without_code_root_raises(self):
+        from utils.runmu2e import resolve_setup
+        with self.assertRaises(ValueError) as ctx:
+            resolve_setup('Code/setup.sh')
+        # The message must name both recovery paths, because the two
+        # callers fail for different reasons.
+        self.assertIn('INPUT_TAR_DIR_LOCAL', str(ctx.exception))
+        self.assertIn('--code', str(ctx.exception))
+
+    def test_relative_setup_with_empty_code_root_raises(self):
+        # os.environ.get returns '' for an exported-but-empty variable;
+        # that must fail like a missing one, not join to 'Code/setup.sh'.
+        from utils.runmu2e import resolve_setup
+        with self.assertRaises(ValueError):
+            resolve_setup('Code/setup.sh', code_root='')
+
+    def test_empty_setup_raises(self):
+        from utils.runmu2e import resolve_setup
+        with self.assertRaises(ValueError):
+            resolve_setup('')
+
+
+def _make_code_tarball(path, with_setup=True, bzip2=True):
+    """Build a tiny stand-in for `muse tarball` output. Few KB, no
+    /cvmfs, no network — safe for the in-process suite."""
+    import tarfile as _tf
+    mode = 'w:bz2' if bzip2 else 'w'
+    with _tf.open(path, mode) as tar:
+        payload = io.BytesIO(b'# fake muse setup\n')
+        if with_setup:
+            info = _tf.TarInfo('Code/setup.sh')
+            info.size = len(payload.getvalue())
+            tar.addfile(info, io.BytesIO(payload.getvalue()))
+        other = _tf.TarInfo('Code/lib/libFake.so')
+        other.size = 3
+        tar.addfile(other, io.BytesIO(b'abc'))
+    return path
+
+
+class TestCodeTarballValidation(unittest.TestCase):
+    """jobdef refuses a code tarball that cannot work on a worker,
+    mirroring the checks Perl mu2ejobdef does at lines 808-828."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def test_good_tarball_accepted(self):
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+        validate_code_tarball(path)  # must not raise
+
+    def test_missing_file_rejected(self):
+        from utils.jobdef import validate_code_tarball
+        with self.assertRaises(ValueError) as ctx:
+            validate_code_tarball(os.path.join(self.dir, 'nope.tar.bz2'))
+        self.assertIn('readable', str(ctx.exception))
+
+    def test_uncompressed_tar_rejected(self):
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'plain.tar'),
+                                  bzip2=False)
+        with self.assertRaises(ValueError) as ctx:
+            validate_code_tarball(path)
+        self.assertIn('bzip2', str(ctx.exception))
+
+    def test_tarball_without_code_setup_rejected(self):
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'nosetup.tar.bz2'),
+                                  with_setup=False)
+        with self.assertRaises(ValueError) as ctx:
+            validate_code_tarball(path)
+        self.assertIn('Code/setup.sh', str(ctx.exception))
+        self.assertIn('muse tarball', str(ctx.exception))
+
+    def test_name_does_not_decide(self):
+        # Content decides, not the filename: a correctly built tarball
+        # under any name is accepted.
+        from utils.jobdef import validate_code_tarball
+        path = _make_code_tarball(os.path.join(self.dir, 'my-build.tbz'))
+        validate_code_tarball(path)
+
+
+class TestSha256File(unittest.TestCase):
+
+    def test_digest_and_size(self):
+        from utils.job_common import sha256_file
+        with tempfile.NamedTemporaryFile(delete=False) as fh:
+            fh.write(b'hello')
+            name = fh.name
+        self.addCleanup(os.unlink, name)
+        digest, size = sha256_file(name)
+        self.assertEqual(digest, hashlib.sha256(b'hello').hexdigest())
+        self.assertEqual(size, 5)
+
+
+class TestCodeModeJobpars(unittest.TestCase):
+    """A code-mode cnf says setup='Code/setup.sh' and carries code_ref;
+    upstream's `code` key stays empty because nothing is embedded."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.tarball = _make_code_tarball(
+            os.path.join(self.dir, 'Code.tar.bz2'))
+
+    def test_code_mode_shape(self):
+        from utils.jobdef import _build_jobpars_json
+        config = {'code': self.tarball, 'desc': 'Demo',
+                  'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        pars = _build_jobpars_json(config, {'outfiles': {}})
+        self.assertEqual(pars['setup'], 'Code/setup.sh')
+        self.assertEqual(pars['code'], '')
+        self.assertEqual(pars['code_ref']['size'],
+                         os.path.getsize(self.tarball))
+        self.assertEqual(pars['code_ref']['source_path'],
+                         os.path.abspath(self.tarball))
+        self.assertEqual(len(pars['code_ref']['sha256']), 64)
+
+    def test_setup_mode_shape_unchanged(self):
+        from utils.jobdef import _build_jobpars_json
+        setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh'
+        config = {'simjob_setup': setup, 'desc': 'Demo',
+                  'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        pars = _build_jobpars_json(config, {'outfiles': {}})
+        self.assertEqual(pars['setup'], setup)
+        self.assertEqual(pars['code'], '')
+        self.assertNotIn('code_ref', pars)
+
+    def test_both_setup_and_code_rejected(self):
+        from utils.jobdef import _build_jobpars_json
+        config = {'simjob_setup': '/cvmfs/x/setup.sh', 'code': self.tarball,
+                  'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        with self.assertRaises(ValueError):
+            _build_jobpars_json(config, {'outfiles': {}})
+
+    def test_neither_setup_nor_code_rejected(self):
+        from utils.jobdef import _build_jobpars_json
+        config = {'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e'}
+        with self.assertRaises(ValueError):
+            _build_jobpars_json(config, {'outfiles': {}})
+
+
+class TestEntryCodeKey(unittest.TestCase):
+    """The entry carries the code tarball's absolute path; the cnf
+    carries only the relative setup and the digest."""
+
+    def test_code_of_returns_path(self):
+        from utils.jobdesc import code_of
+        self.assertEqual(code_of({'code': '/exp/build/Code.tar.bz2'}),
+                         '/exp/build/Code.tar.bz2')
+
+    def test_code_of_none_for_musing_entry(self):
+        from utils.jobdesc import code_of
+        self.assertIsNone(code_of({'tarball': 'cnf.mu2e.X.Run1Baq.0.tar'}))
+
+    def test_absolute_path_accepted(self):
+        from utils.jobdesc import validate_entry_value
+        validate_entry_value('code', '/exp/build/Code.tar.bz2')
+
+    def test_any_suffix_accepted(self):
+        # Content decides whether a tarball is usable (jobdef checks the
+        # bzip2 magic); the name must not.
+        from utils.jobdesc import validate_entry_value
+        validate_entry_value('code', '/exp/build/my-build.tbz')
+
+    def test_relative_path_rejected(self):
+        from utils.jobdesc import validate_entry_value
+        with self.assertRaises(ValueError) as ctx:
+            validate_entry_value('code', 'Code.tar.bz2')
+        self.assertIn('absolute', str(ctx.exception))
+
+    def test_non_string_rejected(self):
+        from utils.jobdesc import validate_entry_value
+        with self.assertRaises(ValueError):
+            validate_entry_value('code', 17)
+
+    def test_code_is_editable_on_a_live_campaign(self):
+        # A rebuilt tarball must be reachable without a new cnf.
+        from utils.submission_ledger import EDITABLE_ENTRY_KEYS
+        self.assertIn('code', EDITABLE_ENTRY_KEYS)
+
+
+class TestJson2JobdefCodeConfig(unittest.TestCase):
+
+    def test_exactly_one_of_setup_and_code(self):
+        from utils.json2jobdef import validate_required_fields
+        base = {'fcl': 'x.fcl', 'dsconf': 'Run1Baq', 'outloc': {'dts.*': 'disk'}}
+        with self.assertRaises(SystemExit):
+            validate_required_fields(dict(base))                    # neither
+        with self.assertRaises(SystemExit):
+            validate_required_fields(dict(base, simjob_setup='/cvmfs/s.sh',
+                                          code='/exp/Code.tar.bz2'))  # both
+        validate_required_fields(dict(base, simjob_setup='/cvmfs/s.sh'))
+        validate_required_fields(dict(base, code='/exp/Code.tar.bz2'))
+
+    def test_code_reaches_the_entry(self):
+        from utils.json2jobdef import build_jobdesc
+        config = {'code': '/exp/build/Code.tar.bz2', 'inloc': 'tape',
+                  'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e',
+                  'fcl': 'x.fcl', 'outloc': {}, 'njobs': 5}
+        entry = build_jobdesc(config)
+        self.assertEqual(entry['code'], '/exp/build/Code.tar.bz2')
+
+    def test_musing_entry_has_no_code_key(self):
+        from utils.json2jobdef import build_jobdesc
+        config = {'simjob_setup': '/cvmfs/s.sh', 'inloc': 'tape',
+                  'desc': 'Demo', 'dsconf': 'Run1Baq', 'owner': 'mu2e',
+                  'fcl': 'x.fcl', 'outloc': {}, 'njobs': 5}
+        self.assertNotIn('code', build_jobdesc(config))
+
+
+class TestBuildJobdefCodeModeReturnValue(unittest.TestCase):
+    """build_jobdef's diagnostic perl_commands dict must not KeyError on
+    a code-mode config (no simjob_setup). That dict is metadata for
+    test/parity_test.py's Perl comparison, which only runs in --setup
+    mode, so `None` is the truthful value for simjob_setup in code
+    mode -- not a placeholder and not the code path's own value."""
+
+    def test_code_mode_reaches_return_without_keyerror(self):
+        from unittest.mock import patch
+        from utils import json2jobdef
+        with patch.object(json2jobdef, 'write_fcl_template'), \
+             patch.object(json2jobdef, 'create_jobdef'), \
+             patch.object(json2jobdef, 'get_parfile_name',
+                          return_value='cnf.x.0.tar'), \
+             patch.object(json2jobdef, 'validate_output_filenames'):
+            cfg = {'desc': 'reco', 'dsconf': 'D', 'owner': 'mu2e',
+                   'code': '/exp/build/Code.tar.bz2', 'inloc': 'tape',
+                   'fcl': 'f.fcl', 'outloc': {'*.art': 'tape'}}
+            result = json2jobdef.build_jobdef(cfg, job_args=[])
+        entry = result['perl_commands'][0]
+        self.assertIsNone(entry['simjob_setup'])
+        self.assertIn('--code', entry['command'])
+
+
+class TestCommonIncludePrecedence(unittest.TestCase):
+    """A campaign default must never beat an entry that pins the key.
+
+    Reversed, `data/Run1B/common.json` would move the 42 frozen entries
+    (geom_run1_b_v01/v03/v06) onto v40 -- a job that runs to completion
+    and produces a wrong world, which is the failure this file exists to
+    make impossible. write_fcl_template owns the ordering so no caller
+    can get it wrong; dict order is not relied on."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, self.cwd)
+
+    def _write(self, overrides, **kwargs):
+        from utils.prod_utils import write_fcl_template
+        write_fcl_template('Production/JobConfig/mixing/Mix.fcl',
+                           overrides, **kwargs)
+        return Path('template.fcl').read_text().splitlines()
+
+    def test_common_include_precedes_the_entrys_own_keys(self):
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        lines = self._write({
+            COMMON_INCLUDE_KEY: ['Production/JobConfig/common/Run1B.fcl'],
+            'services.GeometryService.inputFile':
+                'Offline/Mu2eG4/geom/geom_run1_b_v06.txt',
+        })
+        common = lines.index('#include "Production/JobConfig/common/Run1B.fcl"')
+        pinned = [i for i, l in enumerate(lines) if 'geom_run1_b_v06' in l]
+        self.assertEqual(lines[0],
+                         '#include "Production/JobConfig/mixing/Mix.fcl"')
+        self.assertEqual(common, 1)
+        self.assertTrue(pinned and min(pinned) > common,
+                        'frozen v06 must be stated after the campaign default')
+        # The reserved key is a directive, never emitted as a FHiCL key.
+        self.assertNotIn(COMMON_INCLUDE_KEY, '\n'.join(lines))
+
+    def test_common_include_also_precedes_pre_lines(self):
+        """pre_lines carry the mixing pbeam include, which entries may
+        override. The campaign default sits below even that."""
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        lines = self._write(
+            {COMMON_INCLUDE_KEY: ['Production/JobConfig/common/Run1B.fcl']},
+            pre_lines=['#include "Production/JobConfig/mixing/OneBB.fcl"'])
+        self.assertLess(
+            lines.index('#include "Production/JobConfig/common/Run1B.fcl"'),
+            lines.index('#include "Production/JobConfig/mixing/OneBB.fcl"'))
+
+    def test_absent_key_writes_the_same_template_as_before(self):
+        lines = self._write({'services.GeometryService.inputFile': 'g.txt'})
+        self.assertEqual(lines, ['#include "Production/JobConfig/mixing/Mix.fcl"',
+                                 'services.GeometryService.inputFile: "g.txt"'])
+
+
+class TestCommonOverlayScope(unittest.TestCase):
+    """common.json states which stage files and which dsconf it covers.
+    Both filters are load-bearing: data/Run1B holds 15 MDC2025* entries
+    and three merge/ntuple stage files whose FCLs configure no
+    GeometryService."""
+
+    COMMON = {
+        'applies_to': ['mix.json'],
+        'dsconf_prefix': 'Run1B',
+        'fcl_overrides': {
+            '#include': ['Production/JobConfig/common/Run1B.fcl']},
+    }
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.json2jobdef = json2jobdef
+        self.dir = Path(tempfile.mkdtemp())
+        (self.dir / 'common.json').write_text(json.dumps(self.COMMON))
+
+    def _load(self, name, entries):
+        path = self.dir / name
+        path.write_text(json.dumps(entries))
+        return self.json2jobdef.load_json(path)
+
+    def _entry(self, dsconf='Run1Ban', **overrides):
+        return {'desc': 'Thing', 'dsconf': dsconf,
+                'fcl': 'Production/JobConfig/mixing/Mix.fcl',
+                'fcl_overrides': overrides}
+
+    def _includes(self, config):
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        return config['fcl_overrides'].get(COMMON_INCLUDE_KEY, [])
+
+    def test_listed_file_and_matching_dsconf_takes_the_default(self):
+        configs = self._load('mix.json', [self._entry()])
+        self.assertEqual(self._includes(configs[0]),
+                         ['Production/JobConfig/common/Run1B.fcl'])
+
+    def test_unlisted_stage_file_is_untouched(self):
+        configs = self._load('merge_filter.json', [self._entry()])
+        self.assertEqual(self._includes(configs[0]), [])
+
+    def test_foreign_dsconf_in_a_listed_file_is_untouched(self):
+        """data/Run1B/resampler_beam.json really does hold MDC2025ac and
+        MDC2025af entries; a Run1B geometry default there is wrong."""
+        configs = self._load('mix.json', [self._entry(dsconf='MDC2025ac')])
+        self.assertEqual(self._includes(configs[0]), [])
+
+    def test_entry_without_fcl_overrides_gets_the_key(self):
+        configs = self._load('mix.json', [{'desc': 'T', 'dsconf': 'Run1Ban',
+                                           'fcl': 'x.fcl'}])
+        self.assertEqual(self._includes(configs[0]),
+                         ['Production/JobConfig/common/Run1B.fcl'])
+
+    def test_pinned_key_survives_the_overlay(self):
+        pin = 'Offline/Mu2eG4/geom/geom_run1_b_v06.txt'
+        configs = self._load('mix.json', [self._entry(
+            **{'services.GeometryService.inputFile': pin})])
+        self.assertEqual(
+            configs[0]['fcl_overrides']['services.GeometryService.inputFile'],
+            pin)
+
+    def test_overlay_is_idempotent(self):
+        """Expansion can hand several expanded entries one dict; applying
+        the default twice must not stack duplicate includes."""
+        path = self.dir / 'mix.json'
+        path.write_text(json.dumps([self._entry()]))
+        configs = self.json2jobdef.load_json(path)
+        self.json2jobdef.apply_common_overlay(configs, path)
+        self.assertEqual(self._includes(configs[0]),
+                         ['Production/JobConfig/common/Run1B.fcl'])
+
+    def test_directory_without_common_json_is_untouched(self):
+        (self.dir / 'common.json').unlink()
+        configs = self._load('mix.json', [self._entry()])
+        self.assertEqual(self._includes(configs[0]), [])
+
+
+class TestCommonPlainKeyDefaults(unittest.TestCase):
+    """common.json may state its defaults as plain keys instead of an
+    include -- what a campaign uses while its FCL is still an unmerged
+    Production PR, since including a FCL that does not exist aborts every
+    build in fhicl-get and no entry-level override can suppress it.
+
+    Plain keys carry the same direction as the include: applied only where
+    the entry is silent, so a pinned entry still wins."""
+
+    COMMON = {
+        'applies_to': ['mix.json'],
+        'dsconf_prefix': 'Run1B',
+        'fcl_overrides': {
+            'services.GeometryService.inputFile':
+                'Offline/Mu2eG4/geom/geom_run1_b_v40.txt',
+            'services.GeometryService.bFieldFile':
+                'Offline/Mu2eG4/geom/bfgeom_DSOff.txt'},
+    }
+    GEO = 'services.GeometryService.inputFile'
+    BF = 'services.GeometryService.bFieldFile'
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.json2jobdef = json2jobdef
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        (self.dir / 'common.json').write_text(json.dumps(self.COMMON))
+
+    def _load(self, entries):
+        path = self.dir / 'mix.json'
+        path.write_text(json.dumps(entries))
+        return self.json2jobdef.load_json(path)
+
+    def _entry(self, dsconf='Run1Ban', **overrides):
+        return {'desc': 'Thing', 'dsconf': dsconf,
+                'fcl': 'Production/JobConfig/mixing/Mix.fcl',
+                'fcl_overrides': overrides}
+
+    def test_silent_entry_takes_the_default(self):
+        ov = self._load([self._entry()])[0]['fcl_overrides']
+        self.assertEqual(ov[self.GEO],
+                         'Offline/Mu2eG4/geom/geom_run1_b_v40.txt')
+        self.assertEqual(ov[self.BF], 'Offline/Mu2eG4/geom/bfgeom_DSOff.txt')
+
+    def test_pinned_entry_keeps_its_own_value(self):
+        """The whole safety property: a frozen entry on v06 must not be
+        moved onto v40 by the campaign default."""
+        pinned = {self.GEO: 'Offline/Mu2eG4/geom/geom_run1_b_v06.txt'}
+        ov = self._load([self._entry(**pinned)])[0]['fcl_overrides']
+        self.assertEqual(ov[self.GEO],
+                         'Offline/Mu2eG4/geom/geom_run1_b_v06.txt')
+        # The key it left silent still takes the default.
+        self.assertEqual(ov[self.BF], 'Offline/Mu2eG4/geom/bfgeom_DSOff.txt')
+
+    def test_out_of_scope_dsconf_is_untouched(self):
+        ov = self._load([self._entry(dsconf='MDC2025au')])[0]['fcl_overrides']
+        self.assertNotIn(self.GEO, ov)
+        self.assertNotIn(self.BF, ov)
+
+    def test_no_reserved_include_key_is_emitted(self):
+        """With no '#include' in common.json the reserved key must not
+        appear at all -- an empty one would write a stray blank include."""
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        ov = self._load([self._entry()])[0]['fcl_overrides']
+        self.assertNotIn(COMMON_INCLUDE_KEY, ov)
+
+
+class TestRun1BCommonJson(unittest.TestCase):
+    """Pins the shipped data/Run1B/common.json against the two mistakes
+    that would make it dangerous."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def setUp(self):
+        self.common = json.loads(
+            (self.ROOT / 'data/Run1B/common.json').read_text())
+
+    def test_merge_and_ntuple_stages_are_excluded(self):
+        """artcat.fcl and the EventNtuple FCLs configure no
+        GeometryService; a detector default there is meaningless at best."""
+        for name in ('merge_filter.json', 'merge_beam_pileup.json',
+                     'evntuple.json'):
+            self.assertNotIn(name, self.common['applies_to'])
+
+    def test_every_listed_file_exists(self):
+        for name in self.common['applies_to']:
+            self.assertTrue((self.ROOT / 'data/Run1B' / name).exists(), name)
+
+    def test_no_covered_entry_leaves_the_detector_keys_implicit(self):
+        """The default must be redundant everywhere it lands, so adding it
+        changes no job. An entry that states neither key inherits one from
+        its base FCL's epilog (pileup/epilog.fcl sets bfgeom_no_tsu_ps_v01,
+        beam/POT.fcl sets bfgeom_no_ds_v01) and WOULD change -- six entries
+        did, until they were pinned. A new such entry must be pinned too,
+        or removed from applies_to."""
+        prefix = self.common['dsconf_prefix']
+        implicit = []
+        for name in self.common['applies_to']:
+            for entry in json.loads(
+                    (self.ROOT / 'data/Run1B' / name).read_text()):
+                dsconf = entry.get('dsconf')
+                dsconf = dsconf[0] if isinstance(dsconf, list) else dsconf
+                if not str(dsconf or '').startswith(prefix):
+                    continue
+                ov = entry.get('fcl_overrides') or {}
+                ov = ov[0] if isinstance(ov, list) and ov else ov
+                stated = set(ov) | ({'#include'} if '#include' in ov else set())
+                if 'services.GeometryService.bFieldFile' in stated:
+                    continue
+                # An entry may instead pull the field in via its own include
+                # (stage1's Run1Bai POT_Run1_b uses beam/epilog_1b.fcl).
+                if '#include' in ov:
+                    continue
+                implicit.append(f"{name}:{entry.get('desc')}/{dsconf}")
+        self.assertEqual(implicit, [], 'entries inheriting bFieldFile')
 
 
 # ---------------------------------------------------------------------------

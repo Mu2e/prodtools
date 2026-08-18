@@ -19,7 +19,8 @@ from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
 from utils.jobdesc import (
-    RESOURCE_KEYS, firstjob_of, validate_entry_value, validate_outloc,
+    ENTRY_VALUE_KEYS, RESOURCE_KEYS, firstjob_of, validate_entry_value,
+    validate_outloc,
     validate_window)
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
@@ -141,6 +142,19 @@ def _split_text_file_input(config):
     config.setdefault('sequencer_from_index', True)
 
 
+def _is_dir_inloc(config):
+    """True if `config['inloc']` is the local-dir shape (`dir:<path>`).
+
+    For that shape, `input_data` keys are bare file basenames written
+    verbatim by `_create_inputs_file` (see its docstring below) — never SAM
+    dataset names — so any SAM-dataset-name lookup keyed off the first
+    `input_data` entry (e.g. resampler MaxEventsToSkip auto-computation)
+    must be skipped rather than attempted.
+    """
+    inloc = config.get('inloc', '')
+    return isinstance(inloc, str) and inloc.startswith('dir:')
+
+
 def _create_inputs_file(config, exclude_files=None):
     """Helper: create inputs.txt file from datasets with merge factors.
 
@@ -194,8 +208,7 @@ def _create_inputs_file(config, exclude_files=None):
     # inputs that aren't in SAM:
     #     "inloc": "dir:/cvmfs/.../DataFiles/PBI/",
     #     "input_data": {"PBI_Normal_33344.txt": 1}
-    inloc = config.get('inloc', '')
-    if isinstance(inloc, str) and inloc.startswith('dir:'):
+    if _is_dir_inloc(config):
         with open('inputs.txt', 'w') as f:
             for key in input_data.keys():
                 f.write(key + '\n')
@@ -334,10 +347,15 @@ def validate_required_fields(config):
     (process_single_entry defaults it to 'none'), and the resource keys
     usually come from CLI flags instead.
     """
-    for req in ('simjob_setup', 'fcl', 'dsconf', 'outloc'):
+    for req in ('fcl', 'dsconf', 'outloc'):
         if not config.get(req):
             sys.exit(f"Missing required field: {req}")
-    for key in ('inloc',) + RESOURCE_KEYS:
+    # Exactly one source of Offline, the same rule mu2ejobdef enforces:
+    # a /cvmfs Musing setup script, or a code tarball that travels with
+    # the job. Both would be ambiguous; neither cannot run.
+    if bool(config.get('simjob_setup')) == bool(config.get('code')):
+        sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
+    for key in ENTRY_VALUE_KEYS:
         if key in config:
             try:
                 validate_entry_value(key, config[key])
@@ -383,9 +401,13 @@ def build_jobdef(config, job_args):
     job_type = determine_job_type(config)
 
     if job_type != 'mixing':
-        # Resampler MaxEventsToSkip goes after the overrides (last wins)
+        # Resampler MaxEventsToSkip goes after the overrides (last wins).
+        # Skipped for dir:-inloc resamplers: _build_job_args never computes
+        # `_max_events_to_skip` for them (no SAM dataset to query — see
+        # _is_dir_inloc), so there is nothing to emit here, and the entry's
+        # own fcl_overrides (or the base FCL's) stands undisturbed.
         post_lines = []
-        if job_type == 'resampler':
+        if job_type == 'resampler' and not _is_dir_inloc(config):
             post_lines.append(
                 f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {config['_max_events_to_skip']}")
         write_fcl_template(fcl_path, config.get('fcl_overrides', {}),
@@ -396,7 +418,8 @@ def build_jobdef(config, job_args):
     # result['perl_commands'] to run the Perl mu2ejobdef comparison.
     cmd_parts = [
         'mu2ejobdef',
-        '--setup', config['simjob_setup'],
+        '--setup' if config.get('simjob_setup') else '--code',
+        config.get('simjob_setup') or config['code'],
         '--dsconf', config['dsconf'],
         '--desc', config['desc'],
         '--dsowner', config['owner']
@@ -440,7 +463,7 @@ def build_jobdef(config, job_args):
                 'type': 'mu2ejobdef',
                 'command': ' '.join(cmd_parts),
                 'desc': config['desc'],
-                'simjob_setup': config['simjob_setup']
+                'simjob_setup': config.get('simjob_setup')
             }
         ]
     }
@@ -483,6 +506,12 @@ def build_jobdesc(config):
     for key in ('input_pattern', 'prestage'):
         if key in config:
             jobdef_entry[key] = config[key]
+
+    # The code tarball's path travels on the entry, not in the cnf: the
+    # submit path reads it via jobdesc.code_of to add jobsub's
+    # --tar_file_name, and the snapshot is what later slices reuse.
+    if config.get('code'):
+        jobdef_entry['code'] = config['code']
 
     # A draining entry is defined by having an input_pattern and NO index
     # space. Emitting both would leave the entry self-contradictory --
@@ -609,11 +638,17 @@ def _build_job_args(config):
     job_type = determine_job_type(config)
 
     if job_type == 'resampler':
-        first_dataset = normalize_input_data(config['input_data'])[0].source
-        try:
-            config['_max_events_to_skip'] = max_events_to_skip(first_dataset)
-        except Exception as e:
-            print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+        # dir:-inloc resamplers key input_data by bare file basenames, not
+        # SAM dataset names (see _is_dir_inloc) — there is no dataset to
+        # query, so skip the auto-computation entirely rather than feeding
+        # a basename into a SAM dataset-definition lookup that can only
+        # fail. build_jobdef mirrors this guard when emitting post_lines.
+        if not _is_dir_inloc(config):
+            first_dataset = normalize_input_data(config['input_data'])[0].source
+            try:
+                config['_max_events_to_skip'] = max_events_to_skip(first_dataset)
+            except Exception as e:
+                print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
         merge_factor = calculate_merge_factor(config)
         return ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
 
@@ -775,17 +810,103 @@ def is_already_expanded(configs):
     # If no configs have lists, they're all already expanded
     return True
 
+#: Campaign-wide defaults, read from this file beside the stage files.
+COMMON_JSON = 'common.json'
+
+def _override_dicts(config):
+    """Every fcl_overrides dict on an entry, creating one if absent.
+    Expansion normally collapses the list-wrapped mixing shape `[{...}]`
+    to a dict, but is_already_expanded can hand back a raw config."""
+    overrides = config.setdefault('fcl_overrides', {})
+    if isinstance(overrides, list):
+        return [o for o in overrides if isinstance(o, dict)]
+    return [overrides]
+
+def apply_common_overlay(configs, json_path):
+    """Overlay `<campaign>/common.json` onto the entries `json_path` loaded.
+
+    The overlay is a DEFAULT, not an override: its includes go to
+    COMMON_INCLUDE_KEY, which write_fcl_template emits before everything
+    else, so an entry that pins a value still wins. That direction is the
+    whole safety property — reversed, the campaign default would move the
+    42 frozen Run1B entries (v01/v03/v06) onto the current geometry.
+
+    common.json may state the defaults two ways, and both carry that same
+    direction:
+
+      '#include'   a FCL holding the settings. Preferred once the FCL
+                   exists — one file states the campaign, and Production
+                   owns it.
+      plain keys   the settings written out. Applied only where the entry
+                   does not already state the key, which is what makes
+                   them a default; dict order never decides the outcome,
+                   so these need no reserved position in the writer.
+
+    Plain keys are what a campaign uses while its FCL is still an unmerged
+    Production PR — the include would abort every build in the campaign
+    with a fhicl search_path error, and no entry-level override can
+    suppress an include.
+
+    common.json states its own scope, because a campaign directory is not
+    uniform:
+
+      applies_to     stage files it covers. Merge, catalog and ntuple
+                     stages are left out — artcat.fcl configures no
+                     GeometryService, and a geometry default there would
+                     construct a service the job has no use for.
+      dsconf_prefix  optional dsconf filter. data/Run1B holds 15 MDC2025*
+                     entries that must not take a Run1B default.
+
+    A default is only safe where it is redundant. Before listing a stage
+    file here, check every entry it holds that leaves a key to the base
+    FCL's own epilog: those take the default and change. `pileup/epilog.fcl`
+    sets bfgeom_no_tsu_ps_v01 and `beam/POT.fcl` sets bfgeom_no_ds_v01, so
+    six Run1B entries had to pin their inherited value explicitly first.
+    """
+    common_path = json_path.parent / COMMON_JSON
+    if json_path.name == COMMON_JSON or not common_path.exists():
+        return configs
+
+    common = json.loads(common_path.read_text())
+    if json_path.name not in common.get('applies_to', []):
+        return configs
+
+    common_overrides = common.get('fcl_overrides', {})
+    includes = common_overrides.get('#include', [])
+    defaults = {k: v for k, v in common_overrides.items() if k != '#include'}
+    if not includes and not defaults:
+        return configs
+    prefix = common.get('dsconf_prefix')
+
+    for config in configs:
+        dsconf = config.get('dsconf')
+        if isinstance(dsconf, list):
+            dsconf = dsconf[0] if dsconf else None
+        if prefix and not str(dsconf or '').startswith(prefix):
+            continue
+        for overrides in _override_dicts(config):
+            # Idempotent: expansion may hand several entries one dict.
+            kept = [i for i in overrides.get(COMMON_INCLUDE_KEY, [])
+                    if i not in includes]
+            if includes:
+                overrides[COMMON_INCLUDE_KEY] = list(includes) + kept
+            # setdefault, never assignment: an entry that states the key
+            # keeps its own value, the same way it beats the include.
+            for key, val in defaults.items():
+                overrides.setdefault(key, val)
+    return configs
+
 def load_json(json_path):
     """Load and expand JSON configuration if needed"""
     json_text = json_path.read_text()
     configs = json.loads(json_text)
-    
+
     # Check if expansion is needed
-    if is_already_expanded(configs):
-        return configs
-    
-    # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
-    return expand_configs(configs)
+    if not is_already_expanded(configs):
+        # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
+        configs = expand_configs(configs)
+
+    return apply_common_overlay(configs, json_path)
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):
     """Find a matching JSON entry from configuration list"""

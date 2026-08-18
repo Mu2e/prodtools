@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "Campaign-wide defaults for Run1B, applied by json2jobdef.load_json to",
+    "every entry the listed stage files contribute. The includes land ahead",
+    "of the entry's own overrides, so an entry that pins a value still wins:",
+    "the 42 frozen entries on geom_run1_b_v01/v03/v06 keep their geometry.",
+    "",
+    "applies_to leaves out merge_filter, merge_beam_pileup and evntuple.",
+    "Those run artcat.fcl and the ntuple FCLs, which configure no",
+    "GeometryService at all -- a geometry default there would construct a",
+    "service the job has no use for.",
+    "",
+    "dsconf_prefix is load-bearing: data/Run1B also holds 15 MDC2025*",
+    "entries, which must not take a Run1B detector configuration.",
+    "",
+    "The two keys below are stated inline because the FCL that holds them,",
+    "Production/JobConfig/common/Run1B.fcl, is Mu2e/Production#569 and is",
+    "not in any Musing yet. Including a FCL that does not exist aborts every",
+    "Run1B build in fhicl-get with a search_path error, and an entry-level",
+    "override cannot suppress an include. The values here are #569's file",
+    "verbatim. When it merges, replace them with:",
+    "",
+    "  \"#include\": [\"Production/JobConfig/common/Run1B.fcl\"]"
+  ],
+  "applies_to": [
+    "digi.json",
+    "mix.json",
+    "primary_muon.json",
+    "reco.json",
+    "resampler_beam.json",
+    "resampler_beam_mixing.json",
+    "resampler_stm.json",
+    "stage1.json"
+  ],
+  "dsconf_prefix": "Run1B",
+  "fcl_overrides": {
+    "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+  }
+}

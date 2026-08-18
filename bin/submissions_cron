@@ -7,13 +7,21 @@
 #   1. locking — handled inside `submissions run` itself (a per-DB
 #      lockfile beside the DB, held for the process lifetime); an
 #      overlapping run exits 1 with a "another submissions run holds
-#      ..." message rather than double-submitting (same nonzero class
-#      as the token gate — read the log line to tell them apart).
+#      ..." message rather than double-submitting.
 #   2. Mu2e env (quiet; failures still surface via the python run)
-#   3. token gate — no valid bearer token -> report and exit non-zero.
-#      NEVER fetch or refresh a token here (standing rule: token
-#      problems are reported, not remediated).
-#   4. submissions run, appended to a dated log beside the DB
+#   3. submissions run, appended to a dated log beside the DB
+#
+# There is deliberately NO token pre-check. mu2epro's own hourly
+# cron/tokens.sh stores its bearer token as
+# /tmp/bt_token_mu2e_production_<uid> (jobsub_lite's naming), which is
+# none of the three places `httokendecode` looks by default
+# ($BEARER_TOKEN_FILE, $XDG_RUNTIME_DIR/bt_u<uid>, /tmp/bt_u<uid>).
+# A gate on it therefore fails while a valid token is present, and
+# under `set -e` that silently turns every tick into a no-op. The
+# submitting steps authenticate for themselves and fail loudly with a
+# real message, which is the honest place for the error to appear.
+# NEVER fetch or refresh a token here either way: token problems are
+# reported, not remediated.
 set -e
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,9 +33,5 @@ LOG="$DBDIR/submissions-$(date +%Y%m%d).log"
     echo "=== submissions_cron $(date -u +%FT%TZ) ==="
     source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh >/dev/null 2>&1 || true
     muse setup ops >/dev/null 2>&1 || true
-    if ! httokendecode >/dev/null 2>&1; then
-        echo "ERROR: no valid bearer token — not submitting, not remediating."
-        exit 1
-    fi
     python3 "$REPO/utils/submissions.py" --db "$DB" run
 } >>"$LOG" 2>&1

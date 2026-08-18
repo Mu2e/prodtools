@@ -44,22 +44,22 @@
         "sequential_aux": true
     },
     {
-        "desc": "STMBeamToVDTarget",
-        "dsconf": "MDC2025ai",
+        "desc": "STM1809ToVD",
+        "dsconf": "MDC2025au",
         "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD1809.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
-            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025ai.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025ai.sequence.art"
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025au.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025au.sequence.art"
         },
         "resampler_name": "TargetStopResampler",
         "input_data": {"sim.mu2e.TargetStopsCat.MDC2025ac.art": 1},
         "njobs": 4000,
         "events": 1000000,
         "run": 1430,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh",
         "owner": "mu2e",
-        "inloc": "resilient",
+        "inloc": "tape",
         "outloc": {
             "*.art": "disk"
         },
@@ -67,21 +67,21 @@
     },
     {
         "desc": "STMNeutralsToVD",
-        "dsconf": "MDC2025ai",
+        "dsconf": "MDC2025av",
         "fcl": "Production/JobConfig/pileup/STM/NeutralsTo2VD.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
-            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025ai.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025ai.sequence.art"
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.MDC2025av.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.MDC2025av.sequence.art"
         },
         "resampler_name": "neutralsResampler",
         "input_data": {"sim.mu2e.NeutralsCat.MDC2025ab.art": 1},
         "njobs": 20000,
         "events": 100000,
         "run": 1430,
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ai/setup.sh",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025av/setup.sh",
         "owner": "mu2e",
-        "inloc": "resilient",
+        "inloc": "tape",
         "outloc": {
             "*.art": "disk"
         },

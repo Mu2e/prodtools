@@ -217,12 +217,20 @@ def build_jobsub_argv(
     singularity_image=None,
     mu2e_setup=None,
     extra_jobsub_args=None,
+    code_tarball=None,
 ):
     """Build the full `jobsub_submit` argv (without the `jobsub_submit`
     command itself) for direct-mode submission.
 
     All path arguments are absolute paths on the submitter's filesystem.
     `-f dropbox://<path>` ships them to the worker under `$CONDOR_DIR_INPUT`.
+
+    `code_tarball`, when set, is an absolute path to a `muse tarball`
+    Code.tar.bz2. It rides `--tar_file_name dropbox://`, NOT `-f
+    dropbox://`: jobsub publishes it to RCDS/cvmfs once, deduplicated by
+    content, and the worker sees the unpacked tree at
+    $INPUT_TAR_DIR_LOCAL. `-f` transfers per job, which a ~1 GB build
+    tree cannot afford. Same split mu2eprodsys uses (mu2eprodsys:474).
     """
     if role is None:
         role = role_for_user(submitter)
@@ -274,6 +282,8 @@ def build_jobsub_argv(
     argv.extend(["-f", f"dropbox://{ops_json_path}"])
     argv.extend(["-f", f"dropbox://{jobdef_path}"])
     argv.extend(["-f", f"dropbox://{prodtools_tar_path}"])
+    if code_tarball:
+        argv.extend(["--tar_file_name", f"dropbox://{code_tarball}"])
     if extra_jobsub_args:
         argv.extend(extra_jobsub_args)
     argv.append(f"file://{worker_script_path}")

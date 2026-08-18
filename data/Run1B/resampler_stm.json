@@ -5,11 +5,14 @@
         "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
             "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
         },
         "resampler_name": "beamResampler",
-        "input_data": {"sim.mu2e.EleBeamCat.Run1Bai.art": 1},
+        "input_data": {
+            "sim.mu2e.EleBeamCat.Run1Bai.art": 1
+        },
         "njobs": 5000,
         "events": 200000,
         "run": 1470,
@@ -27,11 +30,14 @@
         "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
             "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
         },
         "resampler_name": "beamResampler",
-        "input_data": {"sim.mu2e.MuBeamCat.Run1Bai.art": 1},
+        "input_data": {
+            "sim.mu2e.MuBeamCat.Run1Bai.art": 1
+        },
         "njobs": 5000,
         "events": 200000,
         "run": 1470,
@@ -49,15 +55,93 @@
         "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD1809.fcl",
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
             "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
         },
         "resampler_name": "TargetStopResampler",
-        "input_data": {"sim.mu2e.TargetStopsCat.Run1Ban-001.art": 1},
+        "input_data": {
+            "sim.mu2e.TargetStopsCat.Run1Ban-001.art": 1
+        },
         "njobs": 5000,
         "events": 200000,
         "run": 1470,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Ban/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "STMBeamToVDEle",
+        "dsconf": "Run1Baq",
+        "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Baq.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Baq.sequence.art"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {
+            "sim.mu2e.EleBeamCat.Run1Bai.art": 1
+        },
+        "njobs": 5000,
+        "events": 200000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "STMBeamToVDMu",
+        "dsconf": "Run1Baq",
+        "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Baq.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Baq.sequence.art"
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {
+            "sim.mu2e.MuBeamCat.Run1Bai.art": 1
+        },
+        "njobs": 5000,
+        "events": 200000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "STM1809ToVD",
+        "dsconf": "Run1Baq",
+        "fcl": "Production/JobConfig/pileup/STM/BeamTo2VD1809.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+            "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Baq.sequence.art",
+            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Baq.sequence.art"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.TargetStopsCat.Run1Ban-001.art": 1
+        },
+        "njobs": 4000,
+        "events": 1000000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh",
         "owner": "mu2e",
         "inloc": "tape",
         "outloc": {

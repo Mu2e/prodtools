@@ -66,6 +66,21 @@ def inloc_of(entry: dict, default: str = "none") -> str:
     return entry.get("inloc", default)
 
 
+def code_of(entry, default=None):
+    """Absolute path to this entry's code tarball, or `default`.
+
+    Present only on an entry built from a `--code` config. Its absence
+    means the ordinary case: the cnf names a /cvmfs Musing setup and no
+    tarball travels with the job.
+
+    The path lives on the ENTRY rather than in the cnf because a tarball
+    can be moved or rebuilt, and because the entry snapshot is what
+    later slices and recoveries read. The cnf keeps the digest instead,
+    which is what actually has to stay true.
+    """
+    return entry.get('code', default)
+
+
 def firstjob_of(entry: dict) -> int:
     """Return the entry's cnf-index window start (default 0).
 
@@ -109,6 +124,14 @@ def validate_window(firstjob: int, njobs: Optional[int], capacity: Optional[int]
 
 
 RESOURCE_KEYS = ('memory', 'disk', 'expected_lifetime')
+
+# Every entry key whose VALUE validate_entry_value knows how to check.
+# Single home, derived by all three boundaries that validate an entry:
+# json2jobdef (a campaign is born), submit.enqueue_entry (the safety net
+# before a campaign is created), and submission_ledger (a live campaign
+# is edited). Three restatements is how `code` reached two of them and
+# not the third.
+ENTRY_VALUE_KEYS = ('inloc', 'code') + RESOURCE_KEYS
 
 
 def resources_of(entry: dict) -> dict:
@@ -190,10 +213,10 @@ def validate_entry_value(key, value):
     worse, as a SILENT SAM fallback for a misspelled inloc, which reads
     as a working campaign with the wrong provenance.
 
-    Keys other than the four it knows are ignored, not rejected: an
+    Keys other than the ones it knows are ignored, not rejected: an
     entry legitimately carries tarball, outputs, njobs and friends.
     """
-    if key not in ('inloc',) + RESOURCE_KEYS:
+    if key not in ('inloc', 'code') + RESOURCE_KEYS:
         return
     if not isinstance(value, str):
         raise ValueError(f"{key} must be a string, got {value!r}")
@@ -211,3 +234,12 @@ def validate_entry_value(key, value):
             raise ValueError(
                 f"inloc must be one of {', '.join(INLOC_SIMPLE)} or "
                 f"'dir:/<absolute path>', got {value!r}")
+    elif key == 'code':
+        # Absolute only: the submit host and the local runner resolve
+        # this path from different working directories, and a relative
+        # one would silently mean different files to each.
+        # No suffix rule — jobdef.validate_code_tarball checks the bzip2
+        # magic, so a correctly built tarball is usable under any name.
+        if not value.startswith('/'):
+            raise ValueError(
+                f"code must be an absolute path, got {value!r}")

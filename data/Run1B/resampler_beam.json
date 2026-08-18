@@ -87,6 +87,10 @@
         "desc": "PiTargetStops",
         "dsconf": "Run1Bai",
         "fcl": "Production/JobConfig/pileup/PiBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
         "resampler_name": "beamResampler",
         "input_data": {"sim.mu2e.PiBeamCat.Run1Bah.art": 1},
         "inloc": "tape",
@@ -136,6 +140,10 @@
         "desc": "RPCExternalPhysical",
         "dsconf": "Run1Bah",
         "fcl": "Production/JobConfig/primary/RPCExternalPhysical.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v01.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
         "resampler_name": "TargetPiStopResampler",
         "input_data": {"sim.mu2e.PhysicalPionStops.Run1Bah.art": 1},
         "njobs": 5000,

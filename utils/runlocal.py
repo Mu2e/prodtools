@@ -31,11 +31,14 @@ no second index space to confuse it with.
 """
 
 import argparse
+import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
+import tarfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -44,6 +47,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.jobdesc import OUTSTAGE_LOCATION
+from utils.job_common import OUTPUT_TIERS
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import _fetch_file_local
 from utils.runmu2e import (
@@ -57,9 +61,20 @@ from utils.runmu2e import (
 DEFAULT_PARALLEL = 4
 GB_PER_JOB = 2.5
 
-# Same tier whitelist job_outputs() uses to tell a real output file from
-# a sink like /dev/null.
-_OUTPUT_TIERS = ('dts.', 'dig.', 'sim.', 'rec.', 'mcs.', 'nts.', 'cnf.')
+# Per-job wall clock. 24h matches the grid's default lease, so a local
+# run refuses to keep a job alive past the point where its grid twin
+# would already have been killed. A wedged mu2e is not rare and does not
+# announce itself: an I/O-stalled job has sat at flat CPU for 75 minutes
+# while its wall clock reached 23 hours.
+DEFAULT_TIMEOUT = 24 * 3600
+# What a job that hit the limit reports. 124 is GNU timeout's value; the
+# summary also carries an explicit `timed_out` so no caller has to know
+# that convention.
+TIMEOUT_RC = 124
+# Between SIGTERM and SIGKILL. art traps SIGTERM to close its output
+# files; a job killed outright leaves a truncated .art behind that looks
+# like a real one.
+KILL_GRACE_SECONDS = 10
 
 
 def output_globs(tarball):
@@ -77,13 +92,13 @@ def output_globs(tarball):
     for name in jp.job_outputs(0, override_desc='*', override_seq='*').values():
         # job_outputs passes non-file targets (a `/dev/null` sink)
         # through untouched; only real datasets are worth globbing for.
-        if not name.startswith(_OUTPUT_TIERS) or name in globs:
+        if not name.startswith(OUTPUT_TIERS) or name in globs:
             continue
         globs.append(name)
     return globs
 
 
-def parse_indices(spec):
+def parse_index_spec(spec):
     """`'0,3,7-9'` -> `[0, 3, 7, 8, 9]`, sorted and deduplicated.
 
     Ranges are inclusive at both ends, matching how a recovery list
@@ -108,7 +123,7 @@ def parse_indices(spec):
 
 
 def format_indices(indices):
-    """The inverse of `parse_indices`, collapsing runs back to `A-B`.
+    """The inverse of `parse_index_spec`, collapsing runs back to `A-B`.
 
     Children and rerun lines carry this, so a 200-index window does
     not become a 200-token argv.
@@ -139,7 +154,7 @@ def resolve_indices(args):
         if args.first is not None or args.num is not None:
             raise ValueError("--indices and --first/--num are alternatives; "
                              "pass one or the other")
-        return parse_indices(args.indices)
+        return parse_index_spec(args.indices)
     first = 0 if args.first is None else args.first
     num = 1 if args.num is None else args.num
     if first < 0:
@@ -197,18 +212,25 @@ def child_argv(index, args):
         argv.append(f'--mu2e-options={args.mu2e_options}')
     if args.copy_input:
         argv.append('--copy-input')
+    if getattr(args, 'code_root', None):
+        # Children get the already-unpacked directory, never --code:
+        # one unpack serves all of them, and the printed command must
+        # reproduce the job without redoing several GB of extraction.
+        argv.extend(['--code-root', args.code_root])
     return argv
 
 
 class JobResult:
     """One finished job: what ran, how it ended, what it left behind."""
 
-    def __init__(self, index, rc, seconds, directory, outputs):
+    def __init__(self, index, rc, seconds, directory, outputs,
+                 timed_out=False):
         self.index = index
         self.rc = rc
         self.seconds = seconds
         self.directory = directory
         self.outputs = outputs
+        self.timed_out = timed_out
 
     @property
     def ok(self):
@@ -231,20 +253,74 @@ def child_env():
             if key != 'MUSE_WORK_DIR'}
 
 
+def kill_job(proc, log=None):
+    """End a job: SIGTERM its process group, SIGKILL what survives.
+
+    The GROUP, not the process. The child is a re-exec of this module and
+    the `mu2e` it launches is a grandchild, so signalling only the direct
+    child would leave a wedged mu2e running with nothing left to reap it
+    — the exact runaway a timeout exists to end. `start_new_session` in
+    the launcher is what makes the child's pid its group id.
+    """
+    if proc.pid is None or proc.pid <= 1:
+        # killpg(0) signals the CALLER's process group — this driver and
+        # every other job it is running. A pid that low means something
+        # is already wrong; refuse rather than take the node down.
+        raise ValueError(f"runlocal: refusing to signal process group "
+                         f"{proc.pid}")
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            if log:
+                log.write(f"[local] could not signal job group: {exc}\n")
+            break
+        try:
+            proc.wait(timeout=KILL_GRACE_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    # Reap whatever is left, so the driver never exits over a zombie.
+    proc.wait()
+
+
 def _run_child(index, args, globs):
-    """Launch one job in its own directory, capturing its output."""
+    """Launch one job in its own directory, capturing its output.
+
+    A job that outlives `args.timeout` is killed and reported as
+    `TIMEOUT_RC`; the rest of the window keeps running, exactly as it
+    does around an ordinary failure. Without that, one wedged job holds
+    the driver open forever and no summary is ever written — the case a
+    scripted caller cannot distinguish from a machine that is simply
+    still busy.
+    """
     directory = job_dir(args.workdir, index)
     directory.mkdir(parents=True, exist_ok=True)
     argv = child_argv(index, args)
     start = time.time()
+    timed_out = False
     with open(directory / 'stdout.log', 'w') as log:
         log.write(shlex.join(argv) + '\n')
         log.flush()
-        rc = subprocess.run(argv, cwd=str(directory), env=child_env(),
-                            stdout=log, stderr=subprocess.STDOUT).returncode
+        # start_new_session so the job owns a process group of its own:
+        # see kill_job. Popen rather than subprocess.run(timeout=)
+        # for the same reason — run() kills only the direct child.
+        proc = subprocess.Popen(argv, cwd=str(directory), env=child_env(),
+                                stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        try:
+            # 0 means no limit; None is how Popen.wait spells that.
+            rc = proc.wait(timeout=args.timeout or None)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            log.write(f"\n[local] killed after {args.timeout:g}s "
+                      f"(--timeout), reported as rc={TIMEOUT_RC}\n")
+            log.flush()
+            kill_job(proc, log)
+            rc = TIMEOUT_RC
     elapsed = time.time() - start
     produced = sorted(p.name for g in globs for p in directory.glob(g))
-    return JobResult(index, rc, elapsed, directory, produced)
+    return JobResult(index, rc, elapsed, directory, produced, timed_out)
 
 
 def drive(args):
@@ -270,11 +346,73 @@ def drive(args):
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
-            state = 'ok  ' if result.ok else f'FAIL({result.rc})'
+            if result.ok:
+                state = 'ok  '
+            elif result.timed_out:
+                state = 'TIMEOUT'
+            else:
+                state = f'FAIL({result.rc})'
             print(f"[local] index {result.index}: {state} "
                   f"{result.seconds:.0f}s  {len(result.outputs)} output(s)")
 
-    return report(results, args)
+    code = report(results, args)
+    if args.json:
+        # After report, and never conditioned on `code`: the run a caller
+        # most needs this file for is the partial one, where some jobs
+        # failed and the exit code is 1.
+        write_summary(args.json, results, args)
+    return code
+
+
+def summary(results, args):
+    """The run's facts as plain data, for a reader that is not a person.
+
+    Output paths are absolute here even though `JobResult` stores bare
+    names: a caller chaining stages hands these to the next command, and
+    should not have to know this module's directory layout to do it.
+
+    `failed` names the indices, not just a count. A caller that measures
+    a rate divides by the jobs that actually produced output; the process
+    exit code cannot tell 7-of-8 from 3-of-8, and dividing by the wrong
+    denominator is silent.
+
+    A failed job's `outputs` are still listed, because the files are
+    really there — but they are whatever art had written when it died,
+    and a killed job's last file is routinely a partial one. Consume
+    outputs from jobs NOT in `failed`.
+    """
+    ordered = sorted(results, key=lambda r: r.index)
+    return {
+        'jobdef': str(args.jobdef),
+        'workdir': str(args.workdir),
+        'jobs': [{'index': r.index,
+                  'rc': r.rc,
+                  'timed_out': r.timed_out,
+                  'seconds': round(r.seconds, 1),
+                  'dir': str(r.directory),
+                  'log': str(Path(r.directory) / 'stdout.log'),
+                  'outputs': [str(Path(r.directory) / name)
+                              for name in r.outputs]}
+                 for r in ordered],
+        'ok': sum(1 for r in ordered if r.ok),
+        'failed': [r.index for r in ordered if not r.ok],
+    }
+
+
+def write_summary(path, results, args):
+    """Write the machine-readable summary to `path`, atomically.
+
+    Temp-then-rename because a caller that polls the path must never
+    read a half-written file. The corollary is the contract on the other
+    side: a MISSING file means this driver died before reporting, not
+    that zero jobs ran. Reading absence as an empty run turns a crash
+    into a plausible-looking result.
+    """
+    path = Path(path)
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(json.dumps(summary(results, args), indent=1) + '\n')
+    tmp.replace(path)
+    print(f"[local] summary: {path}")
 
 
 def report(results, args):
@@ -282,9 +420,10 @@ def report(results, args):
     failed = [r for r in sorted(results, key=lambda r: r.index) if not r.ok]
     print("\n=== local run summary ===")
     for result in sorted(results, key=lambda r: r.index):
+        note = ' TIMEOUT' if result.timed_out else ''
         print(f"  index {result.index:>6}  rc={result.rc:<3} "
               f"{result.seconds:>7.0f}s  {len(result.outputs):>2} output(s)  "
-              f"{result.directory}")
+              f"{result.directory}{note}")
     total = len(results)
     print(f"{total - len(failed)}/{total} succeeded")
     for result in failed:
@@ -310,6 +449,43 @@ def resolve_jobdef(name_or_path, workdir):
     finally:
         os.chdir(cwd)
     return str((Path(workdir) / path.name).resolve())
+
+
+def unpack_code(tarball, workdir):
+    """Unpack a `muse tarball` Code.tar.bz2 once, for every child to share.
+
+    Returns the directory holding `Code/` — what `resolve_setup` wants as
+    its code root, and what the grid gets from $INPUT_TAR_DIR_LOCAL.
+
+    ONE unpack, not one per job: the build tree runs to several GB and
+    the driver launches four jobs at a time by default. Re-running is
+    cheap because an already-unpacked tree is detected and left alone —
+    but only via the `.unpack-complete` sentinel, never via
+    `Code/setup.sh` itself. `setup.sh` is tarball *payload*, typically
+    among the first members extracted; a run killed partway through
+    `extractall` (Ctrl-C, OOM, full disk) can leave it on disk with the
+    rest of the tree missing, and keying the early return on it would
+    make every later run trust a silently incomplete Offline forever.
+    """
+    root = Path(workdir) / 'code'
+    marker = root / 'Code' / 'setup.sh'
+    sentinel = root / '.unpack-complete'
+    if sentinel.is_file():
+        print(f"[local] code already unpacked at {root}")
+        return str(root)
+    root.mkdir(parents=True, exist_ok=True)
+    print(f"[local] unpacking {tarball} into {root} "
+          f"(several GB — this takes a while)")
+    with tarfile.open(tarball, 'r:bz2') as tar:
+        tar.extractall(root)
+    if not marker.is_file():
+        sys.exit(f"runlocal: {tarball} has no Code/setup.sh — "
+                 f"build it with `muse tarball`")
+    # Written last, after the setup.sh check passes: its presence means
+    # every earlier step completed, so a partial extract is never
+    # mistaken for a finished one on a later run.
+    sentinel.write_text(os.path.basename(tarball) + '\n')
+    return str(root)
 
 
 def run_one(index, args):
@@ -354,6 +530,25 @@ def build_parser():
     parser.add_argument('--copy-input', action='store_true',
                         help='stage inputs locally with mdh instead of '
                              'streaming them (worker --copy-input parity)')
+    parser.add_argument('--timeout', type=float, default=DEFAULT_TIMEOUT,
+                        metavar='SECONDS',
+                        help=f'per-job wall-clock limit (default '
+                             f'{DEFAULT_TIMEOUT} = 24h, the grid\'s default '
+                             f'lease; 0 disables). A job over the limit has '
+                             f'its whole process group killed and is '
+                             f'reported as rc={TIMEOUT_RC}; the rest of the '
+                             f'window still runs')
+    parser.add_argument('--json', default=None, metavar='PATH',
+                        help='also write the run summary to PATH as JSON, '
+                             'for a caller driving runlocal from a script '
+                             '(note: this is an OUTPUT path — unlike the '
+                             '--json of json2jobdef, which reads a config)')
+    parser.add_argument('--code', default=None,
+                        help='muse tarball Code.tar.bz2 to run against '
+                             'instead of the cnf\'s /cvmfs setup; unpacked '
+                             'once into <workdir>/code')
+    parser.add_argument('--code-root', default=None,
+                        help=argparse.SUPPRESS)
     parser.add_argument('--one', type=int,
                         help=argparse.SUPPRESS)  # internal: run a single index
     return parser
@@ -367,14 +562,27 @@ def main(argv=None):
         sys.exit(f"runlocal: {exc}")
     if args.parallel < 1:
         sys.exit("runlocal: --parallel must be at least 1")
+    if args.timeout < 0:
+        sys.exit("runlocal: --timeout must be 0 (no limit) or positive")
 
     if args.one is not None:
         # Child: cwd is already this job's directory.
         return run_one(args.one, args)
 
+    if args.json:
+        # Checked before a single job starts. The alternative is losing
+        # the summary of an hour-long run to a directory typo, at the
+        # one moment it cannot be recomputed.
+        args.json = str(Path(args.json).resolve())
+        parent = Path(args.json).parent
+        if not parent.is_dir():
+            sys.exit(f"runlocal: --json directory does not exist: {parent}")
+
     args.workdir = str(Path(args.workdir).resolve())
     Path(args.workdir).mkdir(parents=True, exist_ok=True)
     args.jobdef = resolve_jobdef(args.jobdef, args.workdir)
+    if args.code:
+        args.code_root = unpack_code(args.code, args.workdir)
     # The module, not bin/runlocal: that wrapper sources the Mu2e
     # environment, which this process already has and children inherit.
     args.entry_point = Path(__file__).resolve()

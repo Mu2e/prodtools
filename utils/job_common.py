@@ -14,6 +14,37 @@ import hashlib
 from typing import Dict, Optional, Union
 
 
+# The relative setup path a code-mode cnf carries, and the layout
+# `muse tarball` produces. Same string upstream uses: mu2ejobdef:45
+# (filename_tarsetup) and mu2eprodsys:337 (MU2EGRID_USERSETUP).
+CODE_SETUP_REL = 'Code/setup.sh'
+
+# Filename prefixes that mark a real Mu2e output file, as opposed to a
+# sink like /dev/null or a relative path. Single home: job_outputs uses
+# it to decide whether a name is worth re-sequencing, and runlocal uses
+# it to decide whether a name is worth globbing for. Two copies would
+# drift the first time a tier is added, and the second reader would
+# silently stop seeing that tier's files.
+OUTPUT_TIERS = ('dts.', 'dig.', 'sim.', 'rec.', 'nts.', 'cnf.', 'mcs.')
+
+
+def sha256_file(path, chunk_size=1 << 20):
+    """(hex digest, size in bytes) of a file, read in chunks.
+
+    Single home for content hashing: `jobdef` stamps a code tarball's
+    digest into the cnf at build time and `check_inputs` re-derives it
+    at submit time. Two implementations would eventually disagree on
+    chunking or encoding and turn a match into a spurious refusal.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b''):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
 # Mu2e dataset path puts every tier under one of four umbrella owner-classes.
 # Single source of truth — folded in from jobsub_argv._TIER_TO_OWNER_CLASS.
 _TIER_TO_OWNER_CLASS = {
@@ -525,7 +556,7 @@ class Mu2eJobBase:
                 resolved_template = resolved_template.replace('{desc}', override_desc)
 
             # Skip filenames that don't follow Mu2e naming convention (e.g., /dev/null, relative paths)
-            if not resolved_template.startswith(('dts.', 'dig.', 'sim.', 'rec.', 'nts.', 'cnf.', 'mcs.')):
+            if not resolved_template.startswith(OUTPUT_TIERS):
                 result[key] = resolved_template
                 continue
 
