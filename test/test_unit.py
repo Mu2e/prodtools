@@ -6287,6 +6287,87 @@ class TestManageCampaign(unittest.TestCase):
         with self.assertRaises(ValueError):
             manage_campaign(self.db, self.cid, 'resume')
 
+    # --- cancel --close-rows -------------------------------------------
+    # Cancelling stops the campaign expanding; the rows it already
+    # dispatched keep getting recovered. --close-rows is the other
+    # intent -- abandon the round -- and it has to be typed out.
+
+    def _row(self, indices, tarball=None):
+        return self.sl.record_submission(
+            self.db, tarball=tarball or 'cnf.mu2e.M.C.0.tar',
+            entry={'tarball': tarball or 'cnf.mu2e.M.C.0.tar', 'njobs': 5},
+            indices=indices, jobsub_id='1.0@js', cluster_id='1')
+
+    def _state(self, row_id):
+        return self.sl.row_by_id(self.db, row_id)['state']
+
+    def test_bare_cancel_leaves_rows_active(self):
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        manage_campaign(self.db, self.cid, 'cancel')
+        self.assertEqual(self._state(rid), 'active')
+
+    def test_close_rows_exhausts_open_rows_with_the_note(self):
+        from utils.submissions import manage_campaign
+        a, b = self._row([0, 1]), self._row([2, 3])
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 note='killed by hand', close_rows=True)
+        self.assertEqual(closed, [a, b])
+        self.assertEqual(self._state(a), 'exhausted')
+        self.assertEqual(self._state(b), 'exhausted')
+        self.assertEqual(self.sl.row_by_id(self.db, a)['note'],
+                         'killed by hand')
+        camp = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(camp['state'], 'cancelled')
+        self.assertEqual(camp['note'], 'killed by hand')
+
+    def test_close_rows_leaves_closed_rows_and_other_tarballs_alone(self):
+        from utils.submissions import manage_campaign
+        done = self._row([0, 1])
+        self.sl.close_row(self.db, done, 'complete')
+        other_cid = self.sl.create_campaign(
+            self.db, tarball='cnf.mu2e.OTHER.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.OTHER.C.0.tar', 'njobs': 5},
+            slice_size=2)
+        other = self._row([0, 1], tarball='cnf.mu2e.OTHER.C.0.tar')
+        mine = self._row([4])
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 close_rows=True)
+        self.assertEqual(closed, [mine])
+        self.assertEqual(self._state(done), 'complete')
+        self.assertEqual(self._state(other), 'active')
+        self.assertEqual(
+            [c['state'] for c in self.sl.all_campaigns(self.db)
+             if c['id'] == other_cid], ['active'])
+
+    def test_close_rows_refuses_while_a_row_is_submitting(self):
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        self.sl.reserve_submission(
+            self.db, tarball='cnf.mu2e.M.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.M.C.0.tar', 'njobs': 5},
+            indices=[2, 3])
+        with self.assertRaises(ValueError) as cm:
+            manage_campaign(self.db, self.cid, 'cancel', close_rows=True)
+        self.assertIn('submitting', str(cm.exception))
+        # nothing written: the campaign is untouched too
+        self.assertEqual(self._state(rid), 'active')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'active')
+
+    def test_close_rows_works_on_an_already_cancelled_campaign(self):
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        manage_campaign(self.db, self.cid, 'cancel')
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 close_rows=True)
+        self.assertEqual(closed, [rid])
+        self.assertEqual(self._state(rid), 'exhausted')
+
+    def test_close_rows_only_applies_to_cancel(self):
+        from utils.submissions import manage_campaign
+        with self.assertRaises(ValueError):
+            manage_campaign(self.db, self.cid, 'pause', close_rows=True)
+
 
 # ---------------------------------------------------------------------------
 # submissions CLI verb structure (utils/submissions.py) — workflow hardening

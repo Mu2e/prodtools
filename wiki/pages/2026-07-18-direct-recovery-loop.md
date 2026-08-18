@@ -288,6 +288,7 @@ item to exercise it on a real DB before the cron goes live.
 submissions pause 7    # operator off switch
 submissions resume 7   # paused -> active
 submissions cancel 7   # close; already-submitted rows still recovered
+submissions cancel 7 --close-rows   # abandon the round: rows -> exhausted
 ```
 
 These are mutating (same per-DB lock as `run`), separate verbs from
@@ -309,7 +310,16 @@ partial failure leaves indices that look unsubmitted but might not be.
 only; ledger rows already written for it continue through the recovery
 loop to verified completion exactly as if the campaign were still
 active — cancelling stops new slices, it does not abandon jobs already
-in flight. `cancelled` does **not** free the tarball's index history —
+in flight. To abandon the round as well — the case where the
+clusters have been `jobsub_rm`-ed and the indices are deliberately not
+wanted — pass `--close-rows`, which moves every open row on the
+campaign's tarball to `exhausted` (terminal, "no more attempts") so the
+next tick recovers nothing. It is not the default, because closing rows
+discards the ledger's ability to finish partially-run work. Two
+safeguards: a row still in `submitting` refuses the whole operation
+(its jobsub_submit may be in flight, and closing under it orphans the
+cluster), and the flag works on an already-cancelled campaign, since in
+practice the rows only become a problem after the cancel. `cancelled` does **not** free the tarball's index history —
 re-enqueueing the same tarball afterward starts a brand-new campaign
 row at `cursor=0`, with no memory of what the cancelled campaign
 already fed. In practice `_slice_overlaps_ledger` (crash-window guard
