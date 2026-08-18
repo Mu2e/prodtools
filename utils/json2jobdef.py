@@ -831,6 +831,22 @@ def apply_common_overlay(configs, json_path):
     whole safety property — reversed, the campaign default would move the
     42 frozen Run1B entries (v01/v03/v06) onto the current geometry.
 
+    common.json may state the defaults two ways, and both carry that same
+    direction:
+
+      '#include'   a FCL holding the settings. Preferred once the FCL
+                   exists — one file states the campaign, and Production
+                   owns it.
+      plain keys   the settings written out. Applied only where the entry
+                   does not already state the key, which is what makes
+                   them a default; dict order never decides the outcome,
+                   so these need no reserved position in the writer.
+
+    Plain keys are what a campaign uses while its FCL is still an unmerged
+    Production PR — the include would abort every build in the campaign
+    with a fhicl search_path error, and no entry-level override can
+    suppress an include.
+
     common.json states its own scope, because a campaign directory is not
     uniform:
 
@@ -855,8 +871,10 @@ def apply_common_overlay(configs, json_path):
     if json_path.name not in common.get('applies_to', []):
         return configs
 
-    includes = common.get('fcl_overrides', {}).get('#include', [])
-    if not includes:
+    common_overrides = common.get('fcl_overrides', {})
+    includes = common_overrides.get('#include', [])
+    defaults = {k: v for k, v in common_overrides.items() if k != '#include'}
+    if not includes and not defaults:
         return configs
     prefix = common.get('dsconf_prefix')
 
@@ -870,7 +888,12 @@ def apply_common_overlay(configs, json_path):
             # Idempotent: expansion may hand several entries one dict.
             kept = [i for i in overrides.get(COMMON_INCLUDE_KEY, [])
                     if i not in includes]
-            overrides[COMMON_INCLUDE_KEY] = list(includes) + kept
+            if includes:
+                overrides[COMMON_INCLUDE_KEY] = list(includes) + kept
+            # setdefault, never assignment: an entry that states the key
+            # keeps its own value, the same way it beats the include.
+            for key, val in defaults.items():
+                overrides.setdefault(key, val)
     return configs
 
 def load_json(json_path):
