@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# jobwait - block until a submitted cluster finishes, then record each
+# job's exit code and write the runlocal-style --json summary. Wrapper
+# for utils/jobwait.py
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/jobwait.py"
+
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    exec python3 "$PYTHON_SCRIPT" "$@"
+fi
+
+# Set up Mu2e environment (jobsub_q / jobsub_history need the grid
+# tools and a bearer token).
+source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
+muse setup ops
+
+exec python3 "$PYTHON_SCRIPT" "$@"
