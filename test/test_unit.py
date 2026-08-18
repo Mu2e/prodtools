@@ -15171,11 +15171,28 @@ def _runlocal_args(**over):
     args = SimpleNamespace(
         jobdef='cnf.mu2e.Test.TestConf.0.tar', inloc='tape',
         indices=[0], parallel=1, workdir='.', nevts=-1,
-        mu2e_options='', copy_input=False, one=None,
-        entry_point='/repo/utils/runlocal.py')
+        mu2e_options='', copy_input=False, one=None, json=None,
+        timeout=0, entry_point='/repo/utils/runlocal.py')
     for key, value in over.items():
         setattr(args, key, value)
     return args
+
+
+def _fake_popen(fake):
+    """Adapt a simple `(argv, cwd, env, stdout) -> returncode` stand-in
+    to the Popen object the driver drives.
+
+    The driver uses Popen, not subprocess.run, because it must be able to
+    signal a job's whole process GROUP on timeout — run() would kill the
+    launcher and leave mu2e behind. `pid` is deliberately not 0 or 1:
+    os.killpg(0, ...) signals the CALLER's own group, which in a test run
+    is the test runner.
+    """
+    def popen(argv, cwd=None, env=None, stdout=None, stderr=None, **kwargs):
+        result = fake(argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
+        return SimpleNamespace(pid=2 ** 30, returncode=result.returncode,
+                               wait=lambda timeout=None: result.returncode)
+    return popen
 
 
 class TestRunLocalOutputGlobs(unittest.TestCase):
@@ -15402,7 +15419,7 @@ class TestRunLocalDrive(unittest.TestCase):
     def _drive(self, args, fake):
         from utils import runlocal
         buf = io.StringIO()
-        with patch.object(runlocal.subprocess, 'run', fake):
+        with patch.object(runlocal.subprocess, 'Popen', _fake_popen(fake)):
             with contextlib.redirect_stdout(buf):
                 rc = runlocal.drive(args)
         return rc, buf.getvalue()
@@ -15498,6 +15515,182 @@ class TestRunLocalDrive(unittest.TestCase):
         self.assertIn(' 1 output(s)', out)
         self.assertIn(' 0 output(s)', out)
         self.assertNotIn('unrelated.txt', out)
+
+
+class TestRunLocalTimeout(unittest.TestCase):
+    """A wedged job must not hold the driver open forever: with no
+    limit there is no summary, no exit, and nothing to distinguish a
+    hung run from a slow one."""
+
+    def setUp(self):
+        self.workdir = _mkdtemp()
+        self.tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+        self.killed = []
+
+    def _hang_popen(self, hang_indices):
+        """Popen stand-in whose listed indices never finish."""
+        import subprocess as sp
+
+        def popen(argv, cwd=None, env=None, stdout=None, stderr=None, **kw):
+            index = int(argv[argv.index('--one') + 1])
+
+            def wait(timeout=None):
+                # Stops hanging once it has been signalled — the SIGTERM
+                # half of kill_job is what a real art job answers.
+                if index in hang_indices and not self.killed:
+                    raise sp.TimeoutExpired(argv, timeout or 0)
+                return 0
+            return SimpleNamespace(pid=2 ** 30 + index, wait=wait)
+        return popen
+
+    def _drive(self, popen, **over):
+        from utils import runlocal
+        args = _runlocal_args(jobdef=self.tar, workdir=self.workdir, **over)
+        killers = []
+
+        def killpg(pid, sig):
+            killers.append((pid, sig))
+            self.killed.append((pid, sig))
+        with patch.object(runlocal.subprocess, 'Popen', popen):
+            with patch.object(runlocal.os, 'killpg', killpg):
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    rc = runlocal.drive(args)
+        return rc, buf.getvalue(), killers
+
+    def test_a_hung_job_is_killed_and_the_rest_still_run(self):
+        path = os.path.join(self.workdir, 'summary.json')
+        rc, out, _ = self._drive(self._hang_popen({1}), indices=[0, 1, 2],
+                                 timeout=0.01, json=path)
+        self.assertEqual(rc, 1)
+        self.assertIn('TIMEOUT', out)
+        with open(path) as handle:
+            data = json.load(handle)
+        self.assertEqual(data['failed'], [1])
+        self.assertEqual(data['ok'], 2)
+        hung = data['jobs'][1]
+        self.assertTrue(hung['timed_out'])
+        self.assertEqual(hung['rc'], 124)
+        self.assertFalse(data['jobs'][0]['timed_out'])
+
+    def test_the_whole_process_group_is_signalled(self):
+        """mu2e is a GRANDchild: signalling only the direct child would
+        leave it running with nothing left to reap it."""
+        import signal as sig_module
+        _, _, killers = self._drive(self._hang_popen({0}), indices=[0],
+                                    timeout=0.01)
+        self.assertTrue(killers)
+        # SIGTERM first — art traps it to close its output files.
+        self.assertEqual(killers[0][1], sig_module.SIGTERM)
+        self.assertEqual(killers[0][0], 2 ** 30)
+
+    def test_zero_disables_the_limit(self):
+        """The escape hatch for a job legitimately longer than a day."""
+        seen, waited = [], []
+
+        def popen(argv, cwd=None, env=None, stdout=None, stderr=None, **kw):
+            seen.append(kw.get('start_new_session'))
+            return SimpleNamespace(pid=2 ** 30, wait=lambda timeout=None:
+                                   waited.append(timeout) or 0)
+        rc, _, killers = self._drive(popen, timeout=0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(killers, [])
+        # 0 reaches Popen.wait as None, which is how it spells "forever".
+        self.assertIn(None, waited)
+        # Every job owns a process group, so a kill can reach mu2e.
+        self.assertEqual(seen, [True])
+
+    def test_a_negative_timeout_is_refused(self):
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', self.tar, '--timeout', '-1'])
+
+    def test_default_is_the_grid_lease(self):
+        from utils.runlocal import build_parser, DEFAULT_TIMEOUT
+        self.assertEqual(DEFAULT_TIMEOUT, 24 * 3600)
+        args = build_parser().parse_args(['--jobdef', 'c.tar'])
+        self.assertEqual(args.timeout, DEFAULT_TIMEOUT)
+
+
+class TestRunLocalJsonSummary(unittest.TestCase):
+    """`--json` exists because the printed table is lossy: it shows a
+    COUNT of outputs, never their names, and one exit code for the whole
+    run. A caller that chains stages needs the names, and a caller that
+    measures a rate needs to know which indices contributed."""
+
+    def setUp(self):
+        self.workdir = _mkdtemp()
+        self.tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+        self.path = os.path.join(self.workdir, 'summary.json')
+
+    def _run(self, fake, **over):
+        from utils import runlocal
+        args = _runlocal_args(jobdef=self.tar, workdir=self.workdir,
+                              json=self.path, **over)
+        with patch.object(runlocal.subprocess, 'Popen', _fake_popen(fake)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = runlocal.drive(args)
+        return rc
+
+    @staticmethod
+    def _index_of(argv):
+        return int(argv[argv.index('--one') + 1])
+
+    def _emit(self, index_rcs):
+        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
+            index = self._index_of(argv)
+            rc = index_rcs[index]
+            if rc == 0:
+                Path(cwd, f'dts.mu2e.X.TestConf.001430_{index:08d}.art').touch()
+            Path(cwd, 'unrelated.txt').touch()
+            return SimpleNamespace(returncode=rc)
+        return fake
+
+    def test_outputs_are_absolute_paths_the_next_stage_can_open(self):
+        """The driver stores basenames; a consumer must not have to know
+        the job_<index> layout to turn them into openable paths."""
+        self._run(self._emit({0: 0}))
+        with open(self.path) as handle:
+            data = json.load(handle)
+        outputs = data['jobs'][0]['outputs']
+        self.assertEqual(len(outputs), 1)
+        self.assertTrue(os.path.isabs(outputs[0]))
+        self.assertTrue(os.path.isfile(outputs[0]))
+        # Only the cnf's declared outputs, same rule the table follows.
+        self.assertNotIn('unrelated.txt', json.dumps(data))
+
+    def test_written_even_when_a_job_failed(self):
+        """The partial run is exactly the case the file exists for: 2 of
+        3 succeeded is indistinguishable from 0 of 3 by exit code."""
+        rc = self._run(self._emit({0: 0, 1: 1, 2: 0}), indices=[0, 1, 2])
+        self.assertEqual(rc, 1)
+        with open(self.path) as handle:
+            data = json.load(handle)
+        self.assertEqual(data['ok'], 2)
+        self.assertEqual(data['failed'], [1])
+        self.assertEqual([j['index'] for j in data['jobs']], [0, 1, 2])
+        self.assertEqual([j['rc'] for j in data['jobs']], [0, 1, 0])
+        self.assertEqual(data['jobs'][1]['outputs'], [])
+
+    def test_no_flag_writes_no_file(self):
+        from utils import runlocal
+        args = _runlocal_args(jobdef=self.tar, workdir=self.workdir)
+        with patch.object(runlocal.subprocess, 'Popen',
+                          _fake_popen(self._emit({0: 0}))):
+            with contextlib.redirect_stdout(io.StringIO()):
+                runlocal.drive(args)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_a_bad_directory_is_refused_before_any_job_runs(self):
+        """Losing an hour-long run's summary to a directory typo is not
+        recoverable — the path is checked up front."""
+        from utils.runlocal import main
+        with self.assertRaises(SystemExit):
+            main(['--jobdef', self.tar, '--json',
+                  os.path.join(self.workdir, 'nope', 'summary.json')])
 
 
 class TestRunLocalArgValidation(unittest.TestCase):
@@ -15951,6 +16144,73 @@ class TestCommonOverlayScope(unittest.TestCase):
         (self.dir / 'common.json').unlink()
         configs = self._load('mix.json', [self._entry()])
         self.assertEqual(self._includes(configs[0]), [])
+
+
+class TestCommonPlainKeyDefaults(unittest.TestCase):
+    """common.json may state its defaults as plain keys instead of an
+    include -- what a campaign uses while its FCL is still an unmerged
+    Production PR, since including a FCL that does not exist aborts every
+    build in fhicl-get and no entry-level override can suppress it.
+
+    Plain keys carry the same direction as the include: applied only where
+    the entry is silent, so a pinned entry still wins."""
+
+    COMMON = {
+        'applies_to': ['mix.json'],
+        'dsconf_prefix': 'Run1B',
+        'fcl_overrides': {
+            'services.GeometryService.inputFile':
+                'Offline/Mu2eG4/geom/geom_run1_b_v40.txt',
+            'services.GeometryService.bFieldFile':
+                'Offline/Mu2eG4/geom/bfgeom_DSOff.txt'},
+    }
+    GEO = 'services.GeometryService.inputFile'
+    BF = 'services.GeometryService.bFieldFile'
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.json2jobdef = json2jobdef
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        (self.dir / 'common.json').write_text(json.dumps(self.COMMON))
+
+    def _load(self, entries):
+        path = self.dir / 'mix.json'
+        path.write_text(json.dumps(entries))
+        return self.json2jobdef.load_json(path)
+
+    def _entry(self, dsconf='Run1Ban', **overrides):
+        return {'desc': 'Thing', 'dsconf': dsconf,
+                'fcl': 'Production/JobConfig/mixing/Mix.fcl',
+                'fcl_overrides': overrides}
+
+    def test_silent_entry_takes_the_default(self):
+        ov = self._load([self._entry()])[0]['fcl_overrides']
+        self.assertEqual(ov[self.GEO],
+                         'Offline/Mu2eG4/geom/geom_run1_b_v40.txt')
+        self.assertEqual(ov[self.BF], 'Offline/Mu2eG4/geom/bfgeom_DSOff.txt')
+
+    def test_pinned_entry_keeps_its_own_value(self):
+        """The whole safety property: a frozen entry on v06 must not be
+        moved onto v40 by the campaign default."""
+        pinned = {self.GEO: 'Offline/Mu2eG4/geom/geom_run1_b_v06.txt'}
+        ov = self._load([self._entry(**pinned)])[0]['fcl_overrides']
+        self.assertEqual(ov[self.GEO],
+                         'Offline/Mu2eG4/geom/geom_run1_b_v06.txt')
+        # The key it left silent still takes the default.
+        self.assertEqual(ov[self.BF], 'Offline/Mu2eG4/geom/bfgeom_DSOff.txt')
+
+    def test_out_of_scope_dsconf_is_untouched(self):
+        ov = self._load([self._entry(dsconf='MDC2025au')])[0]['fcl_overrides']
+        self.assertNotIn(self.GEO, ov)
+        self.assertNotIn(self.BF, ov)
+
+    def test_no_reserved_include_key_is_emitted(self):
+        """With no '#include' in common.json the reserved key must not
+        appear at all -- an empty one would write a stray blank include."""
+        from utils.prod_utils import COMMON_INCLUDE_KEY
+        ov = self._load([self._entry()])[0]['fcl_overrides']
+        self.assertNotIn(COMMON_INCLUDE_KEY, ov)
 
 
 class TestRun1BCommonJson(unittest.TestCase):

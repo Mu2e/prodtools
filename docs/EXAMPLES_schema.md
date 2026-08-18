@@ -183,6 +183,25 @@ When regenerating, read in this order:
       `<workdir>/code/` before any jobs run, and each spawned child
       takes the already-unpacked tree via `--code-root` rather than
       re-extracting it.
+    - `runlocal` — document `--json PATH` as the machine-readable half of
+      the end-of-run summary, for a caller driving `runlocal` from a
+      script. Say three things the printed table cannot: it lists each
+      output as an ABSOLUTE path (the table prints only a count), it
+      names the FAILED indices (the single exit code cannot distinguish
+      7-of-8 from 3-of-8, and a caller measuring a rate must divide by
+      the jobs that produced output), and it is written whatever the exit
+      code. Note the contract on the reader's side — a MISSING file means
+      `runlocal` died before reporting, never that zero jobs ran — and
+      that this `--json` is an OUTPUT path, unlike `json2jobdef --json`,
+      which reads a config.
+    - `runlocal` — document `--timeout SECONDS`, default 86400 (24h, the
+      grid's default lease), `0` to disable. Say that a job over the
+      limit has its whole process GROUP signalled (SIGTERM, then SIGKILL
+      after 10s) — not just the launcher, because `mu2e` is a grandchild
+      and killing only the child orphans it — and that the job is
+      reported as `rc=124` with `timed_out: true` in the `--json`
+      summary while the rest of the window keeps running. Note that a
+      timed-out job's output files are listed but may be partial.
 12. **Troubleshooting** — only entries that correspond to real error
     messages produced by current code. Remove stale ones.
 
