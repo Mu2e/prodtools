@@ -609,7 +609,7 @@
       "dts.mu2e.NeutralsFlashCat.Run1Baq.art": 1,
       "dts.mu2e.MuStopPileupCat.Run1Ban.art": 2
     }],
-    "dsconf": ["Run1Bav_best_v1_5"],
+    "dsconf": ["Run1Bav_best_v1_5-001"],
     "pbeam": ["Mix1BB"],
     "owner": ["mu2e"],
     "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025av/setup.sh"],
@@ -630,8 +630,6 @@
         "physics.filters.CaloDtsClusterFilter.NullFilter": false,
         "physics.filters.NeutralsFlashMixer.mu2e.meanEventsPerPOTFactors": [0.01],
         "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
-        "outputs.Output.RejectEvents": [],
-        "outputs.Output.SelectEvents": [],
         "physics.producers.PBISim.extendedMean": "5.92e6",
         "physics.producers.PBISim.cutMax": "35.5e6"
       }
