@@ -16,6 +16,7 @@ if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo ""
     echo "Examples:"
     echo "  fcldump --dataset dts.mu2e.RPCInternalPhysical.MDC2020az.art"
+    echo "  fcldump --dataset nts.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.root  # generic cnf: samples a file"
     echo "  fcldump --target dig.mu2e.DIOtail95Mix1BBTriggered.MDC2020ba_best_v1_3.001202_00000428.art"
     echo "  fcldump --local-jobdef jobdef.tar --index 0"
     echo "  fcldump --dataset cnf.mu2e.DIOtail95Mix1BB.MDC2020ba_best_v1_3.tar"

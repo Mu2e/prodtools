@@ -10,7 +10,8 @@ from utils.jobfcl import Mu2eJobFCL
 # Dataset→cnf resolution lives in jobdef_lookup so other tools (latestDatasets
 # --complete-only) can reuse it without importing this entry point.
 from utils.jobdef_lookup import (list_jobdefs, find_matching_jobdef, set_verbose,
-                                 is_generic_cnf, derive_generic_input)
+                                 is_generic_cnf, derive_generic_input,
+                                 sample_dataset_target)
 
 
 def write_fcl_direct_input(tarball, fname, loc='tape', proto='root'):
@@ -92,9 +93,18 @@ def main():
         # sequencer, so report how to generate instead of crashing in write_fcl.
         if is_generic_cnf(tarball_path):
             print(f"Matched generic cnf: {tarball_path}")
-            if args.target:
-                fname = derive_generic_input(tarball_path, args.target)
-                print(f"target {args.target} -> input {fname}")
+            target = args.target
+            if not target and args.dataset and src.tier != 'cnf':
+                # No sequencer of our own — borrow one from a file of the output
+                # dataset. Sorted, so the same command picks the same file.
+                target = sample_dataset_target(args.dataset, args.index)
+                if target:
+                    print(f"No --target given; using {target} "
+                          f"(index {args.index} of the dataset, sorted by name); "
+                          f"pass --target or --index to pick another.")
+            if target:
+                fname = derive_generic_input(tarball_path, target)
+                print(f"target {target} -> input {fname}")
                 write_fcl_direct_input(tarball_path, fname, args.loc, args.proto)
                 return
             print("This is a generic tarball (output desc deferred as {desc}); a bare "

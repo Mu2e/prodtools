@@ -2306,6 +2306,32 @@ class TestGenericCnfDiscovery(unittest.TestCase):
         finally:
             os.unlink(tar)
 
+    def test_sample_dataset_target_sorts_and_honors_index(self):
+        """A bare --dataset against a generic cnf has no sequencer; the sampler
+        picks one of the dataset's own files. SAM returns files in arbitrary
+        order, so sort before indexing or the pick is not reproducible."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        ds = "nts.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.root"
+        files = [f"nts.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.001430_{i:08d}.root"
+                 for i in (9, 0, 3)]
+        with patch('utils.samweb_wrapper.list_files', return_value=files) as lf:
+            self.assertEqual(jobdef_lookup.sample_dataset_target(ds), files[1])
+            self.assertEqual(jobdef_lookup.sample_dataset_target(ds, index=2), files[0])
+        self.assertIn(f"dh.dataset {ds}", lf.call_args[0][0])
+        self.assertIn("with limit", lf.call_args[0][0])
+
+    def test_sample_dataset_target_none_when_nothing_to_sample(self):
+        """No files (nothing produced yet) or an index past the batch: return
+        None so the caller prints its guidance instead of guessing."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        ds = "nts.mu2e.X.MDC2025au_best_v1_5.root"
+        with patch('utils.samweb_wrapper.list_files', return_value=[]):
+            self.assertIsNone(jobdef_lookup.sample_dataset_target(ds))
+        with patch('utils.samweb_wrapper.list_files', return_value=['a.root']):
+            self.assertIsNone(jobdef_lookup.sample_dataset_target(ds, index=5))
+
 
 # ---------------------------------------------------------------------------
 # 24. _replace_placeholders defer_keys (jobdef.py)
