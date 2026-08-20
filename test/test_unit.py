@@ -7912,6 +7912,102 @@ class TestCheckInputs(unittest.TestCase):
         self.assertEqual([p.kind for p in probs], ["nearline"])
 
 
+class TestCheckDirInloc(unittest.TestCase):
+    """`dir:<path>` inloc: residency is a filesystem existence check on
+    that path — never a SAM query. Filenames are bare basenames written
+    verbatim by json2jobdef for this shape and need not parse as Mu2e
+    names, so the branch must bypass _group_by_dataset entirely."""
+
+    PRIM = "sim.oksuzian.TargetStops.GridSmoke.001430_00000000.art"
+    BARE = "PBI_Normal_33344.txt"          # not a Mu2eName — must not crash
+    PILE = "dts.mu2e.Pile.CampB.001430_00000005.art"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def _write(self, name, content=b"x"):
+        with open(os.path.join(self.dir, name), "wb") as f:
+            f.write(content)
+
+    def _tar(self, files, auxin=None):
+        jp = {"code": "", "setup": "/cvmfs/x/setup.sh",
+              "tbs": {"seed": "s",
+                      "inputs": {"source.fileNames": [1, list(files)]}},
+              "jobname": "cnf.mu2e.T.C.0.tar", "owner": "mu2e",
+              "dsconf": "C"}
+        if auxin is not None:
+            jp["tbs"]["auxin"] = auxin
+        return _make_tarball(jp)
+
+    def _boom(self, *a, **k):
+        raise AssertionError("SAM must not be queried for a dir: inloc")
+
+    def _check(self, tar):
+        from utils.check_inputs import check_inputs
+        ok, probs = check_inputs(tar, f"dir:{self.dir}",
+                                 sam_sizes=self._boom,
+                                 locality=self._boom,
+                                 dataset_location=self._boom)
+        os.unlink(tar)
+        return ok, probs
+
+    def test_all_present_no_sam_query(self):
+        # The pinning assertion: every SAM-facing injectable raises.
+        self._write(self.PRIM)
+        self._write(self.BARE)
+        ok, probs = self._check(self._tar([self.PRIM, self.BARE]))
+        self.assertTrue(ok)
+        self.assertEqual(probs, [])
+
+    def test_missing_file_reported(self):
+        self._write(self.PRIM)
+        ok, probs = self._check(self._tar([self.PRIM, self.BARE]))
+        self.assertFalse(ok)
+        self.assertEqual([(p.filename, p.kind) for p in probs],
+                         [(self.BARE, "missing")])
+
+    def test_zero_size_is_truncated(self):
+        self._write(self.PRIM, content=b"")
+        ok, probs = self._check(self._tar([self.PRIM]))
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["truncated"])
+
+    def test_auxin_checked_against_dir_too(self):
+        self._write(self.PRIM)
+        tar = self._tar([self.PRIM],
+                        auxin={"physics.filters.M.fileNames":
+                               [1, [self.PILE]]})
+        ok, probs = self._check(tar)
+        self.assertFalse(ok)
+        self.assertEqual([(p.filename, p.kind) for p in probs],
+                         [(self.PILE, "missing")])
+
+    def test_stat_error_fails_closed(self):
+        from utils.check_inputs import check_dir
+        def boom_size(path):
+            raise RuntimeError("filesystem exploded")
+        probs = check_dir([self.PRIM], self.dir, file_size=boom_size)
+        self.assertEqual([p.kind for p in probs], ["query_error"])
+
+    def test_non_dir_inloc_still_routes_to_sam_checks(self):
+        # Regression guard: the new branch must not widen. A tape inloc
+        # still resolves through locality/dataset_location.
+        from utils.check_inputs import check_inputs
+        seen = {"called": False}
+        def loc(mdh_loc, fs):
+            seen["called"] = True
+            return {f: "ONLINE" for f in fs}
+        tar = self._tar([self.PILE])
+        ok, probs = check_inputs(tar, "tape",
+                                 sam_sizes=lambda ds: {},
+                                 locality=loc,
+                                 dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertTrue(ok)
+        self.assertTrue(seen["called"])
+
+
 class TestCheckCodeTarball(unittest.TestCase):
     """The entry names a tarball; the cnf remembers the digest of the
     tarball it was built against. They must still agree at submit time."""

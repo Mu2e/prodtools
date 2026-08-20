@@ -19,7 +19,8 @@ from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
 from utils.jobdesc import (
-    ENTRY_VALUE_KEYS, RESOURCE_KEYS, firstjob_of, validate_entry_value,
+    ENTRY_VALUE_KEYS, RESOURCE_KEYS, firstjob_of, is_dir_inloc,
+    validate_entry_value,
     validate_outloc,
     validate_window)
 from utils.job_common import Mu2eName, default_owner
@@ -151,8 +152,7 @@ def _is_dir_inloc(config):
     `input_data` entry (e.g. resampler MaxEventsToSkip auto-computation)
     must be skipped rather than attempted.
     """
-    inloc = config.get('inloc', '')
-    return isinstance(inloc, str) and inloc.startswith('dir:')
+    return is_dir_inloc(config.get('inloc', ''))
 
 
 def _create_inputs_file(config, exclude_files=None):

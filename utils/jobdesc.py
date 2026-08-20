@@ -163,6 +163,27 @@ _LIFETIME_RE = re.compile(r'^\d+[smhd]$')
 # carries a protocol for it. EXAMPLES.md has always documented it.
 INLOC_SIMPLE = ('tape', 'disk', 'scratch', 'resilient', 'stash', 'none')
 
+
+def is_dir_inloc(inloc):
+    """True for the local-dir inloc shape (`dir:<path>`).
+
+    That shape names files on a mounted filesystem that were never
+    declared to SAM (chained intermediate outputs, cvmfs data files), so
+    every SAM-keyed lookup — dataset queries, locality checks, parentage
+    tracking — must be skipped for it, not attempted-and-failed.
+
+    Shared by json2jobdef and check_inputs. NOT yet the single home:
+    file_resolver, runmu2e and jobsub_argv still hand-roll the same
+    `startswith('dir:')` test. Migrate them here when next touching
+    those files rather than adding a seventh copy.
+    """
+    return isinstance(inloc, str) and inloc.startswith('dir:')
+
+
+def dir_inloc_path(inloc):
+    """The filesystem path a `dir:` inloc names."""
+    return inloc[len('dir:'):]
+
 # Where a job's outputs may go. The first three are pushOutput actions
 # (Util/pushOutput.py validActions) — each copies to a dataset path AND
 # declares the file to SAM.
