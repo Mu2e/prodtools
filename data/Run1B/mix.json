@@ -674,5 +674,39 @@
         "physics.producers.PBISim.cutMax": "35.5e6"
       }
     ]
+  },
+  {
+    "input_data": [{"dts.mu2e.NoPrimary.Run1Ban.art": 10}],
+    "pileup_datasets": [{
+      "dts.mu2e.MuBeamFlashCat.Run1Ban.art": 1,
+      "dts.mu2e.EleBeamFlashCat.Run1Ban.art": 25,
+      "dts.mu2e.NeutralsFlashCat.Run1Baq.art": 1,
+      "dts.mu2e.MuStopPileupCat.Run1Ban.art": 2
+    }],
+    "dsconf": ["Run1Bav_best_v1_5-002"],
+    "pbeam": ["Mix1BB"],
+    "owner": ["mu2e"],
+    "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025av/setup.sh"],
+    "fcl": ["Production/JobConfig/mixing/Mix.fcl"],
+    "inloc": ["resilient"],
+    "outloc": [{"dig.mu2e.*.art": "tape"}],
+    "fcl_overrides": [
+      {
+        "#include": [
+          "Production/JobConfig/digitize/OnSpill_run1b_epilog.fcl",
+          "Production/JobConfig/mixing/NoPrimary.fcl"
+        ],
+        "services.DbService.purpose": "Sim_best",
+        "services.DbService.version": "v1_5",
+        "services.ProditionsService.strawElectronics.digitizationEnd": "1650",
+        "physics.producers.CaloShowerROMaker.digitizationEnd": "1650",
+        "physics.producers.CaloDigiMaker.digitizationEnd": "1650",
+        "physics.filters.CaloDtsClusterFilter.NullFilter": true,
+        "physics.filters.NeutralsFlashMixer.mu2e.meanEventsPerPOTFactors": [0.01],
+        "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+        "physics.producers.PBISim.extendedMean": "5.92e6",
+        "physics.producers.PBISim.cutMax": "35.5e6"
+      }
+    ]
   }
 ]
