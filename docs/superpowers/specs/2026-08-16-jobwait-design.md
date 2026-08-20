@@ -141,3 +141,33 @@ so far only against mu2epro's clusters), confirm JSON matches reality.
   callers loop).
 - Retry/resubmit of failed indices (the JSON names them; resubmission is a
   caller decision — `submit --indices` already exists for it).
+
+## Addendum 2026-08-20: history source switched to direct condor_history
+
+A fully successful 15-job cluster (`29868598@jobsub05.fnal.gov`) was
+reported `0/15 ok, unknown: [0..14]` — see
+`autoresearch:docs/handoff/prodtools-jobwait-empty-history-unknown-rc.md`.
+Root cause was NOT fading history and NOT a schedd defect: the deployed
+jobsub_lite (1.13, `/opt/jobsub_lite/bin/jobsub_history`) parses the
+`@schedd` out of `-J` and builds `-name <schedd>` — then discards it
+(`passthru = out` immediately after the append). Every jobsub_history
+query therefore goes to the node's default `SCHEDD_HOST`
+(jobsub01 here). Clusters on jobsub01 answered by coincidence; clusters
+on any other schedd returned header-only. Proof: direct
+`condor_history -name jobsub05.fnal.gov 29868598 -af ProcId ExitCode`
+returned all 15 rows, ExitCode 0, while the wrapper returned none.
+Upstream master has since rewritten the wrapper (`lib/mains/cmd.py`)
+and passes `-name` correctly.
+
+Resolution: `collect_exit_codes` now calls `condor_history` directly,
+`-name <schedd>` split from the jobid. This is the "query can be made
+to work" path — the **Deliberate non-features** above are untouched: no
+file checking, one call, empty history still reported as honest
+`unknown` (now with a log line naming the schedd and the empty-history
+condition). A bare cluster id (no `@schedd`) queries only the default
+schedd; the schedd-qualified form submit prints is the reliable input.
+
+Latent hazard the switch also closes: cluster ids can collide across
+schedds, so the old wrapper could have returned a DIFFERENT cluster's
+exit codes from the default schedd — a silent wrong answer rather than
+a visible empty one.

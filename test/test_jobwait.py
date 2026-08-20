@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for utils/jobwait.py — no grid contact.
 
-jobsub_q and jobsub_history are faked through the injected `runner`
+jobsub_q and condor_history are faked through the injected `runner`
 (the same seam live_clusters exposes), so every queue shape the wait
 loop must survive — running, held, error, drained — is a canned string
 here, and the suite runs anywhere.
@@ -107,7 +107,7 @@ class FakeGrid:
             self.q_calls += 1
             rc, out = self.q_replies.pop(0)
             return SimpleNamespace(returncode=rc, stdout=out, stderr='')
-        if cmd[0] == 'jobsub_history':
+        if cmd[0] == 'condor_history':
             self.history_cmds.append(cmd)
             return SimpleNamespace(returncode=self.history_rc,
                                    stdout=self.history_stdout, stderr='')
@@ -209,13 +209,50 @@ class TestCollectExitCodes(unittest.TestCase):
             collect_exit_codes('777@s', 2, runner=grid, log=QUIET), {})
 
     def test_limit_and_jobid_in_command(self):
+        # -name <schedd> is the load-bearing part: jobsub_lite 1.13's
+        # jobsub_history drops it and always queries the default
+        # SCHEDD_HOST, which is how a fully successful jobsub05 cluster
+        # was reported 0/N ok (2026-08-20). condor_history is called
+        # directly, schedd split out of the jobid.
         grid = FakeGrid([], history_stdout="0 0\n")
         collect_exit_codes('777@jobsub01.fnal.gov', 40,
                            runner=grid, log=QUIET)
         cmd = grid.history_cmds[0]
-        self.assertIn('777@jobsub01.fnal.gov', cmd)
+        self.assertEqual(cmd[:3], ['condor_history', '-name',
+                                   'jobsub01.fnal.gov'])
+        self.assertIn('777', cmd)
+        self.assertNotIn('777@jobsub01.fnal.gov', cmd)
         self.assertIn('-limit', cmd)
         self.assertIn('40', cmd)
+
+    def test_bare_cluster_queries_without_name(self):
+        # A caller that lost the schedd still gets a query — against
+        # the node's default schedd only, which is the best available.
+        grid = FakeGrid([], history_stdout="0 0\n")
+        collect_exit_codes('777', 1, runner=grid, log=QUIET)
+        cmd = grid.history_cmds[0]
+        self.assertEqual(cmd[0], 'condor_history')
+        self.assertNotIn('-name', cmd)
+        self.assertIn('777', cmd)
+
+    def test_empty_history_names_schedd(self):
+        # Zero usable rows must be announced as history-unavailable on
+        # the named schedd — not left to read as N failed jobs.
+        lines = []
+        grid = FakeGrid([], history_stdout='')
+        codes = collect_exit_codes('777@jobsub05.fnal.gov', 2,
+                                   runner=grid, log=lines.append)
+        self.assertEqual(codes, {})
+        self.assertTrue(any('jobsub05.fnal.gov' in l and '777' in l
+                            for l in lines), lines)
+
+    def test_nonempty_history_no_empty_warning(self):
+        lines = []
+        grid = FakeGrid([], history_stdout="0 0\n")
+        collect_exit_codes('777@jobsub05.fnal.gov', 1,
+                           runner=grid, log=lines.append)
+        self.assertFalse(any('no usable records' in l for l in lines),
+                         lines)
 
 
 class TestDrive(unittest.TestCase):

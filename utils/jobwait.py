@@ -48,11 +48,14 @@ DEFAULT_POLL_S = 300
 def split_jobid(jobid):
     """`'12345678@jobsub01.fnal.gov'` -> `('12345678', full id)`.
 
-    The bare numeric cluster is what `live_clusters` keys on; the full
-    id (with schedd) is what jobsub_history needs — a numeric cluster
-    alone makes it search every schedd. A bare id is accepted (history
-    still works, just slower) so a caller that lost the schedd is not
-    stuck.
+    The bare numeric cluster is what `live_clusters` keys on; the
+    schedd is what `collect_exit_codes` passes to condor_history via
+    `-name` — without it the query goes only to the node's default
+    SCHEDD_HOST, which answers for that one schedd's clusters and
+    returns nothing (or a colliding cluster id) for the rest. A bare
+    id is still accepted so a caller that lost the schedd is not
+    stuck, but its history is trustworthy only when the cluster
+    happens to live on the default schedd.
     """
     cluster = jobid.split('@', 1)[0].split('.', 1)[0]
     if not cluster.isdigit():
@@ -86,33 +89,45 @@ def wait_for_drain(cluster, jobid, poll_s, runner=subprocess.run,
 
 
 def collect_exit_codes(jobid, njobs, runner=subprocess.run, log=print):
-    """{proc: rc} from one jobsub_history call. Missing procs -> absent.
+    """{proc: rc} from one condor_history call. Missing procs -> absent.
 
-    `-limit njobs` passes through to condor_history and stops its
-    newest-first scan early: measured 8.4 s vs 51 s unlimited on a real
-    999-job cluster — and a just-drained cluster sits at the head of
-    the history file. When fewer records exist than njobs the scan
-    simply completes and the absent procs are reported by the caller as
-    `unknown`.
+    condor_history is called DIRECTLY, `-name <schedd>` from the jobid.
+    Not jobsub_history: the deployed jobsub_lite (1.13) wrapper parses
+    the `@schedd` out of `-J` and builds a `-name schedd` — then drops
+    it on the floor (`passthru = out` after the append), so every query
+    silently goes to the node's default SCHEDD_HOST. A cluster on any
+    other schedd comes back as zero rows and a fully successful run is
+    reported `0/N ok` (2026-08-20, cluster 29868598@jobsub05 vs
+    SCHEDD_HOST=jobsub01; upstream master has rewritten the wrapper).
+    Worse than zero rows: a colliding cluster id on the default schedd
+    would return some OTHER cluster's exit codes.
+
+    `-limit njobs` stops condor_history's newest-first scan early:
+    measured 8.4 s vs 51 s unlimited on a real 999-job cluster — and a
+    just-drained cluster sits at the head of the history file. When
+    fewer records exist than njobs the scan simply completes and the
+    absent procs are reported by the caller as `unknown`.
 
     A proc can appear more than once (condor re-ran it); records come
     newest-first, so the FIRST occurrence wins. A non-numeric ExitCode
     ("undefined": removed, or exited by signal) stays out of the map —
     that proc's outcome is unknown, not zero.
     """
-    cmd = ['jobsub_history', '-G', 'mu2e', '-J', jobid,
-           '-limit', str(njobs), '-af', 'ProcId', 'ExitCode']
+    cluster, _, schedd = jobid.partition('@')
+    cluster = cluster.split('.', 1)[0]
+    where = schedd or 'the default schedd'
+    cmd = (['condor_history'] + (['-name', schedd] if schedd else [])
+           + [cluster, '-limit', str(njobs), '-af', 'ProcId', 'ExitCode'])
     res = runner(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         # One call, no retries (spec): the caller reports unknowns.
-        log(f"[jobwait] jobsub_history rc={res.returncode}; "
+        log(f"[jobwait] condor_history rc={res.returncode}; "
             f"stderr:\n{res.stderr}")
         return {}
     codes = {}
     for line in (res.stdout or '').splitlines():
         fields = line.split()
-        # jobsub prints a table header even under -af; real rows are
-        # "ProcId ExitCode". Anything else is not data.
+        # Real rows are "ProcId ExitCode". Anything else is not data.
         if len(fields) != 2 or not fields[0].isdigit():
             continue
         proc = int(fields[0])
@@ -120,6 +135,12 @@ def collect_exit_codes(jobid, njobs, runner=subprocess.run, log=print):
             continue
         if fields[1].lstrip('-').isdigit():
             codes[proc] = int(fields[1])
+    if not codes:
+        # Name the condition: "history unavailable on <schedd>" reads
+        # very differently from an unknown list that looks like failed
+        # jobs.
+        log(f"[jobwait] history on {where} returned no usable records "
+            f"for cluster {cluster} — outcomes unknown, not failed")
     return codes
 
 
