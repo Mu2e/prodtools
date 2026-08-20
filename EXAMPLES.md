@@ -54,6 +54,7 @@ Core production tools:
 - `fcldump` — resolve a dataset/target to its producing cnf and dump the FCL
 - `runmu2e` — worker entry point: FCL generation, `mu2e` execution, pushOutput
 - `runlocal` — run cnf jobs on this node, several at a time; nothing is pushed or declared
+- `jobwait` — block until a submitted cluster drains, then record how every job ended
 - `submissions` — status/run/pause/resume/cancel/complete/reconcile/resubmit
   CLI for the submission ledger (verify-and-resubmit recovery +
   sliced-campaign top-up + hand re-firing)
@@ -196,8 +197,46 @@ on the grid worker at runtime).
 
 `inloc` accepts `disk`, `tape`, `scratch`, `resilient`, `stash`, `none`,
 or `dir:<path>` (locally-mounted FS, e.g. cvmfs). There is no `auto`.
-`resilient` reads via xrootd, `stash` reads via CVMFS, and `dir:` reads
-via direct POSIX (the `file` protocol is forced).
+`resilient` reads via xrootd and `stash` reads via CVMFS. `dir:` forces
+the `file` protocol only for a path a worker can really POSIX-read: a
+`dir:` under `/pnfs` is dCache, never mounted on a grid worker, so it
+streams via xrootd like any other dCache location. A `dir:` entry also
+keys `input_data` by bare file basenames instead of SAM dataset names —
+no SAM lookup happens at all — so a `dir:` resampler computes no
+`MaxEventsToSkip` and whatever the base FCL (or the entry's own
+`fcl_overrides`) says stands.
+
+A local text file chunked per job, with globally unique event numbers
+across the chunks (`chunk_lines` + `event_id_per_index`, evaluated as
+`offset + index * step` for any integer-valued FCL key):
+
+```json
+{
+  "desc": "PBINormal_33344",
+  "dsconf": "MDC2025aj",
+  "fcl": "Production/JobConfig/primary/NoPrimaryPBISequence.fcl",
+  "input_data": {
+    "/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/PBI_Normal_33344.txt": {
+      "chunk_lines": 1000
+    }
+  },
+  "run": 1430,
+  "owner": "mu2e",
+  "inloc": "none",
+  "outloc": { "*.art": "tape" },
+  "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aj/setup.sh",
+  "event_id_per_index": {
+    "source.firstSubRunNumber": { "offset": 0, "step": 1 },
+    "source.firstEventNumber": { "offset": 0, "step": 1000 }
+  },
+  "fcl_overrides": {
+    "outputs.PrimaryOutput.fileName": "dts.owner.PBINormal_33344.version.sequencer.art"
+  }
+}
+```
+
+`event_id_per_index` entries are applied last, so they override a fixed
+`event_id` value on the same key.
 
 `outloc` values accept `tape`, `disk`, `scratch`, `outstage`, and are
 validated when the config is read. The first three are pushOutput
@@ -332,6 +371,45 @@ A draining entry's `outloc` globs must be tier-specific (`nts.*.root`,
 is refused at enqueue, because the worker's push manifest would
 otherwise declare the fetched input copy as an output, and pushOutput
 would then try to delete the production input at its own dataset path.
+
+### Campaign-wide defaults (`common.json`)
+
+A campaign directory may hold a `common.json` beside its stage configs.
+`json2jobdef` applies it to every entry contributed by the stage files
+it lists:
+
+```json
+{
+  "applies_to": [
+    "digi.json", "mix.json", "primary_muon.json", "reco.json",
+    "resampler_beam.json", "resampler_stm.json", "stage1.json"
+  ],
+  "dsconf_prefix": "Run1B",
+  "fcl_overrides": {
+    "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+    "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
+  }
+}
+```
+
+- `applies_to` is the stage-file whitelist. Leave out stages whose FCL
+  configures no such service — a geometry default on `artcat.fcl` or an
+  ntuple stage would construct a `GeometryService` the job never uses.
+- `dsconf_prefix` filters by dsconf, for a directory holding more than
+  one campaign's entries: `data/Run1B` also carries `MDC2025*` entries,
+  which must not take a Run1B detector configuration. An entry whose
+  dsconf does not start with the prefix is skipped entirely. That makes
+  the dsconf name load-bearing — a sample built on an `MDC2025av`
+  Musing but named `Run1Bav_best_v1_5` takes the Run1B defaults, and
+  the same sample named `MDC2025av_best_v1_5` does not.
+- Inside `fcl_overrides`, an `#include` list is **prepended** to the
+  entry's own includes, and a plain key is applied with `setdefault`.
+  Either way an entry that states the value keeps its own — the default
+  is only ever a fallback.
+- Watch the include trap the Run1B file records: including a FCL that
+  is not in the Musing aborts every build in `fhicl-get` with a
+  search_path error, and an entry-level override cannot suppress an
+  include. State the keys inline until the FCL actually ships.
 
 ### Running against a code tarball instead of a Musing
 
@@ -501,6 +579,9 @@ fcldump --target dig.mu2e.NoPrimaryMix1BBTriggered.Run1Ban_best_v1_5-000.001470_
 fcldump --local-jobdef cnf.mu2e.OnSpillTriggeredReco.MDC2025af_best_v1_3.0.tar \
     --fname dig.mu2e.NoPrimaryMix1BBTriggered.MDC2025af_best_v1_1.001430_00000042.art
 
+# Generic cnf via the output dataset: fcldump samples a file of it for you
+fcldump --dataset nts.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.root
+
 # List all cnfs at a dsconf
 fcldump --list-dsconf Run1Ban_best_v1_5-000
 ```
@@ -508,6 +589,14 @@ fcldump --list-dsconf Run1Ban_best_v1_5-000
 Flags: `--dataset`, `--target`, `--local-jobdef`, `--fname`,
 `--list-dsconf`, `--index N` (default 0), `--loc` (default `tape`),
 `--proto` (default `root`).
+
+A generic ({desc}-templated) cnf defers both the output description and
+the sequencer to runtime, so the FCL needs one concrete file to resolve
+them. `--dataset` alone is enough: fcldump lists that dataset's files,
+sorts them by name, takes `--index` (default 0), and prints the file it
+picked. `--target` or `--fname` overrides the pick; if the dataset has no
+files yet there is nothing to sample and fcldump says so instead of
+guessing.
 
 Note: one cnf often produces outputs whose descriptions carry suffixes
 glued onto the cnf desc (`Triggered`/`Triggerable` at digi/mix, `-LH`/
@@ -656,6 +745,9 @@ expanded — workers resolve it from the SimJob release at run time.
   fileNames are substituted at build time; outputs whose upstream defaults
   glue a suffix onto the desc token (e.g. `description-CH`) need an
   explicit per-output override or the build-time guard rejects the cnf.
+- Overrides are emitted in dict order and FHiCL is last-definition-wins,
+  so an `#include` listed after a key overrides that key. Put `#include`
+  first when the entry's own values must win over the included file.
 - The template is embedded with `--embed`, so the cnf carries the
   override text verbatim.
 
@@ -844,6 +936,7 @@ submissions run --campaign 7       # top up only campaign 7 (recovery pass still
 submissions pause 7 --note "investigating OOM"
 submissions resume 7               # paused -> active; preserves the pause note
 submissions cancel 7               # close; already-submitted rows still recovered
+submissions cancel 7 --close-rows --note "clusters removed; not recovering"
 submissions complete 7 --note "upstream production finished"
 submissions set-slice 7 500        # retune the batch size from the next tick
 submissions set-memory 7 3000MB    # retune the memory request from the next tick
@@ -891,8 +984,23 @@ Verbs:
   note: `"operator pause"`).
 - `resume CAMP_ID` — reactivate a paused campaign; the note recorded
   when it was paused is preserved, not cleared.
-- `cancel CAMP_ID` — cancel a campaign; already-submitted ledger rows
-  still get recovered normally.
+- `cancel CAMP_ID [--note TEXT] [--close-rows]` — cancel a campaign.
+  Bare, it closes the campaign only: already-submitted ledger rows keep
+  being verified and recovered, because cancelling means "stop
+  expanding", not "abandon the jobs in flight". `--close-rows` states
+  the other intent — the round is being abandoned, its clusters have
+  been removed, and the indices are deliberately not wanted: every open
+  row on the campaign's tarball moves to `exhausted` (terminal, "no
+  more attempts") so the next tick recovers nothing, and each closed
+  row id is printed. It is not the default, because closing rows
+  discards the ledger's ability to finish partially-run work. Two
+  behaviours worth knowing: a row still in `submitting` refuses the
+  whole operation and writes nothing at all (its `jobsub_submit` may be
+  in flight, and closing under it orphans the cluster — `submissions
+  reconcile` it first), and the flag works on an already-cancelled
+  campaign, since in practice the open rows only become a problem after
+  the cancel. Bare `cancel` still errors on an already-cancelled
+  campaign.
 - `complete CAMP_ID [--note TEXT]` — the operator close-out for a
   draining campaign (default note: `"operator complete"`).
   Already-submitted rows still get verified and recovered. A draining
@@ -981,7 +1089,7 @@ Notes:
   verification continues per ledger row), `paused` (submit failure,
   crash-window overlap, or `pause`; a human clears it with `resume` or
   `cancel`), or `cancelled` (`cancel`; already-submitted rows still get
-  recovered).
+  recovered unless the cancel carried `--close-rows`).
 - `--enqueue` refuses a second campaign for the same tarball while an
   `active` OR `paused` one exists. A paused campaign still owns its
   index space, so "pause then enqueue" is not a workaround — only
@@ -1067,7 +1175,7 @@ runlocal --jobdef cnf.mu2e.STMBeamToVDTarget.MDC2025au.0.tar \
 
 # Produce full-length output for indices 100..107, four at a time
 runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
-         --inloc tape --first 100 --num 8 -j 4
+         --inloc tape --first 100 --num 8 -j 4 --json /tmp/run.json
 
 # Rerun exactly the indices a grid pass lost
 runlocal --jobdef /path/to/cnf.mu2e.CeEndpoint.MDC2025au.0.tar \
@@ -1083,9 +1191,10 @@ Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
 `--inloc` (default `tape`), `--first` / `--num` (default `0` / `1`),
 `--indices SPEC`, `-j/--parallel` (default 4), `--workdir` (default
 `.`), `--nevts` (default `-1` = whatever the FCL says),
-`--mu2e-options`, `--copy-input`, `--code TARBALL` (a `muse tarball`
-build to run against instead of the cnf's own `/cvmfs` setup, unpacked
-once into `<workdir>/code`).
+`--mu2e-options`, `--copy-input`, `--timeout SECONDS` (default 86400),
+`--json PATH`, `--code TARBALL` (a `muse tarball` build to run against
+instead of the cnf's own `/cvmfs` setup, unpacked once into
+`<workdir>/code`).
 
 Job prep is the worker's own `process_jobdef`, so a local run exercises
 the same tarball fetch, inloc handling and `--copy-input` staging the
@@ -1114,20 +1223,81 @@ failure, and the process exits 1 if any job failed. Four concurrent
 mu2e processes is roughly 10 GB resident — the driver prints that
 arithmetic for the `-j` you chose.
 
+`--timeout SECONDS` (default `86400` = 24 h, the grid's default lease;
+`0` disables it) bounds each job's wall clock. A job over the limit has
+its whole process **group** signalled — SIGTERM, then SIGKILL 10 s
+later — because `mu2e` is a grandchild of the launcher and killing only
+the child orphans it. The job is reported as `rc=124` with
+`timed_out: true`, and the rest of the window keeps running. A
+timed-out job's output files are still listed, but they are whatever
+art had written when it died, so treat them as partial.
+
+`--json PATH` writes the machine-readable half of the end-of-run
+summary — note this `--json` is an OUTPUT path, unlike `json2jobdef
+--json`, which reads a config. It says three things the printed table
+cannot: each output is an **absolute** path (the table prints only a
+count), the FAILED indices are **named** (one exit code cannot
+distinguish 7-of-8 from 3-of-8, and a caller measuring a rate must
+divide by the jobs that actually produced output), and it is written
+whatever the exit code. On the reader's side the contract is that a
+MISSING file means `runlocal` died before it could report — never that
+zero jobs ran.
+
+### `jobwait`
+
+Block until a submitted cluster leaves the queue, then record how every
+job ended — the grid twin of `runlocal`, writing the same `--json`
+summary shape:
+
+```bash
+jobwait --jobdef cnf.mu2e.STMNeutralsToVD.MDC2025av.0.tar \
+        --cluster 29496724@jobsub01.fnal.gov --json /tmp/wait.json
+
+# Open-ended cnf, and a window submitted with a firstjob offset
+jobwait --jobdef cnf.mu2e.NoPrimary.Run1Baq.0.tar \
+        --cluster 29838670@jobsub02.fnal.gov --njobs 1000 --first 4000
+```
+
+Flags: `--jobdef` and `--cluster` (both required; give the cluster with
+its schedd, `NNNN@jobsub0X.fnal.gov` — a bare number makes history
+search every schedd), `--njobs` (default: the cnf's own count; required
+for an open-ended cnf), `--first` (cnf index of proc 0, for a firstjob
+window), `--poll-s` (default 300), `--outstage` (the submission's
+`$MU2EGRID_WFOUTSTAGE`; with it, summary output paths are absolute),
+`--json PATH` (written atomically, and on failure too).
+
+- It consults **no filesystem**. Under the direct backend the output
+  copy runs inside the job, so a job can only exit 0 after its copies
+  landed — the exit code is the complete success record. Checking
+  files before the drain would race condor's evict-and-rerun, and
+  counting them after is guessing: an empty condor history is reported
+  as `unknown`, never inferred complete.
+- No timeout and no acceptance threshold, both deliberate. A held
+  cluster is waited on — patience is the caller's policy (`timeout 24h
+  jobwait ...`) — and exit 0 means every job succeeded; a caller happy
+  with 95% reads `ok`/`failed` out of the JSON, exactly as with
+  `runlocal`.
+- Condor history fades — jobs from ~2 weeks back are already gone from
+  the mu2e schedds — so the JSON written at drain time is the durable
+  per-job outcome record, not a cache of one.
+
 ### `install_prodtools.sh` / `submissions_cron`
 
 Operations scripts. `install_prodtools.sh` installs a versioned prodtools
 release on CVMFS from a GitHub tag — run it directly on
 `cvmfsmu2e@oasiscfs.fnal.gov`; `-n` is a dry run and `-t [DIR]` installs
 into a local writable dir instead of touching CVMFS.
-`submissions_cron` sets up a quiet Mu2e environment, checks for a valid
-bearer token (report-only — it never fetches or refreshes one), then runs
+`submissions_cron` sets up a quiet Mu2e environment and runs
 `submissions run` (the per-DB lock is taken inside `run` itself, not by
 the cron wrapper) for mu2epro's crontab, appending output to a
 `submissions-YYYYMMDD.log` beside the ledger DB. One tick drives the
-recovery pass, the sliced-campaign top-up, and the draining tick. Not
-installed into any crontab by this repo — that is a one-time operator
-step (section 11 `submissions`, wiki page
+recovery pass, the sliced-campaign top-up, and the draining tick. It
+deliberately performs no token pre-check: the submitting steps
+authenticate for themselves and fail loudly, and a gate there
+false-negatives on mu2epro's own token path — which under `set -e`
+turned every tick into a silent no-op. Token problems are reported,
+never remediated. Not installed into any crontab by this repo — that is
+a one-time operator step (section 11 `submissions`, wiki page
 `2026-07-18-direct-recovery-loop`).
 
 ## 12. Troubleshooting
@@ -1227,6 +1397,9 @@ step (section 11 `submissions`, wiki page
   direct-backend job. To run a cnf's jobs locally use `runlocal`
   (section 11); to smoke the worker itself, set the direct-mode
   environment by hand from a dry-run's ops JSON (section 7).
+- `runlocal: --timeout must be 0 (no limit) or positive` / `runlocal:
+  --json directory does not exist: <dir>` — both are argument checks
+  that fire before any job starts, so a typo costs nothing.
 - `submissions run`: `row N: no cluster id recorded — cannot drain-check;
   update the row manually` — the ledger row has no cluster to query;
   `submissions run` will not guess one.
@@ -1251,6 +1424,16 @@ step (section 11 `submissions`, wiki page
   not --indices` / `submissions: row <N> is an index row — use
   --indices, not --files` — `resubmit`'s selector must match the row's
   kind.
+- `submissions: campaign N: rows <ids> are still 'submitting' — a
+  jobsub_submit may be in flight. Check jobsub_q and `submissions
+  reconcile <id>` them first; nothing was closed` — `cancel
+  --close-rows` refuses to close anything while a window is reserved
+  but not yet attached to a cluster. Reconcile the named rows once
+  jobsub_q confirms the window is free, then re-run the cancel.
+- `submissions: campaign N: cannot go cancelled -> cancelled` — bare
+  `cancel` on an already-cancelled campaign. If what you actually want
+  is to stop its open rows from being recovered, that is `submissions
+  cancel N --close-rows`, which accepts an already-cancelled campaign.
 - `active campaign N already exists for <tarball>` / `paused campaign N
   already exists for <tarball>` — `--enqueue` refuses a second
   active-or-paused campaign for the same tarball. Use `submissions
