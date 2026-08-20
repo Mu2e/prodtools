@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName, sha256_file
-from utils.jobdesc import code_of
+from utils.jobdesc import code_of, dir_inloc_path, is_dir_inloc
 from utils.file_resolver import resilient_path, infer_dataset_location
 # NB: utils.samweb_wrapper (→ samweb_client) is imported lazily inside
 # check_inputs, so `--help` and the unit tests can load this module
@@ -55,16 +55,26 @@ def _group_by_dataset(files):
     return out
 
 
+def _tbs_of(tarball_path):
+    """The cnf's frozen tbs block. Single home of the tarball read, so
+    the input sections are named in one place."""
+    return Mu2eJobPars(tarball_path).json_data.get('tbs', {})
+
+
+def _primary_files(tbs):
+    """Primary input files: tbs.inputs + tbs.samplinginput (the
+    resampler's primary input, routed like any other primary)."""
+    return _section_files(tbs, 'inputs') + _section_files(tbs, 'samplinginput')
+
+
 def split_inputs(tarball_path):
     """(primary_by_ds, auxin_by_ds): distinct input files grouped by
     dataset. Primary = tbs.inputs + tbs.samplinginput (the resampler's
     primary input, routed like any other primary — tape/disk locality,
     never the resilient size check). Pileup = tbs.auxin. Frozen in the
     tarball — no per-index reconstruction."""
-    jp = Mu2eJobPars(tarball_path)
-    tbs = jp.json_data.get('tbs', {})
-    primary = _group_by_dataset(_section_files(tbs, 'inputs')
-                                + _section_files(tbs, 'samplinginput'))
+    tbs = _tbs_of(tarball_path)
+    primary = _group_by_dataset(_primary_files(tbs))
     auxin = _group_by_dataset(_section_files(tbs, 'auxin'))
     return (primary, auxin)
 
@@ -105,6 +115,55 @@ def check_resilient(dataset, files, sam_sizes, disk_size):
             problems.append(Problem(dataset, f, 'truncated',
                                     f'{actual} bytes on disk, SAM expects '
                                     f'{expected[f]}'))
+    return problems
+
+
+def check_dir(files, dir_path, file_size):
+    """Verify inputs named by a `dir:` inloc are present on that path.
+
+    A `dir:` inloc names files on a filesystem, not a SAM dataset: the
+    files may never have been declared (chained intermediate outputs are
+    the normal case), so residency is an existence check and a SAM
+    lookup would be wrong rather than merely slow. Zero size is the one
+    truncation catchable without a SAM size to compare against.
+
+    Problem.dataset carries the dir: path — there is no dataset, and
+    the filenames need not parse as Mu2e names (json2jobdef writes
+    `input_data` keys verbatim for this shape).
+
+    Stats run on the same thread pool `_default_locality` uses, for the
+    same reason: a `dir:` path is normally under /pnfs, where a stat is
+    an NFS round-trip to the dCache namespace server, not a local
+    syscall. Serially that is minutes of blocked enqueue for a
+    multi-thousand-file campaign.
+
+    Fails closed like check_resilient: an unexpected stat error becomes
+    a query_error Problem instead of escaping the gate.
+    """
+    ordered = list(dict.fromkeys(files))    # dedup, preserve order
+    sizes = {}
+    with ThreadPoolExecutor(max_workers=_LOCALITY_WORKERS) as pool:
+        futures = {pool.submit(file_size, os.path.join(dir_path, f)): f
+                   for f in ordered}
+        for fut in as_completed(futures):
+            f = futures[fut]
+            try:
+                sizes[f] = fut.result()
+            except Exception as e:
+                sizes[f] = e
+    problems = []
+    for f in ordered:                       # report in input order
+        size = sizes[f]
+        path = os.path.join(dir_path, f)
+        if isinstance(size, Exception):
+            problems.append(Problem(dir_path, f, 'query_error',
+                                    f'stat failed for {path}: {size}'))
+        elif size is None:
+            problems.append(Problem(dir_path, f, 'missing',
+                                    f'absent from {dir_path}'))
+        elif size == 0:
+            problems.append(Problem(dir_path, f, 'truncated',
+                                    f'zero bytes at {path}'))
     return problems
 
 
@@ -217,12 +276,24 @@ def check_inputs(tarball_path, inloc, *,
     Pileup (tbs.auxin) staged to resilient is checked by direct size vs
     SAM (mdh cannot see resilient); everything else — the primary, and
     pileup under a non-resilient inloc — is checked by tape/disk locality.
+    A `dir:` inloc short-circuits to a pure filesystem check: its files
+    were never declared to SAM, so no SAM query is issued at all.
     Read-only: never remediates. Callers exit 2 when ok is False.
 
     sam_sizes defaults to the real SAM size lister, imported lazily so
     this module loads without the Mu2e environment (for `--help`/tests);
     tests inject their own callable.
     """
+    if is_dir_inloc(inloc):
+        # Flat file list, NOT split_inputs: _group_by_dataset parses
+        # each filename as a Mu2eName, and dir: basenames (written
+        # verbatim from input_data keys) need not conform. Primary and
+        # pileup resolve against the same path, so there is nothing to
+        # route and nothing to group.
+        tbs = _tbs_of(tarball_path)
+        problems = check_dir(_primary_files(tbs) + _section_files(tbs, 'auxin'),
+                             dir_inloc_path(inloc), file_size=disk_size)
+        return (not problems, problems)
     if sam_sizes is None:
         from utils.samweb_wrapper import file_sizes_in_dataset
         sam_sizes = file_sizes_in_dataset

@@ -1077,20 +1077,84 @@ def drain_tick(db_path, cap, dry_run=False, count_fn=total_queued,
     return summary
 
 
-def manage_campaign(db_path, camp_id, action, note=None):
+def manage_campaign(db_path, camp_id, action, note=None, close_rows=False):
     """Operator switches. cancel closes the campaign only —
     already-submitted ledger rows still get recovered normally. note
     applies to pause/cancel; resume never writes one (the stored pause
     reason is preserved). complete is the operator close-out for
     draining campaigns — non-blocking: closing with parked files is a
     legitimate decision. A paused campaign must be resumed first;
-    paused -> complete is not a ledger transition."""
+    paused -> complete is not a ledger transition.
+
+    close_rows=True (cancel only) states the other intent: abandon the
+    round. It additionally moves every open row on this campaign's
+    tarball to 'exhausted' — the terminal state that means "no more
+    attempts" — so the next tick recovers nothing. It is deliberately
+    not the default: closing rows discards the ledger's ability to
+    finish partially-run work, which is exactly what a plain cancel
+    preserves.
+
+    Rows match by tarball because the two tables carry no campaign_id;
+    campaigns_live_tarball keeps that unambiguous for a live campaign,
+    and the closed ids are RETURNED so a cancelled predecessor's stray
+    row shows up rather than hiding in a count (same reasoning as
+    submission_ledger.set_campaign_entry_key's cascade).
+
+    A 'submitting' row on the tarball is refused outright rather than
+    skipped: it is a claimed window whose jobsub_submit may still be in
+    flight, and closing under it orphans the cluster. Nothing is
+    written in that case — not even the campaign state.
+
+    Because the flag is normally reached AFTER a cancel (the rows only
+    become a problem once the clusters are gone), cancelling an
+    already-cancelled campaign is a no-op here instead of an error.
+    Bare cancel keeps raising on it, as before.
+    """
     target = {'pause': 'paused', 'resume': 'active',
               'cancel': 'cancelled', 'complete': 'complete'}[action]
-    submission_ledger.set_campaign_state(
-        db_path, camp_id, target,
-        note=note if note is not None else f'operator {action}')
-    print(f"campaign {camp_id}: {action} -> {target}")
+    if not close_rows:
+        submission_ledger.set_campaign_state(
+            db_path, camp_id, target,
+            note=note if note is not None else f'operator {action}')
+        print(f"campaign {camp_id}: {action} -> {target}")
+        return []
+
+    if action != 'cancel':
+        raise ValueError(f"--close-rows is only valid with cancel, "
+                         f"not {action}")
+    camp = next((c for c in submission_ledger.all_campaigns(db_path)
+                 if c['id'] == camp_id), None)
+    if camp is None:
+        raise ValueError(f"no campaign {camp_id}")
+    reserved = [r['id'] for r in submission_ledger.reserved_rows(db_path)
+                if r['tarball'] == camp['tarball']]
+    if reserved:
+        raise ValueError(
+            f"campaign {camp_id}: rows "
+            f"{', '.join(str(i) for i in reserved)} are still "
+            f"'submitting' — a jobsub_submit may be in flight. Check "
+            f"jobsub_q and `submissions reconcile <id>` them first; "
+            f"nothing was closed")
+    if note is None:
+        note = ('operator cancel --close-rows: indices deliberately '
+                'not recovered')
+    if camp['state'] == 'cancelled':
+        print(f"campaign {camp_id}: already cancelled")
+    else:
+        submission_ledger.set_campaign_state(db_path, camp_id, 'cancelled',
+                                             note=note)
+        print(f"campaign {camp_id}: cancel -> cancelled")
+    closed = []
+    for row in submission_ledger.open_rows(db_path):
+        if row['tarball'] != camp['tarball']:
+            continue
+        submission_ledger.close_row(db_path, row['id'], 'exhausted',
+                                    note=note)
+        print(f"row {row['id']}: active -> exhausted")
+        closed.append(row['id'])
+    if not closed:
+        print(f"campaign {camp_id}: no open rows to close")
+    return closed
 
 
 def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
@@ -1371,6 +1435,16 @@ def build_parser():
                             help='Cancel a campaign (already-submitted '
                                  'rows still get recovered)')
     cancel.add_argument('camp_id', type=int)
+    cancel.add_argument('--note', default=None,
+                        help='Reason recorded on the campaign (default: '
+                             '"operator cancel")')
+    cancel.add_argument(
+        '--close-rows', action='store_true',
+        help='Also close every open row on this campaign to '
+             '"exhausted", so the next tick recovers NOTHING. Use when '
+             'the round is being abandoned and its clusters removed; '
+             'without it the already-submitted indices are recovered '
+             'normally. Safe to run on an already-cancelled campaign.')
     comp = sub.add_parser('complete',
                           help='Close a campaign complete (operator '
                                'close-out for draining campaigns; '
@@ -1743,7 +1817,8 @@ def main(argv=None):
         _acquire_lock(db)
         try:
             manage_campaign(db, args.camp_id, verb,
-                            note=getattr(args, 'note', None))
+                            note=getattr(args, 'note', None),
+                            close_rows=getattr(args, 'close_rows', False))
         except ValueError as e:
             sys.exit(f"submissions: {e}")
         return

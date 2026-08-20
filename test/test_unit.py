@@ -2306,6 +2306,32 @@ class TestGenericCnfDiscovery(unittest.TestCase):
         finally:
             os.unlink(tar)
 
+    def test_sample_dataset_target_sorts_and_honors_index(self):
+        """A bare --dataset against a generic cnf has no sequencer; the sampler
+        picks one of the dataset's own files. SAM returns files in arbitrary
+        order, so sort before indexing or the pick is not reproducible."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        ds = "nts.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.root"
+        files = [f"nts.mu2e.MuCap1809keVCaloOnSpill.MDC2025au_best_v1_5.001430_{i:08d}.root"
+                 for i in (9, 0, 3)]
+        with patch('utils.samweb_wrapper.list_files', return_value=files) as lf:
+            self.assertEqual(jobdef_lookup.sample_dataset_target(ds), files[1])
+            self.assertEqual(jobdef_lookup.sample_dataset_target(ds, index=2), files[0])
+        self.assertIn(f"dh.dataset {ds}", lf.call_args[0][0])
+        self.assertIn("with limit", lf.call_args[0][0])
+
+    def test_sample_dataset_target_none_when_nothing_to_sample(self):
+        """No files (nothing produced yet) or an index past the batch: return
+        None so the caller prints its guidance instead of guessing."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        ds = "nts.mu2e.X.MDC2025au_best_v1_5.root"
+        with patch('utils.samweb_wrapper.list_files', return_value=[]):
+            self.assertIsNone(jobdef_lookup.sample_dataset_target(ds))
+        with patch('utils.samweb_wrapper.list_files', return_value=['a.root']):
+            self.assertIsNone(jobdef_lookup.sample_dataset_target(ds, index=5))
+
 
 # ---------------------------------------------------------------------------
 # 24. _replace_placeholders defer_keys (jobdef.py)
@@ -6287,6 +6313,87 @@ class TestManageCampaign(unittest.TestCase):
         with self.assertRaises(ValueError):
             manage_campaign(self.db, self.cid, 'resume')
 
+    # --- cancel --close-rows -------------------------------------------
+    # Cancelling stops the campaign expanding; the rows it already
+    # dispatched keep getting recovered. --close-rows is the other
+    # intent -- abandon the round -- and it has to be typed out.
+
+    def _row(self, indices, tarball=None):
+        return self.sl.record_submission(
+            self.db, tarball=tarball or 'cnf.mu2e.M.C.0.tar',
+            entry={'tarball': tarball or 'cnf.mu2e.M.C.0.tar', 'njobs': 5},
+            indices=indices, jobsub_id='1.0@js', cluster_id='1')
+
+    def _state(self, row_id):
+        return self.sl.row_by_id(self.db, row_id)['state']
+
+    def test_bare_cancel_leaves_rows_active(self):
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        manage_campaign(self.db, self.cid, 'cancel')
+        self.assertEqual(self._state(rid), 'active')
+
+    def test_close_rows_exhausts_open_rows_with_the_note(self):
+        from utils.submissions import manage_campaign
+        a, b = self._row([0, 1]), self._row([2, 3])
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 note='killed by hand', close_rows=True)
+        self.assertEqual(closed, [a, b])
+        self.assertEqual(self._state(a), 'exhausted')
+        self.assertEqual(self._state(b), 'exhausted')
+        self.assertEqual(self.sl.row_by_id(self.db, a)['note'],
+                         'killed by hand')
+        camp = self.sl.all_campaigns(self.db)[0]
+        self.assertEqual(camp['state'], 'cancelled')
+        self.assertEqual(camp['note'], 'killed by hand')
+
+    def test_close_rows_leaves_closed_rows_and_other_tarballs_alone(self):
+        from utils.submissions import manage_campaign
+        done = self._row([0, 1])
+        self.sl.close_row(self.db, done, 'complete')
+        other_cid = self.sl.create_campaign(
+            self.db, tarball='cnf.mu2e.OTHER.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.OTHER.C.0.tar', 'njobs': 5},
+            slice_size=2)
+        other = self._row([0, 1], tarball='cnf.mu2e.OTHER.C.0.tar')
+        mine = self._row([4])
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 close_rows=True)
+        self.assertEqual(closed, [mine])
+        self.assertEqual(self._state(done), 'complete')
+        self.assertEqual(self._state(other), 'active')
+        self.assertEqual(
+            [c['state'] for c in self.sl.all_campaigns(self.db)
+             if c['id'] == other_cid], ['active'])
+
+    def test_close_rows_refuses_while_a_row_is_submitting(self):
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        self.sl.reserve_submission(
+            self.db, tarball='cnf.mu2e.M.C.0.tar',
+            entry={'tarball': 'cnf.mu2e.M.C.0.tar', 'njobs': 5},
+            indices=[2, 3])
+        with self.assertRaises(ValueError) as cm:
+            manage_campaign(self.db, self.cid, 'cancel', close_rows=True)
+        self.assertIn('submitting', str(cm.exception))
+        # nothing written: the campaign is untouched too
+        self.assertEqual(self._state(rid), 'active')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'], 'active')
+
+    def test_close_rows_works_on_an_already_cancelled_campaign(self):
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        manage_campaign(self.db, self.cid, 'cancel')
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 close_rows=True)
+        self.assertEqual(closed, [rid])
+        self.assertEqual(self._state(rid), 'exhausted')
+
+    def test_close_rows_only_applies_to_cancel(self):
+        from utils.submissions import manage_campaign
+        with self.assertRaises(ValueError):
+            manage_campaign(self.db, self.cid, 'pause', close_rows=True)
+
 
 # ---------------------------------------------------------------------------
 # submissions CLI verb structure (utils/submissions.py) — workflow hardening
@@ -7829,6 +7936,102 @@ class TestCheckInputs(unittest.TestCase):
         os.unlink(tar)
         self.assertFalse(ok)
         self.assertEqual([p.kind for p in probs], ["nearline"])
+
+
+class TestCheckDirInloc(unittest.TestCase):
+    """`dir:<path>` inloc: residency is a filesystem existence check on
+    that path — never a SAM query. Filenames are bare basenames written
+    verbatim by json2jobdef for this shape and need not parse as Mu2e
+    names, so the branch must bypass _group_by_dataset entirely."""
+
+    PRIM = "sim.oksuzian.TargetStops.GridSmoke.001430_00000000.art"
+    BARE = "PBI_Normal_33344.txt"          # not a Mu2eName — must not crash
+    PILE = "dts.mu2e.Pile.CampB.001430_00000005.art"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def _write(self, name, content=b"x"):
+        with open(os.path.join(self.dir, name), "wb") as f:
+            f.write(content)
+
+    def _tar(self, files, auxin=None):
+        jp = {"code": "", "setup": "/cvmfs/x/setup.sh",
+              "tbs": {"seed": "s",
+                      "inputs": {"source.fileNames": [1, list(files)]}},
+              "jobname": "cnf.mu2e.T.C.0.tar", "owner": "mu2e",
+              "dsconf": "C"}
+        if auxin is not None:
+            jp["tbs"]["auxin"] = auxin
+        return _make_tarball(jp)
+
+    def _boom(self, *a, **k):
+        raise AssertionError("SAM must not be queried for a dir: inloc")
+
+    def _check(self, tar):
+        from utils.check_inputs import check_inputs
+        ok, probs = check_inputs(tar, f"dir:{self.dir}",
+                                 sam_sizes=self._boom,
+                                 locality=self._boom,
+                                 dataset_location=self._boom)
+        os.unlink(tar)
+        return ok, probs
+
+    def test_all_present_no_sam_query(self):
+        # The pinning assertion: every SAM-facing injectable raises.
+        self._write(self.PRIM)
+        self._write(self.BARE)
+        ok, probs = self._check(self._tar([self.PRIM, self.BARE]))
+        self.assertTrue(ok)
+        self.assertEqual(probs, [])
+
+    def test_missing_file_reported(self):
+        self._write(self.PRIM)
+        ok, probs = self._check(self._tar([self.PRIM, self.BARE]))
+        self.assertFalse(ok)
+        self.assertEqual([(p.filename, p.kind) for p in probs],
+                         [(self.BARE, "missing")])
+
+    def test_zero_size_is_truncated(self):
+        self._write(self.PRIM, content=b"")
+        ok, probs = self._check(self._tar([self.PRIM]))
+        self.assertFalse(ok)
+        self.assertEqual([p.kind for p in probs], ["truncated"])
+
+    def test_auxin_checked_against_dir_too(self):
+        self._write(self.PRIM)
+        tar = self._tar([self.PRIM],
+                        auxin={"physics.filters.M.fileNames":
+                               [1, [self.PILE]]})
+        ok, probs = self._check(tar)
+        self.assertFalse(ok)
+        self.assertEqual([(p.filename, p.kind) for p in probs],
+                         [(self.PILE, "missing")])
+
+    def test_stat_error_fails_closed(self):
+        from utils.check_inputs import check_dir
+        def boom_size(path):
+            raise RuntimeError("filesystem exploded")
+        probs = check_dir([self.PRIM], self.dir, file_size=boom_size)
+        self.assertEqual([p.kind for p in probs], ["query_error"])
+
+    def test_non_dir_inloc_still_routes_to_sam_checks(self):
+        # Regression guard: the new branch must not widen. A tape inloc
+        # still resolves through locality/dataset_location.
+        from utils.check_inputs import check_inputs
+        seen = {"called": False}
+        def loc(mdh_loc, fs):
+            seen["called"] = True
+            return {f: "ONLINE" for f in fs}
+        tar = self._tar([self.PILE])
+        ok, probs = check_inputs(tar, "tape",
+                                 sam_sizes=lambda ds: {},
+                                 locality=loc,
+                                 dataset_location=lambda ds: "enstore")
+        os.unlink(tar)
+        self.assertTrue(ok)
+        self.assertTrue(seen["called"])
 
 
 class TestCheckCodeTarball(unittest.TestCase):

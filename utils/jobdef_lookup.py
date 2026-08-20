@@ -129,6 +129,27 @@ def derive_generic_input(tarball_path, target):
     return matches[0]
 
 
+# How many of a dataset's files to pull when sampling one. SAM returns them in
+# arbitrary order, so a batch is sorted before indexing; big enough that
+# --index has room, small enough that a 20k-file dataset costs one cheap query.
+SAMPLE_BATCH = 200
+
+
+def sample_dataset_target(dataset, index=0, batch=SAMPLE_BATCH):
+    """Pick one file of ``dataset`` to stand in for a missing --target.
+
+    A generic cnf defers the sequencer to runtime, so a bare --dataset cannot
+    resolve one on its own; any file of the dataset supplies it. Returns None
+    when there is nothing to sample (dataset empty, or index past the batch) —
+    the caller reports that rather than guessing.
+    """
+    from utils.samweb_wrapper import list_files
+    files = sorted(list_files(f"dh.dataset {dataset} with limit {batch}"))
+    if index < 0 or index >= len(files):
+        return None
+    return files[index]
+
+
 def _search_generic(jobdefs, desc, input_type):
     """Lowest-priority pass: match a generic cnf whose {desc}-templated output
     (of the right tier) can produce ``desc``. Used only when no exact per-desc

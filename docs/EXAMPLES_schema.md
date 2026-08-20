@@ -90,6 +90,21 @@ When regenerating, read in this order:
    `json2jobdef --prod --enqueue` CLI path for those campaigns instead,
    with `code` set in the JSON entry (`json2jobdef` has no `--code`
    flag of its own; it passes the entry's value down to `jobdef`).
+   **Campaign-wide defaults (`common.json`)** — a campaign directory
+   may hold a `common.json` beside its stage configs; `json2jobdef`
+   applies it to every entry the listed stage files contribute.
+   Document its three keys: `applies_to` (stage filenames it covers —
+   a stage whose FCL configures no such service is deliberately left
+   out), `dsconf_prefix` (optional filter, so a directory holding two
+   campaigns' entries only defaults the matching ones), and
+   `fcl_overrides`. Inside `fcl_overrides`, an `#include` list is
+   PREPENDED to the entry's own includes and a plain key is applied
+   with setdefault — either way an entry that states the value keeps
+   it. Note the trap the file itself records: including a FCL that
+   does not exist in the Musing aborts every build in `fhicl-get`, and
+   an entry-level override cannot suppress an include, so state the
+   keys inline until the FCL ships.
+
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -97,6 +112,13 @@ When regenerating, read in this order:
    `total_needed`; `njobs` is NOT auto-recomputed).
 5. **FCL Generation (`jobfcl`, `fcldump`)** — from jobdef tarball, from
    dataset name, from target output filename. Include `--local-jobdef`.
+   Cover the generic ({desc}-templated) cnf case: it defers desc and
+   sequencer to runtime, so the FCL needs one concrete file. `fcldump
+   --dataset <output dataset>` supplies it on its own — it samples one
+   file of that dataset (sorted by name, `--index` selects which) and
+   prints which file it used; `--target` / `--fname` override the pick,
+   and the guidance message still prints when the dataset has no files
+   to sample.
 6. **Mixing Jobs** — JSON schema with `pileup_datasets` list-of-dict form,
    automatic mixer mapping. Do not use the legacy `*_dataset` / `*_count`
    split form.
@@ -121,7 +143,8 @@ When regenerating, read in this order:
     user-facing CLI: `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `jobquery`,
-    `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`. Ops scripts
+    `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`, `jobwait`.
+    Ops scripts
     (`install_prodtools.sh`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
     key flags. Enumerate from the current `bin/` directory — add any new
@@ -133,7 +156,12 @@ When regenerating, read in this order:
       the verb table
       (`status` is the default/read-only verb; `run` with `--dry-run`/
       `--row`/`--max-attempts`/`--max-queued`; `pause CAMP_ID [--note
-      TEXT]`; `resume CAMP_ID`; `cancel CAMP_ID`; `complete CAMP_ID
+      TEXT]`; `resume CAMP_ID`; `cancel CAMP_ID [--note TEXT]
+      [--close-rows]` — bare cancel closes the campaign only and its
+      already-submitted rows keep being recovered, while `--close-rows`
+      additionally moves every open row on the campaign's tarball to
+      `exhausted` so the next tick recovers nothing (for a round being
+      abandoned after its clusters were removed); `complete CAMP_ID
       [--note TEXT]` — the operator close-out for a draining campaign;
       `set-slice CAMP_ID N` and `set-memory CAMP_ID MEM` — retune a live
       campaign's slice size / memory request for its remaining slices;
@@ -178,6 +206,23 @@ When regenerating, read in this order:
       NOT document `--extract-code` — it was removed (it extracted any
       tar member ending in `.tar`, which under sidecar delivery is not
       code at all).
+    - `jobwait` — one-line role ("block until a submitted cluster
+      leaves the queue, then record how every job ended"). Cover:
+      `--jobdef` and `--cluster` (required; the cluster id ideally
+      carries its schedd, `NNNN@jobsub0X.fnal.gov`), `--njobs`
+      (default: the cnf's own, required for an open-ended cnf),
+      `--first` (cnf index of proc 0, for firstjob windows),
+      `--poll-s` (default 300), `--outstage`, and `--json PATH` (the
+      same summary shape `runlocal --json` writes, written on failure
+      too). Say that it consults NO filesystem — exit codes are the
+      record, because the copy runs inside the job — that an empty
+      condor history is reported as `unknown` and never inferred
+      complete, and that it has no timeout and no acceptance threshold
+      by design (wrap it in `timeout`, and read `ok`/`failed` from the
+      JSON for a partial-success policy). Note condor history fades in
+      ~2 weeks, so the JSON written at drain time is the durable
+      record.
+
     - `runlocal` — mention `--code <tarball>` as an alternative to a cnf
       built from `simjob_setup`: unpacks the build once into
       `<workdir>/code/` before any jobs run, and each spawned child
@@ -244,7 +289,13 @@ reading the code:
 - `inloc` accepts `disk`, `tape`, `scratch`, `resilient`, `stash`,
   `none`, or `dir:<path>` (locally-mounted FS, e.g. cvmfs). There is no
   `auto`. `resilient` reads via xrootd, `stash` reads via CVMFS, and
-  `dir:` reads via direct POSIX (the `file:` protocol is forced).
+  `dir:` forces the `file:` protocol ONLY for a path a worker can
+  actually POSIX-read — a `dir:` under `/pnfs` is dCache, never mounted
+  on a grid worker, so it streams via xrootd like any other dCache
+  location. A `dir:` entry also keys `input_data` by bare file
+  basenames rather than SAM dataset names (no SAM lookup happens), and
+  a `dir:` resampler therefore computes no `MaxEventsToSkip` — the
+  base FCL's or the entry's own value stands.
 - `outloc` values accept `tape`, `disk`, `scratch`, `outstage`. The
   first three are pushOutput actions — each copies the file to its
   dataset path AND declares it to SAM. pushOutput has no
