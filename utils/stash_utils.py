@@ -28,7 +28,7 @@ Usage
 import os
 import shutil
 import sys
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -78,6 +78,19 @@ def list_expected_paths(dataset: str) -> List[str]:
 # Copy
 # ---------------------------------------------------------------------------
 
+class CopyResult(NamedTuple):
+    """Outcome of a dataset copy: how many landed, how many did not.
+
+    `failed` is carried out of the copy loop rather than only printed.
+    It used to be counted, reported in the summary line and then
+    dropped on the return, so a caller could not tell a complete copy
+    from one that lost every file — and bin/copy_to_stash exited 0
+    either way.
+    """
+    copied: int
+    failed: int
+
+
 def _copy_dataset(
     dataset: str,
     dest_path_fn,
@@ -86,7 +99,7 @@ def _copy_dataset(
     dry_run: bool = False,
     verbose: bool = True,
     skip_existing: bool = False,
-) -> int:
+) -> CopyResult:
     """
     Copy all files in a SAM dataset to the destination given by
     `dest_path_fn(filename)` — the shared engine behind
@@ -203,7 +216,7 @@ def _copy_dataset(
         print(f"\n{status}: {n_ok} copied, {n_fail} failed{skipped} "
               f"out of {len(files) + n_skip} files")
 
-    return n_ok
+    return CopyResult(copied=n_ok, failed=n_fail)
 
 
 def copy_dataset_to_stash(
@@ -213,7 +226,7 @@ def copy_dataset_to_stash(
     dry_run: bool = False,
     verbose: bool = True,
     skip_existing: bool = False,
-) -> int:
+) -> CopyResult:
     """Copy all files in a SAM dataset to their stash write locations."""
     return _copy_dataset(dataset, write_path_for_file, source_loc, limit,
                          dry_run, verbose, skip_existing)
@@ -246,7 +259,7 @@ def copy_dataset_to_resilient(
     dry_run: bool = False,
     verbose: bool = True,
     skip_existing: bool = False,
-) -> int:
+) -> CopyResult:
     """Copy all files in a SAM dataset to their resilient dCache locations."""
     return _copy_dataset(dataset, resilient_path_for_file, source_loc, limit,
                          dry_run, verbose, skip_existing)

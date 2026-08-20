@@ -26,10 +26,9 @@ class Mu2eJobPars(Mu2eJobBase):
     
     def input_datasets(self):
         """Get list of input datasets"""
-        # Check for explicit input_datasets field first
-        if 'input_datasets' in self.json_data:
-            return self.json_data['input_datasets']
-        
+        # Derived from tbs, never read from a top-level `input_datasets`
+        # key: no such key is written (see output_datasets), so the
+        # early return that used to sit here never fired.
         # Extract from TBS inputs and auxin sections
         tbs = self.json_data.get('tbs', {})
         datasets = set()
@@ -67,8 +66,24 @@ class Mu2eJobPars(Mu2eJobBase):
         return files
     
     def output_datasets(self):
-        """Get list of output datasets"""
-        return self.json_data.get('output_datasets', [])
+        """Output dataset names, derived from tbs.outfiles.
+
+        Derived, not read: jobpars.json has no top-level
+        `output_datasets` key and never has — jobdef writes only
+        code/setup/code_ref/tbs/jobname — so reading one returned []
+        for every cnf ever built. That made the --output-files gate
+        reject every dataset and left its implementation unreachable.
+        job_outputs(0) resolves the same name patterns --output-files
+        itself walks, so the two agree by construction.
+        """
+        datasets = set()
+        for filename in self.job_outputs(0).values():
+            try:
+                name = Mu2eName.parse(filename)
+            except ValueError:
+                continue
+            datasets.add(str(name.with_extension('art').dataset))
+        return sorted(datasets)
     
     def codesize(self):
         """Bytes of code embedded in this cnf: always 0.

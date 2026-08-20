@@ -118,7 +118,7 @@ Examples:
     print()
 
     if args.dest == 'resilient':
-        n_copied = copy_dataset_to_resilient(
+        result = copy_dataset_to_resilient(
             dataset=args.dataset,
             source_loc=args.source,
             limit=args.limit,
@@ -127,7 +127,7 @@ Examples:
             skip_existing=args.skip_existing,
         )
     else:
-        n_copied = copy_dataset_to_stash(
+        result = copy_dataset_to_stash(
             dataset=args.dataset,
             source_loc=args.source,
             limit=args.limit,
@@ -136,7 +136,15 @@ Examples:
             skip_existing=args.skip_existing,
         )
 
-    return 0 if n_copied >= 0 else 1
+    # Exit on the failure count, not the success count. This used to read
+    # `0 if n_copied >= 0 else 1` -- n_copied only ever counts up from 0,
+    # so the else could not fire and a copy that lost every file still
+    # exited 0.
+    if result.failed:
+        print(f"ERROR: {result.failed} file(s) failed to copy "
+              f"({result.copied} copied)", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
