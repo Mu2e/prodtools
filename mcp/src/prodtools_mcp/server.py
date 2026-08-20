@@ -13,7 +13,6 @@ from prodtools_mcp import condor
 from prodtools_mcp.adapters import safe_tool
 from prodtools_mcp.tools import discovery, lineage, status
 
-LOGGER = logging.getLogger('prodtools_mcp')
 
 INSTRUCTIONS = """
 Read-only MCP server for Mu2e prodtools production state.

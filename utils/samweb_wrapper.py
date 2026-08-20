@@ -134,13 +134,10 @@ class SAMWebWrapper:
             return 0
     
     
-    def list_files(self, query: str, summary: bool = False) -> List[str]:
+    def list_files(self, query: str) -> List[str]:
         """List files matching a query (equivalent to samweb list-files)."""
         try:
-            if summary:
-                return self.client.listFilesSummary(query)
-            else:
-                return self.client.listFiles(query)
+            return self.client.listFiles(query)
         except Exception as e:
             print(f"Error listing files: {e}")
             return []
@@ -367,9 +364,9 @@ def count_files(query: str) -> int:
     return get_samweb_wrapper().count_files(query)
 
 
-def list_files(query: str, summary: bool = False) -> List[str]:
+def list_files(query: str) -> List[str]:
     """List files matching a query."""
-    return get_samweb_wrapper().list_files(query, summary)
+    return get_samweb_wrapper().list_files(query)
 
 def locate_file(filename: str) -> str:
     """Locate a file."""

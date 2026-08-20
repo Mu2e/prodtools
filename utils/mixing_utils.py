@@ -105,9 +105,9 @@ def build_pileup_args(config):
 
     # Process each mixer type
     for mixer_type, datasets in mixer_datasets.items():
-        mixer = PILEUP_MIXERS.get(mixer_type)
-        if not mixer:
-            continue
+        # _map_dataset_to_mixer returns a PILEUP_MIXERS key or raises, and
+        # the table is never mutated, so this lookup always resolves.
+        mixer = PILEUP_MIXERS[mixer_type]
 
         pileup_list = f"{mixer_type}Cat.txt"
 

@@ -1,9 +1,11 @@
 """Depth-bounded provenance traversal.
 
-New code, not a wrapper: famtree.topology_for_dataset (famtree.py:118)
-has no depth limit, no truncation signal, and walks parents only — its
-recursion is a closure that cannot be parameterized. Nothing in famtree
-walks children; samweb_wrapper.children_of_file (:436) is per-file.
+New code, not a wrapper: famtree's own dataset-topology walker had no
+depth limit, no truncation signal, and walked parents only — its
+recursion was a closure that could not be parameterized. Since nothing
+ever called it, it was removed 2026-08-20 and this is the only
+dataset-level traversal left. Nothing in famtree walks children;
+samweb_wrapper.children_of_file (:436) is per-file.
 
 Both edge functions are the fail-loud samweb_wrapper pair,
 parents_of_file / children_of_file. famtree.get_parents is NOT used:
