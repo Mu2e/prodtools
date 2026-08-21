@@ -14,7 +14,6 @@ from utils.datasetFileList import get_dataset_files
 # Regex patterns
 TIMEREPORT_REGEX = re.compile(r"TimeReport CPU = ([0-9]*\.?[0-9]+) Real = ([0-9]*\.?[0-9]+)")
 MEMREPORT_REGEX = re.compile(r"MemReport\s+VmPeak\s*=\s*([0-9]*\.?[0-9]+)\s+VmHWM\s*=\s*([0-9]*\.?[0-9]+)")
-JOBSTART_REGEX = re.compile(r"Begin processing the \d+\w+ record.*at (.+)")  # Captures "13-Oct-2025 02:00:59 UTC"
 
 def get_log_files(dataset, max_files=None):
     """Get log files for a SAM dataset (e.g., log.mu2e.X.Y.log).
@@ -38,25 +37,20 @@ def get_log_files(dataset, max_files=None):
         return []
 
 def parse_log_file(filepath):
-    """Extract CPU, Real, VmPeak, VmHWM, and job start time from log file."""
-    cpu = real = vmp = vmh = job_date = None
-    
+    """Extract CPU, Real, VmPeak and VmHWM from a log file."""
+    cpu = real = vmp = vmh = None
+
     with open(filepath, 'r', errors='ignore') as f:
         for line in f:
-            if m := JOBSTART_REGEX.search(line):
-                job_date = m.group(1).strip()
             if m := TIMEREPORT_REGEX.search(line):
                 cpu, real = float(m.group(1)) / 3600, float(m.group(2)) / 3600
             if m := MEMREPORT_REGEX.search(line):
                 vmp, vmh = float(m.group(1)) / 1024, float(m.group(2)) / 1024
-            # Continue scanning for job_date even if metrics are found
-            if all(x is not None for x in [cpu, real, vmp, vmh]) and job_date is not None:
+            if all(x is not None for x in [cpu, real, vmp, vmh]):
                 break
-    
-    return {'file': os.path.basename(filepath), 
-            'full_path': filepath,
-            'date': job_date if job_date else 'N/A',
-            'CPU [h]': round(cpu, 2) if cpu else None, 
+
+
+    return {'CPU [h]': round(cpu, 2) if cpu else None, 
             'Real [h]': round(real, 2) if real else None,
             'VmPeak [GB]': round(vmp, 2) if vmp else None, 
             'VmHWM [GB]': round(vmh, 2) if vmh else None}

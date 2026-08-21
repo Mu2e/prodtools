@@ -68,10 +68,9 @@ def resolve_cap(flag_value):
 # prod_utils -> samweb_client). Re-imported here under their original
 # names — every caller and test that reads them off this module keeps
 # working unchanged.
-from utils.queue_state import (_JOBID_RE, _KNOWN_STATES,  # noqa: F401
-                               _SKIP_PREFIXES, _jobsub_table_cluster_states,
-                               _jobsub_table_states, cluster_queue_state,
-                               live_clusters, queue_owner)
+from utils.queue_state import (_jobsub_table_states,  # noqa: F401
+                               cluster_queue_state, live_clusters,
+                               queue_owner)
 
 
 def verify_row(row, sam_lister=files_in_dataset):

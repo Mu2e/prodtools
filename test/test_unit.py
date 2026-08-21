@@ -20,6 +20,8 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import importlib.machinery
+import importlib.util
 import sys
 import types
 import tarfile
@@ -1349,7 +1351,7 @@ class TestStashUtils(unittest.TestCase):
 
         mock_mkdir.assert_not_called()
         mock_run.assert_not_called()
-        self.assertEqual(n, 2)
+        self.assertEqual(n.copied, 2)
 
     def test_copy_dataset_calls_copyfile(self):
         """Copies via shutil.copyfile(src, dest) — not a `cp` subprocess.
@@ -1375,7 +1377,7 @@ class TestStashUtils(unittest.TestCase):
                 verbose=False,
             )
 
-        self.assertEqual(n, 1)
+        self.assertEqual(n.copied, 1)
         src, dest = mock_run.call_args[0]
         self.assertTrue(src.endswith(mock_files[0]))
         self.assertTrue(dest.endswith(mock_files[0]))
@@ -1405,7 +1407,7 @@ class TestStashUtils(unittest.TestCase):
                 "dts.mu2e.CeEndpoint.Run1Bab.art",
                 source_loc='disk', dry_run=False, verbose=False)
 
-        self.assertEqual(n, 0)
+        self.assertEqual(n.copied, 0)
 
     def test_copy_dataset_limit(self):
         """--limit N should copy at most N files."""
@@ -1452,7 +1454,7 @@ class TestStashUtils(unittest.TestCase):
             )
 
         mock_run.assert_not_called()
-        self.assertEqual(n, 0)
+        self.assertEqual(n.copied, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -16464,6 +16466,204 @@ class TestRun1BCommonJson(unittest.TestCase):
                     continue
                 implicit.append(f"{name}:{entry.get('desc')}/{dsconf}")
         self.assertEqual(implicit, [], 'entries inheriting bFieldFile')
+
+
+class TestSamplingInputTableIsWritten(unittest.TestCase):
+    """The samplinginput table must be built for the source type that
+    REQUIRES it.
+
+    The writer used to live inside the `PBISequence` branch, which the
+    validator forbids --samplinginput on; SamplingInput therefore passed
+    validation (which requires the option) and produced a cnf with no
+    samplinginput section at all — a job that resamples nothing, silently.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.flist = os.path.join(self.tmp, 'files.txt')
+        with open(self.flist, 'w') as fh:
+            fh.write('dts.mu2e.A.v1.001.art\ndts.mu2e.A.v1.002.art\n')
+
+    def _parse(self, source_type, job_args):
+        import utils.jobdef as jd
+        with patch.object(jd, '_get_source_type', return_value=source_type), \
+             patch.object(jd, '_get_output_modules', return_value=[]), \
+             patch.object(jd, '_seed_needed', return_value=False):
+            return jd._parse_job_args(job_args, 'template.fcl', {})
+
+    def test_samplinginput_source_gets_the_table(self):
+        tbs = self._parse('SamplingInput', [
+            '--samplinginput', f'2:mydataset:{self.flist}',
+            '--run-number', '1201',
+        ])
+        self.assertIn('samplinginput', tbs)
+        self.assertEqual(
+            tbs['samplinginput'],
+            {'source.dataSets.mydataset.fileNames':
+                [2, ['dts.mu2e.A.v1.001.art', 'dts.mu2e.A.v1.002.art']]})
+
+    def test_all_requested_datasets_are_written(self):
+        second = os.path.join(self.tmp, 'files2.txt')
+        with open(second, 'w') as fh:
+            fh.write('dts.mu2e.B.v1.001.art\n')
+        tbs = self._parse('SamplingInput', [
+            '--samplinginput', f'2:dsA:{self.flist}',
+            '--samplinginput', f'all:dsB:{second}',
+            '--run-number', '1201',
+        ])
+        self.assertEqual(sorted(tbs['samplinginput']), [
+            'source.dataSets.dsA.fileNames',
+            'source.dataSets.dsB.fileNames'])
+        self.assertEqual(tbs['samplinginput']['source.dataSets.dsB.fileNames'][0], 1)
+
+    def test_no_sampling_requested_writes_no_table(self):
+        tbs = self._parse('EmptyEvent', [
+            '--run-number', '1201', '--events-per-job', '10'])
+        self.assertNotIn('samplinginput', tbs)
+
+    def test_pbisequence_still_rejects_samplinginput(self):
+        # The validator's veto is the reason the writer could not live in
+        # that branch; it must stay a veto.
+        with self.assertRaises(ValueError) as cm:
+            self._parse('PBISequence', [
+                '--samplinginput', f'2:dsA:{self.flist}',
+                '--run-number', '1201'])
+        self.assertIn('not compatible', str(cm.exception))
+
+
+class TestOutputDatasetsDerivedFromTbs(unittest.TestCase):
+    """`output_datasets()` must answer from tbs.outfiles.
+
+    It used to read a TOP-LEVEL `output_datasets` key of jobpars.json
+    that nothing has ever written (jobdef emits only code/setup/code_ref/
+    tbs/jobname), so it always returned [] on every real cnf. That made
+    the --output-files gate reject every dataset and left its whole
+    implementation unreachable.
+    """
+
+    def setUp(self):
+        from utils.jobquery import Mu2eJobPars
+        self.Mu2eJobPars = Mu2eJobPars
+
+    def _tar(self, **kw):
+        return _make_tarball(_root_input_jobpars(**kw))
+
+    def test_output_datasets_from_outfiles(self):
+        tar = self._tar(files=['dts.mu2e.In.CampA.001430_00000000.art'])
+        self.addCleanup(os.unlink, tar)
+        jp = self.Mu2eJobPars(tar)
+        self.assertEqual(jp.output_datasets(), ['sim.mu2e.TestDesc.TestConf.art'])
+
+    def test_multiple_output_streams_are_all_reported(self):
+        pars = _root_input_jobpars(files=['dts.mu2e.In.CampA.001430_00000000.art'])
+        pars['tbs']['outfiles'] = {
+            'outputs.A.fileName': 'dig.mu2e.TestDesc.TestConf.sequencer.art',
+            'outputs.B.fileName': 'mcs.mu2e.TestDesc.TestConf.sequencer.art',
+        }
+        tar = _make_tarball(pars)
+        self.addCleanup(os.unlink, tar)
+        self.assertEqual(sorted(self.Mu2eJobPars(tar).output_datasets()),
+                         ['dig.mu2e.TestDesc.TestConf.art',
+                          'mcs.mu2e.TestDesc.TestConf.art'])
+
+    def test_output_files_gate_now_passes(self):
+        # The end-to-end symptom: --output-files used to exit 1 for every
+        # dataset because the gate consulted the always-empty list.
+        tar = self._tar(files=['dts.mu2e.In.CampA.001430_00000000.art',
+                               'dts.mu2e.In.CampA.001430_00000001.art'])
+        self.addCleanup(os.unlink, tar)
+        jp = self.Mu2eJobPars(tar)
+        ds = jp.output_datasets()[0]
+        files = jp.output_files(ds, list_size=2)
+        self.assertEqual(len(files), 2)
+        for f in files:
+            self.assertTrue(f.startswith('sim.mu2e.TestDesc.TestConf.'), f)
+
+    def test_no_outfiles_returns_empty(self):
+        pars = _root_input_jobpars(files=['dts.mu2e.In.CampA.001430_00000000.art'])
+        del pars['tbs']['outfiles']
+        tar = _make_tarball(pars)
+        self.addCleanup(os.unlink, tar)
+        self.assertEqual(self.Mu2eJobPars(tar).output_datasets(), [])
+
+
+class TestCopyToStashExitCode(unittest.TestCase):
+    """A stash copy that lost files must not report success.
+
+    `_copy_dataset` counted `n_fail`, printed it, then returned `n_ok`
+    alone -- and bin/copy_to_stash did `return 0 if n_copied >= 0 else 1`,
+    a condition that cannot be false. A dataset copy that failed on every
+    file exited 0, so any wrapping script read it as done.
+    """
+
+    MOCK_FILES = ["dts.mu2e.CeEndpoint.Run1Bab.001440_00000000.art",
+                  "dts.mu2e.CeEndpoint.Run1Bab.001440_00000001.art"]
+    MOCK_LOC = [{'location_type': 'disk',
+                 'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/'
+                              'CeEndpoint/Run1Bab/art'}]
+
+    def _run(self, copyfile_side_effect=None):
+        from utils import stash_utils
+        cm = patch('utils.stash_utils.shutil.copyfile')
+        with patch('utils.stash_utils.files_in_dataset',
+                   return_value=self.MOCK_FILES), \
+             patch('utils.stash_utils.locate_files_strict',
+                   side_effect=lambda fns: {f: self.MOCK_LOC for f in fns}), \
+             patch('os.makedirs'), \
+             patch('utils.stash_utils.shutil.copyfile',
+                   side_effect=copyfile_side_effect):
+            return stash_utils.copy_dataset_to_stash(
+                "dts.mu2e.CeEndpoint.Run1Bab.art",
+                source_loc='disk', dry_run=False, verbose=False)
+
+    def test_failure_count_is_returned(self):
+        res = self._run(OSError(28, "No space left on device"))
+        self.assertEqual(res.copied, 0)
+        self.assertEqual(res.failed, 2)
+
+    def test_clean_copy_reports_no_failures(self):
+        res = self._run(None)
+        self.assertEqual(res.copied, 2)
+        self.assertEqual(res.failed, 0)
+
+    def test_result_is_falsy_only_when_nothing_copied(self):
+        # Keeps the old `if not n:` idiom meaningful for any caller.
+        self.assertFalse(self._run(OSError(28, "nope")).copied)
+        self.assertTrue(self._run(None).copied)
+
+
+class TestCopyToStashCliExit(unittest.TestCase):
+    """bin/copy_to_stash's exit code must follow the failure count."""
+
+    @staticmethod
+    def _load_cli():
+        import importlib.util
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, 'bin', 'copy_to_stash')
+        spec = importlib.util.spec_from_loader(
+            'copy_to_stash_cli',
+            importlib.machinery.SourceFileLoader('copy_to_stash_cli', path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _main(self, result):
+        cli = self._load_cli()
+        argv = ['--dataset', 'dts.mu2e.CeEndpoint.Run1Bab.art', '--quiet']
+        with patch.object(sys, 'argv', ['copy_to_stash'] + argv), \
+             patch.object(cli, 'copy_dataset_to_stash', return_value=result), \
+             patch.object(cli, 'stash_write_root', return_value='/stash/w'), \
+             patch.object(cli, 'stash_read_root', return_value='/stash/r'):
+            return cli.main()
+
+    def test_exit_nonzero_when_files_failed(self):
+        from utils.stash_utils import CopyResult
+        self.assertNotEqual(self._main(CopyResult(copied=3, failed=2)), 0)
+
+    def test_exit_zero_on_clean_copy(self):
+        from utils.stash_utils import CopyResult
+        self.assertEqual(self._main(CopyResult(copied=5, failed=0)), 0)
 
 
 # ---------------------------------------------------------------------------

@@ -71,7 +71,7 @@ def get_first_file_from_dataset(dataset_name):
         print(f"No files found for dataset: {dataset_name}")
     return first
 
-def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extrapolate=True):
+def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0):
     """Get efficiency statistics for a dataset using process_dataset from genFilterEff.
     
     Args:
@@ -79,11 +79,10 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extr
         samweb: SAMWeb wrapper instance
         max_files: Maximum number of files to sample (default: 10 for speed)
         verbosity: Verbosity level (0=quiet)
-        extrapolate: If True, scale sampled stats to full dataset (default: True)
     
     Returns:
         Tuple of (passed_events, generated_events, efficiency, num_files, is_extrapolated) or None if unavailable
-        If extrapolate=True, counts are scaled to full dataset size.
+        Counts are scaled to full dataset size when only a sample was read.
         is_extrapolated indicates if the stats were extrapolated from a sample.
     """
     try:
@@ -101,7 +100,7 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extr
         )
         
         # If we sampled fewer files than total, extrapolate the counts
-        if extrapolate and summary.nfiles > 0 and summary.nfiles < num_files_total:
+        if summary.nfiles > 0 and summary.nfiles < num_files_total:
             scale_factor = num_files_total / summary.nfiles
             extrapolated_passed = int(summary.passedevents * scale_factor)
             extrapolated_generated = int(summary.genevents * scale_factor)
@@ -114,42 +113,6 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0, extr
     except Exception:
         # Dataset doesn't have gencount or other issue
         return None
-
-def topology_for_dataset(dataset_name, known=None):
-    """Return {dataset: [parent_dataset, ...]} subgraph rooted at dataset_name.
-
-    Walks SAM file-lineage from the first file of the dataset, aggregates
-    by 5-field dataset name (no run/subrun), recurses into unique parent
-    datasets. Written for a lineage cache — the topology is stable per
-    dataset, so a caller only has to walk datasets it has not seen.
-    Returns None if the dataset has no files.
-
-    Pass `known` (dataset names the caller already has cached) to stop
-    the walk at their boundary — N new mix/reco datasets sharing one
-    beam ancestry then cost N short walks, not N full ones.
-    """
-    visited = {}
-    known = known if known is not None else ()
-
-    def walk(file_name):
-        ds = get_dataset_name(file_name)
-        if ds in visited or ds in known:
-            return
-        visited[ds] = []
-        ds_to_parent_file = {}
-        for p in get_parents(file_name):
-            pds = get_dataset_name(p)
-            ds_to_parent_file.setdefault(pds, p)
-        for pds, pfile in ds_to_parent_file.items():
-            visited[ds].append(pds)
-            walk(pfile)
-
-    first_file = get_first_file_from_dataset(dataset_name)
-    if not first_file:
-        return None
-    walk(first_file)
-    return visited
-
 
 def generate_mermaid_diagram(file_name, node_id=0):
     """Generate Mermaid diagram data for the family tree."""

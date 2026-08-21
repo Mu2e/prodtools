@@ -1279,3 +1279,7 @@ dig.mu2e.CosmicCRYAllMix1BB.Run1Ban_best_v1_4-000. fhicl-dump confirmed
 the smoke resolved to geom_run1_b_v40.txt + bfgeom_no_field.txt, so it
 exercised the newly-landed geometry and not a default.
 Source: docs/superpowers/plans/2026-08-08-run1b-consolidation.md Task 7 step 2
+
+## [2026-08-20] ingest | jobwait 0/N ok — jobsub_history drops -name schedd
+Pages written: 2026-08-20-jobwait-jobsub-history-drops-schedd
+Pages updated: index.md

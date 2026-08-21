@@ -6,6 +6,7 @@
 
 ### Incidents
 - [[2026-07-05-run1ban-mix-recovery-data-loss]] — 54 NoPrimaryMix1BB outputs lost: POMS re-queued complete work, pushOutput recoverDelay=3600 clobber-rewrites, 53 rewrites vanished off-grid _(investigated 2026-07-09)_
+- [[2026-08-20-jobwait-jobsub-history-drops-schedd]] — jobwait reported a fully successful 15-job cluster as 0/15 ok: jobsub_lite 1.13 `jobsub_history` drops the `-name <schedd>` it parses and always queries default SCHEDD_HOST (jobsub01); fix = direct `condor_history -name` in `collect_exit_codes` _(2026-08-20)_
 <!-- entries added by wiki-ingest -->
 
 ### Decisions

@@ -522,13 +522,20 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
             'source.runNumber': args_state['run_number'],
         }
         tbs['subrunkey'] = ''  # explicit: no per-job subrun assignment
-        
-        if args_state['sampling']:
-            samplingintable = {}
-            for dsname, (nreq, filelist) in args_state['sampling'].items():
-                inputkey = f'source.dataSets.{dsname}.fileNames'
-                samplingintable[inputkey] = [nreq, filelist]
-            tbs['samplinginput'] = samplingintable
+
+    # Sampling table, for whichever source type carries it. Deliberately
+    # OUTSIDE the chain above: it used to sit inside the PBISequence
+    # branch, which the validator vetoes --samplinginput on, so the one
+    # source type that REQUIRES the option (SamplingInput) reached no
+    # writer and produced a cnf with no samplinginput section — a job
+    # that resamples nothing, silently. The validator already decides
+    # which source types may carry sampling; this only writes it.
+    if args_state['sampling']:
+        samplingintable = {}
+        for dsname, (nreq, filelist) in args_state['sampling'].items():
+            inputkey = f'source.dataSets.{dsname}.fileNames'
+            samplingintable[inputkey] = [nreq, filelist]
+        tbs['samplinginput'] = samplingintable
 
     # Handle output files using the resolved template path (like Perl's
     # $templateresolved). _get_output_modules returns only active,
