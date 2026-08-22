@@ -154,27 +154,26 @@ def get_definition_files(definition_name: str) -> List[str]:
 
     return file_paths
 
+def _print_all(lines):
+    """Print each line; stop quietly when the reader (e.g. `head`) goes away."""
+    for line in lines:
+        try:
+            print(line)
+        except BrokenPipeError:
+            break
+
+
 def main():
     """Main function that replicates the exact behavior of the Perl script."""
     args = parse_args()
     dsname = args.dataset
 
     if args.basename:
-        fns = files_in_dataset(dsname)
-        for f in sorted(fns):
-            try:
-                print(f)
-            except BrokenPipeError:
-                break
+        _print_all(sorted(files_in_dataset(dsname)))
         return
 
     if args.defname:
-        file_paths = get_definition_files(dsname)
-        for final_path in file_paths:
-            try:
-                    print(final_path)
-            except BrokenPipeError:
-                break
+        _print_all(get_definition_files(dsname))
         return
 
     try:
@@ -186,14 +185,7 @@ def main():
         elif args.scratch:
             location = 'scratch'
 
-        file_paths = get_dataset_files(dsname, location)
-
-        for full_path in file_paths:
-            try:
-                print(full_path)
-            except BrokenPipeError:
-                break
-                
+        _print_all(get_dataset_files(dsname, location))
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

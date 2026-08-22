@@ -16,6 +16,8 @@ from utils.file_resolver import FileResolver
 
 _OUTPUT_FILENAME_KEY_RE = re.compile(r'^outputs\.\w+\.fileName$')
 _PLACEHOLDER_TOKEN_RE = re.compile(r'\b(description|desc|owner|version|sequencer)\b')
+_SOURCE_MODULE_TYPE_RE = re.compile(r'module_type\s*:\s*(\w+)')
+_KNOWN_SOURCE_TYPES = ('SamplingInput', 'RootInput', 'EmptyEvent')
 
 
 def _check_output_filenames_substituted(outputs_dict: Dict[str, str], jobdef_name: str = "") -> None:
@@ -58,14 +60,11 @@ class Mu2eJobFCL(Mu2eJobBase):
         """Detect the source module type from the base FCL."""
         if self._source_type is None:
             base_fcl = self._extract_fcl()
-            if 'module_type : SamplingInput' in base_fcl or 'module_type: SamplingInput' in base_fcl:
-                self._source_type = 'SamplingInput'
-            elif 'module_type : RootInput' in base_fcl or 'module_type: RootInput' in base_fcl:
-                self._source_type = 'RootInput'
-            elif 'module_type : EmptyEvent' in base_fcl or 'module_type: EmptyEvent' in base_fcl:
-                self._source_type = 'EmptyEvent'
-            else:
-                self._source_type = 'Unknown'
+            # Same precedence as the historical string checks: first known
+            # source type found anywhere in the file wins, in this order.
+            found = set(_SOURCE_MODULE_TYPE_RE.findall(base_fcl))
+            self._source_type = next(
+                (t for t in _KNOWN_SOURCE_TYPES if t in found), 'Unknown')
         return self._source_type
     
     def _extract_fcl(self) -> str:

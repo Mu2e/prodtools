@@ -31,7 +31,7 @@ PRODTOOLS_DIR="$_CONDOR_SCRATCH_DIR/prodtools"
 # MU2EGRID_PRODTOOLS_TAR is the dropbox-shipped tarball's basename;
 # defaults to "prodtools.tar" for the legacy hand-crafted submission path.
 PRODTOOLS_TAR="${MU2EGRID_PRODTOOLS_TAR:-prodtools.tar}"
-tar xf "$CONDOR_DIR_INPUT/$PRODTOOLS_TAR" -C "$_CONDOR_SCRATCH_DIR"
+tar xf "$CONDOR_DIR_INPUT/$PRODTOOLS_TAR" -C "$_CONDOR_SCRATCH_DIR" || { echo "ERROR: tar failed" >&2; exit 1; }
 ls -la "$PRODTOOLS_DIR/utils/runmu2e.py" 2>&1
 
 echo "=== exec python3 runmu2e.py ==="

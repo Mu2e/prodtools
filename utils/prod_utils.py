@@ -121,7 +121,9 @@ def get_def_counts(dataset):
     Exits when the dataset has no such files."""
     nfiles = definition_file_count(dataset, with_events=True)
     result = dataset_summary(dataset)
-    nevts = (result.get('total_event_count') or 0) if isinstance(result, dict) else 0
+    if not isinstance(result, dict):
+        raise RuntimeError(f"dataset_summary({dataset}) returned {result!r}, expected a dict")
+    nevts = result.get('total_event_count') or 0
 
     if nfiles == 0:
         sys.exit(f"No files found in dataset {dataset}")

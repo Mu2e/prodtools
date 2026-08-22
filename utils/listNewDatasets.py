@@ -2,6 +2,7 @@
 """List recently created datasets from SAM database."""
 
 import os
+import sqlite3
 import sys
 import argparse
 from datetime import datetime, timedelta
@@ -87,14 +88,18 @@ class DatasetLister:
             dataset_counts[dataset] += 1
         return dict(dataset_counts)
 
-    def _total_files(self, dataset: str) -> int:
-        """Total files in the dataset. NOT the windowed COUNT column: a
-        campaign started before the lookback window would otherwise score a
-        full-campaign denominator against a partial numerator."""
+    def _total_files(self, dataset: str) -> Optional[int]:
+        """Total files in the dataset, or None when SAM could not answer
+        (rendered as '?', never a fabricated 0). NOT the windowed COUNT
+        column: a campaign started before the lookback window would
+        otherwise score a full-campaign denominator against a partial
+        numerator."""
         try:
             return dataset_file_count(dataset)
-        except Exception:
-            return 0
+        except (ValueError, RuntimeError) as e:
+            print(f"WARNING: file count failed for {dataset}: {e}",
+                  file=sys.stderr)
+            return None
 
     def _get_completeness(self, dataset: str) -> str:
         """<landed>/<expected> for a dataset produced by a direct campaign.
@@ -119,6 +124,8 @@ class DatasetLister:
         if expected is None:
             return "—"
         landed = self._total_files(dataset)
+        if landed is None:
+            return f"?/{expected}"
         text = f"{landed}/{expected}"
         if landed >= expected:
             return text
@@ -150,7 +157,7 @@ class DatasetLister:
                 self._expected, failures = ledger_expected(
                     self.ledger_db, dsconfs=dsconfs,
                     datasets={ds for ds, _ in sorted_datasets})
-            except Exception as e:
+            except (sqlite3.Error, OSError) as e:
                 print(f"WARNING: could not read ledger {self.ledger_db} ({e}); "
                       "completeness column disabled.", file=sys.stderr)
                 self.completeness = False

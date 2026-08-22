@@ -7,6 +7,7 @@
 #               fetch/extract/mv/symlink logic without touching CVMFS.
 
 set -e
+set -o pipefail
 
 DRY_RUN=false
 TEST_MODE=false

@@ -222,7 +222,7 @@ def sam_physical_path_or_none(filename, prefer_location=None):
     takes a cnf DEFNAME and raises."""
     try:
         return sam_physical_path(filename, prefer_location)
-    except Exception:
+    except (ValueError, RuntimeError):
         return None
 
 
@@ -247,9 +247,11 @@ _UNSET = object()
 def infer_dataset_location(dataset_name, first_file=_UNSET) -> str:
     """Normalized storage location (dcache/enstore/N/A) of a dataset from
     its first file's SAM location records. Pass first_file to reuse one
-    the caller already fetched. Fail-soft: dashboard consumers treat an
-    unknown location as 'N/A', not fatal."""
-    from .samweb_wrapper import first_file_in_definition, locate_file_strict
+    the caller already fetched. Fail-soft for SAM-raised errors and
+    malformed names only: dashboard consumers treat an unknown location
+    as 'N/A', not fatal. Anything else propagates."""
+    from .samweb_wrapper import (SAMError, first_file_in_definition,
+                                 locate_file_strict)
     try:
         if first_file is _UNSET:
             first_file = first_file_in_definition(dataset_name)
@@ -262,7 +264,7 @@ def infer_dataset_location(dataset_name, first_file=_UNSET) -> str:
             full_path = entry.get('full_path')
             if full_path:
                 return classify_sam_location(full_path)
-    except Exception as e:
+    except (SAMError, ValueError) as e:
         print(f"Warning: infer_dataset_location failed for {dataset_name}: {e}",
               file=sys.stderr)
     return 'N/A'
@@ -340,15 +342,16 @@ class FileResolver:
         todo = [f for f in filenames if f not in self._location_cache]
         if not todo:
             return
+        from .samweb_wrapper import locate_files_strict
         try:
-            from .samweb_wrapper import locate_files_strict
             result = locate_files_strict(todo)
-            if isinstance(result, dict):
-                for fname, locs in result.items():
-                    if isinstance(locs, list):
-                        self._location_cache[fname] = locs
-        except Exception:
-            pass
+        except (ValueError, RuntimeError, KeyError):
+            return
+        if not isinstance(result, dict):
+            return
+        self._location_cache.update(
+            {fname: locs for fname, locs in result.items()
+             if isinstance(locs, list)})
 
     def locate(self, filename: str) -> str:
         """Physical path for a file (no protocol formatting)."""

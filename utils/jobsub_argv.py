@@ -83,13 +83,14 @@ def output_storage_dirs(output_filenames, outputs):
     import fnmatch
     dirs = set()
     for fname in output_filenames or []:
-        for spec in outputs or []:
-            pattern = spec.get("dataset") or "*"
-            if fnmatch.fnmatch(fname, pattern):
-                scope = storage_scope_for_file(fname, spec.get("location"))
-                if scope:
-                    dirs.add(scope)
-                break
+        spec = next((spec for spec in outputs or []
+                     if fnmatch.fnmatch(fname, spec.get("dataset") or "*")),
+                    None)
+        if spec is None:
+            continue
+        scope = storage_scope_for_file(fname, spec.get("location"))
+        if scope:
+            dirs.add(scope)
     return sorted(dirs)
 
 
@@ -98,23 +99,16 @@ def output_storage_dirs(output_filenames, outputs):
 def description_from_tarball(tarball_name):
     """`cnf.<owner>.<desc>.<dsconf>.<seq>.tar` → `<desc>`.
 
-    Lenient: unparseable names fall back to the raw basename.
+    Raises ValueError on an unparseable name (tarball_of already
+    rejects those at the entry boundary).
     """
-    bn = os.path.basename(tarball_name)
-    try:
-        return Mu2eName.parse(bn).description
-    except ValueError:
-        return bn
+    return Mu2eName.parse(os.path.basename(tarball_name)).description
 
 
 def campaign_from_tarball(tarball_name):
     """`cnf.<owner>.<desc>.<dsconf>.<seq>.tar` → MDC campaign token in `<dsconf>`,
-    else the full `<dsconf>`. Lenient: unparseable names → 'default'."""
-    bn = os.path.basename(tarball_name)
-    try:
-        n = Mu2eName.parse(bn)
-    except ValueError:
-        return "default"
+    else the full `<dsconf>`. Raises ValueError on an unparseable name."""
+    n = Mu2eName.parse(os.path.basename(tarball_name))
     m = re.match(r"(MDC\d{4})", n.dsconf)
     return m.group(1) if m else n.dsconf
 

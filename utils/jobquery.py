@@ -42,11 +42,11 @@ class Mu2eJobPars(Mu2eJobBase):
 
         for section in ('inputs', 'auxin'):
             for value in tbs.get(section, {}).values():
-                if isinstance(value, list) and len(value) >= 2:
-                    _, file_list = value
-                    dataset = extract_dataset_from_files(file_list)
-                    if dataset:
-                        datasets.add(dataset)
+                if not isinstance(value, list) or len(value) < 2:
+                    continue
+                dataset = extract_dataset_from_files(value[1])
+                if dataset:
+                    datasets.add(dataset)
 
         return list(datasets)
     
@@ -55,11 +55,11 @@ class Mu2eJobPars(Mu2eJobBase):
         tbs = self.json_data.get('tbs', {})
         files = []
         for section in ('inputs', 'samplinginput', 'auxin'):
-            for key, value in tbs.get(section, {}).items():
-                if isinstance(value, list) and len(value) >= 2:
-                    file_list = value[1]
-                    if isinstance(file_list, list):
-                        files.extend(file_list)
+            for value in tbs.get(section, {}).values():
+                if not isinstance(value, list) or len(value) < 2:
+                    continue
+                if isinstance(value[1], list):
+                    files.extend(value[1])
         return files
     
     def output_datasets(self):
@@ -177,6 +177,32 @@ file cnf.tar. The possible queries are:
 """
 
 
+def _output_files(jp, spec):
+    """--output-files <dsname>[:listsize]: print the files of one dataset."""
+    if ':' in spec:
+        dataset_name, size_str = spec.split(':', 1)
+        try:
+            list_size = int(size_str)
+        except ValueError:
+            print(f"Error: Invalid list size: {size_str}")
+            sys.exit(1)
+    else:
+        dataset_name = spec
+        list_size = None
+
+    if dataset_name not in jp.output_datasets():
+        print(f"Error: Dataset {dataset_name} is not produced by the job set")
+        sys.exit(1)
+
+    for filename in jp.output_files(dataset_name, list_size):
+        print(filename)
+
+
+def _print_lines(lines):
+    for line in lines:
+        print(line)
+
+
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Extract information from Mu2e job parameter files')
@@ -210,61 +236,25 @@ def main():
     
     try:
         jp = Mu2eJobPars(args.parfile)
-        
-        if args.jobname:
-            print(jp.jobname())
-        
-        elif args.njobs:
-            print(jp.njobs())
-        
-        elif args.input_datasets:
-            for dataset in jp.input_datasets():
-                print(dataset)
-        
-        elif args.input_files:
-            for f in jp.input_files():
-                print(f)
-        
-        elif args.output_datasets:
-            for dataset in jp.output_datasets():
-                print(dataset)
-        
-        elif args.output_files:
-            # dataset[:size] format
-            if ':' in args.output_files:
-                dataset_name, size_str = args.output_files.split(':', 1)
-                try:
-                    list_size = int(size_str)
-                except ValueError:
-                    print(f"Error: Invalid list size: {size_str}")
-                    sys.exit(1)
-            else:
-                dataset_name = args.output_files
-                list_size = None
 
-            if dataset_name not in jp.output_datasets():
-                print(f"Error: Dataset {dataset_name} is not produced by the job set")
-                sys.exit(1)
+        dispatch = {
+            'jobname':         lambda: print(jp.jobname()),
+            'njobs':           lambda: print(jp.njobs()),
+            'input_datasets':  lambda: _print_lines(jp.input_datasets()),
+            'input_files':     lambda: _print_lines(jp.input_files()),
+            'output_datasets': lambda: _print_lines(jp.output_datasets()),
+            'codesize':        lambda: print(jp.codesize()),
+            'setup':           lambda: print(jp.setup()),
+            'recipe':          lambda: print(jp.recipe()),
+        }
+        if args.output_files is not None:
+            _output_files(jp, args.output_files)
+        else:
+            flag = next(f for f in dispatch if getattr(args, f))
+            dispatch[flag]()
 
-            try:
-                files = jp.output_files(dataset_name, list_size)
-                for filename in files:
-                    print(filename)
-            except ValueError as e:
-                print(f"Error: {e}")
-                sys.exit(1)
-        
-        elif args.codesize:
-            print(jp.codesize())
-
-        elif args.setup:
-            print(jp.setup())
-
-        elif args.recipe:
-            print(jp.recipe())
-    
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

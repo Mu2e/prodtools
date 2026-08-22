@@ -180,15 +180,18 @@ def _narrow_to_latest_release(names):
     discovers every release (MDC2025aa..MDC2025ap); the chain processes
     one."""
     rel = {}
+    skipped = []
     for n in names:
-        try:
-            rel[n] = Mu2eName.parse(n).campaign
-        except ValueError:
-            pass
+        if parse_name(n) is None:
+            skipped.append(n)
+            continue
+        rel[n] = Mu2eName.parse(n).campaign
     if not rel:
         return names
     latest = max(rel.values())  # campaign tags sort lexicographically
-    return [n for n in names if rel.get(n) == latest]
+    # Unparseable names are kept (not silently dropped), as in
+    # _group_by_description / _filter_complete.
+    return [n for n in names if rel.get(n) == latest] + skipped
 
 
 def _filter_complete(names):
@@ -223,18 +226,17 @@ def _filter_complete(names):
                 kept.append(ds)
             else:
                 _vlog(f"# incomplete (skipped): {ds}")
-        except Exception as e:
-            _vlog(f"# completeness indeterminate (included): {ds}: {e}")
+        except (ValueError, RuntimeError) as e:
+            print(f"# completeness indeterminate (included): {ds}: {e}",
+                  file=sys.stderr)
             kept.append(ds)
     return kept
 
 
 def _dataset_exists(name):
-    """True if the SAM dataset has at least one file."""
-    try:
-        return dataset_file_count(name) > 0
-    except Exception:
-        return False
+    """True if the SAM dataset has at least one file. A SAM failure
+    propagates: a false 'unproduced' would re-run the stage."""
+    return dataset_file_count(name) > 0
 
 
 def _filter_unproduced(inputs, template, out_campaign=None, defer_desc=False,

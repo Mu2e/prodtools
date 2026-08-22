@@ -155,37 +155,45 @@ def _connect(db_path):
     # 3.25 (deployed: 3.34.1). PRAGMA-guarded/idempotent — a fresh DB
     # from _SCHEMA is left alone.
     for table in ('submissions', 'campaigns'):
-        cols = [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
-        if 'map_path' in cols and 'origin' not in cols:
-            try:
-                con.execute(
-                    f'ALTER TABLE {table} RENAME COLUMN map_path TO origin')
-            except sqlite3.OperationalError as exc:
-                # Two _connect calls can race check-then-act above: a
-                # cron tick, a manual command, and the write MCP server
-                # can all touch the same never-migrated ledger in one
-                # minute. Both PRAGMA checks can see map_path before
-                # either ALTER commits; the loser's ALTER then fails with
-                # "no such column: map_path" — not SQLITE_BUSY, so
-                # timeout=30 busy-retry doesn't cover it. Re-check: if
-                # origin exists now, the other side already migrated it.
-                cols_now = [r[1] for r in
-                           con.execute(f'PRAGMA table_info({table})')]
-                if 'origin' in cols_now:
-                    pass
-                elif 'readonly database' in str(exc):
-                    # Production ledger is world-readable but
-                    # mu2epro-owned (0444 to others); a non-mu2epro
-                    # reader hits this on the ALTER even though every
-                    # other statement is a no-op. Leave it un-migrated
-                    # and let ledger_ro's map_path->origin shim carry
-                    # readers across the gap; a writer migrates it on
-                    # its next connect.
-                    pass
-                else:
-                    raise  # genuinely broken schema / locked / corrupt DB
+        _migrate_map_path(con, table)
     con.commit()
     return con
+
+
+def _columns(con, table):
+    return [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
+
+
+def _migrate_map_path(con, table):
+    """Rename `table`.map_path -> origin if the old column is still there.
+
+    Two _connect calls can race check-then-act: a cron tick, a manual
+    command, and the write MCP server can all touch the same
+    never-migrated ledger in one minute. Both PRAGMA checks can see
+    map_path before either ALTER commits; the loser's ALTER then fails
+    with "no such column: map_path" — not SQLITE_BUSY, so timeout=30
+    busy-retry doesn't cover it. Re-check after a failure: if origin
+    exists now, the other side already migrated it.
+
+    A "readonly database" failure is also tolerated: the production
+    ledger is world-readable but mu2epro-owned (0444 to others); a
+    non-mu2epro reader hits this on the ALTER even though every other
+    statement is a no-op. Leave it un-migrated and let ledger_ro's
+    map_path->origin shim carry readers across the gap; a writer
+    migrates it on its next connect. Anything else is a genuinely
+    broken schema / locked / corrupt DB and propagates.
+    """
+    cols = _columns(con, table)
+    if 'map_path' not in cols or 'origin' in cols:
+        return
+    try:
+        con.execute(f'ALTER TABLE {table} RENAME COLUMN map_path TO origin')
+    except sqlite3.OperationalError as exc:
+        if 'origin' in _columns(con, table):
+            return
+        if 'readonly database' in str(exc):
+            return
+        raise
 
 
 def _now():

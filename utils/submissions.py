@@ -111,7 +111,7 @@ def verify_row(row, sam_lister=files_in_dataset):
     return missing, partial
 
 
-def _draining_expected(camp, datasets, job_pars, count_fn):
+def _draining_expected(camp, datasets, job_pars, count_fn, failures=None):
     """Denominators for one DRAINING campaign's output datasets.
 
     A draining campaign has no njobs — its input dataset is still
@@ -129,8 +129,17 @@ def _draining_expected(camp, datasets, job_pars, count_fn):
     suffix, and FlatGamma is a prefix of FlatGammaCalo. A cnf that
     suffixes its outputs (`{desc}-KL`) fails the check and keeps its
     "—", the correct answer rather than a fabricated one.
+
+    A dataset whose output mapping or input count FAILS (as opposed to
+    one that simply isn't this campaign's) contributes nothing AND is
+    recorded in `failures` under "<tarball> [<dataset>]" -> reason, the
+    same dict ledger_expected returns, so status reports the gap
+    instead of silently rendering "—".
     """
     pattern = camp['entry']['input_pattern']
+    tarball = camp['tarball']
+    if failures is None:
+        failures = {}
     out = {}
     for ds in datasets:
         try:
@@ -149,13 +158,15 @@ def _draining_expected(camp, datasets, job_pars, count_fn):
         try:
             produced = {_dataset_of(o)
                         for o in expected_outputs_for(probe, job_pars)}
-        except Exception:
+        except (ValueError, KeyError, RuntimeError) as e:
+            failures[f"{tarball} [{ds}]"] = f"output mapping failed: {e}"
             continue
         if ds not in produced:
             continue
         try:
             out[ds] = count_fn(candidate)
-        except Exception:
+        except (ValueError, KeyError, RuntimeError) as e:
+            failures[f"{tarball} [{ds}]"] = f"input count failed for {candidate}: {e}"
             continue
     return out
 
@@ -194,44 +205,32 @@ def ledger_expected(db_path, dsconfs=None, *, datasets=None,
     indices. failures maps tarball -> reason for campaigns that
     couldn't be resolved, contributing nothing rather than a guessed
     denominator; a failed campaign's dataset stays unknown since its
-    name was what the tarball would have supplied.
+    name was what the tarball would have supplied. A draining
+    campaign whose per-dataset mapping or input count fails is
+    recorded under "<tarball> [<dataset>]" (see _draining_expected).
     """
     expected = {}
     failures = {}
     resolved = {}          # tarball -> [datasets], or None when unresolvable
     pars = {}              # draining only: tarball -> Mu2eJobPars, or None
-    for camp in submission_ledger.all_campaigns(db_path):
-        tarball = camp['tarball']
-        entry = camp.get('entry') or {}
-        njobs = entry.get('njobs')
-        draining = is_draining(entry)
-        # A draining campaign has no njobs by definition; skipped
-        # unless the caller named the datasets it cares about, since
-        # its denominators cost one SAM count apiece.
-        if not njobs and not (draining and datasets):
-            continue
-        if dsconfs is not None:
+
+    def _resolve_draining_pars(tarball):
+        """Mu2eJobPars for a draining campaign's tarball, memoised; None
+        (and a failures entry) when the tarball cannot be resolved."""
+        if tarball not in pars:
             try:
-                if Mu2eName.parse(tarball).dsconf not in dsconfs:
-                    continue
-            except ValueError:
-                continue
-        if draining:
-            if tarball not in pars:
-                try:
-                    path = locate(tarball)
-                    if not path:
-                        raise RuntimeError("tarball not locatable")
-                    pars[tarball] = Mu2eJobPars(path)
-                except Exception as e:
-                    failures[tarball] = str(e)
-                    pars[tarball] = None
-            if pars[tarball] is None:
-                continue
-            for ds, n in _draining_expected(camp, datasets, pars[tarball],
-                                            count_fn).items():
-                expected[ds] = max(expected.get(ds, 0), n)
-            continue
+                path = locate(tarball)
+                if not path:
+                    raise RuntimeError("tarball not locatable")
+                pars[tarball] = Mu2eJobPars(path)
+            except Exception as e:
+                failures[tarball] = str(e)
+                pars[tarball] = None
+        return pars[tarball]
+
+    def _resolve_output_datasets(tarball, njobs):
+        """Output dataset names of a windowed campaign's tarball, memoised;
+        None (and a failures entry) when the tarball cannot be resolved."""
         if tarball not in resolved:
             try:
                 path = locate(tarball)
@@ -245,7 +244,39 @@ def ledger_expected(db_path, dsconfs=None, *, datasets=None,
             except Exception as e:
                 failures[tarball] = str(e)
                 resolved[tarball] = None
-        out_datasets = resolved[tarball]
+        return resolved[tarball]
+
+    def _dsconf_ok(tarball):
+        """True when no dsconf filter is set, or the tarball's dsconf is
+        in it. An unparseable tarball name never passes a filter."""
+        if dsconfs is None:
+            return True
+        try:
+            return Mu2eName.parse(tarball).dsconf in dsconfs
+        except ValueError:
+            return False
+
+    for camp in submission_ledger.all_campaigns(db_path):
+        tarball = camp['tarball']
+        entry = camp.get('entry') or {}
+        njobs = entry.get('njobs')
+        draining = is_draining(entry)
+        # A draining campaign has no njobs by definition; skipped
+        # unless the caller named the datasets it cares about, since
+        # its denominators cost one SAM count apiece.
+        if not njobs and not (draining and datasets):
+            continue
+        if not _dsconf_ok(tarball):
+            continue
+        if draining:
+            jp = _resolve_draining_pars(tarball)
+            if jp is None:
+                continue
+            for ds, n in _draining_expected(camp, datasets, jp, count_fn,
+                                            failures).items():
+                expected[ds] = max(expected.get(ds, 0), n)
+            continue
+        out_datasets = _resolve_output_datasets(tarball, njobs)
         if out_datasets is None:
             continue
         for ds in out_datasets:
@@ -344,6 +375,16 @@ def draining_state(camp, db_path, *,
             'parked': parked, 'pending': pending}
 
 
+# dCache locality -> which _gate_batch bucket a file lands in. Any state
+# not listed here (ERROR, LOST, UNAVAILABLE, a missing entry, ...) is
+# "residency unknown" and raises — fail closed, never dispatch on it.
+_LOCALITY_BUCKET = {
+    'ONLINE': 'dispatch',
+    'ONLINE_AND_NEARLINE': 'dispatch',
+    'NEARLINE': 'tape_only',
+}
+
+
 def _gate_batch(entry, candidates, *,
                 locality=_default_locality,
                 metadata_fn=metadata_for_files,
@@ -381,7 +422,7 @@ def _gate_batch(entry, candidates, *,
     by_ds = {}
     for f in old_enough:
         by_ds.setdefault(_dataset_of(f), []).append(f)
-    dispatch, tape_only = [], []
+    buckets = {'dispatch': [], 'tape_only': []}
     for ds, fl in sorted(by_ds.items()):
         mdh_loc = _LOC_TO_MDH.get(dataset_location(ds))
         if mdh_loc is None:
@@ -389,14 +430,12 @@ def _gate_batch(entry, candidates, *,
         states = locality(mdh_loc, fl)
         for f in fl:
             st = states.get(f, 'ERROR')
-            if st in ('ONLINE', 'ONLINE_AND_NEARLINE'):
-                dispatch.append(f)
-            elif st == 'NEARLINE':
-                tape_only.append(f)
-            else:
+            bucket = _LOCALITY_BUCKET.get(st)
+            if bucket is None:
                 raise RuntimeError(f"locality {st!r} for {f} — "
                                    f"residency unknown (fail closed)")
-    return dispatch, young, tape_only
+            buckets[bucket].append(f)
+    return buckets['dispatch'], young, buckets['tape_only']
 
 
 def _request_prestage(files, runner=subprocess.run):
@@ -1561,217 +1600,243 @@ def _run_pass(args):
         sys.exit(2)
 
 
+def _parse_resubmit_payload(args, row):
+    """Indices or files to re-fire for `row`, from --files / --indices /
+    --indices-file. Exits (same messages as before) on a parse error,
+    on a --files/--indices mismatch with the row's kind, or an empty
+    selection."""
+    try:
+        if args.files is not None:
+            payload = submit.parse_files(args.files)
+            if not is_draining(row['entry']):
+                sys.exit(f"submissions: row {args.row_id} is an index "
+                         f"row — use --indices, not --files")
+        else:
+            payload = submit.parse_indices(args.indices,
+                                           args.indices_file)
+            if is_draining(row['entry']):
+                sys.exit(f"submissions: row {args.row_id} is a "
+                         f"draining (file-keyed) row — use --files, "
+                         f"not --indices")
+    except (ValueError, OSError) as e:
+        sys.exit(f"submissions: {e}")
+    if not payload:
+        sys.exit("submissions: nothing to resubmit (empty selection)")
+    return payload
+
+
+def _verb_status(args, db):
+    print(f"queue cap in effect: {resolve_cap(None)}")
+    print_status(db)
+
+
+def _verb_set_slice(args, db):
+    _acquire_lock(db)
+    try:
+        old = submission_ledger.set_campaign_slice(
+            db, args.camp_id, args.slice_size)
+    except ValueError as e:
+        sys.exit(f"submissions: {e}")
+    print(f"campaign {args.camp_id}: slice_size {old} -> "
+          f"{args.slice_size} (applies from the next tick)")
+
+
+def _verb_set_memory(args, db):
+    _acquire_lock(db)
+    try:
+        old = submission_ledger.set_campaign_memory(
+            db, args.camp_id, args.memory)
+    except ValueError as e:
+        sys.exit(f"submissions: {e}")
+    print(f"campaign {args.camp_id}: memory {old or 'unset'} -> "
+          f"{args.memory} (applies from the next tick; rows already "
+          f"submitted keep their own entry, so their recoveries use "
+          f"the {RECOVERY_MEMORY} floor)")
+
+
+def _verb_set_entry(args, db):
+    _acquire_lock(db)
+    # Read the state BEFORE the write: on a settled campaign the
+    # ledger deliberately leaves the campaign snapshot alone and
+    # edits only the open rows, so claiming the campaign changed
+    # would misreport what happened.
+    was = next((c for c in submission_ledger.all_campaigns(db)
+                if c['id'] == args.camp_id), None)
+    live = was is not None and was['state'] in ('active', 'paused')
+    try:
+        old, rows = submission_ledger.set_campaign_entry_key(
+            db, args.camp_id, args.key, args.value,
+            include_open_rows=args.include_open_rows)
+    except ValueError as e:
+        sys.exit(f"submissions: {e}")
+    if live:
+        print(f"campaign {args.camp_id}: {args.key} {old or 'unset'} -> "
+              f"{args.value} (applies from the next tick)")
+    else:
+        print(f"campaign {args.camp_id} is {was['state']}: campaign "
+              f"snapshot left unchanged (no future slice reads it); "
+              f"{args.key} set to {args.value} on its open rows only")
+    if args.include_open_rows:
+        print(f"  rows updated: "
+              f"{', '.join(str(r) for r in rows) if rows else 'none'}")
+    else:
+        print("  rows already submitted keep their own entry; pass "
+              "--include-open-rows to reach their recoveries")
+
+
+def _verb_reconcile(args, db):
+    _acquire_lock(db)
+    note = args.note or ('operator reconcile: jobsub_q checked, '
+                         'window free')
+    try:
+        was = submission_ledger.reconcile_row(db, args.row_id, note)
+    except ValueError as e:
+        sys.exit(f"submissions: {e}")
+    print(f"row {args.row_id}: {was} -> reconciled ({note}). Its "
+          f"indices no longer block a campaign slice; "
+          f"`submissions resume <ID>` to restart the campaign.")
+
+
+def _verb_resubmit(args, db):
+    row = submission_ledger.row_by_id(db, args.row_id)
+    if row is None:
+        sys.exit(f"submissions: no ledger row {args.row_id} in {db}")
+    payload = _parse_resubmit_payload(args, row)
+
+    # Lock BEFORE the overlap scan, not after: the scan and the
+    # submit must be one atomic operation against the ledger, same
+    # as every mutating tick (_acquire_lock: "both passing the
+    # drain gate before either closes a row = double submit").
+    # Scanning outside the lock would let a concurrent `submissions
+    # run` reserve a window AFTER this scan sees it clear and
+    # BEFORE this submits into it — the crash-window race the
+    # ledger reservation protocol exists to close.
+    if not args.dry_run:
+        _acquire_lock(db)
+
+    blocking = _rows_blocking_indices(db, row['tarball'], payload)
+    if blocking:
+        sys.exit(
+            f"submissions: refusing — row {blocking['id']} "
+            f"(state={blocking['state']}) already covers part of this "
+            f"selection for {row['tarball']}. Deterministic payloads "
+            f"mean re-sending live work duplicates physics. Check "
+            f"jobsub_q, then `submissions reconcile {blocking['id']}` "
+            f"if the window is genuinely free.")
+
+    # --indices/--indices-file only: --files is file-keyed and has
+    # no index space to bound. Nothing checks that a requested
+    # index actually belongs to `row` — a typo (e.g. row 4231's
+    # indices meant, cursor 5000 typed) sails through
+    # _rows_blocking_indices above, since nothing else covers it
+    # YET. If a child lands there and closes before the campaign's
+    # own cursor reaches it, _slice_overlaps_ledger permanently
+    # blocks the tick on that row with no CLI escape (reconcile_row
+    # refuses anything not 'failed'/'submitting' — it would need
+    # hand-edited sqlite). The cursor is the correct bound: below it
+    # is legitimate recovery of work already submitted; at or above
+    # it is ground the campaign hasn't reached yet and will submit
+    # itself.
+    if args.files is None:
+        # _live_campaign_cursor returns the ABSOLUTE bound
+        # (firstjob + cursor) — comparable directly against
+        # `payload`, which is absolute cnf indices (same space as
+        # row['indices']). None means no active/paused campaign owns
+        # this tarball's index space right now — there is no cursor
+        # to bound against, so nothing is refused here.
+        abs_cursor = _live_campaign_cursor(db, row['tarball'])
+        over = (sorted(i for i in payload if i >= abs_cursor)
+                if abs_cursor is not None else [])
+        if over:
+            sys.exit(
+                f"submissions: refusing — index(es) {over} are at "
+                f"or above the live campaign's cursor "
+                f"({abs_cursor}) for {row['tarball']}. That ground "
+                f"has not been submitted yet; a future top-up "
+                f"slice will cover it itself, and a hand-fired "
+                f"child there can permanently block the tick with "
+                f"no CLI escape. If you meant to recover work the "
+                f"campaign has ALREADY submitted, use an index "
+                f"below {abs_cursor}.")
+
+    fn = resubmit_files if args.files is not None else resubmit
+    # _guarded_submit (inside fn) returns True for ANY non-raising
+    # call — including submit_entry returning {'status': 'failed'}
+    # when jobsub_submit exits non-zero (possibly after already
+    # creating a cluster) or exits 0 with no parseable cluster id.
+    # `ok` alone can't distinguish that from a real submission, so
+    # confirm by evidence: a NEW active child row parented on this
+    # one. No such row means nothing was confirmed submitted — exit
+    # nonzero rather than let a caller's `&& next-step.sh` run on a
+    # false success. Skipped on --dry-run: submit_entry returns
+    # before touching the ledger, so there's nothing to find and
+    # nothing was promised.
+    before = {r['id'] for r in submission_ledger.open_rows(db)
+             if r['parent_id'] == row['id']}
+    ok = fn(row, payload, db, dry_run=args.dry_run,
+           origin=f"operator resubmit of row {row['id']}")
+    if not ok:
+        sys.exit(f"submissions: resubmit of row {args.row_id} FAILED")
+    if args.dry_run:
+        return
+    new_children = [r for r in submission_ledger.open_rows(db)
+                    if r['parent_id'] == row['id']
+                    and r['id'] not in before]
+    if not new_children:
+        sys.exit(
+            f"submissions: resubmit of row {args.row_id} did NOT "
+            f"confirm a submission — no new active child ledger row "
+            f"appeared. jobsub_submit likely failed (possibly after "
+            f"creating a cluster); nothing is confirmed re-fired. "
+            f"Check jobsub_q, look for a 'failed' child row on "
+            f"row {args.row_id}, and `submissions reconcile <id>` "
+            f"it before retrying.")
+    print(f"row {args.row_id}: resubmitted -> child row "
+          f"{new_children[0]['id']}")
+
+
+def _verb_manage(args, db):
+    """pause / resume / cancel / complete — one handler, verb from args."""
+    _acquire_lock(db)
+    try:
+        manage_campaign(db, args.camp_id, args.verb,
+                        note=getattr(args, 'note', None),
+                        close_rows=getattr(args, 'close_rows', False))
+    except ValueError as e:
+        sys.exit(f"submissions: {e}")
+
+
+def _verb_run(args, db):
+    if not args.dry_run:
+        _acquire_lock(db)
+    _run_pass(args)
+
+
+_VERB_HANDLERS = {
+    'status': _verb_status,
+    'set-slice': _verb_set_slice,
+    'set-memory': _verb_set_memory,
+    'set-entry': _verb_set_entry,
+    'reconcile': _verb_reconcile,
+    'resubmit': _verb_resubmit,
+    'pause': _verb_manage,
+    'resume': _verb_manage,
+    'cancel': _verb_manage,
+    'complete': _verb_manage,
+    'run': _verb_run,
+}
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    verb = args.verb
     # Resolved ONCE here; args.db is overwritten so every use below
     # (including inside _run_pass) sees this same value rather than
     # re-resolving and risking a second answer that disagrees.
     db = args.db = resolve_db(args)
-
-    if verb == 'status':
-        print(f"queue cap in effect: {resolve_cap(None)}")
-        print_status(db)
-        return
-
-    if verb == 'set-slice':
-        _acquire_lock(db)
-        try:
-            old = submission_ledger.set_campaign_slice(
-                db, args.camp_id, args.slice_size)
-        except ValueError as e:
-            sys.exit(f"submissions: {e}")
-        print(f"campaign {args.camp_id}: slice_size {old} -> "
-              f"{args.slice_size} (applies from the next tick)")
-        return
-
-    if verb == 'set-memory':
-        _acquire_lock(db)
-        try:
-            old = submission_ledger.set_campaign_memory(
-                db, args.camp_id, args.memory)
-        except ValueError as e:
-            sys.exit(f"submissions: {e}")
-        print(f"campaign {args.camp_id}: memory {old or 'unset'} -> "
-              f"{args.memory} (applies from the next tick; rows already "
-              f"submitted keep their own entry, so their recoveries use "
-              f"the {RECOVERY_MEMORY} floor)")
-        return
-
-    if verb == 'set-entry':
-        _acquire_lock(db)
-        # Read the state BEFORE the write: on a settled campaign the
-        # ledger deliberately leaves the campaign snapshot alone and
-        # edits only the open rows, so claiming the campaign changed
-        # would misreport what happened.
-        was = next((c for c in submission_ledger.all_campaigns(db)
-                    if c['id'] == args.camp_id), None)
-        live = was is not None and was['state'] in ('active', 'paused')
-        try:
-            old, rows = submission_ledger.set_campaign_entry_key(
-                db, args.camp_id, args.key, args.value,
-                include_open_rows=args.include_open_rows)
-        except ValueError as e:
-            sys.exit(f"submissions: {e}")
-        if live:
-            print(f"campaign {args.camp_id}: {args.key} {old or 'unset'} -> "
-                  f"{args.value} (applies from the next tick)")
-        else:
-            print(f"campaign {args.camp_id} is {was['state']}: campaign "
-                  f"snapshot left unchanged (no future slice reads it); "
-                  f"{args.key} set to {args.value} on its open rows only")
-        if args.include_open_rows:
-            print(f"  rows updated: "
-                  f"{', '.join(str(r) for r in rows) if rows else 'none'}")
-        else:
-            print("  rows already submitted keep their own entry; pass "
-                  "--include-open-rows to reach their recoveries")
-        return
-
-    if verb == 'reconcile':
-        _acquire_lock(db)
-        note = args.note or ('operator reconcile: jobsub_q checked, '
-                             'window free')
-        try:
-            was = submission_ledger.reconcile_row(db, args.row_id, note)
-        except ValueError as e:
-            sys.exit(f"submissions: {e}")
-        print(f"row {args.row_id}: {was} -> reconciled ({note}). Its "
-              f"indices no longer block a campaign slice; "
-              f"`submissions resume <ID>` to restart the campaign.")
-        return
-
-    if verb == 'resubmit':
-        row = submission_ledger.row_by_id(db, args.row_id)
-        if row is None:
-            sys.exit(f"submissions: no ledger row {args.row_id} in {db}")
-        try:
-            if args.files is not None:
-                payload = submit.parse_files(args.files)
-                if not is_draining(row['entry']):
-                    sys.exit(f"submissions: row {args.row_id} is an index "
-                             f"row — use --indices, not --files")
-            else:
-                payload = submit.parse_indices(args.indices,
-                                               args.indices_file)
-                if is_draining(row['entry']):
-                    sys.exit(f"submissions: row {args.row_id} is a "
-                             f"draining (file-keyed) row — use --files, "
-                             f"not --indices")
-        except (ValueError, OSError) as e:
-            sys.exit(f"submissions: {e}")
-        if not payload:
-            sys.exit("submissions: nothing to resubmit (empty selection)")
-
-        # Lock BEFORE the overlap scan, not after: the scan and the
-        # submit must be one atomic operation against the ledger, same
-        # as every mutating tick (_acquire_lock: "both passing the
-        # drain gate before either closes a row = double submit").
-        # Scanning outside the lock would let a concurrent `submissions
-        # run` reserve a window AFTER this scan sees it clear and
-        # BEFORE this submits into it — the crash-window race the
-        # ledger reservation protocol exists to close.
-        if not args.dry_run:
-            _acquire_lock(db)
-
-        blocking = _rows_blocking_indices(db, row['tarball'], payload)
-        if blocking:
-            sys.exit(
-                f"submissions: refusing — row {blocking['id']} "
-                f"(state={blocking['state']}) already covers part of this "
-                f"selection for {row['tarball']}. Deterministic payloads "
-                f"mean re-sending live work duplicates physics. Check "
-                f"jobsub_q, then `submissions reconcile {blocking['id']}` "
-                f"if the window is genuinely free.")
-
-        # --indices/--indices-file only: --files is file-keyed and has
-        # no index space to bound. Nothing checks that a requested
-        # index actually belongs to `row` — a typo (e.g. row 4231's
-        # indices meant, cursor 5000 typed) sails through
-        # _rows_blocking_indices above, since nothing else covers it
-        # YET. If a child lands there and closes before the campaign's
-        # own cursor reaches it, _slice_overlaps_ledger permanently
-        # blocks the tick on that row with no CLI escape (reconcile_row
-        # refuses anything not 'failed'/'submitting' — it would need
-        # hand-edited sqlite). The cursor is the correct bound: below it
-        # is legitimate recovery of work already submitted; at or above
-        # it is ground the campaign hasn't reached yet and will submit
-        # itself.
-        if args.files is None:
-            # _live_campaign_cursor returns the ABSOLUTE bound
-            # (firstjob + cursor) — comparable directly against
-            # `payload`, which is absolute cnf indices (same space as
-            # row['indices']).
-            abs_cursor = _live_campaign_cursor(db, row['tarball'])
-            if abs_cursor is None:
-                # No active/paused campaign owns this tarball's index
-                # space right now — there is no cursor to bound against,
-                # so nothing is refused here.
-                pass
-            else:
-                over = sorted(i for i in payload if i >= abs_cursor)
-                if over:
-                    sys.exit(
-                        f"submissions: refusing — index(es) {over} are at "
-                        f"or above the live campaign's cursor "
-                        f"({abs_cursor}) for {row['tarball']}. That ground "
-                        f"has not been submitted yet; a future top-up "
-                        f"slice will cover it itself, and a hand-fired "
-                        f"child there can permanently block the tick with "
-                        f"no CLI escape. If you meant to recover work the "
-                        f"campaign has ALREADY submitted, use an index "
-                        f"below {abs_cursor}.")
-
-        fn = resubmit_files if args.files is not None else resubmit
-        # _guarded_submit (inside fn) returns True for ANY non-raising
-        # call — including submit_entry returning {'status': 'failed'}
-        # when jobsub_submit exits non-zero (possibly after already
-        # creating a cluster) or exits 0 with no parseable cluster id.
-        # `ok` alone can't distinguish that from a real submission, so
-        # confirm by evidence: a NEW active child row parented on this
-        # one. No such row means nothing was confirmed submitted — exit
-        # nonzero rather than let a caller's `&& next-step.sh` run on a
-        # false success. Skipped on --dry-run: submit_entry returns
-        # before touching the ledger, so there's nothing to find and
-        # nothing was promised.
-        before = {r['id'] for r in submission_ledger.open_rows(db)
-                 if r['parent_id'] == row['id']}
-        ok = fn(row, payload, db, dry_run=args.dry_run,
-               origin=f"operator resubmit of row {row['id']}")
-        if not ok:
-            sys.exit(f"submissions: resubmit of row {args.row_id} FAILED")
-        if args.dry_run:
-            return
-        new_children = [r for r in submission_ledger.open_rows(db)
-                        if r['parent_id'] == row['id']
-                        and r['id'] not in before]
-        if not new_children:
-            sys.exit(
-                f"submissions: resubmit of row {args.row_id} did NOT "
-                f"confirm a submission — no new active child ledger row "
-                f"appeared. jobsub_submit likely failed (possibly after "
-                f"creating a cluster); nothing is confirmed re-fired. "
-                f"Check jobsub_q, look for a 'failed' child row on "
-                f"row {args.row_id}, and `submissions reconcile <id>` "
-                f"it before retrying.")
-        print(f"row {args.row_id}: resubmitted -> child row "
-              f"{new_children[0]['id']}")
-        return
-
-    if verb in ('pause', 'resume', 'cancel', 'complete'):
-        _acquire_lock(db)
-        try:
-            manage_campaign(db, args.camp_id, verb,
-                            note=getattr(args, 'note', None),
-                            close_rows=getattr(args, 'close_rows', False))
-        except ValueError as e:
-            sys.exit(f"submissions: {e}")
-        return
-
-    # verb == 'run'
-    if not args.dry_run:
-        _acquire_lock(db)
-    _run_pass(args)
+    handler = _VERB_HANDLERS.get(args.verb)
+    if handler is None:
+        sys.exit(f"submissions: unknown verb {args.verb!r}")
+    handler(args, db)
 
 
 if __name__ == '__main__':

@@ -9,7 +9,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
 import time
 from pathlib import Path
 
@@ -42,14 +41,11 @@ from utils.samweb_wrapper import locate_file_strict, locate_files_strict
 def _job_index_from_fname(fname):
     """Parse (job_index, sequencer) from a Mu2e fname's sequencer field.
     Returns (0, sequencer) for all-zero sequencers (parent-tarball convention).
-    Raises RuntimeError on a fname that isn't a 6-field Mu2e file/tarball."""
-    try:
-        n = Mu2eName.parse(Path(fname).name)
-    except ValueError as exc:
-        raise RuntimeError(f"Invalid Mu2e fname: {fname}: {exc}")
+    Raises ValueError on a fname that isn't a 6-field Mu2e file/tarball."""
+    n = Mu2eName.parse(Path(fname).name)
     sequencer = n.sequencer
     if sequencer is None:
-        raise RuntimeError(f"Invalid Mu2e fname: {fname}; no sequencer field")
+        raise ValueError(f"Invalid Mu2e fname: {fname}; no sequencer field")
     stripped = sequencer.lstrip('0')
     return (int(stripped) if stripped else 0), sequencer
 
@@ -98,17 +94,14 @@ def _code_root_from(args):
 def _extract_simjob_setup(tarball, jp=None, code_root=None):
     """Read the setup-script path from a cnf.*.tar's jobpars.json (via
     Mu2eJobPars — pass a pre-built instance to avoid re-parsing the
-    tarball), resolve it through `resolve_setup`, re-raising with context
-    on failure.
+    tarball), resolve it through `resolve_setup`. Failures propagate: the
+    traceback (TarError/OSError from the tarball read, ValueError from
+    resolve_setup) already names the tarball.
     """
-    try:
-        jp = jp if jp is not None else Mu2eJobPars(tarball)
-        setup = resolve_setup(jp.setup(), code_root=code_root)
-        print(f"Job setup script: {setup}")
-        return setup
-    except (tarfile.TarError, KeyError, FileNotFoundError, OSError) as e:
-        print(f"ERROR: Failed to get job setup information from {tarball}: {e}")
-        raise
+    jp = jp if jp is not None else Mu2eJobPars(tarball)
+    setup = resolve_setup(jp.setup(), code_root=code_root)
+    print(f"Job setup script: {setup}")
+    return setup
 
 def replace_file_extensions(input_str, first_field, last_field):
     """Replace the tier and extension fields of a Mu2e dot-name."""
@@ -184,6 +177,25 @@ def proto_for_inloc(inloc):
         return 'file'
     return 'root'
 
+def _stage_inputs_locally(all_files, tarball, job_index_num):
+    """Copy every input into ./indir and return an FCL that reads from
+    there. One batch SAM locate (a mixing job has ~90 inputs); a file
+    with no usable location is an error, not a retry."""
+    fcl = write_fcl(tarball, f"dir:{os.getcwd()}/indir", 'file', job_index_num)
+    print("Starting to copy input files locally")
+    located = locate_files_strict(all_files)
+    for file in all_files:
+        locations = located.get(file)
+        if not locations or 'location_type' not in locations[0]:
+            raise RuntimeError(f"Could not detect location for file: {file}")
+        file_inloc = locations[0]['location_type']
+        print(f"Detected location of {file}: {file_inloc}")
+        print(f"Copying {file} from {file_inloc}")
+        _fetch_file_local(file, src_location=file_inloc)
+    run(f"mkdir indir; mv *.art indir/", shell=True)
+    return fcl
+
+
 def process_jobdef(jobdesc, fname, args):
     """Process a job in normal mode.
 
@@ -194,8 +206,8 @@ def process_jobdef(jobdesc, fname, args):
 
     try:
         job_index, _ = _job_index_from_fname(fname)
-    except RuntimeError as e:
-        fail(f"Error: {e}")
+    except ValueError as e:
+        fail(f"Error: Invalid Mu2e fname: {fname}: {e}")
 
     # Global job index -> entry's cnf-local index
     jobdesc_entry, job_index_num = resolve_entry_index(jobdesc, job_index)
@@ -248,29 +260,7 @@ def process_jobdef(jobdesc, fname, args):
     # Stash files are on CVMFS and resilient files use xrootd — no local copy needed
     if copy_input and infiles.strip() and inloc not in ("none", "stash", "resilient"):
         print(f"Copying input files locally from {inloc}: {infiles}")
-        fcl = write_fcl(tarball, f"dir:{os.getcwd()}/indir", 'file', job_index_num)
-
-        # Batch-locate everything in one SAM round-trip first (a mixing
-        # job has ~90 inputs); per-file fallback keeps error semantics.
-        print("Starting to copy input files locally")
-        located = {}
-        try:
-            result = locate_files_strict(all_files)
-            if isinstance(result, dict):
-                located = result
-        except Exception:
-            pass
-        for file in all_files:
-            locations = located.get(file)
-            if not isinstance(locations, list) or not locations:
-                locations = locate_file_strict(file)
-            if not locations or 'location_type' not in locations[0]:
-                raise RuntimeError(f"Could not detect location for file: {file}")
-            file_inloc = locations[0]['location_type']
-            print(f"Detected location of {file}: {file_inloc}")
-            print(f"Copying {file} from {file_inloc}")
-            _fetch_file_local(file, src_location=file_inloc)
-        run(f"mkdir indir; mv *.art indir/", shell=True)
+        fcl = _stage_inputs_locally(all_files, tarball, job_index_num)
         print(f"FCL: {fcl}")
     else:
         proto = proto_for_inloc(inloc)

@@ -34,11 +34,12 @@ class DatasetEffSummary:
         self.passedevents = 0
     
     def fill(self, metadata):
-        """Add one file's SAM metadata dict to the summary."""
-        self.nfiles += 1
-
+        """Add one file's SAM metadata dict to the summary. A file with no
+        dh.gencount raises before it is counted, so nfiles stays the
+        denominator of files actually summed."""
         if 'dh.gencount' not in metadata:
             raise ValueError(f"Error: no dh.gencount in metadata for file {metadata.get('file_name', 'unknown')}")
+        self.nfiles += 1
 
         self.genevents += metadata['dh.gencount']
 
@@ -88,7 +89,7 @@ def process_dataset(dsname, samweb, chunk_size=100, max_files=None, verbosity=2)
         for metadata in chunk_metadata:
             try:
                 summary.fill(metadata)
-            except Exception as e:
+            except ValueError as e:
                 print(f"Warning: Error processing file "
                       f"{metadata.get('file_name', 'unknown')}: {e}", file=sys.stderr)
                 continue
@@ -177,13 +178,13 @@ def main():
                 verbosity=args.verbosity
             )
             summaries.append(summary)
-        except Exception as e:
+        except ValueError as e:
             print(f"Error processing dataset {dataset}: {e}", file=sys.stderr)
             sys.exit(1)
 
     try:
         write_output(summaries, args.outfile, args.firstLine, args.writeFullDatasetName)
-    except Exception as e:
+    except (FileExistsError, OSError) as e:
         print(f"Error writing output: {e}", file=sys.stderr)
         sys.exit(1)
 
