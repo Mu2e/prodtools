@@ -64,12 +64,9 @@ def write_path_for_file(filename: str) -> str:
 
 
 def list_expected_paths(dataset: str) -> List[str]:
-    """
-    Return the expected stash read paths for all files in a SAM dataset.
-
-    This is useful for verifying that all files have been copied before
-    submitting jobs with inloc='stash'.
-    """
+    """Expected stash read paths for all files in a SAM dataset. Useful
+    for verifying files are copied before submitting jobs with
+    inloc='stash'."""
     files = files_in_dataset(dataset)
     return sorted(read_path_for_file(f) for f in files)
 
@@ -81,12 +78,10 @@ def list_expected_paths(dataset: str) -> List[str]:
 class CopyResult(NamedTuple):
     """Outcome of a dataset copy: how many landed, how many did not.
 
-    `failed` is carried out of the copy loop rather than only printed.
-    It used to be counted, reported in the summary line and then
-    dropped on the return, so a caller could not tell a complete copy
-    from one that lost every file — and bin/copy_to_stash exited 0
-    either way.
-    """
+    `failed` is carried out of the copy loop rather than only printed. It
+    used to be counted, reported in the summary line, then dropped on
+    return — so a caller couldn't tell a complete copy from one that lost
+    every file, and bin/copy_to_stash exited 0 either way."""
     copied: int
     failed: int
 
@@ -100,33 +95,28 @@ def _copy_dataset(
     verbose: bool = True,
     skip_existing: bool = False,
 ) -> CopyResult:
-    """
-    Copy all files in a SAM dataset to the destination given by
+    """Copy all files in a SAM dataset to the destination given by
     `dest_path_fn(filename)` — the shared engine behind
     copy_dataset_to_stash / copy_dataset_to_resilient.
 
-    Files are copied with `shutil.copyfile`.  The source path is obtained
-    from SAM for the requested source_loc ('disk' or 'tape').  For tape
-    sources the file must already be staged to disk (dcache); this function
-    does not trigger staging.
+    Files are copied with `shutil.copyfile`. Source path comes from SAM
+    for the requested source_loc ('disk' or 'tape'); for tape sources the
+    file must already be staged to disk (dcache) — this function does not
+    trigger staging.
 
-    Parameters
-    ----------
-    dataset      : SAM dataset name, e.g. "dts.mu2e.CeEndpoint.Run1Bab.art"
-    dest_path_fn : filename -> absolute destination path
-    source_loc   : SAM location type to read from ('disk' or 'tape')
-    limit        : If set, copy at most this many files
-    dry_run      : If True, print what would be done without copying
-    verbose      : If True, print progress for each file
-    skip_existing: If True, skip files already at the destination with the
-                   SAM-recorded size. Without it a partially staged dataset
-                   is re-copied in full, and each existing file is opened
-                   for truncating write — which on dCache either fails or,
-                   worse, truncates a good file if the copy dies midway.
+    dataset: SAM dataset name, e.g. "dts.mu2e.CeEndpoint.Run1Bab.art".
+    dest_path_fn: filename -> absolute destination path.
+    source_loc: SAM location type to read from ('disk' or 'tape').
+    limit: if set, copy at most this many files.
+    dry_run: if True, print what would be done without copying.
+    verbose: if True, print progress for each file.
+    skip_existing: if True, skip files already at the destination with
+    the SAM-recorded size. Without it a partially staged dataset is
+    re-copied in full, and each existing file is opened for truncating
+    write — which on dCache either fails or, worse, truncates a good file
+    if the copy dies midway.
 
-    Returns
-    -------
-    Number of files successfully copied.
+    Returns a CopyResult.
     """
     files = files_in_dataset(dataset)
     if not files:
@@ -172,7 +162,7 @@ def _copy_dataset(
         dest = dest_path_fn(filename)
         dest_dir = os.path.dirname(dest)
 
-        # Get source path from SAM, preferring the requested location type
+        # Source path from SAM, preferring source_loc's location type.
         try:
             locs = locations_map.get(filename)
             if locs:
@@ -193,15 +183,11 @@ def _copy_dataset(
             n_ok += 1
             continue
 
-        # Create destination directory
         os.makedirs(dest_dir, exist_ok=True)
 
-        # Copy file. shutil.copyfile, not copy2/copy: content only, no
-        # metadata or permission-bit copy — the destination is dCache
-        # (stash/resilient), where chmod/utime on a freshly written file
-        # is not reliably supported and would fail a copy that in fact
-        # succeeded. Failures arrive as OSError with errno/strerror
-        # rather than a return code plus scraped stderr.
+        # copyfile, not copy2/copy: content only, no metadata/permission
+        # bits — chmod/utime on dCache (stash/resilient) is unreliable
+        # and would fail a copy that in fact succeeded.
         try:
             shutil.copyfile(src, dest)
         except OSError as e:

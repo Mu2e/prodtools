@@ -1,9 +1,8 @@
 #!/bin/bash
 
-# check_inputs - pre-flight check that a campaign's input files are
-# readable before jobs launch (resilient pileup present + correctly
-# sized, tape inputs staged). Read-only. Wrapper for
-# utils/check_inputs.py
+# Pre-flight check that a campaign's input files are readable before
+# jobs launch (resilient pileup present + sized, tape inputs staged).
+# Read-only. Wrapper for utils/check_inputs.py
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/../utils/check_inputs.py"

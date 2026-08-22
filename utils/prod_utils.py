@@ -22,12 +22,10 @@ def setup_logging(verbose: bool) -> None:
         format="[%(levelname)s] %(message)s"
     )
     
-    # Suppress debug messages from external libraries when verbose is enabled
+    # Keep third-party libraries quiet even when our own logging is verbose.
     if verbose:
-        # Suppress requests library debug messages
         logging.getLogger("urllib3").setLevel(logging.WARNING)
         logging.getLogger("requests").setLevel(logging.WARNING)
-        # Suppress samweb_client debug messages
         logging.getLogger("samweb_client").setLevel(logging.WARNING)
 
 # How many trailing output lines run() keeps for failure classification.
@@ -37,23 +35,19 @@ RUN_TAIL_LINES = 200
 
 
 def run(cmd, shell=False, retries=0, retry_delay=60):
-    """
-    Run a shell command with real-time output streaming.
-    If shell=True, cmd is a string.
-    retries: number of retry attempts (0 = no retries, just run once)
-    retry_delay: seconds to wait between retries
-    Returns the exit code (0 for success) or raises CalledProcessError for failure.
-    """
+    """Run a shell command with real-time output streaming. If shell=True,
+    cmd is a string. retries: retry attempts (0 = run once). retry_delay:
+    seconds between retries. Returns 0 on success, else raises
+    CalledProcessError."""
     attempts = retries + 1
     for attempt in range(1, attempts + 1):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] Running: {cmd}")
 
-        # Real-time streaming, keeping a bounded tail so a caller can
-        # classify the failure (see runmu2e._is_terminal_push_error).
-        # Bounded because this same helper streams `mu2e -c`, whose output
-        # runs to hundreds of thousands of lines — the failure reason is
-        # always near the end.
+        # Bounded tail lets a caller classify the failure (see
+        # runmu2e._is_terminal_push_error) even though this same helper
+        # streams `mu2e -c` output running to hundreds of thousands of
+        # lines — the failure reason is always near the end.
         tail = collections.deque(maxlen=RUN_TAIL_LINES)
         process = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -79,10 +73,9 @@ def run(cmd, shell=False, retries=0, retry_delay=60):
 
 def _fetch_file_local(filename, src_location='disk'):
     """Fetch a SAM-registered file from dCache to cwd via `mdh copy-file`.
-    No-op if `filename` is already locally present (basename-relative).
+    No-op if `filename` is already present locally (basename-relative).
     `src_location` defaults to 'disk' (the cnf-tarball convention, matching
-    pushOutput's `disk` destination); pass the actual location for input
-    data files."""
+    pushOutput's `disk` destination); pass the real location for inputs."""
     if Path(filename).is_file():
         return
     run(f"mdh copy-file -e 3 -o -v -s {src_location} -l local {filename}",
@@ -100,11 +93,9 @@ def fail(msg):
 
 
 def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
-    """
-    Generate and write an FCL file using mu2ejobfcl.
-    """
+    """Generate and write an FCL file using mu2ejobfcl."""
     # cnf.<owner>.<desc>.<dsconf>.<seq>.tar -> cnf.<owner>.<desc>.<dsconf>.<index>.fcl
-    jobdef_name = Path(jobdef).name  # Get just the filename, not the full path
+    jobdef_name = Path(jobdef).name
     fcl = str(Mu2eName.parse(jobdef_name).with_sequencer(str(index)).with_extension('fcl'))
     
     job_fcl = Mu2eJobFCL(jobdef, inloc=inloc, proto=proto)
@@ -128,11 +119,7 @@ def write_fcl(jobdef, inloc='tape', proto='root', index=0, target=None):
 def get_def_counts(dataset):
     """Get file count (events>0 files only) and event count for a dataset.
     Exits when the dataset has no such files."""
-
-    # Count files
     nfiles = definition_file_count(dataset, with_events=True)
-
-    # Count events
     result = dataset_summary(dataset)
     nevts = (result.get('total_event_count') or 0) if isinstance(result, dict) else 0
 
@@ -148,11 +135,7 @@ def max_events_to_skip(dataset):
     return nevts // nfiles
 
 def calculate_merge_factor(fields):
-    """Calculate merge factor from input_data dict.
-    
-    The input_data should be a dict mapping dataset names to merge factors.
-    Returns the merge factor from the first dataset in the dict.
-    """
+    """Merge factor from the first dataset in fields['input_data']."""
     spec = normalize_input_data(fields.get('input_data'))[0]
     if spec.split_lines is not None:
         # split_lines means "split a local text file into N-line chunks;
@@ -170,30 +153,24 @@ def calculate_merge_factor(fields):
 COMMON_INCLUDE_KEY = '#include_first'
 
 def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
-    """
-    Write template.fcl — the single writer for every jobdef stage.
+    """Write template.fcl — the single writer for every jobdef stage.
 
     Layout (FHiCL last-wins, so position is semantics):
         #include base / COMMON_INCLUDE_KEY / pre_lines / overrides / post_lines
 
-    Args:
-        base: Base FCL file to include
-        overrides: Dictionary of FCL overrides. The reserved
-            COMMON_INCLUDE_KEY holds campaign defaults; its position is
-            enforced here rather than left to dict order (what the plain
-            '#include' key relies on), because every caller must get the
-            same answer: a frozen entry that pins geom_run1_b_v06 has to
-            keep it when the campaign default says v40.
-        pre_lines: raw FCL lines the config's overrides may still beat
-            (mixing pbeam include + per-mixer MaxEventsToSkip)
-        post_lines: raw FCL lines that beat the overrides
-            (resampler MaxEventsToSkip, computed from SAM)
+    overrides: dict of FCL overrides. The reserved COMMON_INCLUDE_KEY
+    holds campaign defaults; its position is enforced here rather than
+    left to dict order (what the plain '#include' key relies on), so
+    every caller gets the same answer: a frozen entry pinning
+    geom_run1_b_v06 keeps it even when the campaign default says v40.
+    pre_lines: raw FCL lines the overrides may still beat (mixing pbeam
+    include + per-mixer MaxEventsToSkip). post_lines: raw FCL lines that
+    beat the overrides (resampler MaxEventsToSkip, computed from SAM).
     """
     def _includes(val):
         return val if isinstance(val, list) else [val]
 
     with open('template.fcl', 'w') as f:
-        # Write just the include directive for the base FCL
         f.write(f'#include "{base}"\n')
 
         for inc in _includes(overrides.get(COMMON_INCLUDE_KEY, [])):
@@ -202,7 +179,6 @@ def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
         for line in pre_lines:
             f.write(line + '\n')
 
-        # Add overrides
         for key, val in overrides.items():
             if key == COMMON_INCLUDE_KEY:
                 continue
@@ -210,9 +186,8 @@ def write_fcl_template(base, overrides, pre_lines=(), post_lines=()):
                 for inc in _includes(val):
                     f.write(f'#include "{inc}"\n')
             else:
-                # Use json.dumps for all values to ensure proper FCL formatting
-                # (strings get quotes, lists get proper syntax with double
-                # quotes, bools become lowercase true/false as FHiCL requires)
+                # json.dumps for correct FHiCL formatting: quoted strings,
+                # bracketed lists, lowercase true/false.
                 f.write(f'{key}: {json.dumps(val)}\n')
 
         for line in post_lines:
@@ -223,11 +198,12 @@ def write_direct_input_fcl(job_fcl, fname, format_input=False, filter_base=False
     base content + appended source.fileNames and per-output filename
     overrides (FHiCL last-definition-wins).
 
-    Single home for the worker runtime (runmu2e.process_direct_input) and the
-    fcldump debug view, which had silently drifted apart. The flags ARE
-    that drift, now explicit:
-    - format_input: resolve fname to a full xroot/file URL via the resolver
-      (fcldump debug view); the worker writes the raw fname it fetched.
+    Single home for the worker runtime (runmu2e.process_direct_input) and
+    the fcldump debug view, which had silently drifted apart. The flags
+    ARE that drift, now explicit:
+    - format_input: resolve fname to a full xroot/file URL via the
+      resolver (fcldump debug view); the worker writes the raw fname it
+      fetched.
     - filter_base: strip base-FCL lines the overrides re-define, so the
       debug view shows no unresolved {desc} placeholders (cosmetic — the
       appended overrides win either way).
@@ -272,10 +248,8 @@ def resolve_entry_index(entry, job_index):
     seed safety): see utils/jobdesc.py. A generic entry (no njobs)
     occupies no index space.
 
-    Returns:
-        tuple: (entry, local_job_index), or (None, None) if job_index is
-               beyond the entry's njobs.
-    """
+    Returns (entry, local_job_index), or (None, None) if job_index is
+    beyond the entry's njobs."""
     njobs = njobs_of(entry)
     if njobs is None or job_index >= njobs:
         return None, None
@@ -283,23 +257,16 @@ def resolve_entry_index(entry, job_index):
 
 
 def push_output(output_specs, output_file="output.txt", simjob_setup=None):
-    """
-    Generic function to push output files.
+    """Push output files via pushOutput.
 
-    Args:
-        output_specs: List of tuples (location, filename, parents) — parents
-            is the per-file third column ('parents_list.txt' or 'none')
-        output_file: Name of the output specification file
-        simjob_setup: Path to SimJob setup script for art environment
-    
-    Returns:
-        int: Exit code from pushOutput command
+    output_specs: list of (location, filename, parents) tuples — parents
+    is the per-file third column ('parents_list.txt' or 'none').
+    simjob_setup: path to a SimJob setup script for the art environment.
+    Returns the exit code from pushOutput.
     """
-
     output_lines = []
     for spec in output_specs:
         location, pattern, parents = spec
-        # Handle glob patterns
         matching_files = glob.glob(pattern) if '*' in pattern else [pattern]
         for filename in matching_files:
             if Path(filename).exists():

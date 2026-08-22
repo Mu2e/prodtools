@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""
-Configuration utilities for Mu2e production scripts.
-
-This module provides utilities for processing job configuration dictionaries,
-including description extraction and auto-generation from input data.
-"""
+"""Utilities for processing job configuration dicts: description extraction
+and auto-generation from input data."""
 
 import copy
 from typing import List, NamedTuple, Optional
@@ -80,60 +76,41 @@ def mixing_desc(input_desc: str, pbeam: str) -> str:
 
 
 def prepare_fields_for_job(config, job_type='standard'):
-    """Prepare job configuration by auto-generating desc from input_data and optional pbeam.
-    
-    Args:
-        config: Configuration dictionary
-        job_type: 'standard' or 'mixing'
-        
-    Returns:
-        Modified copy of config with desc populated
-    """
-    # Create a copy of the config to modify
+    """Return a copy of config with `desc` auto-generated from input_data
+    (and, for job_type='mixing', pbeam) if not already set."""
     modified_config = copy.deepcopy(config)
-    
-    # If desc is already present, don't override it
+
     if 'desc' in config and config['desc']:
         return modified_config
-    
-    # Auto-generate desc from input_data
+
     input_data = _get_first_if_list(config.get('input_data', ''))
     if not input_data:
         raise ValueError("input_data is required to auto-generate desc")
-    
+
     if isinstance(input_data, dict):
         # Dict form: validate the whole shape, take the first source
         dataset_name = normalize_input_data(input_data)[0].source
     else:
-        # Old format: string dataset name
-        dataset_name = input_data
-    
+        dataset_name = input_data  # old format: string dataset name
+
     # Dataset name format: tier.owner.desc.dsconf.ext (5 parts)
     n = Mu2eName.parse(dataset_name)
     if not n.is_dataset:
         raise ValueError(f"Invalid dataset name format: '{dataset_name}'. Expected 5 dot-separated fields (tier.owner.desc.dsconf.ext)")
     dsdesc = n.description  # e.g., "CosmicSignal" from "dts.mu2e.CosmicSignal.MDC2025ac.art"
-    
-    # For mixing jobs, append pbeam to the desc
+
     if job_type == 'mixing':
         pbeam = _get_first_if_list(config.get('pbeam', ''))
         modified_config['desc'] = mixing_desc(dsdesc, pbeam)
     else:
-        # For standard jobs (digi, reco, ntuple, etc.), just use the dataset name
         modified_config['desc'] = dsdesc
-    
+
     return modified_config
 
 
 def get_tarball_desc(config):
-    """Get description for tarball naming.
-    
-    Args:
-        config: Configuration dictionary
-        
-    Returns:
-        Tarball description string: base_desc + tarball_append (if specified), or None
-    """
+    """Tarball description string: base_desc + tarball_append if specified,
+    else None."""
     if 'tarball_append' not in config:
         return None
 

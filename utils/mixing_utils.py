@@ -10,12 +10,10 @@ from .samweb_wrapper import files_in_dataset
 from .config_utils import _get_first_if_list, prepare_fields_for_job
 
 def _create_pileup_catalog(dataset, filename):
-    """Helper: create pileup catalog file from datasets with merge factors.
-    
-    Args:
-        dataset: dict mapping dataset names to merge factors
-                 e.g., {"dataset1": 100, "dataset2": 10}
-        filename: Output filename for the catalog
+    """Write a pileup catalog file listing all files from the given datasets.
+
+    dataset: dict mapping dataset names to merge factors, e.g.
+             {"dataset1": 100, "dataset2": 10}
     """
     if not isinstance(dataset, dict):
         raise ValueError(f"dataset must be a dict, got {type(dataset)}")
@@ -62,20 +60,17 @@ def _map_dataset_to_mixer(dataset_name):
 
 def build_pileup_args(config):
     """Build command-line arguments for pileup mixing configuration.
-    
-    Args:
-        config: Configuration dictionary with the following structure:
-            - pileup_datasets: list containing dict mapping dataset names to file counts
-              e.g., [{
-                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
-                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
-                "dts.mu2e.NeutralsFlashCat.MDC2025ac.art": 50,
-                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
-              }]
-              The count value specifies how many files to use from each pileup catalog.
-    
-    Returns:
-        List of command-line arguments for mu2ejobdef
+
+    config['pileup_datasets'] is a list containing one dict mapping dataset
+    names to file counts, e.g.::
+
+        [{"dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+          "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+          "dts.mu2e.NeutralsFlashCat.MDC2025ac.art": 50,
+          "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2}]
+
+    Each count is how many files to use from that pileup catalog.
+    Returns a list of command-line arguments for mu2ejobdef.
     """
     args = []
     pre_lines = []
@@ -86,7 +81,6 @@ def build_pileup_args(config):
     if pbeam and pbeam in MIXING_FCL_INCLUDES:
         pre_lines.append(f'#include "{MIXING_FCL_INCLUDES[pbeam]}"')
 
-    # Get pileup datasets dict (extract from list if needed)
     pileup_datasets = _get_first_if_list(config.get('pileup_datasets', [{}]))
 
     if not isinstance(pileup_datasets, dict):
@@ -103,24 +97,20 @@ def build_pileup_args(config):
             mixer_datasets[mixer_type] = {}
         mixer_datasets[mixer_type][dataset] = merge_factor
 
-    # Process each mixer type
     for mixer_type, datasets in mixer_datasets.items():
-        # _map_dataset_to_mixer returns a PILEUP_MIXERS key or raises, and
-        # the table is never mutated, so this lookup always resolves.
+        # _map_dataset_to_mixer always returns a PILEUP_MIXERS key or raises
         mixer = PILEUP_MIXERS[mixer_type]
 
         pileup_list = f"{mixer_type}Cat.txt"
-
-        # Create pileup catalog for this mixer type
         _create_pileup_catalog(datasets, pileup_list)
-        # Use the first dataset for MaxEventsToSkip calculation
+
+        # MaxEventsToSkip and file count both come from the first dataset
         first_dataset = list(datasets.keys())[0]
         skip = max_events_to_skip(first_dataset)
         pre_lines.append(f"physics.filters.{mixer}.mu2e.MaxEventsToSkip: {skip}")
 
-        # Use the merge factor from the first dataset as the count
         cnt = list(datasets.values())[0]
-        # Use the JSON count parameter - mu2ejobdef will select the first cnt files from the full list
+        # mu2ejobdef selects the first `cnt` files from pileup_list
         args += ['--auxinput', f"{cnt}:physics.filters.{mixer}.fileNames:{pileup_list}"]
 
     write_fcl_template(config['fcl'],
@@ -134,24 +124,18 @@ def _job_type_for_config(job):
 
 
 def expand_configs(configs):
-    """
-    Expand configurations into individual job configurations.
-    Job type (mixing vs standard) is determined per config from content (e.g. pbeam),
-    so desc gets pbeam appended for mixing jobs regardless of filename.
+    """Expand a list of config dicts into individual job configurations.
 
-    Args:
-        configs: List of configuration dictionaries
+    Job type (mixing vs standard) is determined per config from content
+    (e.g. pbeam), so desc gets pbeam appended for mixing jobs regardless
+    of filename.
 
-    Returns:
-        List of expanded job configurations
+    One expansion path handles every shape: all-list, mixed list/non-list,
+    and fully-scalar configs.
     """
-    # Generate jobs for each configuration. One expansion path handles
-    # every shape: all-list, mixed list/non-list, and fully-scalar configs
-    # (the previous separate all-list branch was a copy of the mixed one).
     all_jobs = []
 
     for i, config in enumerate(configs):
-        # Validate that each config is a dictionary
         if not isinstance(config, dict):
             raise ValueError(f"Configuration at index {i} is not a dictionary: {type(config)} - {config}")
 
@@ -163,21 +147,19 @@ def expand_configs(configs):
                 raise ValueError(f"List for key '{key}' is empty. All lists must have at least one value.")
 
         if not list_fields:
-            # All values are non-list (already expanded), just add directly
+            # already scalar-only: add directly
             config = prepare_fields_for_job(config, _job_type_for_config(config))
             all_jobs.append(config)
             continue
 
-        # Generate combinations for list fields, keeping non-list fields constant
+        # cartesian product over list fields; non-list fields stay constant
         param_names = list(list_fields.keys())
 
         for combination in itertools.product(*list_fields.values()):
-            # Create job with this combination
             job = dict(zip(param_names, combination))
-            # Add the non-list fields (create deep copy to avoid reference issues)
-            job.update(copy.deepcopy(non_list_fields))
+            job.update(copy.deepcopy(non_list_fields))  # deep copy: avoid shared refs
 
-            # Ensure fcl_overrides is completely fresh for each job
+            # keep fcl_overrides independent per job
             if 'fcl_overrides' in job:
                 job['fcl_overrides'] = copy.deepcopy(_get_first_if_list(config.get('fcl_overrides', {})))
 

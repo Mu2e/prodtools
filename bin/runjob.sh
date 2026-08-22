@@ -1,13 +1,10 @@
 #!/bin/bash
 #
-# runjob.sh — worker bootstrap for direct-mode runmu2e.
-#
-# Used by Phase 2 of the prodtools direct-submit driver. jobsub_submit
-# delivers this script as the worker executable; the cnf tarball and
-# ops JSON arrive via -f dropbox:// under $CONDOR_DIR_INPUT, and a
-# prodtools tarball arrives the same way (so the worker can use our
-# patched utils/runmu2e.py without depending on a cvmfs version).
-#
+# runjob.sh — worker bootstrap for direct-mode runmu2e (Phase 2 of the
+# prodtools direct-submit driver). jobsub_submit delivers this script as
+# the worker executable; cnf tarball, ops JSON, and a prodtools tarball
+# all arrive via -f dropbox:// under $CONDOR_DIR_INPUT, so the worker can
+# run our patched utils/runmu2e.py without depending on a cvmfs version.
 # Direct mode is detected inside runmu2e.py via MU2EGRID_JOBDEF env.
 
 set -x
@@ -31,8 +28,8 @@ setup OfflineOps || echo "WARNING: setup OfflineOps failed (continuing — direc
 
 echo "=== extracting prodtools tarball ==="
 PRODTOOLS_DIR="$_CONDOR_SCRATCH_DIR/prodtools"
-# MU2EGRID_PRODTOOLS_TAR is the basename of the dropbox-shipped tarball.
-# Default to plain "prodtools.tar" for the legacy hand-crafted submission path.
+# MU2EGRID_PRODTOOLS_TAR is the dropbox-shipped tarball's basename;
+# defaults to "prodtools.tar" for the legacy hand-crafted submission path.
 PRODTOOLS_TAR="${MU2EGRID_PRODTOOLS_TAR:-prodtools.tar}"
 tar xf "$CONDOR_DIR_INPUT/$PRODTOOLS_TAR" -C "$_CONDOR_SCRATCH_DIR"
 ls -la "$PRODTOOLS_DIR/utils/runmu2e.py" 2>&1

@@ -63,8 +63,7 @@ class DatasetLister:
     
     def get_average_filesize(self, dataset: str) -> str:
         """Return average file size in MB, or 'N/A' if unavailable."""
-        # A size column is cosmetic: a SAM hiccup degrades to 'N/A'
-        # rather than killing the whole report.
+        # Cosmetic column: a SAM hiccup degrades to 'N/A', not a crash.
         try:
             result = dataset_summary(dataset)
         except Exception:
@@ -90,8 +89,8 @@ class DatasetLister:
 
     def _total_files(self, dataset: str) -> int:
         """Total files in the dataset. NOT the windowed COUNT column: a
-        campaign that started before the lookback window would otherwise be
-        scored against a full-campaign denominator with a partial numerator."""
+        campaign started before the lookback window would otherwise score a
+        full-campaign denominator against a partial numerator."""
         try:
             return dataset_file_count(dataset)
         except Exception:
@@ -100,21 +99,19 @@ class DatasetLister:
     def _get_completeness(self, dataset: str) -> str:
         """<landed>/<expected> for a dataset produced by a direct campaign.
 
-        '—' when no known campaign produced it. There is deliberately no
-        per-dataset '?': the dataset name comes FROM the cnf tarball, so an
-        unresolvable tarball leaves its dataset unidentifiable. Those failures
-        are reported once on stderr by run() instead.
+        '—' when no known campaign produced it. Deliberately no per-dataset
+        '?': the dataset name comes FROM the cnf tarball, so an unresolvable
+        tarball leaves its dataset unidentifiable — those failures are
+        reported once on stderr by run() instead.
 
-        Incomplete rows (landed < expected) are flagged, but how depends on
-        self.color, the ls/grep-style --color flag:
+        Incomplete rows (landed < expected) are flagged per self.color
+        (ls/grep-style --color):
         - 'auto' (default): red on a tty, dropping the ' INCOMPLETE' suffix
-          (colour alone signals it); plain '<landed>/<expected> INCOMPLETE'
-          with no escape codes otherwise, so piped/redirected consumers
-          (grep, awk) aren't corrupted by codes they can't strip.
-        - 'always': red with no suffix regardless of tty-ness — this is
-          what makes `| grep` usable with colour, since grep's own
-          --color=always only colours grep's match, it can't retroactively
-          add colour we already suppressed.
+          (colour alone signals it); plain text with the suffix otherwise,
+          so piped consumers (grep, awk) aren't corrupted by escape codes.
+        - 'always': red with no suffix regardless of tty-ness — makes
+          `| grep --color=always` usable, since grep can't retroactively
+          colour text we already suppressed.
         - 'never': plain text with the suffix regardless of tty-ness, for
           reproducible captures.
         Complete rows are never coloured or marked, in any mode."""
@@ -162,7 +159,6 @@ class DatasetLister:
                 print(f"WARNING: no expected count for {tarball}: {reason}",
                       file=sys.stderr)
 
-        # Print header
         print("------------------------------------------------")
         header = f"{'COUNT':>8} {'DATASET':<100}"
         divider = f"{'-----':>8} {'-------':<100}"
@@ -175,7 +171,6 @@ class DatasetLister:
         print(header)
         print(divider)
 
-        # Print datasets
         for dataset, count in sorted_datasets:
             line = f"{count:>8} {dataset:<100}"
             if self.show_size:

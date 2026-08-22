@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-anaTimeReport - Analyze Mu2e log performance metrics
-"""
+"""anaTimeReport - Analyze Mu2e log performance metrics."""
 
 import sys, argparse, re, json, os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,25 +9,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.datasetFileList import get_dataset_files
 
-# Regex patterns
 TIMEREPORT_REGEX = re.compile(r"TimeReport CPU = ([0-9]*\.?[0-9]+) Real = ([0-9]*\.?[0-9]+)")
 MEMREPORT_REGEX = re.compile(r"MemReport\s+VmPeak\s*=\s*([0-9]*\.?[0-9]+)\s+VmHWM\s*=\s*([0-9]*\.?[0-9]+)")
 
 def get_log_files(dataset, max_files=None):
-    """Get log files for a SAM dataset (e.g., log.mu2e.X.Y.log).
-    
-    Args:
-        dataset: SAM dataset name (must be a registered dataset with dh.dataset metadata)
-        max_files: Maximum number of log files to return
-    
-    Returns:
-        List of log file paths, or empty list if dataset not found
-    """
+    """Get log files for a SAM dataset (e.g., log.mu2e.X.Y.log). dataset must
+    be registered with dh.dataset metadata. Returns [] if not found."""
     try:
-        # Use get_dataset_files() which constructs paths directly without
-        # locate_files() calls; max_files caps path construction at the
-        # source (a log dataset holds one file per job — up to 100k names
-        # for a 10-log sample otherwise).
+        # get_dataset_files() constructs paths directly, no locate_files()
+        # calls; max_files caps that at the source (a log dataset holds one
+        # file per job — up to 100k names for a 10-log sample otherwise).
         return get_dataset_files(dataset, max_files=max_files)
 
     except Exception as e:
@@ -56,13 +45,8 @@ def parse_log_file(filepath):
             'VmHWM [GB]': round(vmh, 2) if vmh else None}
 
 def process_dataset(dataset, max_logs, max_workers=10):
-    """Process one dataset and return metrics.
-    
-    Args:
-        dataset: Dataset name to process
-        max_logs: Maximum number of log files to process
-        max_workers: Number of threads for parallel log file parsing (default: 10)
-    """
+    """Process one dataset and return metrics. max_logs caps files processed;
+    max_workers is the thread pool size for parallel log parsing."""
     print(f"Processing {dataset}", file=sys.stderr)
     
     log_files = get_log_files(dataset, max_logs)
@@ -71,14 +55,11 @@ def process_dataset(dataset, max_logs, max_workers=10):
                 'Real [h]': None, 'Real_max [h]': None, 'VmPeak [GB]': None,
                 'VmPeak_max [GB]': None, 'VmHWM [GB]': None, 'VmHWM_max [GB]': None}
     
-    # Parse all log files in parallel using thread pool
     file_metrics = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all parsing tasks
-        future_to_file = {executor.submit(parse_log_file, log_file): log_file 
+        future_to_file = {executor.submit(parse_log_file, log_file): log_file
                          for log_file in log_files}
-        
-        # Collect results as they complete
+
         for future in as_completed(future_to_file):
             try:
                 result = future.result()
@@ -86,7 +67,7 @@ def process_dataset(dataset, max_logs, max_workers=10):
             except Exception as e:
                 log_file = future_to_file[future]
                 print(f"Warning: Error parsing {log_file}: {e}", file=sys.stderr)
-                # Add empty result to maintain order
+                # keep an empty placeholder so ordering/count stays intact
                 file_metrics.append({
                     'file': os.path.basename(log_file),
                     'full_path': log_file,
@@ -97,15 +78,13 @@ def process_dataset(dataset, max_logs, max_workers=10):
                     'VmHWM [GB]': None
                 })
     
-    # Collect metrics for statistics
     metrics = {'CPU': [], 'Real': [], 'VmPeak': [], 'VmHWM': []}
     for fm in file_metrics:
         if fm['CPU [h]'] is not None: metrics['CPU'].append(fm['CPU [h]'])
         if fm['Real [h]'] is not None: metrics['Real'].append(fm['Real [h]'])
         if fm['VmPeak [GB]'] is not None: metrics['VmPeak'].append(fm['VmPeak [GB]'])
         if fm['VmHWM [GB]'] is not None: metrics['VmHWM'].append(fm['VmHWM [GB]'])
-    
-    # Calculate statistics
+
     def mean(lst): return round(sum(lst)/len(lst), 2) if lst else None
     def max_val(lst): return round(max(lst), 2) if lst else None
     
@@ -123,10 +102,8 @@ def main():
     parser.add_argument('-n', '--max-logs', type=int, default=None, help='Max logs per dataset (default: all)')
     args = parser.parse_args()
 
-    # Process all datasets
     results = [process_dataset(dataset, args.max_logs) for dataset in args.datasets]
-    
-    # Output results
+
     for result in results:
         print(json.dumps(result, indent=2))
 

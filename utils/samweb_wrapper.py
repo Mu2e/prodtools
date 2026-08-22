@@ -117,10 +117,10 @@ class SAMWebWrapper:
     """Wrapper for samweb_client to replace external samweb commands."""
     
     def __init__(self):
-        """Initialize the SAMWeb client. The experiment must resolve even
-        on grid workers where SAM_EXPERIMENT may be unset (jobfcl runs in
-        the worker's inner loop), so fall back to 'mu2e' explicitly rather
-        than relying on samweb_client's env-only default."""
+        """Init the SAMWeb client. Experiment must resolve even on grid
+        workers where SAM_EXPERIMENT may be unset (jobfcl's inner loop),
+        so fall back to 'mu2e' explicitly rather than samweb_client's
+        env-only default."""
         experiment = (os.environ.get('SAM_EXPERIMENT')
                       or os.environ.get('EXPERIMENT') or 'mu2e')
         self.client = SAMWebClient(experiment=experiment)
@@ -174,11 +174,7 @@ class SAMWebWrapper:
     
     def list_definition_files(self, definition_name: str, availability: str = "anylocation") -> List[str]:
         """List files in a definition (equivalent to samweb list-definition-files).
-        
-        Args:
-            definition_name: Name of the SAM definition
-            availability: Availability constraint ('anylocation', 'physical', etc.)
-        """
+        availability constrains e.g. to 'anylocation' or 'physical'."""
         try:
             return self.client.listFiles(_q_definition_files(definition_name, availability))
         except Exception as e:
@@ -190,8 +186,7 @@ class SAMWebWrapper:
         """First file of a SAM definition without transferring the full
         list (streamed listFiles, closed after one name — a dataset can
         hold 100k files). Returns None on SAM errors or an empty
-        definition — same swallow semantics as list_definition_files,
-        whose query grammar it shares."""
+        definition, matching list_definition_files' swallow semantics."""
         try:
             stream = self.client.listFiles(
                 _q_definition_files(definition_name, availability), stream=True)
@@ -223,9 +218,9 @@ class SAMWebWrapper:
 
     def definition_creation_date(self, defname: str) -> Optional[datetime]:
         """Creation time of a SAM definition as a naive datetime, or None
-        if unavailable. Prefers the structured JSON describe; falls back
-        to parsing the text rendering (older servers). Fail-soft: the
-        dashboard consumers treat an unknown date as absent, not fatal."""
+        if unavailable. Prefers the structured JSON describe, falls back
+        to parsing the text rendering (older servers). Fail-soft: an
+        unknown date is treated as absent, not fatal, by dashboards."""
         info = None
         try:
             info = self.client.descDefinitionDict(defname)
@@ -241,12 +236,9 @@ class SAMWebWrapper:
         return _parse_sam_datetime(match.group(1)) if match else None
     
     def file_lineage(self, filename: str, lineage_type: str = 'parents') -> List[str]:
-        """Get file lineage using SAM client getFileLineage method.
-
-        Args:
-            filename: Name of the file to get lineage for
-            lineage_type: Type of lineage ('parents', 'children', 'ancestors', 'descendants', 'rawancestors')
-        """
+        """Get file lineage via SAM client getFileLineage.
+        lineage_type: 'parents', 'children', 'ancestors', 'descendants',
+        or 'rawancestors'."""
         try:
             result = self.client.getFileLineage(lineage_type, filename)
             return [item['file_name'] for item in result if 'file_name' in item]
@@ -294,10 +286,10 @@ class SAMWebWrapper:
 
         Fail-loud twin of file_lineage(filename, 'parents'), which
         swallows every exception and returns []. For a lineage caller
-        that empty list is indistinguishable from 'this file has no
-        parents' — i.e. 'it is a primary' — so an expired token or a SAM
-        outage renders as a confident, materially wrong answer. Callers
-        that must tell absence from failure use this one."""
+        that empty list is indistinguishable from 'this is a primary
+        with no parents' — an expired token or SAM outage would render
+        as a confident, wrong answer. Use this when you must tell
+        absence from failure."""
         parents = self.client.listFiles(_q_parents_of_file(filename))
         return [p for p in parents
                 if not (p.startswith('etc.') and p.endswith('.txt'))]
@@ -323,12 +315,12 @@ class SAMWebWrapper:
         files instead of one per file.
 
         Chunking lives here, not in callers: SAM rejects an oversized
-        request outright, so a caller that skipped it got a hard failure
-        rather than a slow path, and every new caller had to rediscover
-        the limit. Files unknown to SAM are silently absent from the
-        result (samweb behavior). Raises on SAM errors — callers wanting
-        warn-and-continue still chunk themselves and fall back to
-        get_metadata per file."""
+        request outright, so skipping it means a hard failure instead of
+        a slow path, and every new caller would rediscover the limit.
+        Files unknown to SAM are silently absent from the result (samweb
+        behavior). Raises on SAM errors — callers wanting warn-and-
+        continue still chunk themselves and fall back to get_metadata
+        per file."""
         out: List[Dict] = []
         for i in range(0, len(filenames), MAX_METADATA_BATCH):
             out.extend(self.client.getMultipleMetadata(

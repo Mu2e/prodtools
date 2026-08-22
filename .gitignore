@@ -125,3 +125,7 @@ poms_data.db
 /test2/
 /test_runmu2e/
 /test_reco/
+
+# famtree per-dataset reports and listNewDatasets output (generated)
+/*.mu2e.*.md
+/latest_datasets.html

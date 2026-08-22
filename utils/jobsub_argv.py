@@ -3,13 +3,11 @@
 Pure-Python builder for the jobsub_submit argv that drives our direct-mode
 worker (utils/runmu2e.py via bin/runjob.sh). Replicates the submit-side
 behavior of mu2egrid's mu2ejobsub but routes the worker to our Python
-pipeline so that per-job pushOutput happens.
-
-Phase 2 Step 2 of the plan in
+pipeline so per-job pushOutput happens. Phase 2 Step 2 of the plan in
 wiki/pages/2026-04-30-phase2-direct-jobsub-implementation.md.
 
-Pure functions only — no I/O, no subprocess. Use submit.py's direct
-backend to actually invoke jobsub_submit with the resulting argv.
+Pure functions only — no I/O, no subprocess. submit.py's direct backend
+actually invokes jobsub_submit with the resulting argv.
 """
 
 import os
@@ -25,14 +23,11 @@ from utils.file_resolver import storage_scope
 
 # --- Mu2egrid-compatible defaults (mirrors mu2egrid::commonOptDefaultsJobsub) ---
 DEFAULT_DISK = "30GB"
-# Deliberately ABOVE mu2egrid's 2000MB. Mu2e primaries cluster just over
-# that line -- measured VmHWM 2266 MB (PiTargetStops) and 2377 MB (the
-# RPC primaries), both base-10 -- so the mu2egrid value OOM'd entries
-# whose only sin was not naming a memory key. 2500MB clears the observed
-# peaks while staying low enough not to distort slot matching. Raising an
-# entry above this is still an entry-key decision; note that naming the
-# key forfeits the 4000MB recovery floor (see submissions.RECOVERY_MEMORY
-# and recovery_resource_kwargs, which apply only when the key is absent).
+# Deliberately ABOVE mu2egrid's 2000MB: Mu2e primaries cluster just over
+# that line (measured VmHWM 2266-2377 MB, base-10), so 2000MB OOM'd
+# entries with no memory key. Naming a memory key forfeits the 4000MB
+# recovery floor (submissions.RECOVERY_MEMORY / recovery_resource_kwargs
+# apply only when the key is absent).
 DEFAULT_MEMORY = "2500MB"
 DEFAULT_LIFETIME = "24h"
 DEFAULT_RESOURCE = "usage_model=OPPORTUNISTIC,DEDICATED"
@@ -74,20 +69,16 @@ def storage_scope_for_file(filename, location):
 def output_storage_dirs(output_filenames, outputs):
     """Derive `--need-storage-modify` scopes for direct-mode pushOutput.
 
-    Args:
-        output_filenames: actual filenames the cnf will produce, e.g. from
-            `Mu2eJobPars(jobdef).job_outputs(0).values()`.
-        outputs: map-entry `outputs[]` — list of ``{dataset, location}``
-            globs that map dataset patterns to a location.
-
-    Each filename is matched against the dataset globs to find its
+    `output_filenames` are actual filenames the cnf will produce;
+    `outputs` is the map-entry `outputs[]` list of `{dataset, location}`
+    globs. Each filename is matched against those globs to find its
     location, then the narrowest scope is computed via
     `storage_scope_for_file`. Returns a sorted, deduped list.
 
-    `mu2ejobsub.sh` only writes to `$WFOUTSTAGE`, so the Perl side needs
-    one scope. Direct mode runs `pushOutput` on the worker, which writes
-    to `/pnfs/mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>/...` —
-    a path the WFOUTSTAGE-only token does NOT cover.
+    Direct mode runs `pushOutput` on the worker, which writes to
+    `/pnfs/mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>/...`
+    — a path the WFOUTSTAGE-only token (all `mu2ejobsub.sh` needs) does
+    NOT cover.
     """
     import fnmatch
     dirs = set()
@@ -222,15 +213,14 @@ def build_jobsub_argv(
     """Build the full `jobsub_submit` argv (without the `jobsub_submit`
     command itself) for direct-mode submission.
 
-    All path arguments are absolute paths on the submitter's filesystem.
+    All path arguments are absolute paths on the submitter's filesystem;
     `-f dropbox://<path>` ships them to the worker under `$CONDOR_DIR_INPUT`.
 
     `code_tarball`, when set, is an absolute path to a `muse tarball`
     Code.tar.bz2. It rides `--tar_file_name dropbox://`, NOT `-f
     dropbox://`: jobsub publishes it to RCDS/cvmfs once, deduplicated by
-    content, and the worker sees the unpacked tree at
-    $INPUT_TAR_DIR_LOCAL. `-f` transfers per job, which a ~1 GB build
-    tree cannot afford. Same split mu2eprodsys uses (mu2eprodsys:474).
+    content, at $INPUT_TAR_DIR_LOCAL — `-f` transfers per job, which a
+    ~1 GB build tree can't afford (mu2eprodsys:474 uses the same split).
     """
     if role is None:
         role = role_for_user(submitter)
@@ -272,9 +262,8 @@ def build_jobsub_argv(
     argv.extend(_env_args(env))
     # `--need-storage-modify` accumulates: WFOUTSTAGE plus whatever the
     # caller computed from cnf outputs (CB1). htvault rejects the broad
-    # `/mu2e/<area>/datasets` scope, so callers should derive narrow
-    # `/mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>` paths
-    # via `storage_scope_for_file`.
+    # `/mu2e/<area>/datasets` scope, so callers derive narrow
+    # `.../<owner-class>-<tier>/<tier>/<owner>` paths via storage_scope_for_file.
     scopes = [storage_modify_dir(outstage), *extra_storage_modify]
     for d in dict.fromkeys(scopes):  # dedupe, preserve order
         argv.extend(["--need-storage-modify", d])

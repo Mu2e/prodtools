@@ -2,11 +2,11 @@
 """Resolve an output dataset/description back to the cnf (job definition) that
 produced it, and read ground-truth facts (e.g. njobs) from that cnf.
 
-Extracted from ``fcldump`` so it can be reused by other tools (e.g.
-``latestDatasets --complete-only``) without importing the fcldump entry point.
+Extracted from ``fcldump`` so other tools (e.g. ``latestDatasets
+--complete-only``) can reuse it without importing the fcldump entry point.
 
-All diagnostics go to **stderr** so callers that emit machine-readable output on
-stdout (config JSON, dataset lists) stay clean.
+All diagnostics go to **stderr** so callers emitting machine-readable output
+on stdout (config JSON, dataset lists) stay clean.
 
 The cnf is NOT in SAM data lineage, so the mapping is by name: a fast 1:1 cnf
 desc match, then a fallback that scans the dsconf's cnfs and matches on each
@@ -301,21 +301,19 @@ def output_njobs_map(dsconf):
 
 
 def build_file_maps(job_io, datasets, njobs, firstjob=0, indices=None):
-    """One pass over the cnf's index window building, for each dataset in
-    `datasets`, its {filename: window-relative index} map. job_outputs
-    returns every output stream per call, so a single scan serves all of
-    an entry's datasets (previously one full njobs-scan per dataset —
-    and one fresh tarball parse each, megabytes for mixing cnfs).
+    """One pass over the cnf's index window, building for each dataset in
+    `datasets` its {filename: window-relative index} map. job_outputs
+    returns every output stream per call, so a single scan serves all of an
+    entry's datasets (previously one full njobs-scan, and one fresh tarball
+    parse, per dataset — megabytes for mixing cnfs).
 
-    With `indices` given, scan exactly those indices instead of
-    range(njobs) — map values are the indices as passed (the recovery
-    loop passes ABSOLUTE cnf indices with firstjob=0, so values come
-    back in the caller's own index space). njobs is ignored in that
-    case.
+    With `indices` given, scan exactly those instead of range(njobs) — map
+    values are the indices as passed (the recovery loop passes ABSOLUTE cnf
+    indices with firstjob=0, so values come back in the caller's own index
+    space). njobs is ignored in that case.
 
-    Structured dataset compare — a substring test would false-match
-    sibling dsconfs where one is a prefix of the other (e.g. ..._v1_4 vs
-    ..._v1_4-000).
+    Structured dataset compare — a substring test would false-match sibling
+    dsconfs where one is a prefix of the other (e.g. ..._v1_4 vs ..._v1_4-000).
     """
     wanted = set(datasets)
     maps = {ds: {} for ds in datasets}
@@ -337,13 +335,13 @@ def extract_datasets_from_tarball(job_pars, njobs):
     parses once and shares the instance with build_file_maps)."""
     output_datasets = job_pars.output_datasets()
 
-    # If output_datasets is empty, extract from actual output files
     if not output_datasets:
+        # Fall back to actual output files (a sample of up to 10 jobs).
         dataset_set = set()
         for idx in range(min(10, njobs)):
             for filename in job_pars.job_outputs(idx).values():
-                # Extract dataset name from filename (force .art extension to
-                # match historical behavior — outputs may have other exts).
+                # Force .art extension (historical behavior — outputs may
+                # have other extensions).
                 try:
                     n = Mu2eName.parse(filename)
                 except ValueError:

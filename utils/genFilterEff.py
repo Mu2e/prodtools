@@ -2,10 +2,8 @@
 """
 genFilterEff - Compute overall filter efficiency for Mu2e datasets
 
-Python implementation of mu2eGenFilterEff
-Calculates the ratio of passed events to generated events for simulation datasets.
-
-Author: Converted from Perl version by A.Gaponenko, 2016
+Python port of mu2eGenFilterEff: ratio of passed events to generated events
+for simulation datasets. Converted from the Perl version by A.Gaponenko, 2016.
 """
 
 import sys
@@ -13,12 +11,11 @@ import argparse
 import os
 from pathlib import Path
 
-# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Package-first imports with bare fallback: keeps one module identity
-# when loaded as utils.genFilterEff (web dashboard, cron) while still
-# supporting the bin/ stubs that put utils/ itself on the path.
+# Package-first import with bare fallback: keeps one module identity when
+# loaded as utils.genFilterEff, while still supporting bin/ stubs that put
+# utils/ itself on the path.
 try:
     from utils.samweb_wrapper import get_samweb_wrapper
     from utils.job_common import Mu2eName
@@ -37,18 +34,14 @@ class DatasetEffSummary:
         self.passedevents = 0
     
     def fill(self, metadata):
-        """Add file metadata to the summary.
-        
-        Args:
-            metadata: Dictionary with file metadata from SAM
-        """
+        """Add one file's SAM metadata dict to the summary."""
         self.nfiles += 1
-        
+
         if 'dh.gencount' not in metadata:
             raise ValueError(f"Error: no dh.gencount in metadata for file {metadata.get('file_name', 'unknown')}")
-        
+
         self.genevents += metadata['dh.gencount']
-        
+
         # SAM bug workaround: event_count can be missing for zero
         self.passedevents += metadata.get('event_count', 0)
     
@@ -60,21 +53,12 @@ class DatasetEffSummary:
 
 
 def process_dataset(dsname, samweb, chunk_size=100, max_files=None, verbosity=2):
-    """Process a dataset and compute its efficiency.
-    
-    Args:
-        dsname: Dataset name
-        samweb: SAMWeb wrapper instance
-        chunk_size: Number of metadata to request per SAM transaction
-        max_files: Maximum number of files to process (None for all)
-        verbosity: Verbosity level (0=quiet, 1=minimal, 2=verbose)
-    
-    Returns:
-        DatasetEffSummary object with results
+    """Process a dataset and return a DatasetEffSummary of its efficiency.
+
+    chunk_size: files per SAM metadata transaction. max_files: cap (None=all).
+    verbosity: 0=quiet, 1=minimal, 2=verbose.
     """
     summary = DatasetEffSummary(dsname)
-    
-    # Get list of files in dataset
     file_list = samweb.files_in_dataset(dsname, availability='anylocation')
     
     num_files_total = len(file_list)
@@ -118,15 +102,11 @@ def process_dataset(dsname, samweb, chunk_size=100, max_files=None, verbosity=2)
 
 
 def write_output(summaries, outfile, header='TABLE SimEfficiencies2', use_full_name=False):
-    """Write efficiency results to output file in Proditions format.
-    
-    Args:
-        summaries: List of DatasetEffSummary objects
-        outfile: Output file path
-        header: First line of output file
-        use_full_name: If True, use full dataset name; otherwise use description field
+    """Write DatasetEffSummary results to outfile in Proditions format.
+
+    header is the first line; use_full_name writes the full dataset name
+    instead of just its description field.
     """
-    # Check if file exists
     if os.path.exists(outfile):
         raise FileExistsError(f"Error creating {outfile}: File exists")
     
@@ -134,8 +114,7 @@ def write_output(summaries, outfile, header='TABLE SimEfficiencies2', use_full_n
         f.write(header + '\n')
         
         for summary in summaries:
-            # Extract dataset description (process field from dataset name)
-            # Format: tier.owner.description.dsconf.ext
+            # description field of tier.owner.description.dsconf.ext
             if use_full_name:
                 dstag = summary.dsname
             else:
@@ -145,9 +124,8 @@ def write_output(summaries, outfile, header='TABLE SimEfficiencies2', use_full_n
                     dstag = summary.dsname
             
             eff = summary.efficiency()
-            
-            # Proditions table format:
-            # Row(std::string tag, unsigned long numerator, unsigned long denominator, double eff)
+
+            # Proditions Row(tag, numerator, denominator, eff)
             f.write(f"{dstag},\t{summary.passedevents},\t{summary.genevents},\t{eff}\n")
 
 
@@ -182,15 +160,12 @@ def main():
                         help='Verbosity level: 0=quiet, 1=minimal, 2=verbose (default: 2)')
     
     args = parser.parse_args()
-    
-    # Validate arguments
+
     if args.maxFilesToProcess is not None and args.maxFilesToProcess <= 0:
         parser.error(f"ERROR: Illegal maxFilesToProcess = {args.maxFilesToProcess}")
-    
-    # Initialize SAMWeb wrapper
+
     samweb = get_samweb_wrapper()
-    
-    # Process all datasets
+
     summaries = []
     for dataset in args.datasets:
         try:
@@ -205,8 +180,7 @@ def main():
         except Exception as e:
             print(f"Error processing dataset {dataset}: {e}", file=sys.stderr)
             sys.exit(1)
-    
-    # Write output
+
     try:
         write_output(summaries, args.outfile, args.firstLine, args.writeFullDatasetName)
     except Exception as e:

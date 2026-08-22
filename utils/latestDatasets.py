@@ -6,16 +6,16 @@ Mu2e dataset/definition names are dot-delimited:
 
     <tier>.<owner>.<description>.<dsconf>[.<sequencer>].<format>
 
-This tool queries `samweb list-definitions` (or reads names from stdin),
-groups by description, and prints the lexicographically-greatest dsconf
-per group. For Mu2e dsconfs like `MDC2025af_best_v1_3`, lex order tracks
-campaign letter then version.
+Queries `samweb list-definitions` (or reads names from stdin), groups by
+description, and prints the lexicographically-greatest dsconf per group.
+For dsconfs like `MDC2025af_best_v1_3`, lex order tracks campaign letter
+then version.
 
 `--latest-by time` orders by SAM definition creation date instead. Use it
-when a description's dsconfs come from more than one naming series, where
-lex order is meaningless: the ntuple series `MDC2020-001` sorts BELOW the
-release series `MDC2020aw_best_v1_3_v06_06_00` ('-' < 'a') even though it
-was created six months later.
+when a description's dsconfs span more than one naming series, where lex
+order is meaningless: the ntuple series `MDC2020-001` sorts BELOW the
+release series `MDC2020aw_best_v1_3_v06_06_00` ('-' < 'a') despite being
+created six months later.
 """
 
 import argparse
@@ -57,23 +57,23 @@ def fetch_definitions(defname_pattern, user):
 
 
 def _group_by_description(names, order_key=None):
-    """Group dataset names by description (3rd field), each group's members
-    sorted ascending. Returns (groups, skipped) where groups maps
-    description -> [(dsconf, name), ...] and skipped holds unparseable names.
+    """Group dataset names by description (3rd field), members sorted
+    ascending. Returns (groups, skipped): groups maps description ->
+    [(dsconf, name), ...], skipped holds unparseable names.
 
-    order_key: optional callable name -> sortable, deciding which member of a
-    group counts as latest. Default (None) orders by dsconf lexicographically,
-    which tracks campaign letter then version WITHIN a single naming series.
-    Pass a key when a description spans series, where lex order is meaningless
-    -- see _creation_date_key.
+    order_key: optional callable name -> sortable, deciding which member
+    of a group counts as latest. Default (None) orders by dsconf
+    lexicographically, tracking campaign letter then version WITHIN one
+    naming series. Pass a key when a description spans series, where lex
+    order is meaningless -- see _creation_date_key.
 
     Input names are deduplicated (order preserved) before grouping, so a
     repeated name from a concatenated source (e.g. `cat a.txt b.txt |
-    --stdin`) is never split across both the latest and superseded listings.
+    --stdin`) never splits across both the latest and superseded listings.
 
     Tiebreak: when order_key is given and two members rank equal, dsconf
-    (lexicographic) is the secondary key, so output order is deterministic
-    even if SAM ever returns day-granularity or colliding dates."""
+    is the secondary key, so output order stays deterministic even if SAM
+    returns day-granularity or colliding dates."""
     groups = defaultdict(list)
     skipped = []
     for name in dict.fromkeys(names):
@@ -84,7 +84,7 @@ def _group_by_description(names, order_key=None):
         description, dsconf = parsed
         groups[description].append((dsconf, name))
     if order_key is None:
-        rank = lambda item: item[0]             # item = (dsconf, name)
+        rank = lambda item: item[0]             # (dsconf, name)
     else:
         rank = lambda item: (order_key(item[1]), item[0])
     for items in groups.values():
@@ -96,8 +96,8 @@ def latest_per_description(names, order_key=None):
     """Return list of (description, latest_dsconf, latest_name, count).
 
     order_key decides which member of each group wins -- see
-    _group_by_description. Row order is always by description, independent of
-    the key: selection changes, presentation stays stable."""
+    _group_by_description. Row order is always by description, independent
+    of the key: selection changes, presentation stays stable."""
     groups, skipped = _group_by_description(names, order_key)
     rows = []
     for description, items in groups.items():
@@ -108,16 +108,16 @@ def latest_per_description(names, order_key=None):
 
 
 def superseded_per_description(names, order_key=None):
-    """Inverse of latest_per_description: every group member EXCEPT the latest,
-    i.e. datasets replaced by a newer sibling of the same description.
-    Returns (rows, skipped) with rows = (description, dsconf, name, count)
-    sorted by (description, dsconf); count is the total number of versions in
-    that description's group. Descriptions with a single version contribute
-    nothing (they have no replacement).
+    """Inverse of latest_per_description: every group member EXCEPT the
+    latest, i.e. datasets replaced by a newer sibling of the same
+    description. Returns (rows, skipped) with rows = (description, dsconf,
+    name, count) sorted by (description, dsconf); count is the total
+    versions in that description's group. Single-version descriptions
+    contribute nothing (no replacement).
 
-    MUST be given the same order_key as latest_per_description -- the two are
-    set complements, so differing keys would put a dataset in both listings or
-    in neither."""
+    MUST be given the same order_key as latest_per_description -- the two
+    are set complements, so differing keys would put a dataset in both
+    listings or in neither."""
     groups, skipped = _group_by_description(names, order_key)
     rows = []
     for description, items in groups.items():
@@ -131,18 +131,19 @@ def _creation_date_key(names):
     """Build an order_key ranking datasets by SAM definition creation date.
 
     Only CONTENDED descriptions (2+ versions) are queried: a single-version
-    group has nothing to compare against, so its date is never needed. On a
-    ~20-desc --emit run where most descs have one version, that is ~2 SAM
+    group has nothing to compare against, so its date is never needed. On
+    a ~20-desc --emit run where most descs have one version, that's ~2 SAM
     calls instead of ~20.
 
-    Fails loudly if SAM has no date for a contended dataset. Quietly reverting
-    to dsconf order would answer a --latest-by time question with a
-    lexicographic result -- the exact bug this mode exists to fix, made
-    invisible. definition_creation_date is fail-soft and returns None on a SAM
-    error, so an outage lands here too and surfaces as a loud failure.
+    Fails loudly if SAM has no date for a contended dataset. Quietly
+    reverting to dsconf order would answer a --latest-by time question
+    with a lexicographic result -- the exact bug this mode exists to fix,
+    made invisible. definition_creation_date is fail-soft and returns None
+    on a SAM error, so an outage lands here too and surfaces as a loud
+    failure.
 
-    Input names are deduplicated (order preserved) first, so a repeated name
-    is never double-counted as contended and never costs a second SAM call."""
+    Input names are deduplicated (order preserved) first, so a repeated
+    name is never double-counted as contended or double-charged a SAM call."""
     by_desc = defaultdict(list)
     for name in dict.fromkeys(names):
         parsed = parse_name(name)
@@ -150,8 +151,8 @@ def _creation_date_key(names):
             by_desc[parsed[0]].append(name)
     contended = [n for group in by_desc.values() if len(group) > 1 for n in group]
     if contended:
-        # Status to stderr (stdout stays machine-readable): one SAM round trip
-        # per dataset is the slow part, so signal it even when muted.
+        # stderr, not stdout (stays machine-readable) -- signal the slow
+        # per-dataset SAM round trip even when muted.
         print(f"Querying creation dates for {len(contended)} dataset(s), "
               f"please wait...", file=sys.stderr)
     dates = {}
@@ -162,9 +163,8 @@ def _creation_date_key(names):
     if undated:
         sys.exit("latestDatasets: --latest-by time: SAM has no creation date "
                  "for:\n" + "\n".join(f"  {n}" for n in undated))
-    # Uncontended names were never queried, so they are absent from `dates`.
-    # Their rank is never consulted (they are alone in their group), but a bare
-    # dates[name] would raise KeyError.
+    # Uncontended names were never queried, so absent from `dates`; their
+    # rank is never consulted, but a bare dates[name] would raise KeyError.
     return lambda name: dates.get(name, datetime.min)
 
 
@@ -175,9 +175,10 @@ def _order_key_for(latest_by, names):
 
 
 def _narrow_to_latest_release(names):
-    """From datasets spanning several releases of a family, keep only those of
-    the single latest release (max campaign tag). The family wildcard discovers
-    every release (MDC2025aa..MDC2025ap); the chain processes one."""
+    """From datasets spanning several releases of a family, keep only the
+    single latest release (max campaign tag). The family wildcard
+    discovers every release (MDC2025aa..MDC2025ap); the chain processes
+    one."""
     rel = {}
     for n in names:
         try:
@@ -191,14 +192,14 @@ def _narrow_to_latest_release(names):
 
 
 def _filter_complete(names):
-    """Keep only datasets that are complete (file count == producing cnf njobs).
-    Datasets whose cnf has no inherent job count (open-ended generators) are kept
-    with a warning — never silently dropped; only provably-incomplete ones go.
-    Shared by lister mode and --emit. Diagnostics go to stderr."""
+    """Keep only complete datasets (file count == producing cnf njobs).
+    Datasets whose cnf has no inherent job count (open-ended generators)
+    are kept with a warning — never silently dropped; only provably
+    incomplete ones go. Shared by lister mode and --emit. Diagnostics to
+    stderr."""
     from utils import jobdef_lookup
     jobdef_lookup.set_verbose(_VERBOSE)
-    # Status to stderr (stdout stays machine-readable): scanning cnfs is the slow
-    # part, so signal it even when diagnostics are muted.
+    # stderr, not stdout -- signal the slow cnf scan even when muted.
     print(f"Checking completeness of {len(names)} datasets, please wait...",
           file=sys.stderr)
     njobs_maps = {}          # dsconf -> {(desc, tier): njobs}, built once per dsconf
@@ -238,12 +239,13 @@ def _dataset_exists(name):
 
 def _filter_unproduced(inputs, template, out_campaign=None, defer_desc=False,
                        dsconf=None):
-    """Drop inputs whose this-stage output already exists in SAM (the chain has
-    already produced them). Output dataset names come from the synthesized entry.
+    """Drop inputs whose this-stage output already exists in SAM (the chain
+    already produced them). Output dataset names come from the synthesized
+    entry.
 
     out_campaign/defer_desc/dsconf MUST match what emit_config uses, so the
-    computed output name is the actual target build (e.g. the ar reco output, not
-    the input's ap-build output). Diagnostics to stderr."""
+    computed output name is the actual target build (e.g. the ar reco
+    output, not the input's ap-build output). Diagnostics to stderr."""
     from utils import chain_emit
     print(f"Checking produced outputs for {len(inputs)} datasets, please wait...",
           file=sys.stderr)
@@ -270,14 +272,14 @@ def _emit(args):
         sys.exit("--emit requires --campaign")
 
     # Family-wide stages discover inputs by latest build PER DESC across the
-    # whole family, regardless of which release they were produced at, and write
-    # a separately-tagged build. --campaign is the OUTPUT build.
+    # whole family (any release), writing a separately-tagged build.
+    # --campaign is the OUTPUT build.
     #   digi, mix ← dts primaries (the small primary set)
-    #   reco      ← dig: take the latest dig of every desc anywhere in the family
-    #               (Mix1BB, OnSpill, all streams) and reco them into the output
-    #               build. Input build version varies per desc; the input pattern
-    #               must not pin it.
-    # ntuple stays pinned: it consumes mcs at a specific reco build and uses
+    #   reco      ← dig: latest dig of every desc anywhere in the family
+    #               (Mix1BB, OnSpill, all streams), reco'd into the output
+    #               build. Input build version varies per desc; the input
+    #               pattern must not pin it.
+    # ntuple stays pinned: consumes mcs at a specific reco build, using
     # {parent_dsconf} to carry that build through.
     FAMILY_WIDE = {'digi', 'mix', 'reco'}
     family_wide = (args.emit in FAMILY_WIDE)
@@ -293,18 +295,18 @@ def _emit(args):
     _vlog(f"# discovering inputs: {defname}")
 
     names = fetch_definitions(defname, args.user)
-    # Release narrowing ranks campaign tags as strings and DROPS the losers, so
-    # in time mode it would delete newer-by-date datasets before the key sees
-    # them. It is dsconf-order logic; skip it when the caller asked for time.
+    # Release narrowing ranks campaign tags as strings and DROPS the losers,
+    # so in time mode it would delete newer-by-date datasets before the key
+    # sees them. It's dsconf-order logic; skip when caller asked for time.
     if not family_wide and args.latest_by == "dsconf":
         names = _narrow_to_latest_release(names)
     rows, skipped = latest_per_description(names,
                                            _order_key_for(args.latest_by, names))
     latest = [latest_name for _, _, latest_name, _ in rows]
 
-    # If the template names explicit descs (and has no {desc} wildcard), restrict
-    # discovery to exactly those — don't propose primaries the template omits.
-    # No desc field at all → discover everything (unchanged default).
+    # If the template names explicit descs (no {desc} wildcard), restrict
+    # discovery to exactly those, so we don't propose primaries the
+    # template omits. No desc field at all -> discover everything.
     wanted = set(chain_emit.explicit_descriptions(template))
     if wanted and not chain_emit.has_wildcard(template):
         kept, dropped = [], []
@@ -406,9 +408,7 @@ def main():
     elif args.campaign:
         # Trailing % so a family tag (MDC2025) matches its releases (MDC2025ap).
         names = fetch_definitions(f"dts.mu2e.%.{args.campaign}%.art", args.user)
-        # Same reason as the --emit gate above: narrowing is dsconf-order logic
-        # and would delete newer-by-date datasets before --latest-by time's key
-        # ever sees them.
+        # Same reason as the --emit gate above: skip in time mode.
         if args.latest_by == "dsconf":
             names = _narrow_to_latest_release(names)
     else:
@@ -441,8 +441,7 @@ def main():
         unproduced = set(_filter_unproduced([r[2] for r in rows], digi_tmpl))
         rows = [r for r in rows if r[2] in unproduced]
 
-    # Bare name output unless --show-count adds the count column
-    show_count = args.show_count
+    show_count = args.show_count  # adds a count column when set
     for _, _, latest_name, count in rows:
         print(f"{count:3d}  {latest_name}" if show_count else latest_name)
 

@@ -9,19 +9,17 @@ writes. Spec: docs/superpowers/specs/2026-08-16-jobwait-design.md.
 Exit codes are the complete success record in direct mode: runjob.sh ->
 runmu2e runs the output copy INSIDE the job, so a job can only exit 0
 after its copies landed. No filesystem is consulted, deliberately:
-pre-drain file checks race condor's evict-and-rerun, post-drain
-counting is guessing (empty history is reported as `unknown`, never
-inferred complete), and staying off /pnfs means this runs on any node
-with a bearer token.
+pre-drain file checks race condor's evict-and-rerun, and post-drain
+counting is guessing (empty history reports `unknown`, never inferred
+complete).
 
-Also deliberately absent: any timeout (a held cluster is waited on;
-patience is the caller's policy — `timeout 24h jobwait ...`), and any
-acceptance threshold (exit 0 means ALL jobs ok; a caller happy with
-95% reads `ok`/`failed` from the JSON, same as runlocal).
+Also deliberately absent: any timeout (patience is the caller's policy
+— `timeout 24h jobwait ...`) and any acceptance threshold (exit 0 means
+ALL jobs ok; a caller happy with 95% reads `ok`/`failed` from the JSON).
 
 Condor history is a fading record — jobs from ~2 weeks back are already
-gone from the mu2e schedds — so the JSON written here at drain time is
-the durable per-job outcome record, not a cache of one.
+gone — so the JSON written here at drain time is the durable per-job
+outcome record, not a cache of one.
 """
 
 import argparse
@@ -48,14 +46,12 @@ DEFAULT_POLL_S = 300
 def split_jobid(jobid):
     """`'12345678@jobsub01.fnal.gov'` -> `('12345678', full id)`.
 
-    The bare numeric cluster is what `live_clusters` keys on; the
-    schedd is what `collect_exit_codes` passes to condor_history via
-    `-name` — without it the query goes only to the node's default
-    SCHEDD_HOST, which answers for that one schedd's clusters and
-    returns nothing (or a colliding cluster id) for the rest. A bare
-    id is still accepted so a caller that lost the schedd is not
-    stuck, but its history is trustworthy only when the cluster
-    happens to live on the default schedd.
+    The bare numeric cluster is what `live_clusters` keys on; the schedd
+    is what `collect_exit_codes` passes to condor_history via `-name` —
+    without it the query only reaches the node's default SCHEDD_HOST,
+    returning nothing (or a colliding cluster id) for any other schedd.
+    A bare id is still accepted so a caller that lost the schedd isn't
+    stuck, but its history is trustworthy only on the default schedd.
     """
     cluster = jobid.split('@', 1)[0].split('.', 1)[0]
     if not cluster.isdigit():
@@ -68,16 +64,13 @@ def wait_for_drain(cluster, jobid, poll_s, runner=subprocess.run,
     """Return when the cluster has left the queue. Fail-closed.
 
     `error` (jobsub_q failed or unparseable) is waited out exactly like
-    `running`: a failed query is never evidence the jobs are done — the
-    same rule submissions' cron learned when a per-jobid probe returned
-    a valid zero-row table for a fully running cluster. `held` is also
-    waited out, visibly: the operator resolves holds; this tool does
-    not decide for them.
+    `running`: a failed query is never evidence the jobs are done. `held`
+    is also waited out, visibly — the operator resolves holds, not this
+    tool.
 
     A cluster absent from the very first snapshot classifies `drained`
     and falls straight through to history: a mistyped cluster id then
-    yields all-`unknown` and a nonzero exit — visibly wrong, never a
-    hang.
+    yields all-`unknown` and a nonzero exit — visibly wrong, never a hang.
     """
     while True:
         clusters = live_clusters(runner=runner)
@@ -91,27 +84,23 @@ def wait_for_drain(cluster, jobid, poll_s, runner=subprocess.run,
 def collect_exit_codes(jobid, njobs, runner=subprocess.run, log=print):
     """{proc: rc} from one condor_history call. Missing procs -> absent.
 
-    condor_history is called DIRECTLY, `-name <schedd>` from the jobid.
-    Not jobsub_history: the deployed jobsub_lite (1.13) wrapper parses
-    the `@schedd` out of `-J` and builds a `-name schedd` — then drops
-    it on the floor (`passthru = out` after the append), so every query
-    silently goes to the node's default SCHEDD_HOST. A cluster on any
-    other schedd comes back as zero rows and a fully successful run is
-    reported `0/N ok` (2026-08-20, cluster 29868598@jobsub05 vs
-    SCHEDD_HOST=jobsub01; upstream master has rewritten the wrapper).
-    Worse than zero rows: a colliding cluster id on the default schedd
-    would return some OTHER cluster's exit codes.
+    condor_history is called DIRECTLY, `-name <schedd>` from the jobid,
+    NOT jobsub_history: the deployed jobsub_lite (1.13) wrapper parses
+    `@schedd` out of `-J` and builds a `-name schedd`, then drops it on
+    the floor, so every query silently hits the default SCHEDD_HOST — a
+    cluster on any other schedd comes back as zero rows, or worse, a
+    colliding id on the default schedd returns some OTHER cluster's exit
+    codes (seen 2026-08-20, cluster 29868598@jobsub05; upstream master
+    has since rewritten the wrapper).
 
-    `-limit njobs` stops condor_history's newest-first scan early:
-    measured 8.4 s vs 51 s unlimited on a real 999-job cluster — and a
-    just-drained cluster sits at the head of the history file. When
-    fewer records exist than njobs the scan simply completes and the
-    absent procs are reported by the caller as `unknown`.
+    `-limit njobs` stops condor_history's newest-first scan early
+    (8.4s vs 51s unlimited, measured on a 999-job cluster) since a
+    just-drained cluster sits at the head of the history file; fewer
+    records than njobs just completes the scan.
 
     A proc can appear more than once (condor re-ran it); records come
     newest-first, so the FIRST occurrence wins. A non-numeric ExitCode
-    ("undefined": removed, or exited by signal) stays out of the map —
-    that proc's outcome is unknown, not zero.
+    stays out of the map — unknown, not zero.
     """
     cluster, _, schedd = jobid.partition('@')
     cluster = cluster.split('.', 1)[0]
@@ -155,17 +144,16 @@ def job_output_names(job_pars, index):
 def summary(args, codes, job_pars):
     """The run's facts as plain data — runlocal's summary contract.
 
-    Same core shape (`jobs` with per-index `rc` and absolute-ish
-    `outputs`, `ok`, `failed`) so a caller reads one schema whether the
-    stage ran locally or on the grid. Grid-only additions: `proc` (the
-    condor proc id; `index` is `--first` + proc, the cnf index),
-    `cluster`, and `unknown` — the indices condor history had no usable
-    record for. Unknown is NEVER folded into ok: an unverifiable job is
-    not a successful one.
+    Same core shape (`jobs` with per-index `rc`/`outputs`, `ok`,
+    `failed`) so a caller reads one schema whether the stage ran locally
+    or on the grid. Grid-only additions: `proc` (condor proc id; `index`
+    is `--first` + proc, the cnf index), `cluster`, and `unknown` — the
+    indices condor history had no usable record for. Unknown is NEVER
+    folded into ok: an unverifiable job is not a successful one.
 
     Output paths are `<outstage>/<cluster>/<proc>/<name>` when
-    `--outstage` names the root (exit 0 is the receipt they exist —
-    the copy ran inside the job), bare cnf filenames otherwise.
+    `--outstage` names the root (exit 0 is the receipt they exist), bare
+    cnf filenames otherwise.
     """
     cluster_num, _ = split_jobid(args.cluster)
     jobs = []
@@ -191,10 +179,9 @@ def summary(args, codes, job_pars):
 
 
 def write_summary(path, data, log=print):
-    """Atomic temp-then-rename, same contract as runlocal's: a caller
-    polling the path never reads a half-written file, and a MISSING
-    file means the driver died before reporting — not that zero jobs
-    ran."""
+    """Atomic temp-then-rename, same contract as runlocal's: a polling
+    caller never reads a half-written file, and a MISSING file means the
+    driver died before reporting — not that zero jobs ran."""
     path = Path(path)
     tmp = path.with_name(path.name + '.tmp')
     tmp.write_text(json.dumps(data, indent=1) + '\n')
@@ -260,9 +247,9 @@ def main(argv=None):
     if args.poll_s <= 0:
         sys.exit("jobwait: --poll-s must be positive")
     if args.json:
-        # Checked before hours of waiting, for the same reason runlocal
-        # does: losing the summary to a directory typo at the one moment
-        # it cannot be recomputed.
+        # Checked before hours of waiting — same reason as runlocal: a
+        # directory typo must not lose the summary at the one moment it
+        # can't be recomputed.
         args.json = str(Path(args.json).resolve())
         parent = Path(args.json).parent
         if not parent.is_dir():

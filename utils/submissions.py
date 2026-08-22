@@ -5,10 +5,10 @@ campaign management verbs.
 
 Processes ledger rows written by the direct backend
 (utils/submission_ledger.py). Per active row: skip while jobs are still
-in the queue (held jobs are reported, never touched), SAM-verify the
-row's indices via the cnf's expected output names, then close the row
-as complete, resubmit exactly the missing indices (child row,
-attempt+1), or close as exhausted at the attempt cap.
+in the queue (held jobs reported, never touched), SAM-verify indices
+via the cnf's expected output names, then close as complete, resubmit
+exactly the missing indices (child row, attempt+1), or close exhausted
+at the attempt cap.
 
 Only SAM output-file existence is trusted (the Run1Ban lesson:
 consumption-status recovery re-dispatches finished work). Deterministic
@@ -63,11 +63,10 @@ def resolve_cap(flag_value):
 
 
 # Queue-snapshot primitives (fail-closed drain detection) live in
-# utils/queue_state.py since 2026-08-16, so utils/jobwait.py can import
-# them without dragging in the submit stack (this module -> submit ->
+# utils/queue_state.py since 2026-08-16, so jobwait.py can import them
+# without dragging in the submit stack (this module -> submit ->
 # prod_utils -> samweb_client). Re-imported here under their original
-# names — every caller and test that reads them off this module keeps
-# working unchanged.
+# names so every caller/test reading them off this module keeps working.
 from utils.queue_state import (_jobsub_table_states,  # noqa: F401
                                cluster_queue_state, live_clusters,
                                queue_owner)
@@ -78,8 +77,8 @@ def verify_row(row, sam_lister=files_in_dataset):
 
     Returns (missing, partial): absolute cnf indices with ANY expected
     output file absent from SAM, and the subset where only SOME streams
-    are absent (flagged: a re-run re-pushes the streams that already
-    landed — see the duplicate-declare item in the design spec).
+    are absent (a re-run re-pushes the streams that already landed —
+    see the duplicate-declare item in the design spec).
 
     Raises on anything that prevents verification (unlocatable tarball,
     no output datasets, SAM failure): the caller keeps the row active
@@ -115,22 +114,21 @@ def verify_row(row, sam_lister=files_in_dataset):
 def _draining_expected(camp, datasets, job_pars, count_fn):
     """Denominators for one DRAINING campaign's output datasets.
 
-    A draining campaign has no njobs — its input dataset is still growing,
-    so no fixed target exists. The honest denominator for a 1:1
-    direct-input stage is the INPUT dataset's current file count: 80 digis
-    in means 80 mcs out.
+    A draining campaign has no njobs — its input dataset is still
+    growing, so no fixed target exists. The honest denominator for a
+    1:1 direct-input stage is the INPUT dataset's current file count:
+    80 digis in means 80 mcs out.
 
-    Only `datasets` (what the caller is actually displaying) are resolved,
-    one SAM count each — never the campaign's whole desc space, which for
-    au reco is 21 datasets nobody asked about.
+    Only `datasets` (what the caller displays) are resolved, one SAM
+    count each — never the campaign's whole desc space, which for au
+    reco is 21 datasets nobody asked about.
 
-    The output->input desc mapping is CONFIRMED through expected_outputs_for
-    (the worker's own substitution), never assumed. That guard is the whole
-    point: this function's contract already warns that CosmicCRYAll produces
-    ...CosmicCRYAllOnSpill... while CosmicCRYExtracted takes no suffix and
-    FlatGamma is a prefix of FlatGammaCalo. A cnf that suffixes its outputs
-    (`{desc}-KL`) simply fails the check and the dataset keeps its "—",
-    which is the correct answer rather than a fabricated one.
+    The output->input desc mapping is CONFIRMED via expected_outputs_for
+    (the worker's own substitution), never assumed: CosmicCRYAll
+    produces ...CosmicCRYAllOnSpill... while CosmicCRYExtracted takes no
+    suffix, and FlatGamma is a prefix of FlatGammaCalo. A cnf that
+    suffixes its outputs (`{desc}-KL`) fails the check and keeps its
+    "—", the correct answer rather than a fabricated one.
     """
     pattern = camp['entry']['input_pattern']
     out = {}
@@ -139,9 +137,9 @@ def _draining_expected(camp, datasets, job_pars, count_fn):
             name = Mu2eName.parse(ds)
         except ValueError:
             continue
-        # Candidate input: the pattern's tier/owner/dsconf/format with this
-        # dataset's own desc. Must itself match the campaign's pattern, or
-        # it belongs to some other campaign entirely.
+        # Candidate input: pattern's tier/owner/dsconf/format with this
+        # dataset's own desc; must itself match the pattern or it
+        # belongs to some other campaign.
         pat = Mu2eName.parse(pattern)
         candidate = f"{pat.tier}.{pat.owner}.{name.description}.{pat.dsconf}.{pat.extension}"
         if not _matches_pattern(candidate, pattern):
@@ -166,41 +164,36 @@ def ledger_expected(db_path, dsconfs=None, *, datasets=None,
                     locate=sam_physical_path_or_none, count_fn=dataset_file_count):
     """Map output dataset name -> expected job count, from the submission ledger.
 
-    The ledger entry carries njobs -- the SUBMITTED window, not the cnf's baked
-    capacity -- but names its outputs with a glob ("*.art"), so the dataset NAME
-    has to come from the cnf tarball. That is the same source verify_row uses,
-    and the only sound one: CosmicCRYAll produces ...CosmicCRYAllOnSpill... while
+    njobs is the SUBMITTED window, not the cnf's baked capacity, but the
+    ledger names outputs with a glob ("*.art"), so the dataset NAME must
+    come from the cnf tarball — same source verify_row uses, and the
+    only sound one: CosmicCRYAll produces ...CosmicCRYAllOnSpill... while
     CosmicCRYExtracted takes no suffix, and FlatGamma is a prefix of
-    FlatGammaCalo, so neither convention nor prefix matching can be trusted.
+    FlatGammaCalo, so neither convention nor prefix matching can be
+    trusted.
 
-    dsconfs: optional set of dsconfs; when given, campaigns of other dsconfs are
-    skipped without resolving their tarball, so a short listing does not pay for
-    the whole ledger.
+    dsconfs: optional filter, skips other-dsconf campaigns without
+    resolving their tarball so a short listing doesn't pay for the
+    whole ledger. datasets: optional set of output dataset names the
+    caller will display, required to get a denominator for a DRAINING
+    campaign (no njobs): that denominator is the dataset's INPUT file
+    count, one SAM count each — resolving a campaign's whole desc space
+    uninvited would be 21 queries for au reco alone. Omit it and
+    draining campaigns contribute nothing. The denominator MOVES:
+    "80/80" is complete against inputs that exist right now, and can
+    drop below 100% once the upstream round gains files (see
+    _draining_expected). locate/count_fn: injected for testing.
 
-    datasets: optional set of output dataset names the caller will display.
-    Required to get a denominator for a DRAINING campaign, which has no njobs
-    (its input dataset is still growing, so no fixed target exists): the
-    denominator is that dataset's INPUT file count, one SAM count each, and
-    resolving a campaign's whole desc space uninvited would be 21 queries for
-    au reco alone. Omit it and draining campaigns contribute nothing, exactly
-    as before. NOTE the denominator MOVES — "80/80" means complete against the
-    inputs that exist right now, not terminally complete; when the upstream
-    round gains files a dataset that read 100% drops below it. See
-    _draining_expected.
-
-    locate: injected for testing. count_fn: SAM file count, injected likewise.
-
-    Returns (expected, failures). expected maps dataset -> max njobs over every
-    campaign producing it. njobs is an ABSOLUTE target index count, not an
-    increment: when a tarball is enqueued a second time, the new campaign
-    resumes via its cursor from where the earlier one stopped, so the two
-    campaigns' index windows overlap rather than partition (e.g. 0..249 then
-    250..1666 -- the second campaign's njobs=1667 already covers the first
-    campaign's 250). Summing would double-count the earlier window; max is
-    the cheap equivalent of the true answer, the union of submitted indices.
-    failures maps tarball -> reason for campaigns that could not be resolved;
-    those contribute nothing rather than a guessed denominator. Note a failed
-    campaign's dataset is simply unknown -- it cannot be marked, since its
+    Returns (expected, failures). expected maps dataset -> max njobs
+    over every campaign producing it. njobs is an ABSOLUTE target, not
+    an increment: re-enqueuing a tarball resumes the new campaign's
+    cursor from where the earlier one stopped, so index windows overlap
+    rather than partition (0..249 then 250..1666 — njobs=1667 already
+    covers the first campaign's 250). Summing would double-count the
+    overlap; max is the cheap equivalent of the true union of submitted
+    indices. failures maps tarball -> reason for campaigns that
+    couldn't be resolved, contributing nothing rather than a guessed
+    denominator; a failed campaign's dataset stays unknown since its
     name was what the tarball would have supplied.
     """
     expected = {}
@@ -212,9 +205,9 @@ def ledger_expected(db_path, dsconfs=None, *, datasets=None,
         entry = camp.get('entry') or {}
         njobs = entry.get('njobs')
         draining = is_draining(entry)
-        # A draining campaign has no njobs by definition; it is skipped
-        # entirely unless the caller named the datasets it cares about,
-        # since its denominators cost one SAM count apiece.
+        # A draining campaign has no njobs by definition; skipped
+        # unless the caller named the datasets it cares about, since
+        # its denominators cost one SAM count apiece.
         if not njobs and not (draining and datasets):
             continue
         if dsconfs is not None:
@@ -275,12 +268,11 @@ def _matches_pattern(name, pattern):
     match exactly).
 
     `definitions_matching` (SAM's `list-definitions --defname`) does a
-    substring/prefix match against the pattern, not a field-grammar
-    match — it can hand back drainingn-era junk names whose LAST field
-    merely starts with the pattern's extension (e.g. an extension of
-    `art_slice_0_stage_2` against a pattern extension of `art`), and
-    such a name still parses as a legal 5-field dataset, so the
-    ValueError/is_dataset guard alone does not catch it. This is the
+    substring/prefix match, not a field-grammar match — it can hand
+    back draining-era junk names whose LAST field merely starts with
+    the pattern's extension (e.g. `art_slice_0_stage_2` against `art`),
+    and such a name still parses as a legal 5-field dataset, so the
+    ValueError/is_dataset guard alone doesn't catch it. This is the
     real filter for that case.
     """
     fields = pattern.split('.')
@@ -296,7 +288,7 @@ def draining_state(camp, db_path, *,
                    locate=sam_physical_path_or_none):
     """One draining campaign's file sets, computed fresh from SAM + the
     ledger — draining has NO cursor; nothing counts as done until its
-    output exists (the fix for the POMS-era draining launch-time cursor).
+    output exists (fix for the POMS-era draining launch-time cursor).
 
         inputs    pattern datasets' files (exclude_desc removed)
         landed    inputs whose expected outputs ALL exist in SAM
@@ -305,12 +297,12 @@ def draining_state(camp, db_path, *,
         pending   inputs − landed − in_flight − parked   (sorted)
 
     Dataset enumeration is definition-based (production convention).
-    Each name SAM hands back is re-verified: it must parse as a 5-field
-    dataset, its description must not be excluded, and it must match
-    `input_pattern` field-by-field (see `_matches_pattern` — SAM's own
-    match is substring-based and lets drainingn-era `_slice_`/`_full_`
-    junk through). Raises on an unlocatable tarball or a malformed
-    input filename — never guesses.
+    Each name SAM hands back is re-verified: must parse as a 5-field
+    dataset, description not excluded, and match `input_pattern`
+    field-by-field (see `_matches_pattern` — SAM's own match is
+    substring-based and lets draining-era `_slice_`/`_full_` junk
+    through). Raises on an unlocatable tarball or malformed input
+    filename — never guesses.
     """
     entry = camp['entry']
     exclude = set(entry.get('exclude_desc', []))
@@ -436,14 +428,13 @@ def _request_prestage(files, runner=subprocess.run):
                 pass
 
 
-# Recoveries get resource headroom by default. A recovery is the tail of
-# a population that already succeeded at the default (typically 1-3 jobs
-# out of hundreds), so the prior that it needs more is high and the blast
-# radius is tiny — cheap insurance against slow nodes and heavy events.
-# Deliberately NOT applied to first submissions: there, a memory bump
-# masks an oversized merge factor instead of exposing it (MDC2025au RPC,
-# 2026-07-26 — 300 jobs died at merge 20/100 and the fix was merge 3/6,
-# not memory).
+# Recoveries get resource headroom by default: a recovery is the tail of
+# a population that already succeeded (typically 1-3 jobs of hundreds),
+# so the prior that it needs more is high and the blast radius is tiny.
+# NOT applied to first submissions — there a memory bump masks an
+# oversized merge factor instead of exposing it (MDC2025au RPC,
+# 2026-07-26: 300 jobs died at merge 20/100; fix was merge 3/6, not
+# memory).
 RECOVERY_MEMORY = '4000MB'
 RECOVERY_LIFETIME = '48h'
 
@@ -468,15 +459,14 @@ def resubmit(row, missing, db_path, dry_run=False, submit_fn=None,
     """Resubmit missing indices in-process. Returns True on success.
 
     The reconstructed entry DROPS firstjob: --indices values are absolute
-    cnf indices, and the worker-side firstjob+index resolution must
+    cnf indices, so the worker-side firstjob+index resolution must
     degenerate to the identity. The original windowed entry stays in the
     parent row's snapshot.
 
     `origin` defaults to the automatic-recovery-loop string; a caller
-    acting on an operator's behalf (the `submissions resubmit` verb)
-    passes a distinguishable one, so the ledger's origin column — the
-    whole reason the column was renamed off map_path — can actually
-    tell a hand re-fire apart from an automatic recovery.
+    acting for an operator (`submissions resubmit`) passes a
+    distinguishable one, so the ledger's origin column can tell a hand
+    re-fire apart from an automatic recovery.
     """
     submit_fn = submit_fn or submit.submit_entry
     entry = {k: v for k, v in row['entry'].items() if k != 'firstjob'}
@@ -549,8 +539,8 @@ def total_queued(user=None, runner=subprocess.run):
 
     Counts states I (idle) and R (running) from the default
     `jobsub_q --user` table (see _jobsub_table_states); held/removed/
-    other states do not consume cap headroom. Covers ALL the user's
-    jobs regardless of how they were launched, so the cap bounds the
+    other states don't consume cap headroom. Covers ALL the user's jobs
+    regardless of how they were launched, so the cap bounds the
     account's whole farm footprint.
 
     `user` defaults to the submitting identity (see queue_owner). A
@@ -571,16 +561,15 @@ def _guarded_submit(what, fn):
     """Run one in-process submission; return True on success, False on
     any failure, never propagating.
 
-    This replaces the process boundary a standalone submission CLI used
-    to provide back when the engine ran out-of-process.
-    A subprocess that died gave the tick a nonzero return code and the
-    loop moved on to the next campaign; an in-process call that raises
-    would end the tick for every campaign.
+    Replaces the process boundary a standalone submission CLI used to
+    provide when the engine ran out-of-process: a dead subprocess gave
+    the tick a nonzero return code and the loop moved on; an in-process
+    call that raises would end the tick for every campaign.
 
-    SystemExit is caught EXPLICITLY. submit_entry raises it on an input
-    pre-flight failure, and SystemExit derives from BaseException, so a
-    bare `except Exception` would let it escape — the exact regression
-    this helper exists to prevent. KeyboardInterrupt is deliberately NOT
+    SystemExit is caught EXPLICITLY: submit_entry raises it on an input
+    pre-flight failure, and it derives from BaseException, so a bare
+    `except Exception` would let it escape — the exact regression this
+    helper exists to prevent. KeyboardInterrupt is deliberately NOT
     caught: Ctrl-C must still stop the tick.
     """
     try:
@@ -604,37 +593,28 @@ def _guarded_submit_with_evidence(what, tarball, db_path, fn):
     """_guarded_submit, plus proof the ledger actually gained a new
     ACTIVE row for `tarball`. Returns True only when both hold.
 
-    submit_entry RETURNS {'status': 'failed'} — it does NOT raise — when
-    jobsub_submit exits non-zero, or exits 0 with no parseable cluster
-    id (utils/submit.py's _fail_reservation leaves the 'failed'
-    reservation in the ledger in that case). _guarded_submit alone
-    cannot see that: it only catches exceptions, so a returned-but-
-    failed submission still reads as success, the tick advances the
-    cursor past a slice that was never actually submitted, and the
-    'failed' reservation is left strictly BELOW every future slice
-    window — _slice_overlaps_ledger never intersects it either (see its
-    docstring), so nothing ever blocks on it again and the gap is
-    silent.
+    submit_entry RETURNS {'status': 'failed'} — it does NOT raise —
+    when jobsub_submit exits non-zero, or exits 0 with no parseable
+    cluster id (utils/submit.py's _fail_reservation leaves a 'failed'
+    reservation). _guarded_submit alone can't see that (it only catches
+    exceptions): a returned-but-failed submission would read as
+    success, the cursor would advance past a slice never submitted, and
+    the 'failed' reservation sits BELOW every future slice window where
+    _slice_overlaps_ledger can't reach it — the gap is silent. Same
+    evidence check `submissions resubmit` already applies, keyed on
+    `parent_id == row['id']`; a tick's slice has no parent row, so this
+    keys on TARBALL plus a before/after diff of active row ids — narrow
+    enough that a concurrent row for a DIFFERENT tarball can't
+    false-positive it, and open_rows() already filters to
+    state='active', so a reservation stuck in 'submitting' or closed
+    'failed' doesn't count as evidence either.
 
-    This is the same evidence check the `submissions resubmit` verb
-    already applies before reporting success, keyed on
-    `parent_id == row['id']`. A tick's slice has no parent row, so this
-    keys on the campaign's TARBALL plus a before/after diff of active
-    row ids instead — narrow enough that a concurrent row for a
-    DIFFERENT tarball can never false-positive it, and open_rows()
-    already filters to state='active', so a reservation stuck in
-    'submitting' (crash mid-flight) or closed 'failed' does not count
-    as evidence either.
-
-    Both open_rows() reads (pre- and post-submit) sit inside the SAME
-    try as _guarded_submit's own catch, for the same reason
-    _guarded_submit exists at all: top_up/drain_tick have no outer
-    try, so an exception here (e.g. a locked ledger) would otherwise
-    escape the call site raw and abort the whole tick — including a
-    POST-submit read raising AFTER the slice already went to the
-    grid, which would abort before the cursor advance and before the
-    pause, wedging every remaining campaign that tick. SystemExit is
-    caught explicitly for the same reason _guarded_submit catches it;
+    Both open_rows() reads sit inside the SAME try as _guarded_submit's
+    catch: top_up/drain_tick have no outer try, so an exception here
+    (e.g. a locked ledger) would otherwise escape raw and abort the
+    whole tick — including a POST-submit read raising AFTER the slice
+    already went to the grid, wedging every remaining campaign that
+    tick. SystemExit is caught explicitly, same as _guarded_submit;
     KeyboardInterrupt is deliberately NOT caught.
     """
     try:
@@ -679,51 +659,36 @@ def submit_slice(camp, n, db_path, submit_fn=None):
 def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
     """The blocking ledger row (truthy) if any row for `tarball` already
     has an absolute cnf index inside the slice's absolute window
-    [firstjob+cursor, firstjob+cursor+n), else None.
+    [firstjob+cursor, firstjob+cursor+n), else None. Returns the ROW,
+    not a bool, so the caller can name its id in the pause note rather
+    than leaving the operator to hunt for which row overlaps.
 
-    Sibling guard: _rows_blocking_indices (below) is the analog for
-    `submissions resubmit`'s scattered index/file set. The two
-    deliberately use DIFFERENT skip lists — this one skips draining
-    rows entirely (a slice window is cnf-index space; a draining row
-    has none to overlap) and only the 'reconciled' state (a CAMPAIGN
-    slice must stay blocked by every other open state, including
-    'complete'/'exhausted'/'recovered', because campaign top-up is
-    advancing a cursor that must never re-cover ground the ledger
-    still remembers submitting); _rows_blocking_indices includes
-    draining rows (a hand resubmit of specific files must still see a
-    draining row in its way) and skips the full _SETTLED_STATES list
-    (a hand resubmit is checking "is this exact index/file still
-    live", not "has this cursor position ever been submitted"). If you
-    are about to make these two skip lists match, re-read this
-    paragraph first — they differ on purpose.
+    Sibling guard: _rows_blocking_indices (below) is the resubmit-verb
+    analog, with a DIFFERENT skip list on purpose — this one skips
+    draining rows outright (no index space to overlap) and only
+    'reconciled' (a campaign slice must stay blocked by every other
+    open state, since top-up must never re-cover ground the ledger
+    remembers submitting); the other includes draining rows and skips
+    the full _SETTLED_STATES list (checking "is this exact index/file
+    still live", not "has this cursor position ever been submitted").
+    Don't make the two lists match.
 
-    Returns the ROW, not a bool, so the caller can name its id in the
-    pause note: the operator's next move is `submissions reconcile
-    <row-id>`, and "some row overlaps" would leave them hunting for
-    which one.
-
-    Crash-window guard. Rows are RESERVED before jobsub_submit
+    Crash-window guard: rows are RESERVED before jobsub_submit
     (submission_ledger.reserve_submission), so a process that dies
-    anywhere between claiming the window and recording the cluster
-    still leaves a row here to overlap against. Without that ordering
-    this check could not see the window at all — deterministic payloads
-    make a re-send duplicate physics, not a harmless retry. Also catches
-    a human manually submitting `--first/--num` on a tarball that has a
-    live campaign, and a 'failed' reservation whose window is not proven
-    free.
+    between claiming the window and recording the cluster still leaves
+    a row here to overlap against — deterministic payloads make a
+    re-send duplicate physics, not a harmless retry. Also catches a
+    human submitting `--first/--num` on a tarball with a live campaign,
+    and a 'failed' reservation whose window isn't proven free. Not a
+    false-positive source for the recovery loop's OWN resubmits: a
+    child row's indices sit strictly below the cursor of the ALREADY
+    ADVANCED-PAST parent slice.
 
-    Deliberately not a false-positive source for the recovery loop's
-    OWN resubmits: a child row's indices are a subset of an ALREADY
-    ADVANCED-PAST parent slice, strictly below the cursor — they can
-    never fall inside a slice window that starts at cursor.
-
-    A 'reconciled' row is skipped: that state exists only because a
-    human ran `submissions reconcile <id>` and asserted the window's
-    jobs are genuinely absent from the queue (see
-    submission_ledger.reconcile_row). It is kept in the DB for the audit
-    trail, but it no longer claims index space — otherwise the row would
-    block its campaign forever and reconciliation would be impossible
-    without hand-editing sqlite.
+    A 'reconciled' row is skipped: only a human `submissions reconcile
+    <id>` sets it, asserting the window's jobs are genuinely absent
+    (see submission_ledger.reconcile_row). Kept for the audit trail but
+    no longer claims index space, or it would block its campaign
+    forever with no way out short of hand-editing sqlite.
     """
     lo = firstjob + cursor
     hi = lo + n
@@ -746,9 +711,9 @@ def _slice_overlaps_ledger(db_path, tarball, firstjob, cursor, n):
 # `submissions reconcile <row-id>` after checking jobsub_q.
 #
 # Sibling guard: _slice_overlaps_ledger (above) is the campaign-slice
-# analog and deliberately skips a shorter list ('reconciled' only, plus
-# draining rows outright) — see its docstring for why the two lists
-# differ. Do not "fix" one to match the other.
+# analog and skips a shorter list ('reconciled' only, plus draining
+# rows outright) — see its docstring for why. Do not "fix" one to
+# match the other.
 _SETTLED_STATES = ('complete', 'recovered', 'exhausted', 'reconciled')
 
 
@@ -756,16 +721,14 @@ def _rows_blocking_indices(db_path, tarball, indices):
     """The blocking ledger row (truthy) if any unsettled row for
     `tarball` already covers one of `indices`, else None.
 
-    The scattered-set analog of _slice_overlaps_ledger. Returns the ROW
-    so the caller can name its id: the operator's next move is
-    `submissions reconcile <row-id>`, and "something overlaps" would
-    leave them hunting for which.
+    Scattered-set analog of _slice_overlaps_ledger. Returns the ROW so
+    the caller can name its id in `submissions reconcile <row-id>`
+    rather than leaving the operator hunting for which one overlaps.
 
     Works for both index rows and draining (file-keyed) rows:
-    row['indices'] holds filenames for the latter, and set intersection
-    is the same operation either way — unlike _slice_overlaps_ledger,
-    this one does NOT skip draining rows (see _SETTLED_STATES's comment
-    for the full contrast).
+    row['indices'] holds filenames for the latter, same set
+    intersection either way — unlike _slice_overlaps_ledger, this one
+    does NOT skip draining rows (see _SETTLED_STATES's comment).
     """
     want = set(indices)
     for row in submission_ledger.all_rows(db_path):
@@ -783,33 +746,26 @@ def _live_campaign_cursor(db_path, tarball):
     campaign for `tarball` (firstjob + cursor), or None if no such
     campaign exists.
 
-    'active or paused' — never 'complete'/'cancelled' — matches the
-    campaigns_live_tarball unique index in submission_ledger._connect:
-    at most one campaign can hold this state pair for a given tarball
-    at a time, so this can never be ambiguous. A paused campaign still
-    counts as live: its bound names ground a future `submissions
-    resume` will resubmit from, same as an active one's next tick.
+    'active or paused' matches the campaigns_live_tarball unique index
+    (submission_ledger._connect): at most one campaign can hold this
+    state pair per tarball, so this is never ambiguous. A paused
+    campaign still counts as live — its bound names ground a future
+    `submissions resume` will resubmit from.
 
-    `cursor` on the campaign row is ENTRY-RELATIVE (submit_slice's own
-    docstring: "cursor and first/num are entry-relative, exactly like
-    a manual windowed submission"), but callers compare against
-    ABSOLUTE `--indices` values (same as `row['indices']`, written by
-    _ledger_payload as `firstjob + i`). Add `firstjob` here — taken
-    from the live campaign's own entry, the same idiom top_up uses
-    before calling _slice_overlaps_ledger — so the bound this returns
-    is directly comparable to absolute indices without the caller
-    redoing the arithmetic (and risking comparing entry-relative
-    cursor against absolute indices, which is exactly the bug this
-    function's callers must not reintroduce).
+    `cursor` on the campaign row is ENTRY-RELATIVE, but callers compare
+    against ABSOLUTE `--indices` values (same as `row['indices']`,
+    written as `firstjob + i`). Add `firstjob` here — the idiom top_up
+    uses before _slice_overlaps_ledger — so the bound is directly
+    comparable without the caller redoing the arithmetic (and risking
+    the exact entry-relative-vs-absolute bug callers must not
+    reintroduce).
 
     Backs the `submissions resubmit --indices` cursor-bound refusal
-    (see main()): an index at or above this bound has never been
-    submitted by the campaign, so a hand resubmit there is not a
-    recovery of missing work — it is new work the top-up tick will
-    ALSO eventually submit when the cursor reaches it, and if the
-    hand-fired child lands and closes first, the tick's own overlap
-    guard (_slice_overlaps_ledger) permanently blocks on it with no
-    CLI escape (reconcile_row refuses anything not
+    (see main()): an index at or above this bound was never submitted
+    by the campaign, so resubmitting it is new work the top-up tick
+    will ALSO eventually submit — and if the hand-fired child lands
+    first, _slice_overlaps_ledger permanently blocks the tick on it
+    with no CLI escape (reconcile_row refuses anything not
     'failed'/'submitting').
     """
     for camp in submission_ledger.all_campaigns(db_path):
@@ -822,25 +778,22 @@ def _live_campaign_cursor(db_path, tarball):
 def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
            submit_fn=submit_slice, only_campaign=None):
     """Feed slices from active campaigns while total idle+running stays
-    under the cap. Whole slices only (n = min(slice_size, remaining) is
-    short only at end of entry — never clamped to headroom); cycles
-    oldest-first, one slice per campaign per cycle; the first slice
-    that would exceed the cap stops the tick. Submission failure
-    pauses the campaign (no blind retry — deterministic payloads make
-    an unverified resubmit the Run1Ban failure mode). Before each
-    slice, checks the ledger for indices already covering the slice's
-    absolute window (crash-window guard, see _slice_overlaps_ledger) —
-    an overlap pauses the campaign rather than submits. A campaign
-    whose cursor is already at njobs but is still 'active' (crash
-    between advance_campaign and the completion write) self-heals to
-    'complete'. Returns an action-count summary in the recovery pass's
-    style.
+    under the cap. Whole slices only (short only at end of entry, never
+    clamped to headroom); cycles oldest-first, one slice per campaign
+    per cycle; the first slice that would exceed the cap stops the
+    tick. Submission failure pauses the campaign (no blind retry —
+    deterministic payloads make an unverified resubmit the Run1Ban
+    failure mode). Before each slice, checks the ledger for indices
+    already covering the slice's absolute window (crash-window guard,
+    see _slice_overlaps_ledger) — an overlap pauses rather than
+    submits. A campaign whose cursor is at njobs but still 'active'
+    (crash between advance_campaign and the completion write)
+    self-heals to 'complete'. Returns an action-count summary.
 
-    `only_campaign`, when given, restricts feeding to that one campaign
-    id — every other active campaign is left untouched this tick. The
-    default (None) feeds every active campaign, which is the cron's
-    `submissions run` behaviour and must not change when the filter is
-    unused."""
+    `only_campaign`, when given, restricts feeding to that campaign;
+    every other active campaign is untouched this tick. Default (None)
+    feeds every active campaign — the cron's `submissions run`
+    behaviour — and must not change when unused."""
     summary = {}
 
     def bump(key):
@@ -869,11 +822,11 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
             njobs = njobs_of(camp['entry'])
             remaining = njobs - camp['cursor']
             if remaining <= 0:
-                # Cursor already at njobs but the campaign is still
-                # 'active': a crash between advance_campaign and
-                # set_campaign_state('complete') on a prior tick, or the
-                # last slice's completion write never happened. Self-
-                # heal rather than leaving it stuck active forever.
+                # Cursor already at njobs but still 'active': a crash
+                # between advance_campaign and set_campaign_state
+                # ('complete') on a prior tick, or the completion write
+                # never happened. Self-heal rather than leaving it
+                # stuck active forever.
                 if dry_run:
                     print(f"campaign {camp['id']}: cursor already at "
                           f"njobs — would close complete (self-heal)")
@@ -898,10 +851,10 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
                                              firstjob, camp['cursor'], n)
             if blocker:
                 # Name the BLOCKING ROW, not the cursor: `resume` alone
-                # cannot clear this — the row keeps overlapping and the
+                # can't clear this — the row keeps overlapping and the
                 # next tick re-pauses the campaign immediately. The way
-                # out is `submissions reconcile <row-id>` (after
-                # checking jobsub_q), which is why the id is in the note.
+                # out is `submissions reconcile <row-id>` after checking
+                # jobsub_q.
                 bid = blocker.get('id')
                 fix = (f"check jobsub_q, then `submissions reconcile "
                        f"{bid}` and `submissions resume {camp['id']}`"
@@ -934,10 +887,9 @@ def top_up(db_path, cap, dry_run=False, count_fn=total_queued,
             else:
                 if not submit_fn(camp, n, db_path):
                     # A failed submit usually leaves a 'failed'
-                    # reservation row covering this very window, and
-                    # that row keeps overlapping: `resume` on its own
-                    # re-pauses the campaign on the next tick. Say so
-                    # here, or the operator loops.
+                    # reservation covering this window, which keeps
+                    # overlapping: `resume` alone re-pauses the
+                    # campaign next tick. Say so, or the operator loops.
                     fix = ('check the submit log and jobsub_q, then '
                            '`submissions reconcile <ROW>` for the failed '
                            'reservation (if any) and `submissions resume '
@@ -1078,36 +1030,29 @@ def drain_tick(db_path, cap, dry_run=False, count_fn=total_queued,
 
 def manage_campaign(db_path, camp_id, action, note=None, close_rows=False):
     """Operator switches. cancel closes the campaign only —
-    already-submitted ledger rows still get recovered normally. note
-    applies to pause/cancel; resume never writes one (the stored pause
-    reason is preserved). complete is the operator close-out for
-    draining campaigns — non-blocking: closing with parked files is a
-    legitimate decision. A paused campaign must be resumed first;
-    paused -> complete is not a ledger transition.
+    already-submitted rows still get recovered normally. note applies
+    to pause/cancel; resume never writes one (the pause reason is
+    preserved). complete is the operator close-out for draining
+    campaigns — non-blocking, since closing with parked files is
+    legitimate. A paused campaign must be resumed first; paused ->
+    complete isn't a ledger transition.
 
-    close_rows=True (cancel only) states the other intent: abandon the
-    round. It additionally moves every open row on this campaign's
-    tarball to 'exhausted' — the terminal state that means "no more
-    attempts" — so the next tick recovers nothing. It is deliberately
-    not the default: closing rows discards the ledger's ability to
-    finish partially-run work, which is exactly what a plain cancel
-    preserves.
+    close_rows=True (cancel only): abandon the round. Moves every open
+    row on this tarball to 'exhausted' ("no more attempts") so the
+    next tick recovers nothing. Not the default — it discards the
+    ledger's ability to finish partially-run work, which a plain
+    cancel preserves. Rows match by tarball (no campaign_id column);
+    closed ids are RETURNED so a stray predecessor row isn't hidden in
+    a count.
 
-    Rows match by tarball because the two tables carry no campaign_id;
-    campaigns_live_tarball keeps that unambiguous for a live campaign,
-    and the closed ids are RETURNED so a cancelled predecessor's stray
-    row shows up rather than hiding in a count (same reasoning as
-    submission_ledger.set_campaign_entry_key's cascade).
+    A 'submitting' row is refused outright, not skipped: it's a claimed
+    window whose jobsub_submit may still be in flight, and closing
+    under it orphans the cluster — nothing is written, not even the
+    campaign state.
 
-    A 'submitting' row on the tarball is refused outright rather than
-    skipped: it is a claimed window whose jobsub_submit may still be in
-    flight, and closing under it orphans the cluster. Nothing is
-    written in that case — not even the campaign state.
-
-    Because the flag is normally reached AFTER a cancel (the rows only
-    become a problem once the clusters are gone), cancelling an
-    already-cancelled campaign is a no-op here instead of an error.
-    Bare cancel keeps raising on it, as before.
+    Cancelling an already-cancelled campaign is a no-op here (the flag
+    is normally reached AFTER a cancel), not an error; bare cancel
+    still raises on it.
     """
     target = {'pause': 'paused', 'resume': 'active',
               'cancel': 'cancelled', 'complete': 'complete'}[action]
@@ -1215,26 +1160,26 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
     print(f"row {rid}: {len(missing)}/{len(row['indices'])} indices "
           f"missing outputs")
     # A RESERVED child — 'submitting', window claimed, no cluster
-    # attached — is checked BEFORE the active-child repair below, and it
-    # is not the same case. Measured 2026-08-09 by killing `submissions
+    # attached — is checked BEFORE the active-child repair below; it is
+    # not the same case. Measured 2026-08-09 by killing `submissions
     # run` mid-recovery: open_rows() selects state='active' only, so the
-    # orphan child was invisible here and the loop cheerfully cut a
-    # SECOND child for the same indices. In that run the kill landed
-    # before jobsub_submit created anything, so nothing duplicated — but
-    # had it landed in the window the two-phase write exists to survive
-    # (cluster created, attach not yet written), two clusters would now
-    # be running the same deterministic payload.
+    # orphan child was invisible and the loop cheerfully cut a SECOND
+    # child for the same indices. That kill landed before jobsub_submit
+    # created anything, so nothing duplicated — but landing in the
+    # window the two-phase write exists to survive (cluster created,
+    # attach not yet written) would run two clusters on the same
+    # deterministic payload.
     #
-    # _slice_overlaps_ledger does not cover this: it guards CAMPAIGN
+    # _slice_overlaps_ledger doesn't cover this: it guards CAMPAIGN
     # slices, and a recovery child's indices sit strictly below the
-    # campaign cursor by construction (see its docstring). Recoveries
-    # need their own parent-scoped guard, which is this.
+    # campaign cursor by construction. Recoveries need their own
+    # parent-scoped guard, which is this.
     #
-    # Whether that cluster exists cannot be decided from the ledger, so
+    # Whether that cluster exists can't be decided from the ledger, so
     # this refuses rather than guessing: the parent stays active, no
-    # resubmit is issued, and the operator is pointed at the one row
-    # they must resolve (`submissions reconcile <id>` after checking
-    # jobsub_q). Fail-closed — an unproven window is not a free window.
+    # resubmit issued, and the operator is pointed at the one row to
+    # resolve (`submissions reconcile <id>` after checking jobsub_q).
+    # Fail-closed — an unproven window is not a free window.
     reserved = [r for r in submission_ledger.reserved_rows(db_path)
                 if r['parent_id'] == rid]
     if reserved:
@@ -1299,8 +1244,8 @@ def print_status(db_path):
     rows = submission_ledger.all_rows(db_path)
     if not rows:
         # A freshly-enqueued draining campaign has no ledger rows yet
-        # (nothing dispatched this tick) but is very much not "nothing to
-        # see" — fall through to the campaigns block instead of hiding it.
+        # but is not "nothing to see" — fall through to the campaigns
+        # block instead of hiding it.
         print(f"Ledger is empty ({db_path}).")
     else:
         print(f"{'id':>4} {'state':<10} {'att':>3} {'parent':>6} {'#idx':>5}  "
@@ -1347,8 +1292,8 @@ def print_status(db_path):
 
 
 # `status` is the only read verb. Every other verb mutates, and a
-# non-mu2epro caller cannot write the production ledger at all, so a
-# mutating default of "production" would only ever fail. For mu2epro
+# non-mu2epro caller can't write the production ledger at all, so a
+# mutating default of "production" would only ever fail. For mu2epro,
 # ledger_for() IS the production path, so nothing changes there.
 _READ_VERBS = ('status',)
 
@@ -1358,10 +1303,10 @@ def resolve_db(opts):
     the per-verb default.
 
     A DEFAULTED (derived) path — the --mine branch and the mutating-verb
-    fallback, both ledger_for() — gets its directory created here, since
-    it cannot be a typo. An explicit --db, and the read verb `status`'s
-    production default, never do: a typo there must fail loudly rather
-    than silently make a stray database (see
+    fallback, both ledger_for() — gets its directory created here,
+    since it can't be a typo. An explicit --db, and the read verb
+    `status`'s production default, never do: a typo there must fail
+    loudly, not silently make a stray database (see
     submission_ledger.ensure_ledger_dir).
     """
     if getattr(opts, 'db', None):
@@ -1378,7 +1323,7 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog='submissions',
         description='Direct-submission subsystem CLI: status (default '
-                    'verb, read-only), the hourly verify/resubmit/'
+                    'verb, read-only), the verify/resubmit/'
                     'top-up tick (run), campaign management '
                     '(pause/resume/cancel/complete), and row '
                     'reconciliation (reconcile).')
@@ -1571,9 +1516,9 @@ def _run_pass(args):
 
     summary = {}
     if rows:
-        # ONE queue snapshot per tick drives every row's drain-check. None
-        # means the jobsub_q --user query could not be trusted — every row
-        # then skips as queue-error (fail-closed), never guessed drained.
+        # ONE queue snapshot per tick drives every row's drain-check.
+        # None means the query couldn't be trusted — every row skips
+        # as queue-error (fail-closed), never guessed drained.
         clusters = live_clusters()
         if clusters is None:
             print("drain-check: jobsub_q --user failed — no row verified "
@@ -1719,13 +1664,13 @@ def main(argv=None):
             sys.exit("submissions: nothing to resubmit (empty selection)")
 
         # Lock BEFORE the overlap scan, not after: the scan and the
-        # submit must be one atomic operation against the ledger, same as
-        # every mutating tick (_acquire_lock's own docstring: "both
-        # passing the drain gate before either closes a row = double
-        # submit"). Scanning outside the lock would let a concurrent
-        # `submissions run` reserve a window AFTER this scan sees it
-        # clear and BEFORE this submits into it — the exact crash-window
-        # race the ledger reservation protocol exists to close.
+        # submit must be one atomic operation against the ledger, same
+        # as every mutating tick (_acquire_lock: "both passing the
+        # drain gate before either closes a row = double submit").
+        # Scanning outside the lock would let a concurrent `submissions
+        # run` reserve a window AFTER this scan sees it clear and
+        # BEFORE this submits into it — the crash-window race the
+        # ledger reservation protocol exists to close.
         if not args.dry_run:
             _acquire_lock(db)
 
@@ -1739,18 +1684,19 @@ def main(argv=None):
                 f"jobsub_q, then `submissions reconcile {blocking['id']}` "
                 f"if the window is genuinely free.")
 
-        # --indices/--indices-file only: --files is file-keyed and has no
-        # index space to bound. Nothing checks that a requested index
-        # actually belongs to `row` — a typo (e.g. row 4231's indices
-        # meant, cursor 5000 typed) sails through _rows_blocking_indices
-        # above, since nothing else covers it YET. If a child lands there
-        # and closes before the campaign's own cursor reaches it,
-        # _slice_overlaps_ledger permanently blocks the tick on that row
-        # with no CLI escape (reconcile_row refuses anything not
-        # 'failed'/'submitting' — it would need hand-edited sqlite). The
-        # cursor is the correct bound: below it is legitimate recovery of
-        # work the campaign already submitted; at or above it is ground
-        # the campaign has not reached yet and will submit itself.
+        # --indices/--indices-file only: --files is file-keyed and has
+        # no index space to bound. Nothing checks that a requested
+        # index actually belongs to `row` — a typo (e.g. row 4231's
+        # indices meant, cursor 5000 typed) sails through
+        # _rows_blocking_indices above, since nothing else covers it
+        # YET. If a child lands there and closes before the campaign's
+        # own cursor reaches it, _slice_overlaps_ledger permanently
+        # blocks the tick on that row with no CLI escape (reconcile_row
+        # refuses anything not 'failed'/'submitting' — it would need
+        # hand-edited sqlite). The cursor is the correct bound: below it
+        # is legitimate recovery of work already submitted; at or above
+        # it is ground the campaign hasn't reached yet and will submit
+        # itself.
         if args.files is None:
             # _live_campaign_cursor returns the ABSOLUTE bound
             # (firstjob + cursor) — comparable directly against
@@ -1781,13 +1727,13 @@ def main(argv=None):
         # call — including submit_entry returning {'status': 'failed'}
         # when jobsub_submit exits non-zero (possibly after already
         # creating a cluster) or exits 0 with no parseable cluster id.
-        # `ok` alone cannot distinguish that from a real submission, so
-        # confirm by evidence: a NEW active (open) child row parented on
-        # this one. No such row means nothing was confirmed submitted —
-        # exit nonzero rather than let a caller's `&& next-step.sh` run
-        # on a false success. Skipped on --dry-run: submit_entry returns
-        # before touching the ledger in that mode, so there is nothing to
-        # find and nothing was promised.
+        # `ok` alone can't distinguish that from a real submission, so
+        # confirm by evidence: a NEW active child row parented on this
+        # one. No such row means nothing was confirmed submitted — exit
+        # nonzero rather than let a caller's `&& next-step.sh` run on a
+        # false success. Skipped on --dry-run: submit_entry returns
+        # before touching the ledger, so there's nothing to find and
+        # nothing was promised.
         before = {r['id'] for r in submission_ledger.open_rows(db)
                  if r['parent_id'] == row['id']}
         ok = fn(row, payload, db, dry_run=args.dry_run,

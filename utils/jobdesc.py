@@ -1,8 +1,8 @@
 """Submission-entry (`jobdesc`) accessors.
 
 A jobdesc describes one submission. It is stored in both ledger tables
-(`campaigns.entry_json`, `submissions.entry_json`), shipped to the
-worker as `ops["jobdesc"]`, and read there by `utils/runmu2e.py`:
+(`campaigns.entry_json`, `submissions.entry_json`), shipped to the worker as
+`ops["jobdesc"]`, and read there by `utils/runmu2e.py`:
 
     {
         "tarball":  "cnf.mu2e.<desc>.<dsconf>.<index>.tar",   # required
@@ -12,16 +12,16 @@ worker as `ops["jobdesc"]`, and read there by `utils/runmu2e.py`:
         "firstjob": <int>,                                    # optional, defaults 0
     }
 
-`firstjob` windows the entry into the cnf's index space: the entry's
-njobs slots run cnf indices [firstjob, firstjob+njobs) instead of
-[0, njobs). Since baseSeed = 1 + cnf index, this is the mechanism for
-extending a dataset with fresh seeds while reusing the existing
-tarball (statistics expansion of open-ended resampler/generator cnfs).
+`firstjob` windows the entry into the cnf's index space: the entry's njobs
+slots run cnf indices [firstjob, firstjob+njobs) instead of [0, njobs).
+Since baseSeed = 1 + cnf index, this extends a dataset with fresh seeds
+while reusing the existing tarball (statistics expansion of open-ended
+resampler/generator cnfs).
 
-These helpers enforce fail-loud access on the required fields and the
-documented sentinel defaults on the optional ones. Use them instead of
-bare `entry[...]` or `entry.get(...)` so a malformed jobdesc is caught
-at the boundary, not as a downstream crash.
+These helpers enforce fail-loud access on required fields and the
+documented sentinel defaults on optional ones. Use them instead of bare
+`entry[...]`/`entry.get(...)` so a malformed jobdesc is caught at the
+boundary, not as a downstream crash.
 """
 
 import re
@@ -69,14 +69,12 @@ def inloc_of(entry: dict, default: str = "none") -> str:
 def code_of(entry, default=None):
     """Absolute path to this entry's code tarball, or `default`.
 
-    Present only on an entry built from a `--code` config. Its absence
-    means the ordinary case: the cnf names a /cvmfs Musing setup and no
-    tarball travels with the job.
+    Present only on an entry built from a `--code` config; absent means
+    the ordinary case, a /cvmfs Musing setup with no tarball shipped.
 
-    The path lives on the ENTRY rather than in the cnf because a tarball
-    can be moved or rebuilt, and because the entry snapshot is what
-    later slices and recoveries read. The cnf keeps the digest instead,
-    which is what actually has to stay true.
+    Lives on the ENTRY, not the cnf, because a tarball can be moved or
+    rebuilt and the entry snapshot is what later slices/recoveries read.
+    The cnf keeps only the digest, which is what actually has to stay true.
     """
     return entry.get('code', default)
 
@@ -126,11 +124,10 @@ def validate_window(firstjob: int, njobs: Optional[int], capacity: Optional[int]
 RESOURCE_KEYS = ('memory', 'disk', 'expected_lifetime')
 
 # Every entry key whose VALUE validate_entry_value knows how to check.
-# Single home, derived by all three boundaries that validate an entry:
-# json2jobdef (a campaign is born), submit.enqueue_entry (the safety net
-# before a campaign is created), and submission_ledger (a live campaign
-# is edited). Three restatements is how `code` reached two of them and
-# not the third.
+# Single home, shared by all three boundaries that validate an entry:
+# json2jobdef (campaign born), submit.enqueue_entry (safety net before a
+# campaign is created), and submission_ledger (live campaign edited).
+# Three restatements is how `code` reached two of them and not the third.
 ENTRY_VALUE_KEYS = ('inloc', 'code') + RESOURCE_KEYS
 
 
@@ -149,16 +146,15 @@ def resources_of(entry: dict) -> dict:
     return res
 
 
-# jobsub_submit's --memory grammar, as the house format uses it
-# ('2500MB' in jobsub_argv.DEFAULT_MEMORY, '4000MB' in
-# submissions.RECOVERY_MEMORY). Anchored: 'lots' and '3000 MB' are
-# rejected rather than passed through to fail at submit time.
-# Shared by the memory and disk keys — both take a jobsub size string.
+# jobsub_submit's --memory grammar ('2500MB' in jobsub_argv.DEFAULT_MEMORY,
+# '4000MB' in submissions.RECOVERY_MEMORY). Anchored so 'lots' and
+# '3000 MB' are rejected here rather than passed through to fail at submit
+# time. Shared by memory and disk — both take a jobsub size string.
 _SIZE_RE = re.compile(r'^\d+(MB|GB)$')
 _LIFETIME_RE = re.compile(r'^\d+[smhd]$')
 
-# inloc forms utils/file_resolver.py actually accepts. 'scratch' is one
-# of them: FileResolver.locate falls through to a SAM locate preferring
+# inloc forms utils/file_resolver.py actually accepts. 'scratch' is one:
+# FileResolver.locate falls through to a SAM locate preferring
 # location_type == inloc, and jobsub_argv._LOCATION_DEFAULT_PROTOCOL
 # carries a protocol for it. EXAMPLES.md has always documented it.
 INLOC_SIMPLE = ('tape', 'disk', 'scratch', 'resilient', 'stash', 'none')
@@ -167,15 +163,15 @@ INLOC_SIMPLE = ('tape', 'disk', 'scratch', 'resilient', 'stash', 'none')
 def is_dir_inloc(inloc):
     """True for the local-dir inloc shape (`dir:<path>`).
 
-    That shape names files on a mounted filesystem that were never
-    declared to SAM (chained intermediate outputs, cvmfs data files), so
-    every SAM-keyed lookup — dataset queries, locality checks, parentage
-    tracking — must be skipped for it, not attempted-and-failed.
+    Names files on a mounted filesystem never declared to SAM (chained
+    intermediate outputs, cvmfs data files), so every SAM-keyed lookup —
+    dataset queries, locality checks, parentage tracking — must be
+    skipped for it, not attempted-and-failed.
 
     Shared by json2jobdef and check_inputs. NOT yet the single home:
     file_resolver, runmu2e and jobsub_argv still hand-roll the same
-    `startswith('dir:')` test. Migrate them here when next touching
-    those files rather than adding a seventh copy.
+    `startswith('dir:')` test. Migrate them here rather than adding a
+    seventh copy.
     """
     return isinstance(inloc, str) and inloc.startswith('dir:')
 
@@ -189,11 +185,10 @@ def dir_inloc_path(inloc):
 # declares the file to SAM.
 #
 # 'outstage' is ours, not pushOutput's: the worker copies the file to
-# `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` and declares nothing. It is
-# for test and study runs whose output should not enter SAM. pushOutput
-# offers no such mode — it sets `dosam = True` unconditionally
-# (pushOutput.py:268), and its 'scratch' action is a fully declared
-# dataset that merely lives on scratch.
+# `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` and declares nothing, for test
+# and study runs whose output should not enter SAM. pushOutput has no such
+# mode — it sets `dosam = True` unconditionally (pushOutput.py:268), and
+# its 'scratch' action is a fully declared dataset that merely lives there.
 OUTSTAGE_LOCATION = 'outstage'
 OUTLOC_VALID = ('tape', 'disk', 'scratch', OUTSTAGE_LOCATION)
 
@@ -221,21 +216,20 @@ def validate_outloc(outloc):
 def validate_entry_value(key, value):
     """Reject a malformed entry value at the boundary.
 
-    Single owner of the value grammar, called from BOTH boundaries where
-    an entry value enters the system: `json2jobdef.validate_required_fields`
-    (where a campaign is born, from the build config) and
-    `submission_ledger.set_campaign_entry_key` (where a live campaign is
-    edited). Two validators would let an operator enqueue a spelling that
-    `set-entry` refuses.
+    Single owner of the value grammar, called from BOTH boundaries where a
+    value enters the system: `json2jobdef.validate_required_fields` (campaign
+    born, from the build config) and `submission_ledger.set_campaign_entry_key`
+    (live campaign edited). Two validators would let an operator enqueue a
+    spelling that `set-entry` refuses.
 
-    Written here rather than at submit time because an unparseable value
+    Checked here rather than at submit time, because an unparseable value
     would otherwise sit in the entry looking applied and only surface a
-    tick later — as a jobsub_submit rejection for the resource keys, or,
-    worse, as a SILENT SAM fallback for a misspelled inloc, which reads
-    as a working campaign with the wrong provenance.
+    tick later — a jobsub_submit rejection for the resource keys, or worse,
+    a SILENT SAM fallback for a misspelled inloc that reads as a working
+    campaign with the wrong provenance.
 
-    Keys other than the ones it knows are ignored, not rejected: an
-    entry legitimately carries tarball, outputs, njobs and friends.
+    Keys other than the ones it knows are ignored, not rejected: an entry
+    legitimately carries tarball, outputs, njobs and friends.
     """
     if key not in ('inloc', 'code') + RESOURCE_KEYS:
         return
@@ -256,11 +250,10 @@ def validate_entry_value(key, value):
                 f"inloc must be one of {', '.join(INLOC_SIMPLE)} or "
                 f"'dir:/<absolute path>', got {value!r}")
     elif key == 'code':
-        # Absolute only: the submit host and the local runner resolve
-        # this path from different working directories, and a relative
-        # one would silently mean different files to each.
-        # No suffix rule — jobdef.validate_code_tarball checks the bzip2
-        # magic, so a correctly built tarball is usable under any name.
+        # Absolute only: submit host and local runner resolve this path from
+        # different working directories, so a relative one would silently
+        # mean different files to each. No suffix rule — jobdef.
+        # validate_code_tarball checks the bzip2 magic instead.
         if not value.startswith('/'):
             raise ValueError(
                 f"code must be an absolute path, got {value!r}")
