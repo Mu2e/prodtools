@@ -75,6 +75,28 @@ def list_expected_paths(dataset: str) -> List[str]:
 # Copy
 # ---------------------------------------------------------------------------
 
+def _already_at_dest(dest: str, want: Optional[int]) -> bool:
+    """True when `dest` exists with the SAM-recorded size `want`.
+    An unknown size (None) or a missing/unstat-able file is False."""
+    if want is None:
+        return False
+    try:
+        return os.path.getsize(dest) == want
+    except OSError:
+        return False
+
+
+def _locate_src(filename: str, locations_map, source_loc: str) -> str:
+    """Source path for one file: from the batch locate result when it
+    has a record, else one per-file SAM locate. Raises ValueError /
+    RuntimeError when SAM has no usable location."""
+    locs = locations_map.get(filename)
+    if locs:
+        return path_from_sam_locations(filename, locs,
+                                      prefer_location=source_loc)
+    return sam_physical_path(filename, prefer_location=source_loc)
+
+
 class CopyResult(NamedTuple):
     """Outcome of a dataset copy: how many landed, how many did not.
 
@@ -131,17 +153,9 @@ def _copy_dataset(
     expected_sizes = file_sizes_in_dataset(dataset) if skip_existing else {}
     n_skip = 0
     if skip_existing:
-        keep = []
-        for filename in files:
-            want = expected_sizes.get(filename)
-            try:
-                if want is not None and os.path.getsize(
-                        dest_path_fn(filename)) == want:
-                    n_skip += 1
-                    continue
-            except OSError:
-                pass
-            keep.append(filename)
+        keep = [f for f in files
+                if not _already_at_dest(dest_path_fn(f), expected_sizes.get(f))]
+        n_skip = len(files) - len(keep)
         files = keep
         if verbose:
             print(f"  skipping {n_skip} file(s) already at destination")
@@ -152,7 +166,9 @@ def _copy_dataset(
     # semantics per file are unchanged.
     try:
         locations_map = locate_files_strict(files) if files else {}
-    except Exception:
+    except Exception as e:
+        print(f"  WARNING: batch SAM locate failed ({e}); falling back to "
+              f"one locate per file", file=sys.stderr)
         locations_map = {}
 
     n_ok = 0
@@ -164,13 +180,8 @@ def _copy_dataset(
 
         # Source path from SAM, preferring source_loc's location type.
         try:
-            locs = locations_map.get(filename)
-            if locs:
-                src = path_from_sam_locations(filename, locs,
-                                              prefer_location=source_loc)
-            else:
-                src = sam_physical_path(filename, prefer_location=source_loc)
-        except Exception as e:
+            src = _locate_src(filename, locations_map, source_loc)
+        except (ValueError, RuntimeError) as e:
             print(f"  SKIP {filename}: could not locate ({e})", file=sys.stderr)
             n_fail += 1
             continue

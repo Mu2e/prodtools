@@ -36,19 +36,13 @@ from utils.samweb_wrapper import (
 )
 
 
-def _write_random_selection(out_f, files, total_needed: int, seed_source: str):
-    """Write deterministic pseudo-random selection from a fetched file list."""
+def _random_selection(files, total_needed: int, seed_source: str):
+    """Deterministic pseudo-random selection from a fetched file list."""
     ordered = sorted(files)  # sort first: deterministic regardless of SAM order
     rng = random.Random(seed_source)
     rng.shuffle(ordered)
-
-    produced = 0
-    idx = 0
     count = len(ordered)
-    while produced < total_needed:
-        out_f.write(ordered[idx] + '\n')
-        produced += 1
-        idx = (idx + 1) % count
+    return [ordered[i % count] for i in range(total_needed)]
 
 def _configure_chunk_mode(config):
     """Handle `input_data = {"<path>": {"chunk_lines": N}}`.
@@ -216,39 +210,54 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
                 raise ValueError(f"input_data spec for {spec.source} must include 'count' or 'merge_factor' when using dict form")
 
             query = q_dataset(spec.source, with_events=event_count_positive)
-
             if spec.random:
-                per_job = spec.per_job
-                try:
-                    njobs = int(config.get('njobs', 1))
-                except (TypeError, ValueError):
-                    njobs = 1
-
-                # One SAM query serves njobs derivation and selection
-                # (previously count_files + list_files ran it twice).
-                files = list_files(query)
-                if not files:
-                    raise ValueError(f"No files returned for query: {query}")
-
-                if njobs == -1:
-                    njobs = max(1, len(files) // max(per_job, 1))
-
-                total_needed = per_job * max(njobs, 1)
-                if spec.max_nfiles is not None:
-                    total_needed = min(total_needed, spec.max_nfiles)
-                seed_source = (
-                    f"{config.get('owner','')}.{config.get('desc','')}.{config.get('dsconf','')}"
-                    f".{spec.source}.{per_job}.{njobs}"
-                )
-                _write_random_selection(out_f, files, total_needed, seed_source)
+                files = _random_files(config, spec, query)
             else:
-                files = list_files(query)
-                if spec.max_nfiles is not None:
-                    files = sorted(files)[:spec.max_nfiles]
-                for filepath in files:
-                    if exclude_files and filepath in exclude_files:
-                        continue
-                    out_f.write(filepath + '\n')
+                files = _ordered_files(spec, query, exclude_files)
+            for filepath in files:
+                out_f.write(filepath + '\n')
+
+
+def _random_files(config, spec, query):
+    """Deterministic pseudo-random sample of `per_job * njobs` files (capped by
+    `max_nfiles`), cycling the sorted+shuffled list when it is shorter."""
+    per_job = spec.per_job
+    raw_njobs = config.get('njobs', 1)
+    try:
+        njobs = int(raw_njobs)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"njobs must be an integer for random input selection of "
+            f"{spec.source}; got {raw_njobs!r}")
+
+    # One SAM query serves njobs derivation and selection
+    # (previously count_files + list_files ran it twice).
+    files = list_files(query)
+    if not files:
+        raise ValueError(f"No files returned for query: {query}")
+
+    if njobs == -1:
+        njobs = max(1, len(files) // max(per_job, 1))
+
+    total_needed = per_job * max(njobs, 1)
+    if spec.max_nfiles is not None:
+        total_needed = min(total_needed, spec.max_nfiles)
+    seed_source = (
+        f"{config.get('owner','')}.{config.get('desc','')}.{config.get('dsconf','')}"
+        f".{spec.source}.{per_job}.{njobs}"
+    )
+    return _random_selection(files, total_needed, seed_source)
+
+
+def _ordered_files(spec, query, exclude_files=None):
+    """All matching files in SAM order (sorted prefix when `max_nfiles` caps
+    them), minus `exclude_files`."""
+    files = list_files(query)
+    if spec.max_nfiles is not None:
+        files = sorted(files)[:spec.max_nfiles]
+    if exclude_files:
+        files = [f for f in files if f not in exclude_files]
+    return files
 
 def _next_version(config):
     """Find the next available version number for this job definition tarball.
@@ -258,11 +267,7 @@ def _next_version(config):
     """
     dataset = cnf_name(config, 'tar', dataset=True)
 
-    try:
-        files = files_in_dataset(dataset)
-    except Exception:
-        return 0
-
+    files = files_in_dataset(dataset)
     if not files:
         return 0
 
@@ -324,13 +329,10 @@ def validate_required_fields(config):
     # setup script, or a code tarball that travels with the job.
     if bool(config.get('simjob_setup')) == bool(config.get('code')):
         sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
-    for key in ENTRY_VALUE_KEYS:
-        if key in config:
-            try:
-                validate_entry_value(key, config[key])
-            except ValueError as exc:
-                sys.exit(f"json2jobdef: {exc}")
     try:
+        for key in ENTRY_VALUE_KEYS:
+            if key in config:
+                validate_entry_value(key, config[key])
         validate_outloc(config['outloc'])
     except ValueError as exc:
         sys.exit(f"json2jobdef: {exc}")
@@ -600,11 +602,14 @@ def _build_job_args(config):
         # rather than feed a basename into a SAM lookup that can only fail.
         # build_jobdef mirrors this guard when emitting post_lines.
         if not _is_dir_inloc(config):
+            # A resampler cnf without MaxEventsToSkip is a physics bug (the
+            # resampler silently re-reads the same leading events), so a
+            # failed lookup is fatal, not a warning.
             first_dataset = normalize_input_data(config['input_data'])[0].source
             try:
                 config['_max_events_to_skip'] = max_events_to_skip(first_dataset)
             except Exception as e:
-                print(f"Warning: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+                fail(f"Error: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
         merge_factor = calculate_merge_factor(config)
         return ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
 
@@ -908,9 +913,9 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
     # left alone (already in SAM/ledger; undoing them is not this call).
     if skipped:
         print(f"\n{len(skipped)} of {len(matching_configs)} entries were "
-              f"SKIPPED and no campaign exists for them:")
+              f"SKIPPED and no campaign exists for them:", file=sys.stderr)
         for note in skipped:
-            print(f"  - {note}")
+            print(f"  - {note}", file=sys.stderr)
         sys.exit(2)
 
 if __name__ == '__main__':

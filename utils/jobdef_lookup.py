@@ -17,6 +17,7 @@ cnf's *declared* outputs (handles the suffixed-output case, e.g. cnf desc
 
 import os
 import sys
+import tarfile
 
 from utils.job_common import Mu2eName
 from utils.samweb_wrapper import definitions_matching
@@ -44,23 +45,18 @@ def list_jobdefs(dsconf):
     pattern = f"cnf.mu2e.%.{dsconf}.tar"
     _log(f"Searching for job definitions with pattern: cnf.mu2e.*.{dsconf}.tar")
 
-    try:
-        definitions = definitions_matching(defname=pattern)
+    definitions = definitions_matching(defname=pattern)
 
-        if not definitions:
-            _log(f"No job definitions found for dsconf: {dsconf}")
-            return []
-
-        _log(f"Found {len(definitions)} job definitions:")
-        for definition in definitions:
-            if definition.strip():
-                _log(f"  {definition}")
-
-        return definitions
-
-    except Exception as e:
-        _log(f"Error accessing SAM: {e}")
+    if not definitions:
+        _log(f"No job definitions found for dsconf: {dsconf}")
         return []
+
+    _log(f"Found {len(definitions)} job definitions:")
+    for definition in definitions:
+        if definition.strip():
+            _log(f"  {definition}")
+
+    return definitions
 
 
 def _raw_outfile_descs(tarball_path):
@@ -72,7 +68,9 @@ def _raw_outfile_descs(tarball_path):
     out = []
     try:
         outfiles = Mu2eJobPars(tarball_path).json_data.get('tbs', {}).get('outfiles', {})
-    except Exception:
+    except (tarfile.TarError, OSError, KeyError) as e:
+        print(f"jobdef_lookup: cannot read outfiles from {tarball_path}: {e}",
+              file=sys.stderr)
         return out
     for template in (outfiles or {}).values():
         try:
@@ -219,9 +217,10 @@ def _search_jobdefs(jobdefs, desc, input_type, name_filter, verbose_match=False)
 
         try:
             outputs = Mu2eJobPars(tarball_path).job_outputs(0)
-        except Exception as e:
-            # Generic tarballs defer {desc}/sequencer -> job_outputs() raises.
-            # They are handled by the generic pass; skip here, don't abort.
+        except ValueError as e:
+            # Generic tarballs defer {desc}/sequencer -> job_outputs() raises
+            # ValueError (get_sequencer / Mu2eName.parse). They are handled
+            # by the generic pass; skip here, don't abort.
             _log(f"Skipping {jobdef} in output scan ({e})")
             continue
         for output_file in outputs.values():
@@ -249,26 +248,21 @@ def locate_tarball(jobdef):
     _log(f"Using datasetFileList to locate: {jobdef}")
 
     try:
-        try:
-            file_paths = get_dataset_files(jobdef)
-        except RuntimeError as e:
-            if "No files with dh.dataset" in str(e):
-                file_paths = get_definition_files(jobdef)
-            else:
-                raise
+        file_paths = get_dataset_files(jobdef)
+    except RuntimeError as e:
+        if "No files with dh.dataset" not in str(e):
+            raise
+        file_paths = get_definition_files(jobdef)
 
-        if not file_paths:
-            raise RuntimeError(f"Tarball not found for: {jobdef}")
+    if not file_paths:
+        raise RuntimeError(f"Tarball not found for: {jobdef}")
 
-        tarball_path = file_paths[0]
-        if not os.path.exists(tarball_path):
-            raise RuntimeError(f"Tarball not found for: {jobdef}")
+    tarball_path = file_paths[0]
+    if not os.path.exists(tarball_path):
+        raise RuntimeError(f"Tarball not found for: {jobdef}")
 
-        _log(f"Found tarball at: {tarball_path}")
-        return tarball_path
-
-    except Exception as e:
-        raise RuntimeError(f"Error locating tarball for {jobdef}: {e}")
+    _log(f"Found tarball at: {tarball_path}")
+    return tarball_path
 
 
 def output_njobs_map(dsconf):
@@ -288,7 +282,7 @@ def output_njobs_map(dsconf):
             njobs = jp.njobs()
             outputs = jp.job_outputs(0)
         except Exception as e:
-            _log(f"Skipping {jobdef}: {e}")
+            print(f"jobdef_lookup: skipping {jobdef}: {e}", file=sys.stderr)
             continue
         for output_file in outputs.values():
             try:

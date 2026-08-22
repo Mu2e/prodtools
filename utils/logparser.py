@@ -14,16 +14,12 @@ MEMREPORT_REGEX = re.compile(r"MemReport\s+VmPeak\s*=\s*([0-9]*\.?[0-9]+)\s+VmHW
 
 def get_log_files(dataset, max_files=None):
     """Get log files for a SAM dataset (e.g., log.mu2e.X.Y.log). dataset must
-    be registered with dh.dataset metadata. Returns [] if not found."""
-    try:
-        # get_dataset_files() constructs paths directly, no locate_files()
-        # calls; max_files caps that at the source (a log dataset holds one
-        # file per job — up to 100k names for a 10-log sample otherwise).
-        return get_dataset_files(dataset, max_files=max_files)
-
-    except Exception as e:
-        print(f"Warning: get_log_files failed for {dataset}: {e}", file=sys.stderr)
-        return []
+    be registered with dh.dataset metadata. Raises RuntimeError (from
+    get_dataset_files) when the dataset cannot be resolved."""
+    # get_dataset_files() constructs paths directly, no locate_files()
+    # calls; max_files caps that at the source (a log dataset holds one
+    # file per job — up to 100k names for a 10-log sample otherwise).
+    return get_dataset_files(dataset, max_files=max_files)
 
 def parse_log_file(filepath):
     """Extract CPU, Real, VmPeak and VmHWM from a log file."""
@@ -49,11 +45,13 @@ def process_dataset(dataset, max_logs, max_workers=10):
     max_workers is the thread pool size for parallel log parsing."""
     print(f"Processing {dataset}", file=sys.stderr)
     
-    log_files = get_log_files(dataset, max_logs)
+    try:
+        log_files = get_log_files(dataset, max_logs)
+    except RuntimeError as e:
+        print(f"Error: get_log_files failed for {dataset}: {e}", file=sys.stderr)
+        return {'dataset': dataset, 'error': str(e)}
     if not log_files:
-        return {'dataset': dataset, 'CPU [h]': None, 'CPU_max [h]': None,
-                'Real [h]': None, 'Real_max [h]': None, 'VmPeak [GB]': None,
-                'VmPeak_max [GB]': None, 'VmHWM [GB]': None, 'VmHWM_max [GB]': None}
+        return {'dataset': dataset, 'error': 'no log files found'}
     
     file_metrics = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -67,16 +65,6 @@ def process_dataset(dataset, max_logs, max_workers=10):
             except Exception as e:
                 log_file = future_to_file[future]
                 print(f"Warning: Error parsing {log_file}: {e}", file=sys.stderr)
-                # keep an empty placeholder so ordering/count stays intact
-                file_metrics.append({
-                    'file': os.path.basename(log_file),
-                    'full_path': log_file,
-                    'date': 'N/A',
-                    'CPU [h]': None,
-                    'Real [h]': None,
-                    'VmPeak [GB]': None,
-                    'VmHWM [GB]': None
-                })
     
     metrics = {'CPU': [], 'Real': [], 'VmPeak': [], 'VmHWM': []}
     for fm in file_metrics:

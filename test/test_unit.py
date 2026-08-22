@@ -1849,10 +1849,13 @@ class TestNextVersion(unittest.TestCase):
         with patch('utils.json2jobdef.files_in_dataset', return_value=files):
             self.assertEqual(_next_version(self._cfg()), 3)
 
-    def test_sam_exception_returns_zero(self):
+    def test_sam_exception_propagates(self):
+        """A SAM failure must NOT read as version 0 — that collides with an
+        existing cnf name. Fail loud instead."""
         from utils.json2jobdef import _next_version
         with patch('utils.json2jobdef.files_in_dataset', side_effect=Exception("SAM down")):
-            self.assertEqual(_next_version(self._cfg()), 0)
+            with self.assertRaises(Exception):
+                _next_version(self._cfg())
 
     def test_non_sequential_versions(self):
         from utils.json2jobdef import _next_version
@@ -10095,13 +10098,13 @@ class TestSamwebParentsOfFile(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._wrapper(boom).parents_of_file('x.art')
 
-    def test_file_lineage_still_swallows(self):
-        """This is additive: file_lineage's callers depend on its current
-        fail-soft behaviour and must not change."""
+    def test_file_lineage_raises_on_sam_error(self):
+        """file_lineage must not swallow SAM errors: [] is a physics claim
+        ("no parents"), not an error state."""
         import inspect
         from utils.samweb_wrapper import SAMWebWrapper
         src = inspect.getsource(SAMWebWrapper.file_lineage)
-        self.assertIn('return []', src)
+        self.assertNotIn('except Exception', src)
 
 
 # ---------------------------------------------------------------------------
@@ -16489,7 +16492,9 @@ class TestSamplingInputTableIsWritten(unittest.TestCase):
         import utils.jobdef as jd
         with patch.object(jd, '_get_source_type', return_value=source_type), \
              patch.object(jd, '_get_output_modules', return_value=[]), \
-             patch.object(jd, '_seed_needed', return_value=False):
+             patch.object(jd, '_seed_needed', return_value=False), \
+             patch.object(jd, '_get_fcl_value',
+                          side_effect=subprocess.CalledProcessError(1, 'fhicl-get')):
             return jd._parse_job_args(job_args, 'template.fcl', {})
 
     def test_samplinginput_source_gets_the_table(self):

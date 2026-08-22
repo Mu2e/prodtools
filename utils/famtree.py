@@ -28,6 +28,7 @@ Examples:
 import argparse
 import functools
 import os
+import sys
 
 # Package-first, bare fallback: one module identity when loaded as
 # utils.famtree (web dashboard, cron), but still works from bin/ stubs
@@ -102,8 +103,9 @@ def get_dataset_efficiency(dataset_name, samweb, max_files=10, verbosity=0):
         else:
             return (summary.passedevents, summary.genevents, summary.efficiency(), num_files_total, False)
 
-    except Exception:
-        # No gencount for this dataset, or other lookup failure.
+    except (ValueError, KeyError):
+        # No gencount / no files for this dataset (genFilterEff raises
+        # ValueError; a malformed metadata record raises KeyError).
         return None
 
 def generate_mermaid_diagram(file_name, node_id=0):
@@ -133,6 +135,21 @@ def generate_mermaid_diagram(file_name, node_id=0):
             nodes.extend(parent_data)
 
     return current_node, node_id, nodes + connections
+
+
+def _label_with_stats(lbl, samweb, cache, max_files):
+    """Node label with efficiency stats appended, when available. `cache`
+    maps dataset label -> get_dataset_efficiency result, so shared
+    ancestors (several nodes, one dataset) pay the SAM queries once."""
+    if lbl not in cache:
+        cache[lbl] = get_dataset_efficiency(lbl, samweb, max_files=max_files)
+    stats = cache[lbl]
+    if not stats:
+        return lbl
+    passed, generated, eff, num_files, is_extrapolated = stats
+    extrapolated_note = " (extrapolated)" if is_extrapolated else ""
+    return (f"{lbl}<br/>eff={eff:.4f}, trig: {passed}, gen: {generated}"
+            f"{extrapolated_note}<br/>nfiles={num_files}")
 
 
 def main():
@@ -187,16 +204,8 @@ def main():
     for part in diagram_parts:
         if isinstance(part, tuple) and len(part) == 2 and isinstance(part[0], str):
             nid, lbl = part
-
             if args.stats and samweb:
-                if lbl not in stats_cache:
-                    stats_cache[lbl] = get_dataset_efficiency(lbl, samweb, max_files=args.max_files)
-                stats = stats_cache[lbl]
-                if stats:
-                    passed, generated, eff, num_files, is_extrapolated = stats
-                    extrapolated_note = " (extrapolated)" if is_extrapolated else ""
-                    lbl = f"{lbl}<br/>eff={eff:.4f}, trig: {passed}, gen: {generated}{extrapolated_note}<br/>nfiles={num_files}"
-            
+                lbl = _label_with_stats(lbl, samweb, stats_cache, args.max_files)
             nodes.append(f'    {nid}["{lbl}"]')
         elif isinstance(part, str):
             connections.append(part)
@@ -246,8 +255,10 @@ def main():
                 convert_to_format('svg')
         except subprocess.CalledProcessError as e:
             print(f"Error converting diagram: {e}")
+            sys.exit(1)
         except FileNotFoundError:
             print("Error: mmdc command not found. Install with: npm install -g @mermaid-js/mermaid-cli")
+            sys.exit(1)
 
 if __name__ == '__main__':
     main()

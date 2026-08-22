@@ -257,7 +257,7 @@ def kill_job(proc, log=None):
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(proc.pid, sig)
-        except (ProcessLookupError, PermissionError, OSError) as exc:
+        except OSError as exc:
             if log:
                 log.write(f"[local] could not signal job group: {exc}\n")
             break

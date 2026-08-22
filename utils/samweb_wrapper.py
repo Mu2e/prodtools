@@ -7,14 +7,15 @@ Callers must not hand-write "dh.dataset ..." / "defname: ..." strings;
 they call a named query method, or build the string with a q_* helper
 when the query itself is an argument (e.g. create_definition).
 
-Error-mode policy:
-- Named query methods (files_in_dataset, dataset_file_count, ...) fail
-  loud: a SAM outage raises instead of masquerading as an empty/zero
-  result.
-- Legacy generic passthroughs (list_files, count_files, ...) keep their
-  historical swallow-and-default behavior; some callers rely on it
-  (e.g. prod_utils uses describe_definition() == '' as an existence
-  check).
+Error-mode policy: every method fails loud. A SAM outage, expired
+token or malformed query raises (samweb_client.exceptions.Error or a
+subclass) instead of masquerading as an empty/zero result. An empty
+return means SAM answered "no files" / "no locations", nothing else.
+The one exception is locate_file(), which maps FileNotFound to "" —
+a file SAM does not know has no location, and its callers use that
+as an existence probe. definition_creation_date() is a documented
+dashboard fail-soft: a missing date is None, but only for SAM-raised
+errors.
 """
 
 import functools
@@ -24,6 +25,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from samweb_client import SAMWebClient #type: ignore
+from samweb_client import Error as SAMError, FileNotFound  # type: ignore
 
 
 # SAM rejects getMultipleMetadata outright above this many names
@@ -126,32 +128,25 @@ class SAMWebWrapper:
         self.client = SAMWebClient(experiment=experiment)
     
     def count_files(self, query: str) -> int:
-        """Count files matching a query (equivalent to samweb count-files)."""
-        try:
-            return self.client.countFiles(query)
-        except Exception as e:
-            print(f"Error counting files: {e}")
-            return 0
-    
-    
+        """Count files matching a query (equivalent to samweb count-files).
+        Raises on SAM errors."""
+        return self.client.countFiles(query)
+
     def list_files(self, query: str) -> List[str]:
-        """List files matching a query (equivalent to samweb list-files)."""
-        try:
-            return self.client.listFiles(query)
-        except Exception as e:
-            print(f"Error listing files: {e}")
-            return []
-    
+        """List files matching a query (equivalent to samweb list-files).
+        Raises on SAM errors; [] means SAM matched nothing."""
+        return self.client.listFiles(query)
+
     def locate_file(self, filename: str) -> str:
-        """Locate a file (equivalent to samweb locate-file)."""
+        """First location of a file (equivalent to samweb locate-file),
+        or "" when the file is unknown to SAM or has no locations —
+        the existence-probe contract json2jobdef's pushout path uses.
+        Every other SAM error (outage, auth) raises."""
         try:
             locations = self.client.locateFile(filename)
-            if locations:
-                return locations[0]  # Return first location
+        except FileNotFound:
             return ""
-        except Exception as e:
-            print(f"Error locating file {filename}: {e}")
-            return ""
+        return locations[0] if locations else ""
     
     def create_definition(self, definition_name: str, query: str) -> None:
         """Create a definition (equivalent to samweb create-definition).
@@ -165,40 +160,30 @@ class SAMWebWrapper:
         self.client.deleteDefinition(definition_name)
     
     def describe_definition(self, definition_name: str) -> str:
-        """Describe a definition (equivalent to samweb describe-definition)."""
-        try:
-            return self.client.descDefinition(definition_name)
-        except Exception as e:
-            print(f"Error describing definition {definition_name}: {e}")
-            return ""
+        """Describe a definition (equivalent to samweb describe-definition).
+        Raises on SAM errors (DefinitionNotFound included)."""
+        return self.client.descDefinition(definition_name)
     
     def list_definition_files(self, definition_name: str, availability: str = "anylocation") -> List[str]:
         """List files in a definition (equivalent to samweb list-definition-files).
-        availability constrains e.g. to 'anylocation' or 'physical'."""
-        try:
-            return self.client.listFiles(_q_definition_files(definition_name, availability))
-        except Exception as e:
-            print(f"Error listing definition files for {definition_name}: {e}")
-            return []
+        availability constrains e.g. to 'anylocation' or 'physical'.
+        Raises on SAM errors; [] means the definition is empty."""
+        return self.client.listFiles(_q_definition_files(definition_name, availability))
 
     def first_file_in_definition(self, definition_name: str,
                                  availability: str = "anylocation") -> Optional[str]:
         """First file of a SAM definition without transferring the full
         list (streamed listFiles, closed after one name — a dataset can
-        hold 100k files). Returns None on SAM errors or an empty
-        definition, matching list_definition_files' swallow semantics."""
+        hold 100k files). Returns None for an empty definition; raises
+        on SAM errors."""
+        stream = self.client.listFiles(
+            _q_definition_files(definition_name, availability), stream=True)
         try:
-            stream = self.client.listFiles(
-                _q_definition_files(definition_name, availability), stream=True)
-            try:
-                return next(iter(stream), None)
-            finally:
-                close = getattr(stream, 'close', None)
-                if close:
-                    close()
-        except Exception as e:
-            print(f"Error listing definition files for {definition_name}: {e}")
-            return None
+            return next(iter(stream), None)
+        finally:
+            close = getattr(stream, 'close', None)
+            if close:
+                close()
 
     def file_sizes_in_dataset(self, dataset: str) -> Dict[str, int]:
         """{filename: file_size} for a dataset via one list-files
@@ -209,22 +194,20 @@ class SAMWebWrapper:
                 for fi in self.client.listFiles(dimensions=q, fileinfo=True)}
 
     def get_metadata(self, filename: str) -> Dict:
-        """Get metadata for a file (equivalent to samweb get-metadata)."""
-        try:
-            return self.client.getMetadata(filename)
-        except Exception as e:
-            print(f"Error getting metadata for {filename}: {e}")
-            return {}
+        """Get metadata for a file (equivalent to samweb get-metadata).
+        Raises on SAM errors (FileNotFound included)."""
+        return self.client.getMetadata(filename)
 
     def definition_creation_date(self, defname: str) -> Optional[datetime]:
         """Creation time of a SAM definition as a naive datetime, or None
         if unavailable. Prefers the structured JSON describe, falls back
         to parsing the text rendering (older servers). Fail-soft: an
-        unknown date is treated as absent, not fatal, by dashboards."""
+        unknown date is treated as absent, not fatal, by dashboards —
+        but only for SAM-raised errors; anything else propagates."""
         info = None
         try:
             info = self.client.descDefinitionDict(defname)
-        except Exception:
+        except SAMError:
             pass
         if isinstance(info, dict):
             for key in ('create_time', 'creation_date'):
@@ -232,26 +215,24 @@ class SAMWebWrapper:
                 if parsed:
                     return parsed
         # Text fallback: "Creation Date: 2025-09-03T11:46:14+00:00"
-        match = re.search(r'Creation Date:\s+(.+)', self.describe_definition(defname))
+        try:
+            text = self.describe_definition(defname)
+        except SAMError:
+            return None
+        match = re.search(r'Creation Date:\s+(.+)', text)
         return _parse_sam_datetime(match.group(1)) if match else None
     
     def file_lineage(self, filename: str, lineage_type: str = 'parents') -> List[str]:
         """Get file lineage via SAM client getFileLineage.
         lineage_type: 'parents', 'children', 'ancestors', 'descendants',
-        or 'rawancestors'."""
-        try:
-            result = self.client.getFileLineage(lineage_type, filename)
-            return [item['file_name'] for item in result if 'file_name' in item]
-        except Exception as e:
-            print(f"Error getting file lineage {lineage_type} for {filename}: {e}")
-            return []
+        or 'rawancestors'. Raises on SAM errors; [] means SAM recorded
+        no lineage of that kind (e.g. a primary has no parents)."""
+        result = self.client.getFileLineage(lineage_type, filename)
+        return [item['file_name'] for item in result if 'file_name' in item]
 
     # -----------------------------------------------------------------
-    # Named queries — fail loud.
-    # Unlike the legacy passthroughs above, these do NOT swallow
-    # exceptions: a SAM outage raises instead of masquerading as an
-    # empty/zero result. Callers that can tolerate absence handle it
-    # themselves, visibly.
+    # Named queries. Like everything above, these raise on SAM errors;
+    # callers that can tolerate absence handle it themselves, visibly.
     # -----------------------------------------------------------------
 
     def files_in_dataset(self, dataset: str, with_events: bool = False,
@@ -284,12 +265,10 @@ class SAMWebWrapper:
         """Files that are parents of `filename`, excluding the etc.*.txt
         bookkeeping entries (same filter famtree.get_parents applies).
 
-        Fail-loud twin of file_lineage(filename, 'parents'), which
-        swallows every exception and returns []. For a lineage caller
-        that empty list is indistinguishable from 'this is a primary
-        with no parents' — an expired token or SAM outage would render
-        as a confident, wrong answer. Use this when you must tell
-        absence from failure."""
+        Twin of file_lineage(filename, 'parents') built on list-files
+        rather than getFileLineage; both raise on SAM errors, so an
+        expired token or SAM outage never renders as 'this is a primary
+        with no parents'."""
         parents = self.client.listFiles(_q_parents_of_file(filename))
         return [p for p in parents
                 if not (p.startswith('etc.') and p.endswith('.txt'))]
@@ -299,9 +278,9 @@ class SAMWebWrapper:
         return self.client.listFiles(_q_dataset_like(pattern, sequencer))
 
     def locate_file_strict(self, filename: str) -> List[Dict]:
-        """locate_file_full without the error swallowing — for the worker
-        fcl-generation path, where a masked SAM error must not surface as
-        a misleading 'file not found'."""
+        """Full locate record list (no first-record pick, no FileNotFound
+        mapping) — for the worker fcl-generation path, where an unknown
+        file must raise rather than read as 'no location'."""
         return self.client.locateFile(filename)
 
     def locate_files_strict(self, filenames: List[str]) -> Dict[str, List[Dict]]:

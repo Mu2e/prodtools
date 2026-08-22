@@ -378,28 +378,40 @@ class Mu2eJobBase:
                 nreq = len(infiles)
 
             if sequential_aux:
-                nf = len(infiles)
-                first = index * nreq
-                last = min(first + nreq - 1, nf - 1)
-                if first >= nf:
-                    first = first % nf
-                    last = min(first + nreq - 1, nf - 1)
-                if first > last:
-                    raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
-                result[dataset] = infiles[first:last + 1]
+                result[dataset] = self._sequential_slice(infiles, nreq, index)
             else:
-                sample = []
-                available_files = infiles.copy()
-                for _ in range(nreq):
-                    if not available_files:
-                        break
-                    rnd = self._my_random(index, *available_files)
-                    file_index = rnd % len(available_files)
-                    sample.append(available_files[file_index])
-                    available_files.pop(file_index)
-                result[dataset] = sample
+                result[dataset] = self._sampled(infiles, nreq, index)
 
         return result
+
+    @staticmethod
+    def _sequential_slice(infiles, nreq, index):
+        """`nreq` files starting at index*nreq, rolling over past the end."""
+        nf = len(infiles)
+        first = index * nreq
+        last = min(first + nreq - 1, nf - 1)
+        if first >= nf:
+            first = first % nf
+            last = min(first + nreq - 1, nf - 1)
+        if first > last:
+            raise ValueError(f"job_aux_inputs(): invalid index {index} for sequential selection")
+        return infiles[first:last + 1]
+
+    def _sampled(self, infiles, nreq, index):
+        """`nreq` files sampled without repetition. The
+        `_my_random(index, *available_files)` call order is a seed
+        contract with mu2ejobfcl — do not change the argument order or
+        the number of calls."""
+        sample = []
+        available_files = infiles.copy()
+        for _ in range(nreq):
+            if not available_files:
+                break
+            rnd = self._my_random(index, *available_files)
+            file_index = rnd % len(available_files)
+            sample.append(available_files[file_index])
+            available_files.pop(file_index)
+        return sample
 
     def job_sampling_inputs(self, index):
         """Sampling input files for job index.

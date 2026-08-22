@@ -101,9 +101,9 @@ def _seed_needed(template_path: str) -> bool:
     """True if services.SeedService is configured (Perl seedNeeded() parity)."""
     try:
         svclist = _run_fhicl_get(template_path, '--names-in', 'services')
-        return sum(1 for service in svclist.split('\n') if service == 'SeedService')
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return 0  # fhicl-get failure/absence -> not needed (Perl's 2>/dev/null)
+        return any(service == 'SeedService' for service in svclist.split('\n'))
+    except subprocess.CalledProcessError:
+        return False  # no services block -> not needed (Perl's 2>/dev/null)
 
 
 def _get_output_modules(template_path: str) -> List[str]:
@@ -130,7 +130,7 @@ def _get_output_modules(template_path: str) -> List[str]:
             for m in mods:
                 if m:
                     endmodules.add(m)
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except subprocess.CalledProcessError:
             continue
 
     active_outmods = []
@@ -501,7 +501,7 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         if tfileservice_filename and tfileservice_filename.strip() and tfileservice_filename.strip() != '/dev/null':
             defer_keys = config.get('_defer_keys', set()) if config else set()
             _add_outfile(tbs, 'services.TFileService.fileName', tfileservice_filename, config, defer_keys=defer_keys)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError:
         pass  # not defined; skip
 
     if args_state['auxin']:
@@ -559,15 +559,19 @@ def get_output_dataset_names(config: Dict) -> List[str]:
             try:
                 pattern = _run_fhicl_get(
                     template_path, '--atom-as', f'outputs.{mod}.fileName')
-                resolved = _replace_placeholders(pattern, config)
-                try:
-                    n = Mu2eName.parse(resolved)
-                except ValueError:
-                    continue
-                if n.is_file:
-                    datasets.append(str(n.dataset))
-            except subprocess.CalledProcessError:
+            except subprocess.CalledProcessError as e:
+                # An output module on an end path with no fileName is a
+                # template bug, not an "unknown dataset".
+                raise RuntimeError(
+                    f"active output module '{mod}' has no outputs.{mod}.fileName "
+                    f"in {fcl_path}") from e
+            resolved = _replace_placeholders(pattern, config)
+            try:
+                n = Mu2eName.parse(resolved)
+            except ValueError:
                 continue
+            if n.is_file:
+                datasets.append(str(n.dataset))
     finally:
         if os.path.exists(template_path):
             os.unlink(template_path)

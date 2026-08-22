@@ -206,7 +206,7 @@ def _attach_cluster(row_id, result, options):
             cluster_id=result['cluster_id'])
         print(f"Ledger: row {row_id} attached to cluster "
               f"{result['cluster_id']} in {options.ledger_db}")
-    except Exception as e:
+    except (sqlite3.Error, OSError) as e:
         print(f"WARNING: ledger attach failed ({e}) — the submission DID "
               f"go through (cluster {result['cluster_id']}). Row {row_id} "
               f"is still 'submitting'; set it active by hand: "
@@ -224,7 +224,7 @@ def _fail_reservation(row_id, result, options):
             f"submit failed (status={result.get('status')}); window NOT "
             f"proven free — check jobsub_q before reusing these indices")
         print(f"Ledger: row {row_id} marked failed in {options.ledger_db}")
-    except Exception as e:
+    except (sqlite3.Error, OSError) as e:
         print(f"WARNING: could not mark row {row_id} failed ({e}); it "
               f"remains 'submitting' in {options.ledger_db}")
 
@@ -243,30 +243,30 @@ def _log_submission(firstjob, jobset, result, options, files=None):
     origin (manual, cron slice, recovery resubmit). Never raises: the
     attempt already happened, so a log problem must not crash the
     submit."""
+    if files is not None:
+        idx_line = (f"files: {len(files)} "
+                    f"[{files[0]} .. {files[-1]}]")
+    else:
+        absolute = [firstjob + i for i in jobset]
+        idx_line = (f"indices: {len(absolute)} absolute "
+                    f"[{absolute[0]}..{absolute[-1]}]"
+                    if absolute else "indices: none")
+    block = '\n'.join([
+        f"=== {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
+        f"user={getpass.getuser()} status={result['status']}",
+        f"origin={options.origin} tarball={result['tarball']}",
+        idx_line,
+        f"cluster={result['cluster_id']} "
+        f"jobsub_id={result.get('jobsub_id')}",
+        "--- jobsub output ---",
+        result.get('raw_output', '').rstrip(),
+        "=== end",
+        "",
+    ])
     try:
-        if files is not None:
-            idx_line = (f"files: {len(files)} "
-                        f"[{files[0]} .. {files[-1]}]")
-        else:
-            absolute = [firstjob + i for i in jobset]
-            idx_line = (f"indices: {len(absolute)} absolute "
-                        f"[{absolute[0]}..{absolute[-1]}]"
-                        if absolute else "indices: none")
-        block = '\n'.join([
-            f"=== {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
-            f"user={getpass.getuser()} status={result['status']}",
-            f"origin={options.origin} tarball={result['tarball']}",
-            idx_line,
-            f"cluster={result['cluster_id']} "
-            f"jobsub_id={result.get('jobsub_id')}",
-            "--- jobsub output ---",
-            result.get('raw_output', '').rstrip(),
-            "=== end",
-            "",
-        ])
         with open(_submission_log_path(options.ledger_db), 'a') as fh:
             fh.write(block + '\n')
-    except Exception as e:
+    except OSError as e:
         print(f"WARNING: submit-log write failed ({e}) — submission "
               f"outcome unaffected (status={result['status']})")
 
@@ -418,31 +418,9 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     _validate_entry_values(entry)
     _refuse_outstage_campaign(entry)
     if is_draining(entry):
-        err = _validate_draining_entry(entry)
-        if err:
-            sys.exit(f"json2jobdef: {err}")
-        tarball_path = _ensure_local_tarball(tarball_of(entry))
-        # No check_inputs: a generic cnf bakes no inputs — the tick gates
-        # each batch (residency + settling age) at dispatch. Code
-        # tarball still has to match, though.
-        _gate_code_tarball(entry, tarball_path)
-        snap = _snapshot_entry(entry, resources)
-        if dry_run:
-            print(f"[DRY RUN] would enqueue draining campaign: "
-                  f"{tarball_of(entry)} "
-                  f"pattern={entry['input_pattern']} "
-                  f"slice={slice_size}")
-            return None
-        try:
-            camp_id = submission_ledger.create_campaign(
-                ledger_db, tarball=tarball_of(entry), entry=snap,
-                slice_size=slice_size, origin=provenance)
-        except (ValueError, sqlite3.Error) as e:
-            sys.exit(f"json2jobdef: {e}")
-        print(f"Enqueued draining campaign {camp_id}: "
-              f"{tarball_of(entry)} pattern={entry['input_pattern']} "
-              f"slice={slice_size} (db {ledger_db})")
-        return camp_id
+        return _enqueue_draining(entry, ledger_db=ledger_db,
+                                 slice_size=slice_size, dry_run=dry_run,
+                                 resources=resources, provenance=provenance)
 
     tarball_path = _ensure_local_tarball(tarball_of(entry))
     ok, problems = check_inputs(str(tarball_path), inloc_of(entry))
@@ -468,15 +446,46 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
               f"{tarball_of(entry)} njobs={njobs} "
               f"slice={slice_size}")
         return None
+    camp_id = _create_campaign(ledger_db, entry, snap, slice_size, provenance)
+    print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
+          f"njobs={njobs} slice={slice_size} (db {ledger_db})")
+    return camp_id
+
+
+def _enqueue_draining(entry, *, ledger_db, slice_size, dry_run,
+                      resources, provenance):
+    """Draining-entry tail of enqueue_entry (generic cnf + input_pattern)."""
+    err = _validate_draining_entry(entry)
+    if err:
+        sys.exit(f"json2jobdef: {err}")
+    tarball_path = _ensure_local_tarball(tarball_of(entry))
+    # No check_inputs: a generic cnf bakes no inputs — the tick gates
+    # each batch (residency + settling age) at dispatch. Code
+    # tarball still has to match, though.
+    _gate_code_tarball(entry, tarball_path)
+    snap = _snapshot_entry(entry, resources)
+    if dry_run:
+        print(f"[DRY RUN] would enqueue draining campaign: "
+              f"{tarball_of(entry)} "
+              f"pattern={entry['input_pattern']} "
+              f"slice={slice_size}")
+        return None
+    camp_id = _create_campaign(ledger_db, entry, snap, slice_size, provenance)
+    print(f"Enqueued draining campaign {camp_id}: "
+          f"{tarball_of(entry)} pattern={entry['input_pattern']} "
+          f"slice={slice_size} (db {ledger_db})")
+    return camp_id
+
+
+def _create_campaign(ledger_db, entry, snap, slice_size, provenance):
+    """Single home of the create_campaign call and its one-line exit on
+    a ledger/validation error (nothing has been submitted yet)."""
     try:
-        camp_id = submission_ledger.create_campaign(
+        return submission_ledger.create_campaign(
             ledger_db, tarball=tarball_of(entry), entry=snap,
             slice_size=slice_size, origin=provenance)
     except (ValueError, sqlite3.Error) as e:
         sys.exit(f"json2jobdef: {e}")
-    print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
-          f"njobs={njobs} slice={slice_size} (db {ledger_db})")
-    return camp_id
 
 
 def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
@@ -762,11 +771,10 @@ def submit_entry(entry, idx, options):
         output_filenames, outputs_of(entry)))
     if output_filenames:
         log_location = log_storage_location(entry)
-        try:
-            first_out = Mu2eName.parse(output_filenames[0])
-        except ValueError:
-            first_out = None
-        if first_out is not None and first_out.is_file:
+        # A cnf output that does not parse is a broken cnf: a silently
+        # skipped log scope surfaces as a 403 on the worker's log push.
+        first_out = Mu2eName.parse(output_filenames[0])
+        if first_out.is_file:
             log_fname = str(first_out.as_tier('log').with_extension('log'))
             log_scope = _jobsub_argv.storage_scope_for_file(log_fname, log_location)
             if log_scope:
