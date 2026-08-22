@@ -1,5 +1,0 @@
-PROXYMOUNT=""
-[ "$X509_USER_PROXY" ] && PROXYMOUNT=" -B $(dirname $X509_USER_PROXY) "
-apptainer exec -B /cvmfs -B $PWD -B /pnfs -B $HOME -B /exp/mu2e/app/users/oksuzian/node/ -B/exp/mu2e/app/users/oksuzian/.claude \
-  --env DISPLAY=$DISPLAY -e $PROXYMOUNT \
-/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-wn-el9:latest /bin/bash
