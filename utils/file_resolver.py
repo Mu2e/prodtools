@@ -250,8 +250,8 @@ def infer_dataset_location(dataset_name, first_file=_UNSET) -> str:
     the caller already fetched. Fail-soft for SAM-raised errors and
     malformed names only: dashboard consumers treat an unknown location
     as 'N/A', not fatal. Anything else propagates."""
-    from .samweb_wrapper import first_file_in_definition, locate_file_strict
-    from samweb_client.exceptions import Error as SAMError  # type: ignore
+    from .samweb_wrapper import (SAMError, first_file_in_definition,
+                                 locate_file_strict)
     try:
         if first_file is _UNSET:
             first_file = first_file_in_definition(dataset_name)

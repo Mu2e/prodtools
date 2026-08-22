@@ -16677,3 +16677,28 @@ class TestCopyToStashCliExit(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestInferDatasetLocationImports(unittest.TestCase):
+    """The function body imports SAMError lazily; it must execute under the
+    deployed samweb_client, which is a single module (no `.exceptions`).
+    Every _gate_batch test injects dataset_location=, so nothing else
+    runs this line."""
+
+    def test_real_function_runs_with_sam_patched(self):
+        from utils import file_resolver
+        with patch('utils.samweb_wrapper.first_file_in_definition',
+                   return_value='sim.mu2e.X.v1.001.art'), \
+             patch('utils.samweb_wrapper.locate_file_strict',
+                   return_value=[{'location': 'enstore:/pnfs/mu2e/tape/x',
+                                  'location_type': 'tape'}]):
+            self.assertEqual(file_resolver.infer_dataset_location('sim.mu2e.X.v1.art'),
+                             'enstore')
+
+    def test_sam_error_is_caught_not_import_error(self):
+        from utils import file_resolver
+        from utils.samweb_wrapper import SAMError
+        with patch('utils.samweb_wrapper.first_file_in_definition',
+                   side_effect=SAMError('SAM down')):
+            self.assertEqual(file_resolver.infer_dataset_location('sim.mu2e.X.v1.art'),
+                             'N/A')

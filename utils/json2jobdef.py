@@ -41,6 +41,8 @@ def _random_selection(files, total_needed: int, seed_source: str):
     ordered = sorted(files)  # sort first: deterministic regardless of SAM order
     rng = random.Random(seed_source)
     rng.shuffle(ordered)
+    if not ordered:
+        return []
     count = len(ordered)
     return [ordered[i % count] for i in range(total_needed)]
 
