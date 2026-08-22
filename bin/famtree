@@ -9,14 +9,11 @@
 #   famtree sim.mu2e.TargetStops.MDC2025ac.001430_00004022.art
 #
 
-# Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRODTOOLS_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Add prodtools to Python path
 export PYTHONPATH="$PRODTOOLS_DIR:$PYTHONPATH"
 
-# Run the Python script
 exec python3 "$PRODTOOLS_DIR/utils/famtree.py" "$@"
 
 

@@ -2,8 +2,7 @@
 """
 Shared base classes and utilities for Mu2e production tools.
 
-This module consolidates common functionality that was previously duplicated
-across multiple files to reduce code redundancy and ensure consistency.
+Consolidates functionality that used to be duplicated across files.
 """
 
 import json
@@ -14,17 +13,15 @@ import hashlib
 from typing import Dict, Optional, Union
 
 
-# The relative setup path a code-mode cnf carries, and the layout
-# `muse tarball` produces. Same string upstream uses: mu2ejobdef:45
+# The relative setup path a code-mode cnf carries, and the layout `muse
+# tarball` produces. Same string upstream uses: mu2ejobdef:45
 # (filename_tarsetup) and mu2eprodsys:337 (MU2EGRID_USERSETUP).
 CODE_SETUP_REL = 'Code/setup.sh'
 
-# Filename prefixes that mark a real Mu2e output file, as opposed to a
-# sink like /dev/null or a relative path. Single home: job_outputs uses
-# it to decide whether a name is worth re-sequencing, and runlocal uses
-# it to decide whether a name is worth globbing for. Two copies would
-# drift the first time a tier is added, and the second reader would
-# silently stop seeing that tier's files.
+# Filename prefixes marking a real Mu2e output file, vs. a sink like
+# /dev/null or a relative path. Single home: job_outputs uses it to
+# decide whether to re-sequence a name, runlocal to decide whether to
+# glob for it — two copies would drift the first time a tier is added.
 OUTPUT_TIERS = ('dts.', 'dig.', 'sim.', 'rec.', 'nts.', 'cnf.', 'mcs.')
 
 
@@ -60,25 +57,20 @@ _CAMPAIGN_RE = re.compile(r"^(MDC\d{4}[a-z]*|Run\d+[A-Z]?[a-z]*)")
 class Mu2eName:
     """Parse and build Mu2e dot-names (file / dataset / tarball).
 
-    The Mu2e dot-name grammar covers three forms:
+    Grammar covers three forms:
       FILE     = tier.owner.description.dsconf.sequencer.extension     (6 fields)
       DATASET  = tier.owner.description.dsconf.extension               (5 fields)
       TARBALL  = cnf.owner.description.dsconf.<index>.tar              (6 fields)
 
     Sequencer (when present) is one opaque chunk like `001430_00000052`.
-    Tarballs are syntactically 6-field but their slot-4 is an integer index,
-    not a sequencer.
-
-    Construction:
-      Mu2eName.parse(s)        - accept any of the three forms
-      Mu2eName.build(...)      - assemble from named fields
-
-    Fields are exposed as read-only attributes; derivations
+    Tarballs are syntactically 6-field but slot-4 is an integer index,
+    not a sequencer. `Mu2eName.parse(s)` accepts any of the three forms;
+    `Mu2eName.build(...)` assembles from named fields. Derivations
     (`.dataset`, `.with_sequencer`, `.as_tier`, ...) return new
-    Mu2eName instances rather than mutating in place.
+    instances rather than mutating in place.
 
     `relpathname()` reproduces the Perl Mu2eFilename hash-prefixed path
-    (SHA256 of the basename) for parity with the legacy tooling.
+    for parity with the legacy tooling.
     """
 
     __slots__ = ("filename", "tier", "owner", "description", "dsconf",
@@ -222,30 +214,21 @@ class Mu2eName:
 def log_storage_location(outputs) -> str:
     """Where a job's log dataset goes, given its map-entry outputs list.
 
-    Mu2e convention: logs live on persistent disk
-    (`/pnfs/mu2e/persistent/datasets/phy-etc/log/...`) regardless of where
-    the data lands, so they stay cheap to read without a tape recall. This
-    matches push_logs()'s 'disk' default (and what the retired POMS path did).
+    Mu2e convention: logs live on persistent disk regardless of where the
+    data lands, so they stay cheap to read without a tape recall (matches
+    push_logs()'s 'disk' default). Two exceptions where 'disk' is wrong:
+    `scratch` — a non-mu2epro account with data on scratch lacks
+    storage.modify on /mu2e/persistent/datasets, so a 'disk' log push
+    would 403 (those runs keep logs beside their data); and `outstage` —
+    the data was never declared to SAM, so a declared log would list
+    parents SAM never heard of (the log follows the data into
+    $MU2EGRID_WFOUTSTAGE, also undeclared).
 
-    There are two exceptions, both cases where a 'disk' log is not merely
-    unconventional but wrong:
+    Do NOT let logs inherit 'tape' — small logs on tape are wasteful and
+    diverge from every sibling dataset (regression fixed 2026-07-21 after
+    the first direct campaign put 500 logs on tape).
 
-    `scratch` — a non-mu2epro account whose data goes to scratch has no
-    storage.modify scope on /mu2e/persistent/datasets, so a 'disk' log
-    push would 403. Those runs keep logs beside their data.
-
-    `outstage` — the data was never declared to SAM, so a declared log
-    would list parents SAM has never heard of. The log follows the data
-    into $MU2EGRID_WFOUTSTAGE and is not declared either.
-
-    Do NOT let logs inherit 'tape' from the data outputs — small log files
-    on tape are wasteful and diverge from every earlier campaign's sibling
-    dataset. (Regression fixed 2026-07-21 after the first direct campaign
-    put 500 logs on tape.)
-
-    Accepts the bare outputs list (`[{'location': ..., 'dataset': ...}, ...]`)
-    or a map-entry dict containing one. Used by submit.py (to scope the
-    worker token) and runmu2e.py (to place the push).
+    Accepts the bare outputs list or a map-entry dict containing one.
     """
     if isinstance(outputs, dict):
         outputs = outputs.get('outputs')
@@ -261,14 +244,7 @@ def default_owner() -> str:
 
 
 def remove_storage_prefix(path: str) -> str:
-    """Remove storage system prefixes (enstore:, dcache:) from a file path.
-    
-    Args:
-        path: File path that may have storage prefix
-    
-    Returns:
-        Path with storage prefix removed
-    """
+    """Strip a leading storage-system prefix (enstore:, dcache:) if present."""
     if path.startswith('enstore:'):
         return path[8:]
     elif path.startswith('dcache:'):
@@ -277,12 +253,12 @@ def remove_storage_prefix(path: str) -> str:
 
 
 def tbs_capacity(tbs, context=''):
-    """Max job count supported by a tbs dict's frozen input lists — the
-    single home of the ceil-div arithmetic, shared by the tarball reader
+    """Max job count supported by a tbs dict's frozen input lists — single
+    home of the ceil-div arithmetic, shared by the tarball reader
     (Mu2eJobBase.njobs) and the writer (jobdef._resolve_njobs).
 
     Returns None when tbs carries neither inputs nor samplinginput
-    (generator / generic jobdefs — capacity is not derivable from tbs).
+    (generator / generic jobdefs — capacity isn't derivable from tbs).
     """
     where = f" in {context}" if context else ""
 
@@ -309,22 +285,18 @@ def tbs_capacity(tbs, context=''):
 
 
 class Mu2eJobBase:
-    """Base class for Mu2e job handling classes.
-
-    Provides common functionality for extracting data from job definition
-    tarballs, generating deterministic random numbers, and computing the
-    per-job input file lists (primary / aux / sampling).
+    """Base class for Mu2e job handling classes: extracting data from job
+    definition tarballs, generating deterministic random numbers, and
+    computing per-job input file lists (primary / aux / sampling).
     """
 
     def __init__(self, jobdef_path: str):
-        """Initialize with path to job definition tarball; extract jobpars.json."""
         self.jobdef = jobdef_path
         self._member_cache = {}
         self.json_data = self._extract_json()
-        # owner/dsconf feed the `.owner.`/`.version.` placeholder substitution
-        # in job_outputs(). jobpars.json built by mu2ejobdef has no top-level
-        # owner/dsconf keys, so these normally resolve to the environment
-        # defaults — same behavior Mu2eJobFCL always had.
+        # Feed the `.owner.`/`.version.` placeholder substitution in
+        # job_outputs(). mu2ejobdef's jobpars.json has no top-level
+        # owner/dsconf keys, so these normally resolve to env defaults.
         self.owner = self.json_data.get('owner', default_owner())
         self.dsconf = self.json_data.get('dsconf', 'unknown')
 
@@ -351,18 +323,11 @@ class Mu2eJobBase:
         return self._member_cache[suffix]
 
     def _extract_json(self) -> dict:
-        """Extract jobpars.json from the tarball.
-
-        Consolidated implementation from the former per-class copies.
-        """
+        """Extract jobpars.json from the tarball."""
         return json.loads(self._extract_member('jobpars.json'))
-    
-    def _my_random(self, *args) -> int:
-        """Generate deterministic random number from inputs.
 
-        Consolidated implementation from the former per-class copies.
-        Uses SHA256 hash to create deterministic pseudo-random numbers.
-        """
+    def _my_random(self, *args) -> int:
+        """Deterministic pseudo-random int from inputs, via SHA256."""
         h = hashlib.sha256()
         for arg in args:
             h.update(str(arg).encode())
@@ -370,12 +335,11 @@ class Mu2eJobBase:
         return int(h.hexdigest()[:8], 16)
 
     def job_primary_inputs(self, index):
-        """Get primary input files for job index.
+        """Primary input files for job index.
 
-        `tbs.inputs` maps each dataset to a (merge, filelist) tuple. Slices
-        the filelist by `[index*merge : index*merge+merge]` (clamped at end).
-        Raises ValueError if `index` is past the end.
-        Returns {} if no primary inputs configured.
+        `tbs.inputs` maps each dataset to a (merge, filelist) tuple, sliced
+        by `[index*merge : index*merge+merge]` (clamped at end). Raises
+        ValueError if `index` is past the end; {} if none configured.
         """
         tbs = self.json_data.get('tbs', {})
         inputs = tbs.get('inputs')
@@ -394,12 +358,12 @@ class Mu2eJobBase:
         return result
 
     def job_aux_inputs(self, index):
-        """Get auxiliary input files for job index.
+        """Auxiliary input files for job index.
 
         `tbs.auxin` maps each dataset to (nreq, infiles). When
-        `tbs.sequential_aux` is True, slice deterministically with rollover;
-        otherwise sample `nreq` files without repetition using `_my_random`.
-        Returns {} if no auxin configured.
+        `tbs.sequential_aux` is True, slice deterministically with
+        rollover; otherwise sample `nreq` files without repetition via
+        `_my_random`. {} if none configured.
         """
         tbs = self.json_data.get('tbs', {})
         auxin = tbs.get('auxin')
@@ -438,10 +402,10 @@ class Mu2eJobBase:
         return result
 
     def job_sampling_inputs(self, index):
-        """Get sampling input files for job index.
+        """Sampling input files for job index.
 
         `tbs.samplinginput` maps each dataset to (nreq, filelist), sliced
-        sequentially by index. Returns {} if no sampling input configured.
+        sequentially by index. {} if none configured.
         """
         tbs = self.json_data.get('tbs', {})
         samplinginput = tbs.get('samplinginput')
@@ -462,7 +426,7 @@ class Mu2eJobBase:
         return result
 
     def job_inputs(self, index):
-        """Get all input files for job index — merged primary + aux + sampling."""
+        """All input files for job index — merged primary + aux + sampling."""
         result = {}
         result.update(self.job_primary_inputs(index))
         result.update(self.job_aux_inputs(index))
@@ -470,11 +434,11 @@ class Mu2eJobBase:
         return result
 
     # ------------------------------------------------------------------
-    # Per-index job arithmetic. These are THE single implementation —
-    # the worker names its actual output files through them (via
-    # Mu2eJobFCL.generate_fcl), so every other consumer (submit,
-    # submissions, jobdef_lookup) must get identical answers.
-    # Formerly duplicated (divergently) in the deleted jobiodetail.py and in jobquery.py.
+    # Per-index job arithmetic. THE single implementation — the worker
+    # names its actual output files through them (Mu2eJobFCL.generate_fcl),
+    # so every other consumer (submit, submissions, jobdef_lookup) must
+    # get identical answers. Formerly duplicated (divergently) in the
+    # deleted jobiodetail.py and in jobquery.py.
     # ------------------------------------------------------------------
 
     def sequencer(self, index: int) -> str:
@@ -498,7 +462,6 @@ class Mu2eJobBase:
         if run:
             return f"{run:06d}_{index:08d}"
 
-        # Get sequencers from primary input files
         primary_inputs = self.job_primary_inputs(index)
         if not primary_inputs:
             raise ValueError("Error: get_sequencer(): unsupported JSON content")
@@ -511,16 +474,14 @@ class Mu2eJobBase:
         if not sequencers:
             raise ValueError("Error: get_sequencer(): no sequencers found in input files")
 
-        # Sort and get first sequencer
         sequencers.sort()
         parent_sequencer = sequencers[0]
 
-        # If sequencer_from_index is enabled, extract run number and use index as subrun
+        # sequencer_from_index: keep the parent's run, use index as subrun
         if tbs.get('sequencer_from_index', False) and '_' in parent_sequencer:
             parent_run = parent_sequencer.split('_')[0]
             return f"{parent_run}_{index:08d}"
 
-        # Otherwise, use the sequencer from input files directly
         return parent_sequencer
 
     def job_outputs(self, index: int,
@@ -543,24 +504,21 @@ class Mu2eJobBase:
         seq = override_seq if override_seq is not None else self.sequencer(index)
 
         for key, template in outfiles.items():
-            # The template may still contain placeholders that need to be resolved
-            # Replace placeholders with actual values
             resolved_template = template
             resolved_template = resolved_template.replace('.owner.', f'.{self.owner}.')
             resolved_template = resolved_template.replace('.version.', f'.{self.dsconf}.')
             resolved_template = resolved_template.replace('.sequencer.', f'.{seq}.')
-            # Also handle {sequencer} format (Python-style placeholder)
+            # {sequencer}: Python-style placeholder, same substitution
             resolved_template = resolved_template.replace('{sequencer}', seq)
-            # Substitute {desc} from fname at runtime (direct-input / generic tarball mode)
+            # {desc} comes from fname at runtime (direct-input / generic tarball mode)
             if override_desc is not None:
                 resolved_template = resolved_template.replace('{desc}', override_desc)
 
-            # Skip filenames that don't follow Mu2e naming convention (e.g., /dev/null, relative paths)
+            # Not a Mu2e-named file (e.g. /dev/null, a relative path) — leave as-is
             if not resolved_template.startswith(OUTPUT_TIERS):
                 result[key] = resolved_template
                 continue
 
-            # Update sequencer in the filename (parse then re-emit with new seq)
             result[key] = str(Mu2eName.parse(resolved_template).with_sequencer(seq))
 
         return result
@@ -607,16 +565,15 @@ class Mu2eJobBase:
         return {seed_key: 1 + index}
 
     def njobs(self) -> int:
-        """Get the number of jobs in the set.
+        """Number of jobs in the set.
 
-        Precedence: tbs.njobs (embedded at build time: the declared or
-        resolved campaign size) → capacity derived from the frozen input
-        lists (tbs_capacity) → 0.
-
-        0 means "open-ended": a legacy generator tarball built before
-        tbs.njobs existed, or a generic tarball (1 job per input fname).
-        For those the job count is a submit-time decision, authoritative
-        in the submission map — 0 is deliberately not a guess.
+        Precedence: tbs.njobs (declared/resolved campaign size, embedded
+        at build time) -> capacity from the frozen input lists
+        (tbs_capacity) -> 0. 0 means "open-ended": a legacy generator
+        tarball built before tbs.njobs existed, or a generic tarball (1
+        job per input fname) — job count is a submit-time decision,
+        authoritative in the submission map, so 0 is deliberately not a
+        guess.
         """
         tbs = self.json_data.get('tbs', {})
 
@@ -632,12 +589,11 @@ def expected_outputs_for(input_fname, job_pars):
 
     THE single home for the input->output name mapping: delegates to
     job_outputs(0, override_desc=, override_seq=) — the exact
-    substitution process_direct_input performs on the worker — so the
-    dispatcher, the verifier, and the worker cannot drift. Non-Mu2e-
-    named streams (paths like /dev/null) are dropped, mirroring
-    submit._read_cnf_facts. Raises ValueError on a malformed input name
-    and RuntimeError when the cnf yields no Mu2e-named outputs (fail
-    loud, never guess).
+    substitution process_direct_input performs on the worker — so
+    dispatcher, verifier and worker can't drift. Non-Mu2e-named streams
+    (e.g. /dev/null) are dropped, mirroring submit._read_cnf_facts.
+    Raises ValueError on a malformed input name, RuntimeError when the
+    cnf yields no Mu2e-named outputs (fail loud, never guess).
     """
     n = Mu2eName.parse(os.path.basename(input_fname))
     if not n.is_file:

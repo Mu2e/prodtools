@@ -1,11 +1,9 @@
 #!/bin/bash
 
-# Simple shell wrapper for json2jobdef.py
-# Sets up Mu2e environment and calls the Python script
+# Shell wrapper for json2jobdef.py: checks the Mu2e env, then execs the script.
 
-# Check if help is requested - pass through to Python script for complete help
+# --help/-h: pass through to Python for full help
 if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    # Find and execute the Python script with help
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PYTHON_SCRIPT="$SCRIPT_DIR/../utils/json2jobdef.py"
     
@@ -17,7 +15,6 @@ if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     exec python3 "$PYTHON_SCRIPT" "$@"
 fi
 
-# Check for no arguments
 if [[ $# -eq 0 ]]; then
     echo "Usage: json2jobdef [options]"
     echo "  --json <json_file>     Path to JSON configuration file (required)"
@@ -40,13 +37,11 @@ if [[ $# -eq 0 ]]; then
     exit 1
 fi
 
-# Check if SimJob is set up
 if [[ -z "$MUSE_DIR" ]] || ! command -v mu2e >/dev/null 2>&1; then
     echo "Error: Mu2e environment not set up. Run: muse setup ops, then muse setup SimJob <tag> (or source a Musing setup.sh)"
     exit 1
 fi
 
-# Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/../utils/json2jobdef.py"
 
@@ -55,5 +50,4 @@ if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     exit 1
 fi
 
-# Execute the Python script with all arguments
 exec python3 "$PYTHON_SCRIPT" "$@"

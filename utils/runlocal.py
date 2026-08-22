@@ -2,32 +2,29 @@
 """Run cnf jobs locally, several at a time.
 
 Two uses, one driver: smoking a handful of indices before submitting
-(`--nevts 10`), and producing art files on a local disk for study (full
+(`--nevts 10`), and producing art files on local disk for study (full
 events, no grid). Nothing here touches SAM: no pushOutput, no declare,
-no manifest. Outputs stay in the job's directory.
+no manifest.
 
 Job prep is the worker's own `runmu2e.process_jobdef`, so a local run
 exercises the same tarball fetch, inloc handling, chunk-mode
-materialization and `--copy-input` staging the grid will do. The only
-part not shared is the tail (push), which is exactly the part a local
-run must not have.
+materialization and `--copy-input` staging the grid will do — only the
+push tail is not shared, deliberately.
 
 Layout — one directory per job:
 
     <workdir>/job_<index>/       fcl, art outputs, art log, stdout.log
 
-The per-job directory is not cosmetic. `process_jobdef` works in cwd,
-and its `--copy-input` branch runs `mkdir indir; mv *.art indir/`;
-jobs sharing a directory would move each other's files. Each job
-therefore runs as a child process with `cwd=` its own directory —
-which also means the driver can print a single command that reproduces
-any one job by hand.
+Not cosmetic: `process_jobdef`'s `--copy-input` branch runs `mkdir
+indir; mv *.art indir/` in cwd, so jobs sharing a directory would move
+each other's files. Each job runs with `cwd=` its own directory, which
+also lets the driver print a single command that reproduces any job.
 
 Index semantics: `--first`/`--num` name cnf indices directly
-(`baseSeed = 1 + index`), and `--indices 0,3,7-9` names them one by
-one — for rerunning the exact jobs a grid pass lost, which are rarely
-contiguous. The synthesized jobdesc carries no `firstjob`, so there is
-no second index space to confuse it with.
+(`baseSeed = 1 + index`); `--indices 0,3,7-9` names them one by one, for
+rerunning the exact (often non-contiguous) jobs a grid pass lost. The
+synthesized jobdesc carries no `firstjob`, so there's no second index
+space to confuse it with.
 """
 
 import argparse
@@ -56,42 +53,37 @@ from utils.runmu2e import (
     process_jobdef,
 )
 
-# Four concurrent mu2e processes is ~10 GB resident. The driver prints
-# that arithmetic rather than guessing a node's free memory.
+# Four concurrent mu2e processes is ~10 GB resident; printed rather than
+# guessing a node's free memory.
 DEFAULT_PARALLEL = 4
 GB_PER_JOB = 2.5
 
-# Per-job wall clock. 24h matches the grid's default lease, so a local
-# run refuses to keep a job alive past the point where its grid twin
-# would already have been killed. A wedged mu2e is not rare and does not
-# announce itself: an I/O-stalled job has sat at flat CPU for 75 minutes
-# while its wall clock reached 23 hours.
+# 24h matches the grid's default lease, so a local run refuses to keep a
+# job alive past the point its grid twin would already be dead. A
+# wedged mu2e doesn't announce itself: an I/O-stalled job has sat at
+# flat CPU for 75 minutes while its wall clock reached 23 hours.
 DEFAULT_TIMEOUT = 24 * 3600
-# What a job that hit the limit reports. 124 is GNU timeout's value; the
-# summary also carries an explicit `timed_out` so no caller has to know
-# that convention.
+# 124 is GNU timeout's value; the summary also carries an explicit
+# `timed_out` so no caller has to know that convention.
 TIMEOUT_RC = 124
 # Between SIGTERM and SIGKILL. art traps SIGTERM to close its output
-# files; a job killed outright leaves a truncated .art behind that looks
-# like a real one.
+# files; killing outright leaves a truncated .art that looks real.
 KILL_GRACE_SECONDS = 10
 
 
 def output_globs(tarball):
     """Glob patterns matching what one job of this cnf writes.
 
-    `Mu2eJobBase.job_outputs` owns the placeholder rules — `.owner.`,
-    `.version.`, and the `.sequence.`/`.sequencer.` spelling live
-    jobpars use — so this asks it for the names with the sequencer and
-    `{desc}` wildcarded rather than resolved. The sequencer of an
-    input-driven job is not known until the inputs are resolved, and
-    the driver only needs to count and report files afterwards.
+    `Mu2eJobBase.job_outputs` owns the placeholder rules, so this asks
+    it for the names with sequencer and `{desc}` wildcarded rather than
+    resolved — an input-driven job's sequencer isn't known until inputs
+    resolve, and the driver only needs to count/report files afterward.
     """
     jp = Mu2eJobPars(tarball)
     globs = []
     for name in jp.job_outputs(0, override_desc='*', override_seq='*').values():
         # job_outputs passes non-file targets (a `/dev/null` sink)
-        # through untouched; only real datasets are worth globbing for.
+        # through untouched; only real datasets are worth globbing.
         if not name.startswith(OUTPUT_TIERS) or name in globs:
             continue
         globs.append(name)
@@ -101,9 +93,9 @@ def output_globs(tarball):
 def parse_index_spec(spec):
     """`'0,3,7-9'` -> `[0, 3, 7, 8, 9]`, sorted and deduplicated.
 
-    Ranges are inclusive at both ends, matching how a recovery list
-    reads ("indices 7 through 9 failed"). Raises ValueError on
-    anything else — a typo here would silently run the wrong jobs.
+    Ranges are inclusive at both ends ("indices 7 through 9 failed").
+    Raises ValueError on anything else — a typo here would silently run
+    the wrong jobs.
     """
     indices = []
     for token in spec.split(','):
@@ -123,10 +115,10 @@ def parse_index_spec(spec):
 
 
 def format_indices(indices):
-    """The inverse of `parse_index_spec`, collapsing runs back to `A-B`.
+    """Inverse of `parse_index_spec`, collapsing runs back to `A-B`.
 
-    Children and rerun lines carry this, so a 200-index window does
-    not become a 200-token argv.
+    Children and rerun lines carry this, so a 200-index window doesn't
+    become a 200-token argv.
     """
     parts = []
     start = prev = None
@@ -146,9 +138,9 @@ def format_indices(indices):
 def resolve_indices(args):
     """The list of cnf indices to run, from whichever flag named them.
 
-    `--indices` and `--first`/`--num` are alternatives, not layers: a
-    run that accepted both would have to decide whether the list is
-    clipped to the window, and either answer surprises someone.
+    `--indices` and `--first`/`--num` are alternatives, not layers:
+    accepting both would force a choice — clip the list to the window
+    or not — and either answer surprises someone.
     """
     if args.indices is not None:
         if args.first is not None or args.num is not None:
@@ -168,16 +160,14 @@ def synth_jobdesc(tarball, inloc, indices):
     """The jobdesc `process_jobdef` needs, built from CLI flags.
 
     `njobs` is one past the largest index because `resolve_entry_index`
-    rejects any index >= njobs and — with no `firstjob` — maps an index
-    to itself. Gaps in `indices` are not holes in the jobdesc: it
-    describes the cnf's index space, and the driver decides which of
-    those indices actually run. Deliberately no 'firstjob' key: the
-    local runner has ONE index space, the cnf's.
+    rejects any index >= njobs and, with no `firstjob`, maps an index to
+    itself. Gaps in `indices` aren't holes in the jobdesc — it describes
+    the cnf's index space; the driver decides which indices actually run.
 
-    `outputs` is passthrough for `process_jobdef`; its location is
-    never read on this path. It says `outstage` so that a jobdesc that
-    escapes into the submission path is refused by `enqueue_entry`
-    rather than quietly declaring local test output to SAM.
+    `outputs` is passthrough for `process_jobdef` (location is never read
+    on this path); it says `outstage` so a jobdesc that escapes into the
+    submission path is refused by `enqueue_entry` rather than quietly
+    declaring local test output to SAM.
     """
     return {
         'tarball': str(tarball),
@@ -198,8 +188,8 @@ def child_argv(index, args):
 
     Printed in the summary, so it must be runnable verbatim.
     """
-    # --indices, never --first/--num: one spelling for the child means
-    # one code path, whichever flag the user reached for.
+    # --indices, never --first/--num: one spelling for the child, one
+    # code path regardless of which flag the user reached for.
     argv = [sys.executable, str(args.entry_point),
             '--one', str(index),
             '--jobdef', str(args.jobdef),
@@ -207,15 +197,14 @@ def child_argv(index, args):
             '--indices', format_indices(args.indices),
             '--nevts', str(args.nevts)]
     if args.mu2e_options.strip():
-        # `--opt=value`, not `--opt value`: mu2e options start with a dash
-        # and argparse would read the next token as another flag.
+        # `--opt=value`, not `--opt value`: mu2e options start with a
+        # dash and argparse would read the next token as another flag.
         argv.append(f'--mu2e-options={args.mu2e_options}')
     if args.copy_input:
         argv.append('--copy-input')
     if getattr(args, 'code_root', None):
-        # Children get the already-unpacked directory, never --code:
-        # one unpack serves all of them, and the printed command must
-        # reproduce the job without redoing several GB of extraction.
+        # Children get the already-unpacked directory, never --code: one
+        # unpack serves all of them, no redoing several GB of extraction.
         argv.extend(['--code-root', args.code_root])
     return argv
 
@@ -240,14 +229,12 @@ class JobResult:
 def child_env():
     """The caller's environment minus the one variable that breaks a job.
 
-    Each job sources the cnf's own `simjob_setup`, which calls
-    museSetup; museSetup refuses to run when `MUSE_WORK_DIR` is already
-    set. So a caller who did `muse setup SimJob <tag>` first — the
-    habit, since most prodtools commands want it — loses every job to
-    `ERROR - Muse already setup for directory`, a message that names
-    Muse and never mentions runlocal. Dropping that one variable is the
-    same narrow fix the ksu wrappers use: unset MUSE_WORK_DIR only, not
-    MUSE_* (which would take MUSE_DIR with it) and not PATH.
+    Each job sources the cnf's own `simjob_setup`, which calls museSetup;
+    museSetup refuses to run when `MUSE_WORK_DIR` is already set, so a
+    caller who ran `muse setup SimJob <tag>` first (the usual habit)
+    loses every job to `ERROR - Muse already setup for directory`. Same
+    narrow fix the ksu wrappers use: unset MUSE_WORK_DIR only, not
+    MUSE_* (would take MUSE_DIR with it) and not PATH.
     """
     return {key: value for key, value in os.environ.items()
             if key != 'MUSE_WORK_DIR'}
@@ -256,16 +243,15 @@ def child_env():
 def kill_job(proc, log=None):
     """End a job: SIGTERM its process group, SIGKILL what survives.
 
-    The GROUP, not the process. The child is a re-exec of this module and
-    the `mu2e` it launches is a grandchild, so signalling only the direct
-    child would leave a wedged mu2e running with nothing left to reap it
-    — the exact runaway a timeout exists to end. `start_new_session` in
-    the launcher is what makes the child's pid its group id.
+    The GROUP, not the process: `mu2e` is a grandchild (the direct child
+    re-execs this module), so signalling only the direct child would
+    leave a wedged mu2e with nothing left to reap it. `start_new_session`
+    in the launcher makes the child's pid its group id.
     """
     if proc.pid is None or proc.pid <= 1:
         # killpg(0) signals the CALLER's process group — this driver and
-        # every other job it is running. A pid that low means something
-        # is already wrong; refuse rather than take the node down.
+        # every job it's running. A pid that low means something is
+        # already wrong; refuse rather than take the node down.
         raise ValueError(f"runlocal: refusing to signal process group "
                          f"{proc.pid}")
     for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -288,11 +274,9 @@ def _run_child(index, args, globs):
     """Launch one job in its own directory, capturing its output.
 
     A job that outlives `args.timeout` is killed and reported as
-    `TIMEOUT_RC`; the rest of the window keeps running, exactly as it
-    does around an ordinary failure. Without that, one wedged job holds
-    the driver open forever and no summary is ever written — the case a
-    scripted caller cannot distinguish from a machine that is simply
-    still busy.
+    `TIMEOUT_RC`; the rest of the window keeps running, same as around
+    an ordinary failure — otherwise one wedged job holds the driver open
+    forever with no summary ever written.
     """
     directory = job_dir(args.workdir, index)
     directory.mkdir(parents=True, exist_ok=True)
@@ -302,9 +286,8 @@ def _run_child(index, args, globs):
     with open(directory / 'stdout.log', 'w') as log:
         log.write(shlex.join(argv) + '\n')
         log.flush()
-        # start_new_session so the job owns a process group of its own:
-        # see kill_job. Popen rather than subprocess.run(timeout=)
-        # for the same reason — run() kills only the direct child.
+        # start_new_session so the job owns its process group (see
+        # kill_job); Popen not run(timeout=), which kills only the child.
         proc = subprocess.Popen(argv, cwd=str(directory), env=child_env(),
                                 stdout=log, stderr=subprocess.STDOUT,
                                 start_new_session=True)
@@ -357,9 +340,8 @@ def drive(args):
 
     code = report(results, args)
     if args.json:
-        # After report, and never conditioned on `code`: the run a caller
-        # most needs this file for is the partial one, where some jobs
-        # failed and the exit code is 1.
+        # Never conditioned on `code`: the partial run (some jobs failed)
+        # is exactly when a caller most needs this file.
         write_summary(args.json, results, args)
     return code
 
@@ -367,19 +349,13 @@ def drive(args):
 def summary(results, args):
     """The run's facts as plain data, for a reader that is not a person.
 
-    Output paths are absolute here even though `JobResult` stores bare
-    names: a caller chaining stages hands these to the next command, and
-    should not have to know this module's directory layout to do it.
-
-    `failed` names the indices, not just a count. A caller that measures
-    a rate divides by the jobs that actually produced output; the process
-    exit code cannot tell 7-of-8 from 3-of-8, and dividing by the wrong
-    denominator is silent.
-
-    A failed job's `outputs` are still listed, because the files are
-    really there — but they are whatever art had written when it died,
-    and a killed job's last file is routinely a partial one. Consume
-    outputs from jobs NOT in `failed`.
+    Output paths are absolute even though `JobResult` stores bare names,
+    so a caller chaining stages needn't know this module's layout.
+    `failed` names the indices, not just a count, so a rate can be
+    computed over jobs that actually produced output (the exit code
+    alone can't tell 7-of-8 from 3-of-8). A failed job's `outputs` are
+    still listed since the files are really there, but may be partial —
+    consume outputs only from jobs NOT in `failed`.
     """
     ordered = sorted(results, key=lambda r: r.index)
     return {
@@ -402,11 +378,10 @@ def summary(results, args):
 def write_summary(path, results, args):
     """Write the machine-readable summary to `path`, atomically.
 
-    Temp-then-rename because a caller that polls the path must never
-    read a half-written file. The corollary is the contract on the other
-    side: a MISSING file means this driver died before reporting, not
-    that zero jobs ran. Reading absence as an empty run turns a crash
-    into a plausible-looking result.
+    Temp-then-rename because a caller polling the path must never read a
+    half-written file. Corollary: a MISSING file means this driver died
+    before reporting, not that zero jobs ran — reading absence as an
+    empty run turns a crash into a plausible-looking result.
     """
     path = Path(path)
     tmp = path.with_name(path.name + '.tmp')
@@ -455,17 +430,15 @@ def unpack_code(tarball, workdir):
     """Unpack a `muse tarball` Code.tar.bz2 once, for every child to share.
 
     Returns the directory holding `Code/` — what `resolve_setup` wants as
-    its code root, and what the grid gets from $INPUT_TAR_DIR_LOCAL.
+    its code root, same as the grid gets from $INPUT_TAR_DIR_LOCAL.
 
-    ONE unpack, not one per job: the build tree runs to several GB and
-    the driver launches four jobs at a time by default. Re-running is
-    cheap because an already-unpacked tree is detected and left alone —
-    but only via the `.unpack-complete` sentinel, never via
-    `Code/setup.sh` itself. `setup.sh` is tarball *payload*, typically
-    among the first members extracted; a run killed partway through
-    `extractall` (Ctrl-C, OOM, full disk) can leave it on disk with the
-    rest of the tree missing, and keying the early return on it would
-    make every later run trust a silently incomplete Offline forever.
+    ONE unpack, not one per job (build tree runs several GB, driver
+    launches four jobs at once by default). Re-running detects an
+    already-unpacked tree via the `.unpack-complete` sentinel, never via
+    `Code/setup.sh` itself — setup.sh is tarball *payload*, typically
+    extracted early, so a run killed partway through `extractall` can
+    leave it on disk with the rest of the tree missing; keying the early
+    return on it would trust a silently incomplete Offline forever.
     """
     root = Path(workdir) / 'code'
     marker = root / 'Code' / 'setup.sh'
@@ -481,9 +454,7 @@ def unpack_code(tarball, workdir):
     if not marker.is_file():
         sys.exit(f"runlocal: {tarball} has no Code/setup.sh — "
                  f"build it with `muse tarball`")
-    # Written last, after the setup.sh check passes: its presence means
-    # every earlier step completed, so a partial extract is never
-    # mistaken for a finished one on a later run.
+    # Written last, so a partial extract is never mistaken for finished.
     sentinel.write_text(os.path.basename(tarball) + '\n')
     return str(root)
 
@@ -570,9 +541,8 @@ def main(argv=None):
         return run_one(args.one, args)
 
     if args.json:
-        # Checked before a single job starts. The alternative is losing
-        # the summary of an hour-long run to a directory typo, at the
-        # one moment it cannot be recomputed.
+        # Checked before any job starts — the alternative is losing an
+        # hour-long run's summary to a directory typo, uncomputable after.
         args.json = str(Path(args.json).resolve())
         parent = Path(args.json).parent
         if not parent.is_dir():

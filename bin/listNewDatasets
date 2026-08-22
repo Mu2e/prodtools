@@ -7,8 +7,7 @@ Wrapper script for listNewDatasets utility module.
 import os
 import sys
 
-# Add repo root (for utils.* imports inside the package) and the utils
-# directory (for the module's bare imports) to the path
+# repo root: for utils.* package imports; utils/: for the module's bare imports.
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, repo_root)
 sys.path.insert(0, os.path.join(repo_root, 'utils'))

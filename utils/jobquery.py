@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""
-Python equivalent of mu2ejobquery Perl script.
-Extracts information from Mu2e job parameter files (.tar files containing jobpars.json).
-"""
+"""Python equivalent of mu2ejobquery: extracts information from Mu2e job
+parameter files (.tar files containing jobpars.json)."""
 
 import argparse
 import os
@@ -25,11 +23,10 @@ class Mu2eJobPars(Mu2eJobBase):
         return self.json_data.get('jobname', '')
     
     def input_datasets(self):
-        """Get list of input datasets"""
-        # Derived from tbs, never read from a top-level `input_datasets`
-        # key: no such key is written (see output_datasets), so the
-        # early return that used to sit here never fired.
-        # Extract from TBS inputs and auxin sections
+        """Get list of input datasets, derived from tbs inputs/auxin sections.
+
+        Never read from a top-level `input_datasets` key: jobdef writes no
+        such key (see output_datasets)."""
         tbs = self.json_data.get('tbs', {})
         datasets = set()
 
@@ -68,13 +65,10 @@ class Mu2eJobPars(Mu2eJobBase):
     def output_datasets(self):
         """Output dataset names, derived from tbs.outfiles.
 
-        Derived, not read: jobpars.json has no top-level
-        `output_datasets` key and never has — jobdef writes only
-        code/setup/code_ref/tbs/jobname — so reading one returned []
-        for every cnf ever built. That made the --output-files gate
-        reject every dataset and left its implementation unreachable.
-        job_outputs(0) resolves the same name patterns --output-files
-        itself walks, so the two agree by construction.
+        Derived, not read: jobpars.json has no top-level `output_datasets`
+        key — jobdef writes only code/setup/code_ref/tbs/jobname. Uses
+        job_outputs(0), the same name-pattern resolution --output-files
+        walks, so the two agree by construction.
         """
         datasets = set()
         for filename in self.job_outputs(0).values():
@@ -88,11 +82,9 @@ class Mu2eJobPars(Mu2eJobBase):
     def codesize(self):
         """Bytes of code embedded in this cnf: always 0.
 
-        prodtools ships an Offline build as a jobsub sidecar
-        (--tar_file_name), never inside the cnf, so nothing is embedded
-        and 0 is the honest answer rather than a placeholder. The build
-        a code-mode cnf was made against is recorded in `code_ref`;
-        `--recipe` prints it.
+        prodtools ships an Offline build as a jobsub sidecar (--tar_file_name),
+        never inside the cnf, so 0 is the honest answer, not a placeholder.
+        `--recipe` prints the build a code-mode cnf was made against.
         """
         return 0
 
@@ -100,11 +92,9 @@ class Mu2eJobPars(Mu2eJobBase):
         """Reconstruct this cnf's build config as human-readable text.
 
         A cnf in SAM is sometimes the only surviving record of how it was
-        built — the MDC2025ar generic reco/evnt entries were never committed
-        to data/, so the tarball was the source of truth. The embedded
-        mu2e.fcl IS the json2jobdef entry's `fcl` + `fcl_overrides`, and
-        jobpars.json carries the setup script and output name patterns.
-        Neither the other queries nor fcldump exposed the override block.
+        built (e.g. MDC2025ar generic reco/evnt entries were never committed
+        to data/). The embedded mu2e.fcl IS the json2jobdef entry's `fcl` +
+        `fcl_overrides`; no other query or fcldump exposed that override block.
         """
         lines = [f"# recipe: {self.jobname()}",
                  f"setup: {self.setup()}"]
@@ -205,17 +195,15 @@ def main():
 
     args = parser.parse_args()
 
-    # Check that exactly one query is specified
     queries = [args.jobname, args.njobs, args.input_datasets, args.input_files,
                args.output_datasets, args.output_files is not None,
                args.codesize, args.setup, args.recipe]
-    
+
     if sum(queries) != 1:
         print("Error: Exactly one query must be specified")
         print(usage())
         sys.exit(1)
-    
-    # Check that parfile exists
+
     if not os.path.exists(args.parfile):
         print(f"Error: File not found: {args.parfile}")
         sys.exit(1)
@@ -242,7 +230,7 @@ def main():
                 print(dataset)
         
         elif args.output_files:
-            # Parse dataset:size format
+            # dataset[:size] format
             if ':' in args.output_files:
                 dataset_name, size_str = args.output_files.split(':', 1)
                 try:
@@ -253,13 +241,11 @@ def main():
             else:
                 dataset_name = args.output_files
                 list_size = None
-            
-            # Validate dataset exists
+
             if dataset_name not in jp.output_datasets():
                 print(f"Error: Dataset {dataset_name} is not produced by the job set")
                 sys.exit(1)
-            
-            # Get output files
+
             try:
                 files = jp.output_files(dataset_name, list_size)
                 for filename in files:

@@ -4,24 +4,20 @@
 #   17 * * * * /path/to/prodtools/bin/submissions_cron
 #
 # Order matters:
-#   1. locking — handled inside `submissions run` itself (a per-DB
-#      lockfile beside the DB, held for the process lifetime); an
-#      overlapping run exits 1 with a "another submissions run holds
-#      ..." message rather than double-submitting.
+#   1. locking — handled inside `submissions run` (a per-DB lockfile
+#      beside the DB, held for the process lifetime); an overlapping
+#      run exits 1 rather than double-submitting.
 #   2. Mu2e env (quiet; failures still surface via the python run)
 #   3. submissions run, appended to a dated log beside the DB
 #
-# There is deliberately NO token pre-check. mu2epro's own hourly
-# cron/tokens.sh stores its bearer token as
-# /tmp/bt_token_mu2e_production_<uid> (jobsub_lite's naming), which is
-# none of the three places `httokendecode` looks by default
-# ($BEARER_TOKEN_FILE, $XDG_RUNTIME_DIR/bt_u<uid>, /tmp/bt_u<uid>).
-# A gate on it therefore fails while a valid token is present, and
-# under `set -e` that silently turns every tick into a no-op. The
-# submitting steps authenticate for themselves and fail loudly with a
-# real message, which is the honest place for the error to appear.
-# NEVER fetch or refresh a token here either way: token problems are
-# reported, not remediated.
+# Deliberately NO token pre-check: mu2epro's hourly cron/tokens.sh
+# stores its bearer token as /tmp/bt_token_mu2e_production_<uid>
+# (jobsub_lite's naming), none of the three places `httokendecode`
+# looks by default ($BEARER_TOKEN_FILE, $XDG_RUNTIME_DIR/bt_u<uid>,
+# /tmp/bt_u<uid>). A gate on it would fail while a valid token is
+# present, and under `set -e` silently no-op every tick. Submitting
+# steps authenticate for themselves and fail loudly instead.
+# NEVER fetch or refresh a token here: report, don't remediate.
 set -e
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

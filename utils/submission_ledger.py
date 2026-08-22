@@ -1,22 +1,20 @@
 """Submission ledger for the direct backend (recovery loop state).
 
 One row per direct-backend submission (`json2jobdef --enqueue`, a
-cron-fed slice, or a `submissions resubmit`), including the recovery
-loop's own resubmissions (chained via parent_id, attempt+1). Only the
-direct backend writes rows here (the retired POMS backend never did),
-so the recovery loop races nothing by construction.
+cron-fed slice, or `submissions resubmit`), including recovery-loop
+resubmissions (chained via parent_id, attempt+1). Only the direct
+backend writes rows here (the retired POMS backend never did), so the
+recovery loop races nothing.
 
-Stdlib sqlite3 ONLY — this module is imported by the submit path, which
-runs as mu2epro in the bare ops environment (no pyenv ana, no
-SQLAlchemy; see reference_pyenv_ana_for_db).
+Stdlib sqlite3 ONLY — imported by the submit path, which runs as
+mu2epro in the bare ops environment (no pyenv ana, no SQLAlchemy).
 
-The DB lives at a stable absolute path: mu2epro submissions run from
-throwaway /tmp workdirs, so a repo-relative path would scatter state.
-An OPERATOR-SUPPLIED directory (MU2E_SUBMISSION_DB, --ledger-db) is
-surfaced when missing (sqlite3.OperationalError), never silently
-mkdir'd over — a typo must fail, not create a stray DB. A DERIVED
-path from ledger_for() is created by ensure_ledger_dir(), since it
-cannot be a typo.
+DB lives at a stable absolute path: mu2epro runs from throwaway /tmp
+workdirs, so a repo-relative path would scatter state. An
+OPERATOR-SUPPLIED directory (MU2E_SUBMISSION_DB, --ledger-db) is
+surfaced when missing, never silently mkdir'd — a typo must fail, not
+create a stray DB. A DERIVED path from ledger_for() IS created by
+ensure_ledger_dir(), since it cannot be a typo.
 """
 import getpass
 import json
@@ -28,18 +26,15 @@ from pathlib import Path
 from utils.jobdesc import ENTRY_VALUE_KEYS, validate_entry_value
 
 # Entry keys `submissions set-entry` may edit on a live campaign.
-# Deliberately excludes tarball/njobs/firstjob/input_pattern: those
-# define the campaign's identity and index space, so changing one in
-# place corrupts a live campaign instead of fixing it. The correct
-# operation there is cancel + re-enqueue.
+# Excludes tarball/njobs/firstjob/input_pattern: those define the
+# campaign's identity and index space, so editing in place corrupts it
+# instead of fixing it — use cancel + re-enqueue there.
 #
-# This is ledger policy — WHICH keys are safe to edit mid-flight. What
-# a valid VALUE looks like is entry-format knowledge, owned by
-# utils/jobdesc.validate_entry_value and shared with the json2jobdef
-# boundary so the two cannot drift.
-# Derived, not restated: a key validate_entry_value learns to check is
-# editable here the moment it joins ENTRY_VALUE_KEYS, and a key it does
-# not know cannot slip into the editable set unvalidatable.
+# WHICH keys are editable is ledger policy; what a valid VALUE looks
+# like is owned by utils/jobdesc.validate_entry_value, shared with the
+# json2jobdef boundary so the two cannot drift. Derived from
+# ENTRY_VALUE_KEYS, not restated, so a key validate_entry_value doesn't
+# know cannot slip into the editable set unvalidated.
 EDITABLE_ENTRY_KEYS = ENTRY_VALUE_KEYS
 
 
@@ -49,11 +44,11 @@ PRODUCTION_DB = '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'
 def ledger_for(user=None):
     """Ledger path for a UNIX account.
 
-    There is ONE production ledger everyone reads and N personal
-    ledgers each person writes, so readers and writers resolve
-    differently (see DEFAULT_DB below). For 'mu2epro' this returns
-    PRODUCTION_DB exactly, which is why the split needs no migration
-    and leaves the production cron untouched.
+    One production ledger everyone reads, N personal ledgers each
+    person writes — readers and writers resolve differently (see
+    DEFAULT_DB). For 'mu2epro' this returns PRODUCTION_DB exactly, so
+    the split needed no migration and leaves the production cron
+    untouched.
     """
     return (f'/exp/mu2e/data/users/{user or getpass.getuser()}'
             f'/prodtools/submissions.db')
@@ -63,11 +58,9 @@ def ensure_ledger_dir(db_path):
     """Create the parent directory of a DERIVED ledger path; return it.
 
     Called ONLY on a ledger_for() path. An operator-supplied path
-    (MU2E_SUBMISSION_DB, --ledger-db) is deliberately never mkdir'd:
-    a typo there would silently create a stray database instead of
-    failing, which is why this module has always surfaced a missing
-    directory rather than creating one. A derived path cannot be a
-    typo, so the reasoning does not apply to it.
+    (MU2E_SUBMISSION_DB, --ledger-db) is never mkdir'd: a typo there
+    would silently create a stray database instead of failing. A
+    derived path cannot be a typo, so that reasoning doesn't apply here.
 
     Raises rather than falling back: writing a personal campaign into
     the production ledger is the worst available outcome.
@@ -84,27 +77,26 @@ def ensure_ledger_dir(db_path):
 # Readers resolve here and keep seeing production.
 DEFAULT_DB = os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB)
 
-# 'submitting' is a RESERVED row: its indices are claimed but
-# jobsub_submit has not returned yet. It is deliberately not 'active' —
-# the recovery loop must not try to verify a window that may never have
-# launched. 'failed' is a reservation whose submit definitively failed;
-# it stays in the DB because jobsub_submit can exit non-zero having
-# already made a cluster, so its window is not proven free.
-# 'reconciled' is the ONLY way out of either: a human has checked
-# jobsub_q and asserted the window's jobs are genuinely absent (see
-# reconcile_row). Nothing sets it automatically, and the row is kept
-# rather than deleted so the audit trail of the failed attempt survives.
+# 'submitting' = a RESERVED row: indices claimed, jobsub_submit not yet
+# returned. Deliberately not 'active' — the recovery loop must not
+# verify a window that may never have launched. 'failed' = a reservation
+# whose submit definitively failed; kept in the DB because jobsub_submit
+# can exit non-zero having already made a cluster, so the window isn't
+# proven free. 'reconciled' is the ONLY way out of either: a human
+# checked jobsub_q and asserted the jobs are genuinely absent (see
+# reconcile_row). Nothing sets it automatically; the row stays for the
+# audit trail.
 STATES = ('submitting', 'active', 'complete', 'recovered', 'exhausted',
           'failed', 'reconciled')
 
-# States reconcile_row may close. Both are windows whose jobs may or may
-# not exist; neither can be cleared by any automatic path.
+# States reconcile_row may close: windows whose jobs may or may not
+# exist, neither clearable by an automatic path.
 RECONCILABLE_STATES = ('failed', 'submitting')
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
-# Sliced-submission campaign lifecycle. 'complete' means fully SUBMITTED
-# (verification continues per ledger row); 'paused' is the operator /
+# Sliced-submission campaign lifecycle. 'complete' = fully SUBMITTED
+# (verification continues per ledger row); 'paused' = operator or
 # submit-failure hold; 'cancelled' closes the campaign but already-
 # submitted rows still get recovered.
 _CAMPAIGN_TRANSITIONS = {
@@ -152,16 +144,16 @@ def _connect(db_path):
     con.execute(_SCHEMA)
     con.execute(_CAMPAIGN_SCHEMA)
     # Closes the SELECT-then-INSERT race in create_campaign: a paused
-    # campaign still owns its index space (enqueue-after-pause then
-    # resume would feed two campaigns into the same indices = double
-    # submit), so the live set is active+paused, not just active.
+    # campaign still owns its index space (resume after enqueue-on-top
+    # would double-submit the same indices), so the live set is
+    # active+paused, not just active.
     con.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS campaigns_live_tarball "
         "ON campaigns(tarball) WHERE state IN ('active','paused')")
-    # map_path -> origin (2026-08-11). The column is free-text provenance;
-    # the map file it used to name no longer exists. RENAME COLUMN needs
-    # sqlite >= 3.25 (deployed: 3.34.1). Idempotent: PRAGMA-guarded, so a
-    # DB created fresh from _SCHEMA is left alone.
+    # map_path -> origin (2026-08-11): free-text provenance; the map file
+    # it used to name no longer exists. RENAME COLUMN needs sqlite >=
+    # 3.25 (deployed: 3.34.1). PRAGMA-guarded/idempotent — a fresh DB
+    # from _SCHEMA is left alone.
     for table in ('submissions', 'campaigns'):
         cols = [r[1] for r in con.execute(f'PRAGMA table_info({table})')]
         if 'map_path' in cols and 'origin' not in cols:
@@ -169,37 +161,29 @@ def _connect(db_path):
                 con.execute(
                     f'ALTER TABLE {table} RENAME COLUMN map_path TO origin')
             except sqlite3.OperationalError as exc:
-                # Two _connect calls can race the check-then-act above: a
-                # cron tick, a manual `submissions` command, and the
-                # write MCP server can all touch the same never-migrated
-                # ledger in the same minute. Both PRAGMA checks can see
-                # map_path before either ALTER commits; whichever commits
-                # first wins, and the loser's own ALTER then fails with
-                # "no such column: map_path" — this is not SQLITE_BUSY,
-                # so the connection's timeout=30 busy-retry does not
-                # cover it. Re-check: if origin exists now, the other
-                # side already finished the migration for us and there
-                # is nothing left to do here.
+                # Two _connect calls can race check-then-act above: a
+                # cron tick, a manual command, and the write MCP server
+                # can all touch the same never-migrated ledger in one
+                # minute. Both PRAGMA checks can see map_path before
+                # either ALTER commits; the loser's ALTER then fails with
+                # "no such column: map_path" — not SQLITE_BUSY, so
+                # timeout=30 busy-retry doesn't cover it. Re-check: if
+                # origin exists now, the other side already migrated it.
                 cols_now = [r[1] for r in
                            con.execute(f'PRAGMA table_info({table})')]
                 if 'origin' in cols_now:
                     pass
                 elif 'readonly database' in str(exc):
-                    # The production ledger is world-readable but
-                    # mu2epro-owned (0444 to everyone else); a
-                    # non-mu2epro reader opening it hits this on the
-                    # ALTER even though every other statement above is a
-                    # no-op against an already-current schema. Reading is
-                    # still the whole point of a status/query command, so
-                    # leave the DB un-migrated and let ledger_ro's
-                    # map_path->origin shim carry read consumers across
-                    # the gap; a writer (which always has write access)
-                    # will migrate it on its own next connect.
+                    # Production ledger is world-readable but
+                    # mu2epro-owned (0444 to others); a non-mu2epro
+                    # reader hits this on the ALTER even though every
+                    # other statement is a no-op. Leave it un-migrated
+                    # and let ledger_ro's map_path->origin shim carry
+                    # readers across the gap; a writer migrates it on
+                    # its next connect.
                     pass
                 else:
-                    # A genuinely broken schema, a locked/corrupt DB, or
-                    # any other unrelated failure must still surface.
-                    raise
+                    raise  # genuinely broken schema / locked / corrupt DB
     con.commit()
     return con
 
@@ -227,8 +211,8 @@ def record_submission(db_path, *, tarball, entry, indices, jobsub_id,
 
     entry is snapshotted verbatim (recovery must survive map edits and
     vanished /tmp workdirs); indices are ABSOLUTE cnf indices, stored
-    sorted. attempt = parent's attempt + 1 (1 for an original
-    submission); an unknown parent_id is a ValueError.
+    sorted. attempt = parent's attempt + 1 (1 if no parent); unknown
+    parent_id is a ValueError.
     """
     con = _connect(db_path)
     try:
@@ -251,14 +235,13 @@ def reserve_submission(db_path, *, tarball, entry, indices, origin=None,
                        parent_id=None):
     """Claim an index window BEFORE jobsub_submit runs; return the row id.
 
-    This is what makes _slice_overlaps_ledger's "crash-window guard"
-    claim true. Written after the fact, a row cannot cover the window
-    between a successful jobsub_submit and the ledger write — there is
-    nothing in the DB to overlap against, and the next tick re-submits
+    Makes _slice_overlaps_ledger's "crash-window guard" true: written
+    after the fact, a row can't cover the window between a successful
+    jobsub_submit and the ledger write, so the next tick would re-submit
     the same deterministic payload as duplicate physics.
 
-    Raising here is correct and load-bearing: if the window cannot be
-    recorded, the submission must not happen.
+    Raising here is load-bearing: if the window can't be recorded, the
+    submission must not happen.
     """
     con = _connect(db_path)
     try:
@@ -294,9 +277,9 @@ def attach_cluster(db_path, row_id, *, jobsub_id, cluster_id):
 def fail_reservation(db_path, row_id, note):
     """Close a reserved row whose submit definitively failed.
 
-    The row is kept, not deleted: jobsub_submit can exit non-zero having
-    already created a cluster, so the window is not proven free and must
-    keep blocking until a human reconciles it.
+    Kept, not deleted: jobsub_submit can exit non-zero having already
+    created a cluster, so the window isn't proven free and must keep
+    blocking until a human reconciles it.
     """
     con = _connect(db_path)
     try:
@@ -315,18 +298,16 @@ def reconcile_row(db_path, row_id, note):
     """Close a 'failed' or 'submitting' row after a HUMAN has checked
     jobsub_q; return the state it was in.
 
-    This is the only exit from either state, and the only way a campaign
-    blocked by one can ever move again: a failed reservation leaves a row
-    covering [cursor, cursor+n), `_slice_overlaps_ledger` keeps seeing
-    it, and top_up re-pauses the campaign on every tick — `submissions
-    resume` alone can never clear that, because it is the ROW, not the
-    cursor, that blocks. Before this existed the only escape was editing
-    sqlite by hand.
+    Only exit from either state, and the only way a blocked campaign can
+    move again: a failed reservation leaves a row covering
+    [cursor, cursor+n), `_slice_overlaps_ledger` keeps seeing it, and
+    top_up re-pauses the campaign every tick — `submissions resume`
+    alone can't clear that, since it's the ROW, not the cursor, that
+    blocks. Before this existed the only escape was hand-editing sqlite.
 
-    The safety property is preserved by making the call itself the
-    assertion: jobsub_submit can exit non-zero having already made a
-    cluster, so nobody but a human who has just looked at jobsub_q can
-    say the window is free. Nothing in the tick calls this.
+    The safety property is the call itself: only a human who just
+    checked jobsub_q can assert the window is free. Nothing in the tick
+    calls this.
     """
     con = _connect(db_path)
     try:
@@ -351,8 +332,8 @@ def reconcile_row(db_path, row_id, note):
 def reserved_rows(db_path):
     """Rows still in 'submitting' — claimed windows with no cluster.
 
-    A row that stays here is the needs-reconciliation case: someone must
-    check jobsub_q before its window can be reused.
+    Needs-reconciliation case: someone must check jobsub_q before the
+    window can be reused.
     """
     con = _connect(db_path)
     try:
@@ -405,9 +386,9 @@ def row_by_id(db_path, row_id):
         con.close()
 
 
-# States close_row may move an active row INTO. Deliberately NOT derived
-# from STATES: 'submitting' is a pre-submit reservation and 'failed' is
-# fail_reservation's alone, so a future addition to STATES must not
+# States close_row may move an active row INTO. NOT derived from
+# STATES: 'submitting' is a pre-submit reservation and 'failed' is
+# fail_reservation's alone — a future addition to STATES must not
 # silently become closable here.
 _CLOSABLE_STATES = ('complete', 'recovered', 'exhausted')
 
@@ -434,14 +415,13 @@ def close_row(db_path, row_id, state, note=None):
 def create_campaign(db_path, *, tarball, entry, slice_size, origin=None):
     """Register a sliced-submission campaign (cursor 0); return its id.
 
-    entry is snapshotted verbatim — the caller has already merged any
-    CLI resource overrides, so slices reproduce what was asked for. A
-    second ACTIVE or PAUSED campaign for the same tarball is refused:
-    that is the double-submit guard. A paused campaign still owns its
-    index space — enqueueing on top of it and later resuming both would
-    feed two campaigns into the same indices. The
-    campaigns_live_tarball unique index (see _connect) backstops this
-    check against the SELECT-then-INSERT race.
+    entry is snapshotted verbatim — the caller already merged CLI
+    resource overrides, so slices reproduce what was asked for. A second
+    ACTIVE or PAUSED campaign for the same tarball is refused (double-
+    submit guard): a paused campaign still owns its index space, so
+    enqueueing on top and later resuming would feed two campaigns into
+    the same indices. campaigns_live_tarball (see _connect) backstops
+    this against the SELECT-then-INSERT race.
     """
     if slice_size < 1:
         raise ValueError(f"slice_size must be >= 1, got {slice_size}")
@@ -515,11 +495,11 @@ def advance_campaign(db_path, camp_id, new_cursor):
 def set_campaign_slice(db_path, camp_id, slice_size):
     """Retune a live campaign's batch size; return the previous value.
 
-    Only active/paused campaigns accept it — a closed campaign's slice
-    is never read again, so silently accepting one would report success
-    for a no-op. The value binds from the next tick: batches already
-    submitted keep the size they were dispatched with, since a ledger
-    row records the indices it actually sent."""
+    Only active/paused campaigns accept it — a closed campaign's slice is
+    never read again, so accepting one would report success for a no-op.
+    Binds from the next tick: already-submitted batches keep the size
+    they were dispatched with, since a ledger row records the indices it
+    actually sent."""
     if slice_size < 1:
         raise ValueError(f"slice_size must be >= 1, got {slice_size}")
     con = _connect(db_path)
@@ -549,46 +529,36 @@ def set_campaign_entry_key(db_path, camp_id, key, value,
     Same live-retune contract as set_campaign_slice: active/paused only,
     binds from the next tick.
 
-    By default this edits the CAMPAIGN's snapshot only, so it reaches
-    future slices and nothing else — rows already dispatched keep the
-    entry they were submitted with. That default is deliberate, and it
-    is what `memory` depends on: an UNSET memory is exactly what earns a
+    By default only the CAMPAIGN snapshot is edited, reaching future
+    slices and nothing else — dispatched rows keep the entry they were
+    submitted with. Deliberate for `memory`: an UNSET memory earns a
     recovery the 4000MB floor (submissions.recovery_resource_kwargs), so
-    cascading a memory value would silently forfeit the better failure
-    mode.
+    cascading a memory value would forfeit that better failure mode.
 
-    include_open_rows=True additionally rewrites the entry snapshot of
-    every not-yet-closed row on this campaign's tarball, which is what
-    makes RECOVERIES pick the change up (submissions.resubmit builds its
-    SubmitOptions from row['entry'], not from the campaign). Rows match by
-    tarball because the two tables carry no campaign_id; the partial
-    unique index campaigns_live_tarball keeps that unambiguous for a
-    live campaign, but a cancelled predecessor could have left an open
-    row behind — so the changed ids are RETURNED, not just counted.
+    include_open_rows=True also rewrites every not-yet-closed row's
+    entry on this tarball, which is how RECOVERIES pick up the change
+    (submissions.resubmit builds SubmitOptions from row['entry'], not
+    the campaign). Rows match by tarball since neither table carries
+    campaign_id; campaigns_live_tarball keeps that unambiguous for a
+    live campaign, but a cancelled predecessor could leave an open row
+    behind — so changed ids are RETURNED, not just counted.
 
-    `closed_utc IS NULL` rather than state='active' on purpose: a
-    'submitting' row (reserved, cluster not yet attached) is still going
-    to be recovered, so it needs the new value too.
+    `closed_utc IS NULL`, not state='active': a 'submitting' row
+    (reserved, no cluster yet) still gets recovered and needs the value.
 
-    SETTLED CAMPAIGNS (2026-08-12): a campaign whose cursor is exhausted
-    is 'complete', and a cancelled one is 'cancelled', but BOTH keep
-    recovering their already-dispatched rows — `complete` means every
-    slice was dispatched, not that every job landed
-    (reference: windowed-campaign completeness). The live-retune gate
-    used to refuse those outright, which closed the operator surface
-    exactly when it was needed: campaign 54 (PhysicalPionStops.Run1Bap)
-    sat 'complete' at 500/500 dispatched with 239 outputs missing and an
-    open row that was about to re-run them from the WRONG inloc, and
-    there was no CLI way to correct it short of hand-editing entry_json
-    in sqlite.
+    SETTLED CAMPAIGNS (2026-08-12): 'complete' (cursor exhausted) and
+    'cancelled' both keep recovering already-dispatched rows —
+    'complete' means every slice dispatched, not every job landed. The
+    gate used to refuse those outright, blocking the operator exactly
+    when needed: campaign 54 (PhysicalPionStops.Run1Bap) sat 'complete'
+    at 500/500 dispatched with 239 outputs missing and an open row about
+    to re-run them from the WRONG inloc — fixable only by hand-editing
+    entry_json in sqlite.
 
-    So a settled campaign now accepts the row cascade and only the row
-    cascade: `include_open_rows=True` rewrites its open rows, while the
-    CAMPAIGN snapshot is deliberately left alone, because with the
-    cursor exhausted (or the campaign cancelled) no future slice will
-    ever read it — editing it would record an intent that nothing
-    executes. Without the flag a settled campaign is still refused, and
-    the error names the flag rather than the state.
+    So a settled campaign now accepts ONLY the row cascade
+    (include_open_rows=True); the CAMPAIGN snapshot stays untouched
+    since no future slice reads it. Without the flag it's still
+    refused, and the error names the flag.
     """
     if key not in EDITABLE_ENTRY_KEYS:
         raise ValueError(
@@ -663,8 +633,8 @@ def set_campaign_state(db_path, camp_id, state, note=None):
             raise ValueError(
                 f"campaign {camp_id}: cannot go {row['state']} -> {state}")
         if state == 'active':
-            # Resume: KEEP the note that explains why it was paused —
-            # the operator clearing the pause is exactly who needs it.
+            # Resume: KEEP the pause-reason note; the operator clearing
+            # the pause needs it.
             con.execute(
                 'UPDATE campaigns SET state = ?, closed_utc = NULL '
                 'WHERE id = ?', (state, camp_id))

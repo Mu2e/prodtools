@@ -12,17 +12,17 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-# Allow running as a script (bin/check_inputs execs `python3 utils/check_inputs.py`,
-# which puts utils/ on sys.path, not the repo root). Matches submit.py/submissions.py.
+# Run as a script (bin/check_inputs execs `python3 utils/check_inputs.py`,
+# putting utils/ on sys.path, not the repo root). Matches submit.py/submissions.py.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName, sha256_file
 from utils.jobdesc import code_of, dir_inloc_path, is_dir_inloc
 from utils.file_resolver import resilient_path, infer_dataset_location
-# NB: utils.samweb_wrapper (→ samweb_client) is imported lazily inside
-# check_inputs, so `--help` and the unit tests can load this module
-# without the Mu2e environment on PATH.
+# NB: utils.samweb_wrapper (-> samweb_client) is imported lazily inside
+# check_inputs, so `--help` and unit tests can load this module without
+# the Mu2e environment on PATH.
 
 
 @dataclass(frozen=True)
@@ -69,10 +69,10 @@ def _primary_files(tbs):
 
 def split_inputs(tarball_path):
     """(primary_by_ds, auxin_by_ds): distinct input files grouped by
-    dataset. Primary = tbs.inputs + tbs.samplinginput (the resampler's
-    primary input, routed like any other primary — tape/disk locality,
-    never the resilient size check). Pileup = tbs.auxin. Frozen in the
-    tarball — no per-index reconstruction."""
+    dataset. Primary = tbs.inputs + tbs.samplinginput (routed like any
+    other primary: tape/disk locality, never the resilient size check).
+    Pileup = tbs.auxin. Frozen in the tarball — no per-index
+    reconstruction."""
     tbs = _tbs_of(tarball_path)
     primary = _group_by_dataset(_primary_files(tbs))
     auxin = _group_by_dataset(_section_files(tbs, 'auxin'))
@@ -123,19 +123,18 @@ def check_dir(files, dir_path, file_size):
 
     A `dir:` inloc names files on a filesystem, not a SAM dataset: the
     files may never have been declared (chained intermediate outputs are
-    the normal case), so residency is an existence check and a SAM
-    lookup would be wrong rather than merely slow. Zero size is the one
-    truncation catchable without a SAM size to compare against.
+    the normal case), so residency is an existence check — a SAM lookup
+    would be wrong, not just slow. Zero size is the one truncation
+    catchable without a SAM size to compare against.
 
-    Problem.dataset carries the dir: path — there is no dataset, and
-    the filenames need not parse as Mu2e names (json2jobdef writes
+    Problem.dataset carries the dir: path — there is no dataset, and the
+    filenames need not parse as Mu2e names (json2jobdef writes
     `input_data` keys verbatim for this shape).
 
-    Stats run on the same thread pool `_default_locality` uses, for the
-    same reason: a `dir:` path is normally under /pnfs, where a stat is
-    an NFS round-trip to the dCache namespace server, not a local
-    syscall. Serially that is minutes of blocked enqueue for a
-    multi-thousand-file campaign.
+    Stats run on the same thread pool `_default_locality` uses: a `dir:`
+    path is normally under /pnfs, where a stat is an NFS round-trip to
+    the dCache namespace server, not a local syscall — serially, minutes
+    of blocked enqueue for a multi-thousand-file campaign.
 
     Fails closed like check_resilient: an unexpected stat error becomes
     a query_error Problem instead of escaping the gate.
@@ -152,7 +151,7 @@ def check_dir(files, dir_path, file_size):
             except Exception as e:
                 sizes[f] = e
     problems = []
-    for f in ordered:                       # report in input order
+    for f in ordered:
         size = sizes[f]
         path = os.path.join(dir_path, f)
         if isinstance(size, Exception):
@@ -185,9 +184,8 @@ def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
     """Locality of one file, searching `mdh_loc` first then the disk areas.
 
     A file absent from the tape area but present on disk/persistent is
-    ONLINE by construction: those areas have no tape copy, so there is
-    nothing to stage and no recall to avoid. Only a file found in NO area
-    is MISSING.
+    ONLINE by construction: those areas have no tape copy, so nothing to
+    stage and no recall to avoid. Only a file found in NO area is MISSING.
 
     Transport failures are retried: under concurrency a transient HTTPS
     error would otherwise fail the gate closed and block a whole campaign
@@ -285,11 +283,10 @@ def check_inputs(tarball_path, inloc, *,
     tests inject their own callable.
     """
     if is_dir_inloc(inloc):
-        # Flat file list, NOT split_inputs: _group_by_dataset parses
-        # each filename as a Mu2eName, and dir: basenames (written
-        # verbatim from input_data keys) need not conform. Primary and
-        # pileup resolve against the same path, so there is nothing to
-        # route and nothing to group.
+        # Flat file list, NOT split_inputs: _group_by_dataset parses each
+        # filename as a Mu2eName, and dir: basenames (written verbatim
+        # from input_data keys) need not conform. Primary and pileup
+        # resolve against the same path, so nothing to route or group.
         tbs = _tbs_of(tarball_path)
         problems = check_dir(_primary_files(tbs) + _section_files(tbs, 'auxin'),
                              dir_inloc_path(inloc), file_size=disk_size)
@@ -317,13 +314,11 @@ def check_code_tarball(entry, cnf_path):
     thing — input-data residency — and this is a different question
     about a different artifact.
 
-    Sidecar delivery means the build's bytes are not in the cnf, so
+    Sidecar delivery means the build's bytes aren't in the cnf, so
     without this gate a rebuilt or replaced tarball would ship silently
-    and the campaign's outputs would carry provenance that is simply
-    wrong. mu2eprodsys binds nothing here; we can, cheaply.
-
-    Hashing ~1 GB costs a few seconds, negligible beside the RCDS
-    publish that follows.
+    and the campaign's outputs would carry wrong provenance. mu2eprodsys
+    binds nothing here; we can, cheaply — hashing ~1 GB costs a few
+    seconds, negligible beside the RCDS publish that follows.
     """
     code = code_of(entry)
     try:

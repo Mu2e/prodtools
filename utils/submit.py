@@ -3,12 +3,10 @@
 Direct-submit driver for Mu2e grid jobs (single backend).
 
 Builds the `jobsub_submit` argv directly and ships prodtools as a
-dropbox tarball. Worker bootstraps `bin/runjob.sh` →
-`utils/runmu2e.py` direct mode → per-job pushOutput. The Phase-1
-mu2ejobsub backend was retired 2026-07-19 (spec
-2026-07-19-workflow-hardening-design.md): template/direct_input/g4bl
-entries and HPC submission run via the upstream mu2ejobsub/mu2eg4bl
-CLIs, never through this module.
+dropbox tarball. Worker bootstraps `bin/runjob.sh` -> `utils/runmu2e.py`
+direct mode -> per-job pushOutput. The Phase-1 mu2ejobsub backend was
+retired 2026-07-19: template/direct_input/g4bl entries and HPC
+submission run via the upstream mu2ejobsub/mu2eg4bl CLIs, never here.
 
 Plans:
 - wiki/pages/2026-04-29-remove-poms-from-submit-loop.md (Phase 1, POMS removal)
@@ -50,21 +48,15 @@ DEFAULT_PRODTOOLS_TAR = Path('/tmp') / f'prodtools-{getpass.getuser()}.tar'
 class SubmitOptions(NamedTuple):
     """Everything submit_entry needs beyond the entry itself.
 
-    Replaces the argparse namespace the old single-purpose submission
-    CLI used to reach into, so utils/submissions.py can call
-    submit_entry directly instead of serialising an entry to a temp
-    file and spawning a subprocess for it.
-
-    One object rather than loose keyword arguments because the value is
-    threaded on to _reserve_in_ledger, _attach_cluster, _fail_reservation
-    and _log_submission — re-expanding it at every hop would be worse
-    than the namespace it replaces.
+    Replaces the argparse namespace the old single-purpose submission CLI
+    reached into, so utils/submissions.py can call submit_entry directly
+    instead of serialising an entry to a temp file and spawning a
+    subprocess.
 
     `first`/`num` are NOT the retired operator flags: submit_slice feeds
-    every campaign slice through them (see _compute_jobset).
-
-    `origin` is free-text provenance recorded on the ledger row. Nothing
-    dispatches from it; only the MCP status tools echo it back.
+    every campaign slice through them (see _compute_jobset). `origin` is
+    free-text provenance on the ledger row, echoed back only by MCP
+    status tools.
     """
     ledger_db: str
     dry_run: bool = False
@@ -117,13 +109,12 @@ def _run_submit(cmd, tarball_name, njobs):
 
     cluster_id = _parse_cluster_id(result.stdout)
     if not cluster_id:
-        # jobsub_lite can exit 0 even when its internal condor_submit failed
-        # (seen 2026-07-10: condor_vault_storer permission failure under ksu
-        # printed "Error: condor_submit exited with failed status code 1" yet
-        # jobsub returned 0). A run with no parseable cluster ID is
-        # unconfirmed — report it failed rather than claim success. Verify
-        # with jobsub_q before resubmitting: a retry after a genuinely
-        # partial submit would double-run indices (duplicate seeds).
+        # jobsub_lite can exit 0 even when its internal condor_submit
+        # failed (seen 2026-07-10: condor_vault_storer permission failure
+        # under ksu). Treat a run with no parseable cluster ID as failed,
+        # not success — a retry after a genuinely partial submit would
+        # double-run indices (duplicate seeds), so verify with jobsub_q
+        # before resubmitting.
         print(f"ERROR: {cmd[0]} exited 0 but no cluster ID found in its "
               f"output — treating as failed. Verify with jobsub_q before "
               f"resubmitting.")
@@ -185,18 +176,13 @@ def _reserve_in_ledger(entry, firstjob, jobset, options, files=None):
     """Claim this window BEFORE jobsub_submit. Returns the row id.
 
     RAISES on failure, deliberately: an unrecordable window must not be
-    submitted, because nothing would then stop the next tick from
-    re-sending the same deterministic payload. This is also what makes a
-    self-submission fail fast rather than launching jobs and only then
-    discovering it cannot write the ledger.
+    submitted, or nothing stops the next tick from re-sending the same
+    deterministic payload.
 
     options.ledger_db is expected already resolved (see
-    _resolve_ledger_db, called once by the sole caller, `json2jobdef`):
-    a DERIVED path arrives with its directory already created, an
-    explicit --ledger-db arrives exactly as given. Creating it again
-    here would defeat the point of resolving once — an explicit path
-    pointing at a missing directory must fail here, not get silently
-    mkdir'd.
+    _resolve_ledger_db): a DERIVED path arrives with its directory
+    already created; an explicit --ledger-db pointing at a missing
+    directory must fail here, not get silently mkdir'd.
     """
     return submission_ledger.reserve_submission(
         options.ledger_db,
@@ -253,10 +239,10 @@ def _submission_log_path(ledger_db):
 
 def _log_submission(firstjob, jobset, result, options, files=None):
     """Append a human-readable record of a submission attempt — success
-    AND failure (failures are exactly what gets debugged). Covers every
-    origin (manual, cron slice, recovery resubmit): they all pass
-    through here. Never raises: the attempt already happened; a log
-    problem must not crash the submit."""
+    AND failure (failures are exactly what gets debugged), across every
+    origin (manual, cron slice, recovery resubmit). Never raises: the
+    attempt already happened, so a log problem must not crash the
+    submit."""
     try:
         if files is not None:
             idx_line = (f"files: {len(files)} "
@@ -311,11 +297,9 @@ def _snapshot_entry(entry, resources):
 
 def _resolve_ledger_db(opts):
     """Writer ledger path, resolved ONCE by the sole caller, `json2jobdef`
-    (there is no `main()` in this module — submit.py is a library, not a
-    CLI). A DEFAULTED (derived) path gets its directory created
-    (submission_ledger.ensure_ledger_dir); an operator-supplied
-    --ledger-db never does — a typo there must fail loudly rather than
-    silently make a stray database."""
+    (submit.py is a library, not a CLI). A DEFAULTED (derived) path gets
+    its directory created; an operator-supplied --ledger-db never does —
+    a typo there must fail loudly, not silently make a stray database."""
     if opts.ledger_db:
         return opts.ledger_db
     return submission_ledger.ensure_ledger_dir(submission_ledger.ledger_for())
@@ -338,12 +322,11 @@ def _validate_draining_entry(entry):
     if len(fields) != 5 or not all(fields):
         return (f"input_pattern {pattern!r} is not a 5-field "
                 f"tier.owner.desc.dsconf.ext pattern")
-    # An outputs glob that matches the input pattern would make the worker
-    # declare the fetched input copy as an output (push_data globs cwd),
-    # and pushOutput's orphan recovery then tries to delete the production
-    # input at its own dataset path. Heuristic gate (fnmatch of the pattern
-    # string, % treated as a literal); the worker also excludes its inputs
-    # as the authoritative defense.
+    # An outputs glob matching the input pattern would make the worker
+    # declare the fetched input as an output, and pushOutput's orphan
+    # recovery would then try to delete the production input. Heuristic
+    # gate (fnmatch of the pattern string); the worker's own input
+    # exclusion is the authoritative defense.
     for out in entry['outputs']:
         out_glob = out.get('dataset', '')
         if out_glob and fnmatch.fnmatchcase(pattern, out_glob):
@@ -365,21 +348,14 @@ def _validate_draining_entry(entry):
 
 def _validate_entry_values(entry):
     """Reject a malformed inloc / resource value in an ENTRY before any
-    ledger row exists.
+    ledger row exists. The boundary check `enqueue_entry` applies before
+    a campaign is created. Matters most for `inloc`: a misspelled
+    location doesn't fail, it degrades — file_resolver.locate finds
+    nothing and falls through to SAM, so the campaign runs to completion
+    reading from the wrong place.
 
-    json2jobdef validates the build config it reads, but this is also
-    the boundary check `enqueue_entry` applies before any campaign is
-    created, and `json2jobdef --enqueue` is the only remaining caller.
-
-    It matters most for `inloc`: a misspelled location does not fail, it
-    degrades. file_resolver.locate finds no such location and falls
-    through to SAM, so the campaign runs to completion reading from the
-    wrong place.
-
-    The CLI overrides (--memory/--disk/--expected-lifetime) are NOT
-    checked here -- they are validated in main(), where they are read.
-    Checking the merged result instead would mean re-validating the
-    entry's own values on every path that merges.
+    CLI overrides (--memory/--disk/--expected-lifetime) are NOT checked
+    here — validated in main(), where they're read.
     """
     for key in ENTRY_VALUE_KEYS:
         if key in entry:
@@ -393,10 +369,9 @@ def _gate_code_tarball(entry, tarball_path, note=None):
     """Refuse to create a campaign whose code tarball no longer matches
     the cnf. Exits 2; returns only when the entry passes.
 
-    Draining and normal entries ask the same question of the same
-    artifact, so they share one gate — the branch-local copies this
-    replaces differed only by the trailing note, which is exactly the
-    kind of difference that drifts into a real one.
+    Draining and normal entries share one gate rather than branch-local
+    copies differing only by the trailing note — exactly the kind of
+    difference that drifts into a real one.
     """
     ok, problems = check_code_tarball(entry, str(tarball_path))
     if ok:
@@ -411,14 +386,9 @@ def _refuse_outstage_campaign(entry):
     """An outstage entry cannot be a campaign.
 
     Outstage outputs are never declared to SAM, and verify_row is
-    fail-closed against SAM: it derives the expected outputs from the
-    cnf and asks SAM whether they landed. With nothing declared, every
-    index reads as missing, so each tick issues a recovery for the whole
-    row against files that already exist — forever.
-
-    Teaching verify_row to list an outstage directory instead is a real
-    feature; refusing here is the boundary that keeps it from being an
-    accident. Build and submit an outstage entry by hand.
+    fail-closed against SAM: with nothing declared, every index reads as
+    missing, so each tick would recover the whole row against files that
+    already exist — forever. Build and submit an outstage entry by hand.
     """
     for output in entry.get('outputs') or []:
         if output.get('location') == OUTSTAGE_LOCATION:
@@ -434,22 +404,15 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     """Register ONE entry as a sliced-submission campaign (cursor 0);
     submit nothing. Returns the new campaign id, or None under dry_run.
 
-    Single owner of the enqueue preflight; `json2jobdef --enqueue` is
-    the only caller: inputs are checked before any ledger row is
-    written, so a campaign is never created for a tarball with
-    unreadable inputs.
+    Single owner of the enqueue preflight (`json2jobdef --enqueue` is the
+    only caller), so a campaign is never created for a tarball with
+    unreadable inputs. Nothing has been submitted when this fails, so
+    operator-reachable errors exit with a ONE-LINE message, never a
+    traceback (sys.exit kept deliberately — both callers are CLIs, so
+    inheriting exit codes is correct).
 
-    Nothing has been submitted when this fails, so failures are hard
-    errors — but operator-reachable ones (duplicate live campaign, bad
-    njobs, DB trouble) exit with a ONE-LINE message, never a traceback.
-
-    sys.exit is retained deliberately: converting submit.py's error
-    protocol to exceptions restructures the path that launches every
-    production job and belongs in its own change. Both callers are CLIs,
-    so inheriting the exit codes is correct.
-
-    `provenance` is free-text recorded as the campaign's origin. It is
-    never dispatched from — only the MCP status tools echo it back.
+    `provenance` is free-text recorded as the campaign's origin; nothing
+    dispatches from it, only the MCP status tools echo it back.
     """
     resources = resources or {}
     _validate_entry_values(entry)
@@ -459,9 +422,9 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
         if err:
             sys.exit(f"json2jobdef: {err}")
         tarball_path = _ensure_local_tarball(tarball_of(entry))
-        # No check_inputs: a generic cnf bakes no inputs — the tick
-        # gates every batch (residency + settling age) at dispatch.
-        # The code tarball still has to match, though.
+        # No check_inputs: a generic cnf bakes no inputs — the tick gates
+        # each batch (residency + settling age) at dispatch. Code
+        # tarball still has to match, though.
         _gate_code_tarball(entry, tarball_path)
         snap = _snapshot_entry(entry, resources)
         if dry_run:
@@ -519,13 +482,12 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
 def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
     """Tar `utils/` + `bin/` from this repo into a worker-shippable bundle.
 
-    Used by submit_entry: the worker bootstraps `runjob.sh`, which
-    extracts this tarball under `$_CONDOR_SCRATCH_DIR/prodtools/` and execs
-    `utils/runmu2e.py` from there. Avoids depending on a cvmfs-published
-    prodtools version that might not yet contain our changes.
+    `runjob.sh` extracts this under `$_CONDOR_SCRATCH_DIR/prodtools/`
+    and execs `utils/runmu2e.py` from there, avoiding a dependency on a
+    cvmfs-published prodtools version that might not have our changes.
 
-    Skips tarring if `out_path` is already newer than every Python source
-    file under utils/ — keeps repeated submissions cheap.
+    Skips tarring if `out_path` is already newer than every Python
+    source file under utils/ — keeps repeated submissions cheap.
     """
     out = Path(out_path)
     sources = list((REPO_ROOT / 'utils').rglob('*.py')) + \
@@ -553,11 +515,11 @@ def _read_cnf_facts(tarball_path):
     """One Mu2eJobPars parse per cnf, returning the three facts the direct
     backend needs: (njobs, input_datasets, output_filenames_index0).
 
-    - njobs is authoritative from the cnf, not the submission map (the map field
-      can be stale or absent for direct-input mode).
-    - output filenames (index 0) feed the per-(area, tier, owner) token
-      scope derivation; templates that resolved to a path (`/dev/null`)
-      are skipped.
+    njobs is authoritative from the cnf, not the submission map (the map
+    field can be stale or absent for direct-input mode). Output
+    filenames (index 0) feed the per-(area, tier, owner) token scope
+    derivation; templates that resolved to a path (`/dev/null`) are
+    skipped.
     """
     from utils.jobquery import Mu2eJobPars
     jp = Mu2eJobPars(str(tarball_path))
@@ -618,19 +580,17 @@ def parse_files(path):
 def _compute_jobset(options, njobs_total, firstjob=0, entry_njobs=None):
     """Resolve --first/--num/--indices into the list of job indices to submit.
 
-    Indices are entry-relative (PROCESS space, starting at 0) — a windowed
-    entry's `firstjob` offset is applied worker-side by `resolve_entry_index`
-    (the entry ships in ops['jobdesc']), not here. A window is sized by the
-    entry's njobs and validated against the cnf capacity (njobs_total,
-    0 = open-ended) via jobdesc.validate_window.
+    Indices are entry-relative (PROCESS space, starting at 0) — a
+    windowed entry's `firstjob` offset is applied worker-side by
+    `resolve_entry_index`, not here; window size comes from the entry's
+    njobs, validated against cnf capacity via jobdesc.validate_window.
 
     Default: every index 0..size-1 (the whole cnf).
     --first N alone: 1 job at index N.
     --first N --num M: indices [N, N+M).
-    --indices K1,K2,...: exactly those ABSOLUTE cnf indices (recovery). Only
-      valid on a non-windowed entry, because the values ARE the cnf indices
-      (the caller ships firstjob=0 so worker-side `local == global`); a
-      contiguous window cannot express a scattered set.
+    --indices K1,K2,...: exactly those ABSOLUTE cnf indices (recovery),
+      valid only on a non-windowed entry — a contiguous window can't
+      express a scattered set.
     """
     if options.indices is not None:
         if firstjob:
@@ -664,25 +624,18 @@ def _compute_jobset(options, njobs_total, firstjob=0, entry_njobs=None):
 
 
 def _preflight_inputs(entry, tarball_path):
-    """Verify a cnf's baked inputs before submitting. Returns
-    (ok, problems).
+    """Verify a cnf's baked inputs before submitting. Returns (ok, problems).
 
     Mirrors the gate enqueue_entry applies, so the DIRECT path
-    (--first/--num and every recovery resubmit) gets it too — it is
-    exactly the bulk-death failure check_inputs exists to prevent.
-    A draining/generic cnf bakes no inputs and is skipped, the same
-    carve-out enqueue_entry makes.
+    (--first/--num and every recovery resubmit) gets it too — exactly
+    the bulk-death failure check_inputs exists to prevent. A
+    draining/generic cnf bakes no inputs, same carve-out as enqueue_entry.
 
-    check_code_tarball runs FIRST, above the draining early-return,
-    because it is not an input-residency check — it is the digest gate
-    that binds a code-mode campaign to the Offline build the cnf was
-    made against. enqueue_entry only runs once per campaign, so without
-    this call here every later slice and every recovery resubmit (both
-    draining and normal) would ship whatever bytes currently sit at the
-    entry's `code` path with no verification at all. For a Musing entry
-    (no `code`, cnf with no `code_ref`) it short-circuits immediately —
-    one cheap cnf-parse, no sha256 — so the production path is
-    unaffected; on the code path it costs one sha256 pass per submit.
+    check_code_tarball runs FIRST, above the draining early-return: it's
+    the digest gate binding a code-mode campaign to its Offline build,
+    and since enqueue_entry runs once per campaign, every later
+    slice/recovery would otherwise ship unverified bytes. Short-circuits
+    for a Musing entry (no `code`) — one cheap cnf-parse, no sha256.
     """
     ok, problems = check_code_tarball(entry, str(tarball_path))
     if not ok:
@@ -712,19 +665,15 @@ def submit_entry(entry, idx, options):
         tarball_path = _ensure_local_tarball(tarball_name)
 
     # njobs from the cnf is authoritative; the map's field is informational.
-    # output_filenames feeds the per-(area, tier, owner) token scope derivation
-    # so pushOutput can MAKE_PARENT in `/pnfs/mu2e/<area>/datasets/...`.
+    # output_filenames feeds the per-(area, tier, owner) token scope
+    # derivation so pushOutput can MAKE_PARENT under /pnfs/mu2e/<area>/...
     if files is not None:
-        # Draining batch: one direct-input job per file. A generic cnf
-        # has no index capacity — the jobset is positions into the
-        # batch. Scope granularity is (area, tier, owner), but the AREA
-        # itself is resolved per-output by fnmatching output_filenames
-        # against outputs[].dataset globs (output_storage_dirs) — a
-        # desc-discriminating glob (e.g. one desc to tape, another to
-        # disk) picks a different area per desc. So every distinct desc
-        # in the batch must contribute its mapped outputs, not just the
-        # first file's (expected_outputs_for is the worker's own
-        # substitution, so the names are exact).
+        # Draining batch: one direct-input job per file; a generic cnf has
+        # no index capacity, so the jobset is positions into the batch.
+        # Scope AREA is resolved per-output via fnmatch against
+        # outputs[].dataset globs — a desc-discriminating glob picks a
+        # different area per desc, so every distinct desc must contribute
+        # its own mapped outputs, not just the first file's.
         from utils.jobquery import Mu2eJobPars
         jp = Mu2eJobPars(str(tarball_path))
         njobs_total = len(files)
@@ -740,11 +689,9 @@ def submit_entry(entry, idx, options):
         firstjob = 0
         jobset = list(range(len(files)))
     elif options.dry_run and not tarball_path.is_file():
-        # Capacity stand-in when the cnf isn't inspectable: the window end
-        # (== njobs for plain entries), so validate_window never spuriously
-        # fails a dry run. --indices addresses cnf indices far past the
-        # recovery entry's own njobs, so widen the stand-in to cover them —
-        # otherwise the real capacity check below rejects a valid dry run.
+        # Capacity stand-in when the cnf isn't inspectable, so
+        # validate_window never spuriously fails a dry run; widened below
+        # to cover any --indices past the recovery entry's own njobs.
         njobs_total = firstjob_of(entry) + njobs_of(entry, default=1)
         if options.indices is not None:
             njobs_total = max(njobs_total, options.indices[-1] + 1)
@@ -777,19 +724,17 @@ def submit_entry(entry, idx, options):
         print(f"  jobset:  {jobset if len(jobset) <= 10 else f'[{jobset[0]}..{jobset[-1]}] ({len(jobset)} indices)'}")
     print(f"{'='*60}")
 
-    # `--indices` values ARE cnf indices, but the worker reaches a cnf index via
-    # resolve_entry_index (`local = global + firstjob`, gated on `global <
-    # njobs`). So the SHIPPED entry must sit at firstjob=0 and span past the
-    # largest index for `local == global` to hold. Only the ops copy is
-    # rewritten — the on-disk map keeps its own njobs, so a recovery map
-    # never has to store the "bare submit re-runs everything" njobs.
+    # `--indices` values ARE cnf indices, but the worker reaches one via
+    # resolve_entry_index (`local = global + firstjob`), so the SHIPPED
+    # entry must sit at firstjob=0 and span past the largest index. Only
+    # the ops copy is rewritten — the on-disk map keeps its own njobs.
     ops_entry = entry
     if options.indices is not None:
         ops_entry = {**entry, 'firstjob': 0, 'njobs': jobset[-1] + 1}
 
-    # Synthesize ops JSON (jobs[] + inspec + jobdesc) and write to /tmp.
-    # /tmp is the same FS jobsub_lite uses for its dropbox staging, so
-    # this is fine for both local-test and mu2epro runs.
+    # Synthesize ops JSON (jobs[] + inspec + jobdesc) to /tmp — same FS
+    # jobsub_lite uses for dropbox staging, fine for local-test and
+    # mu2epro alike.
     ops = _jobsub_argv.build_ops_json(
         entry=ops_entry,
         jobset=jobset,
@@ -803,17 +748,16 @@ def submit_entry(entry, idx, options):
     # Bundle prodtools so the worker has our patched runmu2e.py.
     prodtools_tar = _bundle_prodtools(options.prodtools_tar or DEFAULT_PRODTOOLS_TAR)
 
-    # Compute effective resources (CLI flag > entry key > None/builtin).
     resources = _effective_resources(entry, options)
 
-    # Build the jobsub_submit argv. submitter is the effective UNIX user;
-    # role auto-defaults to Production for mu2epro per jobsub_argv.role_for_user.
+    # submitter is the effective UNIX user; role auto-defaults to
+    # Production for mu2epro per jobsub_argv.role_for_user.
     submitter = getpass.getuser()
     # Token scopes for direct-mode pushOutput (CB1):
     #   - per data output: /mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>
     #   - per log: same scheme with tier=log, but logs go to persistent disk
-    #     regardless of the data location (see log_storage_location), so a
-    #     tape campaign needs BOTH a tape data scope and a disk log scope.
+    #     regardless of data location (log_storage_location), so a tape
+    #     campaign needs BOTH a tape data scope and a disk log scope.
     extra_scopes = list(_jobsub_argv.output_storage_dirs(
         output_filenames, outputs_of(entry)))
     if output_filenames:

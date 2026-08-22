@@ -9,7 +9,7 @@ Usage (from the repo root, with `muse setup ops` sourced):
 """
 import os, sys
 import random
-# Allow running this file directly: make package root importable
+# Run directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
@@ -38,8 +38,7 @@ from utils.samweb_wrapper import (
 
 def _write_random_selection(out_f, files, total_needed: int, seed_source: str):
     """Write deterministic pseudo-random selection from a fetched file list."""
-    # Sort before shuffling to make output deterministic independent of SAM order
-    ordered = sorted(files)
+    ordered = sorted(files)  # sort first: deterministic regardless of SAM order
     rng = random.Random(seed_source)
     rng.shuffle(ordered)
 
@@ -55,14 +54,13 @@ def _configure_chunk_mode(config):
     """Handle `input_data = {"<path>": {"chunk_lines": N}}`.
 
     Doesn't pre-split. Records the source path + chunk size in
-    `config['chunk_mode']` so the tarball carries it into jobpars;
-    at grid runtime, `runmu2e` extracts the per-job slice from the
-    cvmfs source before invoking mu2e. njobs = ceil(lines/chunk_lines)
-    is computed here and carried into the submission entry.
+    `config['chunk_mode']` so the tarball carries it into jobpars; at grid
+    runtime, `runmu2e` extracts the per-job slice from the cvmfs source
+    before invoking mu2e. njobs = ceil(lines/chunk_lines), computed here and
+    carried into the submission entry.
 
-    Every job's FCL points at the same local filename (default:
-    `chunk.txt`) via fcl_overrides; the per-job content is created
-    fresh on the grid worker.
+    Every job's FCL points at the same local filename (default `chunk.txt`)
+    via fcl_overrides; the per-job content is created fresh on the worker.
     """
     input_data = config['input_data']
     if len(input_data) != 1:
@@ -89,8 +87,8 @@ def _configure_chunk_mode(config):
         'lines': chunk_lines,
         'local_filename': local_chunk,
     }
-    # No inputs.txt — there are no SAM-tracked inputs; runmu2e materializes
-    # the per-job chunk directly from cvmfs at job time.
+    # No inputs.txt: no SAM-tracked inputs; runmu2e materializes the
+    # per-job chunk from cvmfs at job time.
 
 
 def _split_text_file_input(config):
@@ -116,11 +114,10 @@ def _split_text_file_input(config):
     chunks_dir = Path('chunks')
     chunks_dir.mkdir(exist_ok=True)
 
-    # Chunk sequencer follows Mu2e convention: <RRRRRR>_<SSSSSSSS> (run_subrun),
-    # zero-padded. Combined with sequencer_from_index, each output inherits the
-    # run from its chunk's basename and substitutes job index as the subrun,
-    # producing standard filenames like
-    #     dts.mu2e.PBINormal_33344.MDC2025ai.001430_00000000.art
+    # Sequencer is <RRRRRR>_<SSSSSSSS> (run_subrun, zero-padded), Mu2e
+    # convention. With sequencer_from_index, each output inherits the run
+    # from its chunk's basename and substitutes job index as the subrun,
+    # e.g. dts.mu2e.PBINormal_33344.MDC2025ai.001430_00000000.art
     run = int(config.get('run', 0))
     lines = src.read_text().splitlines()
     chunk_names = []
@@ -137,9 +134,8 @@ def _split_text_file_input(config):
         for name in chunk_names:
             f.write(name + '\n')
 
-    # split_lines almost always wants per-job sequencers from the job index
-    # (otherwise every job output gets the same sequencer as chunk 00 and they
-    # collide). User can set sequencer_from_index: false explicitly to opt out.
+    # split_lines needs per-job sequencers from the job index, else every job
+    # output collides on chunk 00's sequencer. Opt out with sequencer_from_index: false.
     config.setdefault('sequencer_from_index', True)
 
 
@@ -156,34 +152,15 @@ def _is_dir_inloc(config):
 
 
 def _create_inputs_file(config, exclude_files=None):
-    """Helper: create inputs.txt file from datasets with merge factors.
+    """Create inputs.txt from input_data. `exclude_files` (used by --extend)
+    omits already-processed filenames.
 
-    Supports optional random sampling by allowing input_data values to be
-    dictionaries with the following keys:
-        - count (int): number of files to use (required)
-        - random (bool): if True, choose a deterministic pseudo-random sample
-
-    Also supports text-file splitting when the value is a dict with
-    `split_lines`: the source file is split locally into N-line chunks and
-    inputs.txt is populated with the chunk basenames.
-
-    Args:
-        config: Job configuration dictionary.
-        exclude_files: Optional set of filenames to omit (used by --extend).
-
-    Example:
-        "input_data": {
-            "sim.mu2e.NeutralsFlash.MDC2025ac.art": {
-                "count": 100,
-                "random": true
-            }
-        }
-
-        "input_data": {
-            "/cvmfs/mu2e.opensciencegrid.org/DataFiles/PBI/PBI_Normal_33344.txt": {
-                "split_lines": 1000
-            }
-        }
+    input_data values may be a dict `{"count": N, "random": bool}` for
+    (optionally random) SAM sampling, e.g.
+    `{"sim.mu2e.NeutralsFlash.MDC2025ac.art": {"count": 100, "random": true}}`,
+    or `{"split_lines": N}` to split a local text file into N-line chunks
+    with basenames written to inputs.txt, e.g.
+    `{"/cvmfs/.../DataFiles/PBI/PBI_Normal_33344.txt": {"split_lines": 1000}}`.
     """
     input_data = config.get('input_data')
     if not isinstance(input_data, dict):
@@ -191,21 +168,20 @@ def _create_inputs_file(config, exclude_files=None):
 
     first_value = next(iter(input_data.values()), None)
 
-    # Chunk-on-grid shape: {"<path>": {"chunk_lines": N}}. No pre-split,
-    # no inputs.txt — runmu2e extracts each job's slice at runtime.
+    # Chunk-on-grid: {"<path>": {"chunk_lines": N}}. No pre-split, no
+    # inputs.txt — runmu2e extracts each job's slice at runtime.
     if isinstance(first_value, dict) and 'chunk_lines' in first_value:
         _configure_chunk_mode(config)
         return
 
-    # Text-file split shape: pre-split into chunks at submit time.
+    # Text-file split: pre-split into chunks at submit time.
     if isinstance(first_value, dict) and 'split_lines' in first_value:
         _split_text_file_input(config)
         return
 
-    # Local-dir shape: if inloc is "dir:<path>", treat input_data keys as
-    # basenames and write them verbatim (no SAM lookup). At runtime,
-    # jobfcl prepends the directory prefix. Used for cvmfs-resident
-    # inputs that aren't in SAM:
+    # dir:<path> inloc: input_data keys are basenames, written verbatim (no
+    # SAM lookup); jobfcl prepends the directory prefix at runtime. For
+    # cvmfs-resident inputs not in SAM, e.g.
     #     "inloc": "dir:/cvmfs/.../DataFiles/PBI/",
     #     "input_data": {"PBI_Normal_33344.txt": 1}
     if _is_dir_inloc(config):
@@ -220,19 +196,17 @@ def _create_inputs_file(config, exclude_files=None):
 def _write_sam_inputs(config, input_data, exclude_files=None):
     """Write inputs.txt by resolving each input_data dataset against SAM.
 
-    Each input_data value is either a plain merge_factor (int) or a dict
-    `{"count": N, "random": <bool>, "max_nfiles": M}`. With `random: True`,
-    a deterministic pseudo-random sample of `count * njobs` files is
-    selected; otherwise list_files() returns all matching files.
-    `max_nfiles` (optional, positive int) caps the per-dataset file count
-    written to inputs.txt — applied as a deterministic prefix slice of the
-    sorted file list (non-random branch) or as an upper bound on
-    `total_needed` (random branch). njobs is NOT recomputed; the entry
-    author is responsible for keeping `merge_factor * njobs <= max_nfiles`.
+    Each input_data value is a plain merge_factor (int) or a dict
+    `{"count": N, "random": <bool>, "max_nfiles": M}`. `random: True` picks a
+    deterministic pseudo-random sample of `count * njobs` files; otherwise
+    all matching files are used. `max_nfiles` caps the per-dataset file
+    count — a sorted prefix slice (non-random) or an upper bound on
+    `total_needed` (random). njobs is NOT recomputed; the entry author must
+    keep `merge_factor * njobs <= max_nfiles`.
 
-    `_event_count_positive` flag in `config` toggles a `event_count>0`
-    filter on the SAM query (older behavior applied this implicitly; now
-    explicit so zero-event files aren't silently dropped).
+    `config['_event_count_positive']` adds an explicit `event_count>0` SAM
+    filter (older behavior applied this implicitly) so zero-event files
+    aren't silently dropped.
     """
     event_count_positive = bool(config.get('_event_count_positive'))
 
@@ -250,9 +224,8 @@ def _write_sam_inputs(config, input_data, exclude_files=None):
                 except (TypeError, ValueError):
                     njobs = 1
 
-                # One SAM evaluation serves both the njobs derivation and
-                # the selection (previously count_files + list_files ran
-                # the same query twice)
+                # One SAM query serves njobs derivation and selection
+                # (previously count_files + list_files ran it twice).
                 files = list_files(query)
                 if not files:
                     raise ValueError(f"No files returned for query: {query}")
@@ -333,26 +306,22 @@ def get_parfile_name(config):
     return cnf_name(config, 'tar')
 
 def validate_required_fields(config):
-    """Validate that config has all required fields, and that the entry
-    values it supplies are well formed.
+    """Validate required fields, and that supplied entry values are well formed.
 
-    The value check shares utils/jobdesc.validate_entry_value with
-    `submissions set-entry`, so a spelling the operator cannot set on a
-    live campaign is also one they cannot enqueue. Unconditional, not
-    gated on --enqueue: a misspelled inloc makes file_resolver fall
-    through to SAM without complaint, which is just as wrong on a local
-    smoke and far harder to notice there.
+    Value checks share utils/jobdesc.validate_entry_value with `submissions
+    set-entry`, so a spelling the operator can't set on a live campaign is
+    also one they can't enqueue. Unconditional, not gated on --enqueue: a
+    misspelled inloc silently falls through to SAM, which is just as wrong
+    on a local smoke and harder to notice there.
 
-    Keys are validated only when present — inloc is optional
-    (process_single_entry defaults it to 'none'), and the resource keys
-    usually come from CLI flags instead.
+    Keys are validated only when present — inloc defaults to 'none'
+    (process_single_entry), and the resource keys usually come from CLI flags.
     """
     for req in ('fcl', 'dsconf', 'outloc'):
         if not config.get(req):
             sys.exit(f"Missing required field: {req}")
-    # Exactly one source of Offline, the same rule mu2ejobdef enforces:
-    # a /cvmfs Musing setup script, or a code tarball that travels with
-    # the job. Both would be ambiguous; neither cannot run.
+    # Exactly one source of Offline (mu2ejobdef's own rule): a /cvmfs Musing
+    # setup script, or a code tarball that travels with the job.
     if bool(config.get('simjob_setup')) == bool(config.get('code')):
         sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
     for key in ENTRY_VALUE_KEYS:
@@ -394,9 +363,8 @@ def determine_job_type(config):
         return 'stage1'
 
 def build_jobdef(config, job_args):
-    # Create jobdef using the embed approach with custom template to preserve fcl_overrides
-    # For mixing jobs, template.fcl is already created by build_pileup_args
-    # For non-mixing jobs, create the template here
+    # Embed template.fcl to preserve fcl_overrides. Mixing jobs already have
+    # it (written by build_pileup_args); non-mixing jobs create it here.
     fcl_path = config['fcl']
     job_type = determine_job_type(config)
 
@@ -424,23 +392,18 @@ def build_jobdef(config, job_args):
         '--desc', config['desc'],
         '--dsowner', config['owner']
     ]
-    
-    # Only add --run-number if it's present in config
+
     if 'run' in config:
         cmd_parts.extend(['--run-number', str(config['run'])])
-    
-    # Only add --events-per-job if it's present in config
+
     if 'events' in config:
         cmd_parts.extend(['--events-per-job', str(config['events'])])
-    
-    # Add job_args and template
+
     cmd_parts.extend(job_args)
     cmd_parts.extend(['--embed', 'template.fcl'])
 
-    # Now create jobdef using the template.fcl
     create_jobdef(config, fcl_path='template.fcl', job_args=job_args, embed=True, quiet=True)
 
-    # Get the parfile name for both modes
     parfile_name = get_parfile_name(config)
 
     # Build-time guard: ensure every outputs.*.fileName substitutes cleanly.
@@ -471,13 +434,13 @@ def build_jobdef(config, job_args):
 def build_jobdesc(config):
     """Project a build config onto the submission entry (the `jobdesc`).
 
-    Pure: no filesystem writes. The one impure part is the `njobs: -1`
-    branch, which asks the freshly-built cnf for its job count.
+    Pure except the `njobs: -1` branch, which asks the freshly-built cnf
+    for its job count.
 
     Raises ValueError if `outloc` is malformed (validate_outloc owns the
-    grammar). Fatal, not a warning: the only caller is the enqueue path,
-    and skipping there would push a cnf to SAM and create no campaign —
-    a half-done production push that reports success. This is a backstop;
+    grammar). Fatal, not a warning, because the only caller is the enqueue
+    path: skipping there would push a cnf to SAM and create no campaign — a
+    half-done production push that reports success. This is a backstop;
     validate_required_fields already checked the same config earlier.
     """
     parfile_name = get_parfile_name(config)
@@ -489,41 +452,37 @@ def build_jobdesc(config):
         "outputs": []
     }
 
-    # Optional per-entry resource requests pass through to the entry;
-    # the submit path reads them via jobdesc.resources_of
-    # (CLI flag > entry key > built-in default).
+    # Optional per-entry resource requests, read at submit time via
+    # jobdesc.resources_of (CLI flag > entry key > built-in default).
     for key in RESOURCE_KEYS:
         if key in config:
             jobdef_entry[key] = config[key]
 
-    # Draining configuration passes through too, so a draining campaign
-    # is enqueued straight from its config with no hand-edit: the submit
-    # path reads `input_pattern` (jobdesc.is_draining, the
-    # kind discriminator) and `prestage` (submit._validate_draining_entry,
-    # and the tape-residency gate in submissions.drain_tick) off the
-    # ENTRY, so a value left behind in the JSON config would silently do
-    # nothing.
+    # Draining config passes through too: submit reads `input_pattern`
+    # (jobdesc.is_draining, the kind discriminator) and `prestage`
+    # (submit._validate_draining_entry / submissions.drain_tick's
+    # tape-residency gate) off the ENTRY, not the JSON config, so a value
+    # left only in the JSON would silently do nothing.
     for key in ('input_pattern', 'prestage'):
         if key in config:
             jobdef_entry[key] = config[key]
 
-    # The code tarball's path travels on the entry, not in the cnf: the
-    # submit path reads it via jobdesc.code_of to add jobsub's
-    # --tar_file_name, and the snapshot is what later slices reuse.
+    # Code tarball path travels on the entry, not the cnf: submit reads it
+    # via jobdesc.code_of for jobsub's --tar_file_name, and the snapshot is
+    # what later slices reuse.
     if config.get('code'):
         jobdef_entry['code'] = config['code']
 
-    # A draining entry is defined by having an input_pattern and NO index
-    # space. Emitting both would leave the entry self-contradictory --
-    # is_draining() would say draining while njobs claimed a fixed window
-    # -- so refuse rather than write it.
+    # A draining entry has input_pattern and NO index space; emitting both
+    # would self-contradict (is_draining() true while njobs claims a fixed
+    # window), so refuse rather than write it.
     if 'input_pattern' in config and not is_generic:
         fail("Error: input_pattern requires generic_tarball: true "
              "(a draining entry has no fixed job count)")
 
-    # Optional cnf-index window start (statistics expansion; semantics
-    # in utils/jobdesc.py). firstjob_of/validate_window are the single
-    # validation authority — shared with the submit path.
+    # Optional cnf-index window start (statistics expansion; see
+    # utils/jobdesc.py). firstjob_of/validate_window are shared with the
+    # submit path as the single validation authority.
     try:
         firstjob = firstjob_of(config)
     except ValueError as e:
@@ -532,8 +491,8 @@ def build_jobdesc(config):
         fail("Error: firstjob requires a fixed job count (njobs); "
              "generic tarball entries have no index window")
 
-    # Generic tarballs have no pre-determined job count — omit njobs so
-    # runmu2e detects direct-input mode (absence of njobs is the trigger)
+    # Generic tarballs have no pre-determined job count; omitting njobs is
+    # what tells runmu2e to use direct-input mode.
     if not is_generic:
         njobs = config['njobs']
         jp = None
@@ -599,16 +558,14 @@ def main():
                  "bare --prod pushes the cnf to SAM and registers no "
                  "campaign -- a silent no-op)")
 
-    # If --prod is specified, enable pushout
     if args.prod:
         args.pushout = True
 
     setup_logging(args.verbose)
-    
-    # Load and expand the JSON configuration once
+
     expanded_configs = load_json(Path(args.json))
-    
-    # Bulk mode: dsconf only → every entry at that dsconf
+
+    # Bulk mode: dsconf only -> every entry at that dsconf
     if args.dsconf and args.desc is None and args.index is None:
         process_all_for_dsconf(expanded_configs, args.dsconf, args)
     else:
@@ -638,11 +595,10 @@ def _build_job_args(config):
     job_type = determine_job_type(config)
 
     if job_type == 'resampler':
-        # dir:-inloc resamplers key input_data by bare file basenames, not
-        # SAM dataset names (see _is_dir_inloc) — there is no dataset to
-        # query, so skip the auto-computation entirely rather than feeding
-        # a basename into a SAM dataset-definition lookup that can only
-        # fail. build_jobdef mirrors this guard when emitting post_lines.
+        # dir:-inloc resamplers key input_data by bare basenames, not SAM
+        # dataset names (see _is_dir_inloc), so skip the auto-computation
+        # rather than feed a basename into a SAM lookup that can only fail.
+        # build_jobdef mirrors this guard when emitting post_lines.
         if not _is_dir_inloc(config):
             first_dataset = normalize_input_data(config['input_data'])[0].source
             try:
@@ -673,17 +629,16 @@ def cnf_location(owner):
     """Which storage class the cnf tarball is pushed to.
 
     Production cnfs live in the persistent `datasets` area
-    (/pnfs/mu2e/persistent/datasets/usr-etc/cnf/...), and only the
-    production account can write there. An ordinary user's token grants
-    `storage.modify:/mu2e/scratch/datasets/usr-etc/cnf/<user>` but NOT
-    anything under `/mu2e/persistent/datasets`, so pushing a
-    user-owned cnf to 'disk' dies after three gfal retries with
-    `DESTINATION MAKE_PARENT HTTP 403 : Permission refused` — which is
-    what made `json2jobdef --prod` unusable for anyone but mu2epro.
+    (/pnfs/mu2e/persistent/datasets/usr-etc/cnf/...), writable only by the
+    production account. An ordinary user's token grants
+    `storage.modify:/mu2e/scratch/datasets/usr-etc/cnf/<user>` but nothing
+    under `/mu2e/persistent/datasets`, so pushing a user-owned cnf to 'disk'
+    dies after three gfal retries with `DESTINATION MAKE_PARENT HTTP 403 :
+    Permission refused` — which made `json2jobdef --prod` unusable for
+    anyone but mu2epro.
 
-    Owner 'mu2e' keeps 'disk', so production is bit-for-bit unchanged;
-    every other owner gets the scratch datasets area its own token
-    actually covers.
+    Owner 'mu2e' keeps 'disk' (production unchanged); every other owner
+    gets the scratch datasets area its own token actually covers.
     """
     return 'disk' if owner == 'mu2e' else 'scratch'
 
@@ -727,7 +682,7 @@ def _provenance(json_path, config):
 def process_single_entry(config, pushout=False, no_cleanup=True,
                          extend=False, ignore_empty=False,
                          enqueue=False, slice_size=1000, json_path=None):
-    """Process a single configuration entry (original behavior)"""
+    """Process a single configuration entry."""
     validate_required_fields(config)
     config['owner'] = config.get('owner', default_owner())
     config['inloc'] = config.get('inloc', 'none')
@@ -737,18 +692,16 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     if config.get('generic_tarball'):
         config['_defer_keys'] = {'desc'}
         config['njobs'] = 0
-    
-    # Auto-generate desc from input_data if desc is missing
-    # This extracts the 3rd field from dataset name (e.g., "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")
+
+    # Auto-generate desc from input_data (3rd field of the dataset name,
+    # e.g. "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")
     if not config.get('desc'):
         config = prepare_fields_for_job(config, job_type='standard')
-    
-    # Extend mode: exclude already-processed input files and auto-increment version
+
     exclude_files = None
     if extend:
         exclude_files = _compute_extend_exclusions(config)
-    
-    # Create inputs.txt first if needed
+
     if config.get('input_data'):
         _create_inputs_file(config, exclude_files=exclude_files)
 
@@ -764,8 +717,6 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
             sys.exit("--extend: no new input files to process")
 
     job_args = _build_job_args(config)
-
-    # build_jobdef handles FCL template creation for non-mixing jobs
     result = build_jobdef(config, job_args)
 
     parfile_name = get_parfile_name(config)
@@ -794,20 +745,16 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     return result
 
 def is_already_expanded(configs):
-    """Check if the configuration is already expanded (has scalar values, not lists)"""
+    """True if every entry already has scalar values (no lists to expand)."""
     if not isinstance(configs, list) or len(configs) == 0:
         return False
-    
-    # Check all entries, not just the first one
+
     for i, config in enumerate(configs):
         if not isinstance(config, dict):
             raise ValueError(f"Entry {i} is not a dictionary: {type(config)}")
-        
-        # If any config has lists, the whole configuration needs expansion
         if any(isinstance(v, list) for v in config.values()):
             return False
-    
-    # If no configs have lists, they're all already expanded
+
     return True
 
 #: Campaign-wide defaults, read from this file beside the stage files.
@@ -831,37 +778,28 @@ def apply_common_overlay(configs, json_path):
     whole safety property — reversed, the campaign default would move the
     42 frozen Run1B entries (v01/v03/v06) onto the current geometry.
 
-    common.json may state the defaults two ways, and both carry that same
-    direction:
+    common.json states the defaults two ways, both carrying that same
+    direction: `'#include'`, a FCL holding the settings (preferred once it
+    exists — one file states the campaign, Production owns it), or plain
+    keys written out directly and applied via setdefault, so an entry that
+    states the key keeps it and dict order never decides the outcome. Plain
+    keys are what's used while the FCL is still an unmerged Production PR —
+    an include would abort every build with a fhicl search_path error, and
+    no entry-level override can suppress an include.
 
-      '#include'   a FCL holding the settings. Preferred once the FCL
-                   exists — one file states the campaign, and Production
-                   owns it.
-      plain keys   the settings written out. Applied only where the entry
-                   does not already state the key, which is what makes
-                   them a default; dict order never decides the outcome,
-                   so these need no reserved position in the writer.
+    common.json also states its own scope, since a campaign directory isn't
+    uniform: `applies_to` lists the stage files it covers (merge, catalog
+    and ntuple stages are excluded — artcat.fcl configures no
+    GeometryService, and a geometry default there would construct a service
+    the job has no use for), and the optional `dsconf_prefix` filters by
+    dsconf (data/Run1B holds 15 MDC2025* entries that must not take a
+    Run1B default).
 
-    Plain keys are what a campaign uses while its FCL is still an unmerged
-    Production PR — the include would abort every build in the campaign
-    with a fhicl search_path error, and no entry-level override can
-    suppress an include.
-
-    common.json states its own scope, because a campaign directory is not
-    uniform:
-
-      applies_to     stage files it covers. Merge, catalog and ntuple
-                     stages are left out — artcat.fcl configures no
-                     GeometryService, and a geometry default there would
-                     construct a service the job has no use for.
-      dsconf_prefix  optional dsconf filter. data/Run1B holds 15 MDC2025*
-                     entries that must not take a Run1B default.
-
-    A default is only safe where it is redundant. Before listing a stage
-    file here, check every entry it holds that leaves a key to the base
-    FCL's own epilog: those take the default and change. `pileup/epilog.fcl`
-    sets bfgeom_no_tsu_ps_v01 and `beam/POT.fcl` sets bfgeom_no_ds_v01, so
-    six Run1B entries had to pin their inherited value explicitly first.
+    A default is only safe where it's redundant: before listing a stage file
+    here, check every entry that leaves a key to the base FCL's own
+    epilog — those take the default and change. `pileup/epilog.fcl` sets
+    bfgeom_no_tsu_ps_v01 and `beam/POT.fcl` sets bfgeom_no_ds_v01, so six
+    Run1B entries had to pin their inherited value explicitly first.
     """
     common_path = json_path.parent / COMMON_JSON
     if json_path.name == COMMON_JSON or not common_path.exists():
@@ -901,9 +839,8 @@ def load_json(json_path):
     json_text = json_path.read_text()
     configs = json.loads(json_text)
 
-    # Check if expansion is needed
     if not is_already_expanded(configs):
-        # Expand all configurations; mixing vs standard is determined per config from content (e.g. pbeam)
+        # mixing vs standard is determined per config from content (e.g. pbeam)
         configs = expand_configs(configs)
 
     return apply_common_overlay(configs, json_path)
@@ -922,39 +859,33 @@ def find_json_entry(configs, desc=None, dsconf=None, index=None):
     return matches[0]
 
 def process_all_for_dsconf(expanded_configs, dsconf, args):
-    """Process all entries matching the specified dsconf and generate job definitions for all permutations"""
-    
-    # Filter to only entries matching the specified dsconf (exact match)
+    """Process every entry matching `dsconf` (exact match), building a job
+    definition for each."""
     matching_configs = [config for config in expanded_configs if config.get('dsconf', '') == dsconf]
-    
+
     if not matching_configs:
         sys.exit(f"No entries found matching dsconf: {dsconf}")
-    
+
     print(f"Found {len(matching_configs)} entries matching dsconf: {dsconf}")
 
     skipped = []
-    # Process each matching configuration using the existing process_single_entry function
     for i, config in enumerate(matching_configs):
-        # Get display desc: use get_tarball_desc (handles tarball_append), or existing desc, or extract from input_data
+        # get_tarball_desc handles tarball_append; fall back to input_data extraction
         display_desc = get_tarball_desc(config) or config.get('desc')
         if not display_desc:
-            # Fall back to extracting from input_data
             temp_config = prepare_fields_for_job(config, job_type='standard')
             display_desc = temp_config.get('desc', 'Unknown')
         print(f"\nProcessing entry {i+1}/{len(matching_configs)}: {display_desc}")
-        
-        # Check required fields before calling process_single_entry
+
         try:
             validate_required_fields(config)
         except SystemExit as e:
             print(f"Warning: {e}, skipping entry")
             skipped.append(f"{display_desc}: {e}")
             continue
-        
-        # Propagate CLI options that affect input selection onto the config
+
         config['_event_count_positive'] = args.event_count_positive
 
-        # Use the existing process_single_entry function
         process_single_entry(
             config,
             pushout=args.pushout,
@@ -964,17 +895,17 @@ def process_all_for_dsconf(expanded_configs, dsconf, args):
             slice_size=args.slice_size,
             json_path=args.json,
         )
-        
-        # Clean up template.fcl for next iteration (since process_single_entry cleans up)
+
+        # process_single_entry runs with no_cleanup=True here, so template.fcl
+        # is removed by hand before the next iteration writes its own.
         if Path('template.fcl').exists():
             Path('template.fcl').unlink()
 
-    # A bulk run that silently dropped entries must NOT report success.
-    # The per-entry warning scrolls past in a long log, and the MCP write
-    # server (and any cron) reads only the exit code -- so a typo'd inloc
-    # in entry 7 of 22 would be reported as "all 22 done". The entries
-    # that DID process are left alone: they are already in SAM and in the
-    # ledger, and undoing them is not this function's call.
+    # A bulk run that silently dropped entries must NOT report success: the
+    # per-entry warning scrolls past in a long log, and the MCP write server
+    # (and any cron) reads only the exit code, so a typo'd inloc in entry 7
+    # of 22 would be reported as "all 22 done". Entries that DID process are
+    # left alone (already in SAM/ledger; undoing them is not this call).
     if skipped:
         print(f"\n{len(skipped)} of {len(matching_configs)} entries were "
               f"SKIPPED and no campaign exists for them:")

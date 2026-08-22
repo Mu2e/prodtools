@@ -3,8 +3,8 @@
 dataset + a per-campaign stage template into a ``json2jobdef`` config entry,
 and derive the discovery defname for a stage from its template's input pattern.
 
-Chain dts→digi→reco→ntuple, walked as per-tier hops. Templates live
-in ``<templates_dir>/<campaign>/<stage>.json`` and carry the curated physics
+Chain dts->digi->reco->ntuple, walked as per-tier hops. Templates live in
+``<templates_dir>/<campaign>/<stage>.json`` and carry the curated physics
 (geom, DbService version, nearestMatch, fcl, dsconf, simjob_setup). The only
 per-primary substitution done here is ``{desc}`` and ``{input}`` — everything
 else is authored, not derived.
@@ -50,11 +50,11 @@ def template_path(campaign, stage, templates_dir):
 
 
 def load_template(campaign, stage, templates_dir):
-    """Load ``<templates_dir>/<family>/<stage>.json``, where family is the
-    campaign with release letters stripped (MDC2025ap→MDC2025, Run1Ban→Run1B).
+    """Load ``<templates_dir>/<family>/<stage>.json`` (family = campaign with
+    release letters stripped, e.g. MDC2025ap->MDC2025, Run1Ban->Run1B).
 
-    Fail loud if absent: a new family must have its physics deliberately curated
-    (geom/DbService/nearestMatch), never silently inherited.
+    Fails loud if absent: a new family must have its physics deliberately
+    curated (geom/DbService/nearestMatch), never silently inherited.
     """
     family = family_of(campaign)
     path = template_path(family, stage, templates_dir)
@@ -118,8 +118,7 @@ def _desc_map(entry):
         "desc": {"CeMLeadingLog": 4,
                  "NoPrimary": {"merge": 5, "fcl_overrides": {...}}}
 
-    This is the preferred shape — it keeps the merge factor in exactly one
-    place and avoids repeating the key name ("desc") inside each item.
+    Preferred shape: keeps the merge factor in one place, no repeated key.
     """
     d = entry.get('desc')
     if not isinstance(d, dict):
@@ -154,11 +153,10 @@ def _input_merge(template, description=None):
 
     Precedence: the description's own `merge` (from the `desc` mapping or a
     legacy per-desc dict) wins; otherwise the factor paired with the
-    input_data pattern, when the template still uses `{pattern: merge}`.
+    input_data pattern (legacy `{pattern: merge}` form).
 
     Fails loud when neither supplies one — a silently-defaulted merge would
-    produce an undersized round with several times the intended job count
-    and nothing to flag it.
+    produce an undersized round with nothing to flag it.
     """
     indata = template['input_data']
     if isinstance(indata, list):
@@ -183,10 +181,9 @@ def _apply_desc_overrides(entry, description):
     place, preserving the template's container shape (list vs dict).
 
     A PATCH, not a replacement: one description needing a single extra
-    override (e.g. the NoPrimary.fcl trigger include) would otherwise force a
-    duplicate of the entry's whole pileup/dsconf/fcl block. Per-desc keys win
-    over the entry's base keys. `entry` is already a deep copy, so the shared
-    template is never mutated.
+    override (e.g. NoPrimary.fcl's trigger include) would otherwise force a
+    duplicate of the entry's whole pileup/dsconf/fcl block. Per-desc keys win.
+    `entry` is already a deep copy, so the shared template is never mutated.
     """
     extra = _desc_settings(entry, description).get('fcl_overrides')
     if not extra:
@@ -263,12 +260,12 @@ def derive_input_defname(template, campaign, family_wide=False):
     """Discovery defname for this stage's inputs: the template's input pattern
     with ``{desc}`` replaced by the SAM wildcard ``%`` and ``{campaign}`` filled.
 
-    family_wide=False (digi/reco/ntuple): inputs come from the same campaign as
-    the output, so ``{campaign}`` → ``<campaign>%``.
+    family_wide=False (digi/reco/ntuple): inputs share the output's campaign,
+    so ``{campaign}`` -> ``<campaign>%``.
 
-    family_wide=True (mix): inputs are primaries produced at any release of the
-    family, independent of the output build, so ``{campaign}`` → ``<family>%``
-    (e.g. dts.mu2e.%.MDC2025%.art). The caller then narrows to latest-per-desc.
+    family_wide=True (mix): inputs are primaries from any release of the
+    family, independent of the output build, so ``{campaign}`` -> ``<family>%``
+    (e.g. dts.mu2e.%.MDC2025%.art). Caller narrows to latest-per-desc.
     """
     pat = _input_pattern(_default_entry(_entries(template)))
     repl = f"{family_of(campaign)}%" if family_wide else f"{campaign}%"
@@ -294,36 +291,33 @@ def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=Fals
                      dsconf=None):
     """Return a ``json2jobdef`` config entry for one discovered input dataset.
 
-    Substitutes the per-dataset fields: ``{desc}`` → its description,
-    ``{campaign}`` → its release campaign (e.g. ``MDC2025ap``), ``{input}`` →
-    the dataset name, ``{out_campaign}`` → the target build campaign.
+    Substitutes the per-dataset fields: ``{desc}`` -> its description,
+    ``{campaign}`` -> its release campaign (e.g. ``MDC2025ap``), ``{input}`` ->
+    the dataset name, ``{out_campaign}`` -> the target build campaign.
 
-    For most stages input and output share a campaign, so ``out_campaign``
-    defaults to the input's campaign. Mixing is the exception: it reads
-    primaries from whatever campaign they were produced at but writes a
-    separately-tagged build, so the caller passes the target build campaign and
-    the template uses ``{out_campaign}`` for dsconf/simjob_setup.
+    ``out_campaign`` defaults to the input's campaign (most stages share one).
+    Mixing is the exception: primaries come from whatever campaign they were
+    produced at, but the build is separately tagged, so the caller passes the
+    target build campaign for the template's ``{out_campaign}``.
 
-    ``dsconf`` overrides the template's dsconf outright (after substitution),
-    preserving the template's container shape (scalar vs list-form). Use it to
-    pin the exact build — e.g. ``MDC2025ar_best_v1_3`` — so the emitted config
-    and the skip-produced check both target that build instead of whatever
-    version the template happens to bake. ``None`` leaves the template's dsconf.
+    ``dsconf``, if given, overrides the template's dsconf outright (after
+    substitution, preserving scalar-vs-list shape) — e.g. pin
+    ``MDC2025ar_best_v1_3`` so both the emitted config and the skip-produced
+    check target that build regardless of the template's own dsconf. ``None``
+    leaves the template's dsconf as-is.
 
-    ``defer_desc`` (mixing): do NOT pin ``desc`` or substitute ``{desc}``.
-    Mixing derives its output desc as ``input_desc + pbeam`` at generation time
-    (config_utils.prepare_fields_for_job); pinning desc here would block that
-    append, and pre-substituting ``{desc}`` in the output override would lock the
-    name to the bare primary desc (missing the ``Mix1BB`` suffix). Leaving
-    ``{desc}`` literal lets json2jobdef resolve it from the pbeam-augmented desc.
+    ``defer_desc`` (mixing): do NOT pin ``desc`` or substitute ``{desc}``,
+    since json2jobdef derives output desc as ``input_desc + pbeam`` at
+    generation time (config_utils.prepare_fields_for_job) and skips that if
+    desc is already set; leaving ``{desc}`` literal lets it resolve later
+    instead of locking to the bare primary desc (missing the ``Mix1BB`` suffix).
     """
     n = Mu2eName.parse(input_dataset)
     entry = copy.deepcopy(match_entry(template, n.description))
     merge = _input_merge(entry, n.description)
     _apply_desc_overrides(entry, n.description)
-    # Pin the concrete input, preserving the template's container shape:
-    # list-form [{name: merge}] (mixing) vs dict {name: merge}
-    # (digi/reco/ntuple). pileup_datasets and other fields are left untouched.
+    # pin the concrete input, preserving container shape: list-form (mixing)
+    # vs dict (digi/reco/ntuple); other fields (e.g. pileup_datasets) untouched
     if isinstance(entry.get('input_data'), list):
         entry['input_data'] = [{input_dataset: merge}]
     else:
@@ -333,18 +327,15 @@ def synthesize_entry(template, input_dataset, out_campaign=None, defer_desc=Fals
                'parent_dsconf': n.dsconf,   # full input dsconf incl build suffix
                'input': input_dataset}
     if not defer_desc:
-        # Pin desc to the concrete description and substitute {desc} everywhere.
         entry['desc'] = n.description
         mapping['desc'] = n.description
     else:
-        # Mixing: drop desc entirely so json2jobdef's prepare_fields_for_job
-        # derives desc = input_desc + pbeam (it skips derivation if desc is set).
-        # Leave {desc} tokens (e.g. in the output fileName) unsubstituted for it
-        # to resolve from the pbeam-augmented desc.
+        # mixing: drop desc so prepare_fields_for_job derives input_desc+pbeam
+        # (it skips derivation if desc is set); leave {desc} tokens literal
+        # for it to resolve from the pbeam-augmented desc.
         entry.pop('desc', None)
     entry = _subst(entry, mapping)
     if dsconf is not None and 'dsconf' in entry:
-        # Override the build outright, keeping the template's container shape.
         entry['dsconf'] = [dsconf] if isinstance(entry['dsconf'], list) else dsconf
     return entry
 
@@ -358,12 +349,11 @@ def emit_config(template, input_datasets, out_campaign=None, defer_desc=False,
 
 
 def _deferred_descs(entry):
-    """For a ``defer_desc`` (mixing) entry, the output desc is left as the literal
-    ``{desc}`` because json2jobdef derives it as ``input_desc + pbeam`` at
-    generation time. Reconstruct those concrete descs here so produced-output
-    checks can resolve the real names: parse the pinned input's description and
-    append each ``pbeam`` value (e.g. CeMLeadingLog + Mix1BB). Returns [] when
-    the entry isn't deferred / has no pbeam."""
+    """Reconstruct the concrete output desc(s) for a ``defer_desc`` (mixing)
+    entry, whose desc is left as the literal ``{desc}`` since json2jobdef
+    derives it as ``input_desc + pbeam`` at generation time: parse the pinned
+    input's description and append each ``pbeam`` value (e.g. CeMLeadingLog +
+    Mix1BB). Returns [] when the entry isn't deferred / has no pbeam."""
     indata = entry.get('input_data')
     indata = indata[0] if isinstance(indata, list) and indata else indata
     if not isinstance(indata, dict) or not indata:
@@ -382,21 +372,18 @@ def output_datasets(entry, owner='mu2e'):
     ``*.fileName`` override (a Mu2e file pattern with literal ``owner``/``version``
     fields plus a sequencer), resolving owner and version (=dsconf) and dropping
     the sequencer. Skips templates that resolve to a path (e.g. /dev/null).
+    Handles both scalar fields (digi/reco/ntuple) and list-wrapped mixing fields.
 
-    Handles both shapes: scalar fields (digi/reco/ntuple) and list-wrapped
-    mixing fields, unwrapping ``[x]`` -> ``x``.
-
-    Mixing leaves ``{desc}`` literal in the output fileName (see ``defer_desc``).
-    When that token survives, expand it to the concrete ``input_desc + pbeam``
-    name(s) so the produced-output check matches real SAM datasets instead of a
-    literal ``dig.mu2e.{desc}...`` that can never exist."""
+    Mixing leaves ``{desc}`` literal in the output fileName (see ``defer_desc``);
+    when it survives, expand it to the concrete ``input_desc + pbeam`` name(s)
+    so the produced-output check matches real SAM datasets instead of a literal
+    ``dig.mu2e.{desc}...`` that can never exist."""
     dsconf = _get_first_if_list(entry.get('dsconf', '')) or ''
     out = []
     for key, val in (_get_first_if_list(entry.get('fcl_overrides', {})) or {}).items():
         if not key.endswith('fileName') or not isinstance(val, str) or '/' in val:
             continue
-        # Templates carry literal placeholder tokens (owner/version/sequencer);
-        # Mu2eName parses them structurally. Only the 6-field file form counts.
+        # only the 6-field file form counts; Mu2eName parses it structurally
         try:
             n = Mu2eName.parse(val)
         except ValueError:

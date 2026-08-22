@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# jobwait - block until a submitted cluster finishes, then record each
-# job's exit code and write the runlocal-style --json summary. Wrapper
-# for utils/jobwait.py
+# Wrapper for utils/jobwait.py: block until a submitted cluster finishes,
+# then record each job's exit code and write the runlocal-style --json
+# summary.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/../utils/jobwait.py"

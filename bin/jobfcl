@@ -1,9 +1,7 @@
 #!/bin/bash
 
-# Simple shell wrapper for jobfcl.py
-# Sets up Mu2e environment and calls the Python script
+# Shell wrapper for jobfcl.py
 
-# Check required arguments
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo "Usage: jobfcl [options]"
     echo "  --jobdef <file>           Job definition file (cnf.tar) (required)"
@@ -22,7 +20,6 @@ if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     exit 1
 fi
 
-# Find and execute the Python script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/../utils/jobfcl.py"
 
@@ -31,5 +28,4 @@ if [[ ! -f "$PYTHON_SCRIPT" ]]; then
     exit 1
 fi
 
-# Execute the Python script with all arguments
 exec python3 "$PYTHON_SCRIPT" "$@"

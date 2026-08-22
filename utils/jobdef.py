@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """
-Python implementation of mu2ejobdef with full parity to Perl version.
+Python implementation of mu2ejobdef, with full parity to the Perl version.
 
-Creates a jobdef (par) tarball with:
-  - jobpars.json (complete structure matching Perl mu2ejobdef)
-  - mu2e.fcl     (embedded from template.fcl)
-
-Features implemented:
-  - Source type detection (EmptyEvent, RootInput, SamplingInput)
-  - Complete event_id, subrunkey, outfiles, seed sections
-  - Auxiliary input and sampling input processing
-  - Output file name processing and override logic
-  - SeedService detection via fhicl-get
+Creates a jobdef (par) tarball containing jobpars.json (matching Perl's
+structure) and mu2e.fcl (embedded from template.fcl): source-type detection
+(EmptyEvent, RootInput, SamplingInput, ...), event_id/subrunkey/outfiles/seed
+sections, aux/sampling input processing, and output filename overrides.
 """
 import os
 import sys
@@ -50,29 +44,25 @@ def resolve_fhicl_file(templatespec: str) -> str:
 
 
 def _replace_placeholders(pattern: str, config: Dict, defer_keys: set = None) -> str:
-    """Replace placeholders in output filename patterns, matching Perl behavior.
+    """Replace placeholders in output filename patterns (Perl parity).
 
-    Handles legacy tokens like `.owner.` and `.version.`, the literal
-    'configuration', and `{var}` placeholders for any string fields in config.
+    Handles legacy tokens `.owner.` and `.version.`, the literal word
+    'configuration', and `{var}` placeholders for any string field in config.
 
-    defer_keys: set of config key names whose {key} placeholders should NOT be
-                replaced at creation time (left for runtime resolution from fname).
-                Used for generic tarballs where {desc} must stay unresolved.
+    defer_keys: config key names whose {key} placeholders are left unresolved
+                for runtime substitution (generic tarballs: {desc}).
     """
     if pattern is None:
         return pattern
     if defer_keys is None:
         defer_keys = set()
     replaced_pattern = pattern.strip()
-    # Legacy tokens
     replaced_pattern = replaced_pattern.replace('.owner.', f'.{config.get("owner", "mu2e")}.')
     replaced_pattern = replaced_pattern.replace('.version.', f'.{config["dsconf"]}.')
-    # Literal word used in some templates
     replaced_pattern = replaced_pattern.replace('configuration', config["dsconf"])
-    # `{var}` placeholders — skip any key in defer_keys
     for key, value in config.items():
         if key in defer_keys:
-            continue  # leave e.g. {desc} as a literal placeholder for runtime substitution
+            continue  # leave {desc} etc. as a literal for runtime substitution
         if isinstance(value, str):
             replaced_pattern = replaced_pattern.replace(f'{{{key}}}', value)
     return replaced_pattern
@@ -93,7 +83,6 @@ def _run_fhicl_get(template_path: str, command: str, key: str = "") -> str:
     elif command == '--sequence-of':
         cmd = ['fhicl-get', '--sequence-of', 'string', key, template_path]
     else:
-        # All other commands follow the same pattern
         cmd = ['fhicl-get', command, key, template_path] if key else ['fhicl-get', command, template_path]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return result.stdout.strip()
@@ -101,78 +90,54 @@ def _run_fhicl_get(template_path: str, command: str, key: str = "") -> str:
 
 def _get_source_type(template_path: str) -> str:
     """Determine source module type from FCL template using fhicl-get.
-    
-    Matches Perl behavior exactly: dies on fhicl-get failure.
+
+    Dies on fhicl-get failure (Perl parity): no source section is fatal.
     """
-    # Try to get source type - if this fails, the FCL doesn't have a source section
-    # This matches Perl behavior: it dies on fhicl-get failure
     source_type = _run_fhicl_get(template_path, '--atom-as', 'source.module_type')
     return source_type
 
 
 def _seed_needed(template_path: str) -> bool:
-    """Check if SeedService is configured in the template FCL.
-    
-    Matches Perl seedNeeded() function exactly: checks services.SeedService.baseSeed.
-    """
-    # Perl: my @svclist = `fhicl-get --names-in services $filename 2>/dev/null`;
-    #       return 0 + grep /^SeedService\z/, @svclist;
+    """True if services.SeedService is configured (Perl seedNeeded() parity)."""
     try:
         svclist = _run_fhicl_get(template_path, '--names-in', 'services')
-        # Count of exact matches (like Perl's 0 + grep)
         return sum(1 for service in svclist.split('\n') if service == 'SeedService')
     except (subprocess.CalledProcessError, FileNotFoundError):
-        # If fhicl-get fails or is absent, return 0 (Perl's 2>/dev/null behavior)
-        return 0
+        return 0  # fhicl-get failure/absence -> not needed (Perl's 2>/dev/null)
 
 
 def _get_output_modules(template_path: str) -> List[str]:
-    """Get list of output modules from FCL template, filtering to only active ones (like Perl).
-    
-    Matches Perl's complex logic: analyzes end paths to determine active output modules.
-    Handles both FCL structures: end_paths as names or as values.
-    """
-
-    
-    # Get all output modules (like Perl's @all_outmods)
-    # Some FCL files (like EventNtuple) don't have an outputs section - handle gracefully
+    """Output modules from the FCL template that are active on an end path
+    (Perl parity). Modules merely declared under `outputs` but not wired
+    into physics.end_paths are excluded."""
     try:
         all_outmods = _run_fhicl_get(template_path, '--names-in', 'outputs').split('\n')
     except subprocess.CalledProcessError:
-        # No outputs section - return empty list (e.g., EventNtuple uses TFileService)
-        return []
-    
+        return []  # no outputs section, e.g. EventNtuple uses TFileService
+
     if not all_outmods:
         return []
-    
-    # Filter to only active modules (like Perl's complex logic)
-    # Perl: Prepare a list of all active end path modules (outputs, but also analyzers)
-    # Get end paths (NOT trigger paths - this was the bug!)
+
+    # end_paths, not trigger_paths (past bug)
     endpaths = _run_fhicl_get(template_path, '--sequence-of', 'physics.end_paths').split('\n')
-    
-    # Build set of active end path modules (like Perl's %endmodules)
+
     endmodules = set()
     for ep in endpaths:
         if ep == '@nil':
             continue
-        
-        # Get modules in this end path
         try:
             mods = _run_fhicl_get(template_path, '--sequence-of', f'physics.{ep}').split('\n')
             for m in mods:
-                if m:  # Skip empty entries
+                if m:
                     endmodules.add(m)
         except (subprocess.CalledProcessError, FileNotFoundError):
-            # If this fails, skip this end path
             continue
-    
-    # Only return output modules that are in active end paths
-    # Perl: my @active_outmods = grep { $endmodules{$_} } @all_outmods;
+
     active_outmods = []
     for mod in all_outmods:
         if mod and mod != '' and mod in endmodules:
             active_outmods.append(mod)
-    
+
     return active_outmods
 
 
@@ -183,12 +148,9 @@ def _get_fcl_value(template_path: str, key: str) -> str:
 
 def _validate_fcl_template(template_path: str) -> None:
     """Validate FCL template has required physics sections (trigger_paths, end_paths).
-    
-    Matches Perl behavior exactly: dies on fhicl-get failure.
-    """
 
-    
-    # Check for trigger_paths and end_paths in physics section
+    Dies on fhicl-get failure (Perl parity).
+    """
     result = subprocess.run(
         ['fhicl-get', '--names-in', 'physics', template_path],
         capture_output=True, text=True, check=True
@@ -318,11 +280,8 @@ def _resolve_njobs(config: Dict, tbs: Dict) -> Optional[int]:
 
 
 def _validate_options_for_source_type(source_type: str, args_state: Dict) -> None:
-    """Validate options for source type (matching Perl's validateOptionsForSourceType exactly).
-    
-    Matches Perl's complex validation logic with required/allowed options per source type.
-    """
-    # Define validation rules for each source type (matching Perl exactly)
+    """Validate CLI options against the required/allowed set for source_type
+    (Perl validateOptionsForSourceType parity)."""
     validation_rules = {
         'EmptyEvent': {
             'required': ['run_number', 'events_per_job', 'description'],
@@ -358,45 +317,39 @@ def _validate_options_for_source_type(source_type: str, args_state: Dict) -> Non
         raise ValueError(f"Unknown source type {source_type}")
     
     rule = validation_rules[source_type]
-    
-    # Get all options for incompatibility checking
+
+    # All options across every source type, for the incompatibility pass below.
     all_options = set()
     for rule_set in validation_rules.values():
         all_options.update(rule_set['required'])
         all_options.update(rule_set['allowed'])
-    
-    # Check required options (matching Perl's nonempty() logic)
+
+    # Required options (Perl's nonempty() logic)
     for option in rule['required']:
         if option == 'description':
-            # Description is always available from config
-            continue
+            continue  # always available from config
         elif option == 'samplinginput':
-            # Check if sampling is non-empty
             if not args_state.get('sampling'):
                 raise ValueError(f"Error: --samplinginput must be specified and nonempty for fcl files that use source type {source_type}.")
         elif option == 'inputs':
-            # Check if inputs list is non-empty
             if not args_state.get('inputs_list'):
                 raise ValueError(f"Error: --inputs must be specified and nonempty for fcl files that use source type {source_type}.")
         elif option == 'merge_factor':
-            # Check if merge_factor is positive
             if not args_state.get('merge_factor') or args_state['merge_factor'] <= 0:
                 raise ValueError(f"Error: --merge-factor must be specified and positive for fcl files that use source type {source_type}.")
         elif option == 'run_number':
-            # Check if run_number is specified
             if args_state.get('run_number') is None:
                 raise ValueError(f"Error: --run-number must be specified for fcl files that use source type {source_type}.")
         elif option == 'events_per_job':
-            # Check if events_per_job is specified
             if args_state.get('events_per_job') is None:
                 raise ValueError(f"Error: --events-per-job must be specified for fcl files that use source type {source_type}.")
-    
-    # Check for incompatible options (matching Perl's veto logic)
+
+    # Incompatible options (Perl's veto logic): anything not required/allowed
+    # for this source type is rejected if the caller actually supplied it.
     for option in all_options:
         if option in rule['required'] or option in rule['allowed']:
             continue
-        
-        # Check if this incompatible option is present and non-empty
+
         if option == 'samplinginput' and args_state.get('sampling'):
             raise ValueError(f"Error: --samplinginput is not compatible with fcl files that use source type {source_type}.")
         elif option == 'inputs' and args_state.get('inputs_list'):
@@ -455,15 +408,12 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
             args_state['fcl_mode'] = token[2:]
             args_state['fcl_template'] = next(it)
 
-    # Determine source type using the resolved template path (like Perl's $templateresolved)
     source_type = _get_source_type(template_path)
-    
-    # Validate options for source type (matching Perl's validateOptionsForSourceType exactly)
+
     # Skip for generic tarballs — no inputs list at creation time by design
     if not (config and config.get('generic_tarball')):
         _validate_options_for_source_type(source_type, args_state)
-    
-    # Build TBS based on source type (matching Perl behavior exactly)
+
     if source_type == 'EmptyEvent':
         tbs['event_id'] = {
             'source.firstRun': args_state['run_number'],
@@ -475,8 +425,7 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         if args_state['inputs_list']:
             tbs['inputs'] = {'source.fileNames': [args_state['merge_factor'], args_state['inputs_list']]}
         tbs['subrunkey'] = ''  # subrun comes from the inputs
-        
-        # Set event_id based on available arguments (like Perl version)
+
         if args_state['run_number'] is not None or args_state['events_per_job'] is not None:
             tbs['event_id'] = {}
             if args_state['run_number'] is not None:
@@ -484,8 +433,7 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
             if args_state['events_per_job'] is not None:
                 tbs['event_id']['source.maxEvents'] = args_state['events_per_job']
         elif source_type != 'FromCorsikaBinary':
-            # Fallback to default behavior
-            tbs['event_id'] = {'source.maxEvents': 2147483647}
+            tbs['event_id'] = {'source.maxEvents': 2147483647}  # default: unlimited
             
     elif source_type == 'SamplingInput':
         if args_state['run_number'] is not None:
@@ -496,16 +444,15 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         tbs['subrunkey'] = 'source.subRun'
 
     elif source_type == 'PBISequence':
-        # PBISequence: one text-chunk file per job. Up to MDC2025ai the module's
-        # pset validator accepted only fileNames + runNumber (plus static config
-        # like reconstitutedModuleLabel, integratedSummary, verbosity) and
-        # rejected source.maxEvents / firstSubRunNumber / firstEventNumber.
-        # MDC2025aj (Offline PR #1799 + Production #533, merged 2026-04-15) adds
-        # firstSubRunNumber and firstEventNumber as optional atoms (default 0),
-        # so per-index offsets via `event_id_per_index` are now accepted there.
-        # source.maxEvents is still rejected. Sequencer uniqueness otherwise
-        # comes from the input chunk basename (e.g. the ".00" slot in
-        # dts.mu2e.PBINormal_33344.MDC2025ac.00.txt) — no subrunkey needed.
+        # One text-chunk file per job. Up to MDC2025ai the pset validator
+        # accepted only fileNames + runNumber and rejected source.maxEvents /
+        # firstSubRunNumber / firstEventNumber. MDC2025aj (Offline PR #1799 +
+        # Production #533, merged 2026-04-15) adds firstSubRunNumber and
+        # firstEventNumber as optional atoms (default 0), so per-index offsets
+        # via `event_id_per_index` are accepted there; maxEvents is still
+        # rejected. Sequencer uniqueness comes from the input chunk basename
+        # (e.g. ".00" in dts.mu2e.PBINormal_33344.MDC2025ac.00.txt) — no
+        # subrunkey needed.
         has_inputs = bool(args_state.get('inputs_list'))
         has_chunk_mode = bool(config and config.get('chunk_mode'))
         if not (has_inputs or has_chunk_mode):
@@ -524,12 +471,11 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         tbs['subrunkey'] = ''  # explicit: no per-job subrun assignment
 
     # Sampling table, for whichever source type carries it. Deliberately
-    # OUTSIDE the chain above: it used to sit inside the PBISequence
-    # branch, which the validator vetoes --samplinginput on, so the one
-    # source type that REQUIRES the option (SamplingInput) reached no
-    # writer and produced a cnf with no samplinginput section — a job
-    # that resamples nothing, silently. The validator already decides
-    # which source types may carry sampling; this only writes it.
+    # OUTSIDE the chain above: it used to sit inside the PBISequence branch,
+    # which the validator vetoes --samplinginput on, so SamplingInput (the
+    # type that REQUIRES it) reached no writer and produced a cnf that
+    # silently resamples nothing. The validator already decides which
+    # source types may carry sampling; this only writes it.
     if args_state['sampling']:
         samplingintable = {}
         for dsname, (nreq, filelist) in args_state['sampling'].items():
@@ -537,73 +483,57 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
             samplingintable[inputkey] = [nreq, filelist]
         tbs['samplinginput'] = samplingintable
 
-    # Handle output files using the resolved template path (like Perl's
-    # $templateresolved). _get_output_modules returns only active,
-    # non-empty module names; _add_outfile creates tbs['outfiles'] on
-    # first add.
+    # _get_output_modules returns only active module names;
+    # _add_outfile creates tbs['outfiles'] on first add.
     for mod in _get_output_modules(template_path):
         output_key = f'outputs.{mod}.fileName'
-
-        # Get template from FCL file (like Perl does)
         filename_pattern = _get_fcl_value(template_path, output_key)
 
         if filename_pattern and filename_pattern.strip():
             defer_keys = config.get('_defer_keys', set()) if config else set()
             _add_outfile(tbs, output_key, filename_pattern, config, defer_keys=defer_keys)
         else:
-            # No template pattern found - this shouldn't happen in a properly resolved template
-            # Fail like Perl does when output filename is not defined
+            # Shouldn't happen in a resolved template; fail like Perl does.
             raise ValueError(f"Error: {output_key} is not defined")
 
-    # Handle TFileService (like Perl's separate TFileService handling)
     try:
         tfileservice_filename = _get_fcl_value(template_path, 'services.TFileService.fileName')
         if tfileservice_filename and tfileservice_filename.strip() and tfileservice_filename.strip() != '/dev/null':
-            # Add via shared helper (Perl adds it to %outtable)
             defer_keys = config.get('_defer_keys', set()) if config else set()
             _add_outfile(tbs, 'services.TFileService.fileName', tfileservice_filename, config, defer_keys=defer_keys)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        # If TFileService.fileName is not defined, skip it
-        pass
+        pass  # not defined; skip
 
-    # Handle auxiliary inputs
     if args_state['auxin']:
         tbs['auxin'] = args_state['auxin']
 
-    # Handle seed if needed using the resolved template path (like Perl's $templateresolved)
     if _seed_needed(template_path):
-        # This matches the Perl behavior exactly: set the string reference
-        # The mu2ejobfcl tool will process this string and add the actual baseSeed value
+        # String reference only; mu2ejobfcl resolves it to the actual baseSeed.
         tbs['seed'] = 'services.SeedService.baseSeed'
-    
-    # Handle sequential_aux setting from config
+
     if 'sequential_aux' in config:
         tbs['sequential_aux'] = config['sequential_aux']
-    
-    # Handle sequencer_from_index setting from config
-    # When true, generates sequencers from job index instead of input files
-    # This fixes the bug where different indices produce the same output filename
+
+    # sequencer_from_index: generate sequencers from job index instead of
+    # input files. Fixes different indices producing the same output filename.
     if 'sequencer_from_index' in config:
         tbs['sequencer_from_index'] = config['sequencer_from_index']
 
-    # Handle event_id_per_index — per-job linear overrides.
-    # Shape: {"source.firstEventNumber": {"offset": 0, "step": 1000}}
-    # Evaluated per job as: value = offset + index * step.
-    # Added for PBISequence where firstEventNumber must be globally unique
-    # across chunks, but generic — any key that takes an integer works.
+    # event_id_per_index: per-job linear overrides, e.g.
+    # {"source.firstEventNumber": {"offset": 0, "step": 1000}}, evaluated as
+    # value = offset + index * step. Added for PBISequence (firstEventNumber
+    # must be globally unique across chunks) but generic to any integer key.
     if 'event_id_per_index' in config:
         tbs['event_id_per_index'] = config['event_id_per_index']
 
-    # Handle chunk_mode — on-the-fly chunking at grid.
-    # Shape: {"source": "/cvmfs/.../file.txt", "lines": 1000,
-    #         "local_filename": "chunk.txt"}
-    # runmu2e reads this from jobpars at grid time, extracts the per-job
-    # slice, and writes it to local_filename before mu2e runs. The FCL
-    # points at local_filename via fcl_overrides (set by json2jobdef).
+    # chunk_mode: on-the-fly chunking at grid, e.g.
+    # {"source": "/cvmfs/.../file.txt", "lines": 1000, "local_filename": "chunk.txt"}.
+    # runmu2e reads this from jobpars at grid time, extracts the per-job slice
+    # into local_filename before mu2e runs; the FCL points at local_filename
+    # via fcl_overrides (set by json2jobdef).
     if 'chunk_mode' in config:
         tbs['chunk_mode'] = config['chunk_mode']
 
-    # Reorder TBS to match Perl order: outfiles, subrunkey, auxin, inputs, event_id, seed
     return _reorder(tbs, ['outfiles', 'subrunkey', 'auxin', 'inputs',
                           'event_id', 'seed', 'samplinginput'])
 
@@ -611,12 +541,9 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
 def get_output_dataset_names(config: Dict) -> List[str]:
     """Extract output dataset names by parsing the FCL template.
 
-    Creates a temporary template.fcl, uses fhicl-get to extract output module
-    filenames, resolves placeholders, and derives SAM dataset names.
-
-    Returns:
-        List of dataset name strings
-        (e.g. ['mcs.mu2e.DIOtail0_60Mix1BB-KL.Run1Bah_best_v1_4-001.art'])
+    Creates a temporary template.fcl, uses fhicl-get to pull output module
+    filenames, resolves placeholders, and derives SAM dataset names, e.g.
+    ['mcs.mu2e.DIOtail0_60Mix1BB-KL.Run1Bah_best_v1_4-001.art'].
     """
     from utils.prod_utils import write_fcl_template
 
@@ -649,21 +576,18 @@ def get_output_dataset_names(config: Dict) -> List[str]:
 
 
 def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[str] = None, embed: bool = True, outdir: Optional[Path] = None, quiet: bool = False) -> Path:
-    """
-    Create a jobdef tarball (cnf.owner.desc.dsconf.0.tar) with complete Perl parity.
+    """Create a jobdef tarball (cnf.owner.desc.dsconf.0.tar), Perl parity.
 
-    - Embeds jobpars.json and mu2e.fcl
-    - Processes all source types, output files, seeds, etc.
-    - Returns Path to the created file
+    Embeds jobpars.json and mu2e.fcl; processes source types, output files,
+    seeds, etc. Returns the Path to the created file.
     """
     owner = config.get('owner') or default_owner()
-    
-    # Handle auto-description
+
     if config.get('auto_description') is not None:
         desc = f"AutoDesc{config.get('auto_description', '')}"
     else:
         desc = config['desc']
-    
+
     dsconf = config['dsconf']
 
     # Fail before building anything: a bad code tarball should cost one
@@ -671,65 +595,54 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     if config.get('code'):
         validate_code_tarball(config['code'])
 
-    # Determine template path - match Perl logic exactly: for --embed, check if file exists locally first, then fall back to FHICL_FILE_PATH
+    # --embed: a local file wins over FHICL_FILE_PATH (Perl parity).
     if embed and Path(fcl_path).exists():
-        # Local file exists - use directly (matches Perl: -e $templatespec && $templatespec)
         template_path = fcl_path
     else:
-        # Resolve via FHICL_FILE_PATH (matches Perl: resolveFHICLFile($templatespec))
         template_path = resolve_fhicl_file(fcl_path)
-    
+
     fcl_embed_mode = 'embed' if embed else 'include'
 
-    # Build complete command-line arguments from config and job_args  
     base_args = []
     if config.get('run'):
         base_args.extend(['--run-number', str(config['run'])])
     if config.get('events'):
         base_args.extend(['--events-per-job', str(config['events'])])
-    
-    # Add any additional job_args passed in, but filter out embed/include since we handle them separately
+
+    # job_args, minus embed/include (handled separately below)
     filtered_job_args = []
     it = iter(job_args or [])
     for arg in it:
         if arg in ['--embed', '--include']:
-            next(it, None)  # Skip the next argument (template path)
+            next(it, None)  # skip its template-path argument
         else:
             filtered_job_args.append(arg)
-    
+
     base_args.extend(filtered_job_args)
-    
-    # Add embed/include for parsing (needed for _parse_job_args)
+
     all_args = base_args.copy()
     if embed:
         all_args.extend(['--embed', template_path])
     else:
         all_args.extend(['--include', template_path])
-    
-    # Print equivalent mu2ejobdef command for debugging (unless quiet)
+
+    # Equivalent mu2ejobdef command line, printed for debugging unless quiet.
     cmd_parts = ['mu2ejobdef']
-    
-    # Add setup or code argument
     setup_arg = '--setup' if config.get('simjob_setup') else '--code'
     setup_val = config.get('simjob_setup') or config.get('code')
     cmd_parts.extend([setup_arg, setup_val])
-    
-    # Add required arguments
     cmd_parts.extend([
         '--dsconf', dsconf,
         '--desc', desc,
         '--dsowner', owner
     ])
-    
-    # Add optional arguments and FCL mode
     cmd_parts.extend(base_args)
     cmd_parts.extend(['--embed' if embed else '--include', template_path])
-    
+
     if not quiet:
         print(f"Python mu2ejobdef equivalent command:")
         print(' '.join(cmd_parts))
 
-    # Parse job arguments and build TBS with template analysis using the resolved template path (like Perl's $templateresolved)
     tbs = _parse_job_args(all_args, template_path, config)
 
     # Embed the resolved job count so the tarball is self-descriptive.
@@ -739,7 +652,6 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     if embedded_njobs is not None:
         tbs['njobs'] = embedded_njobs
     
-    # Use provided outdir (simple logic matching Perl version)
     # desc carries the auto_description resolution; tarball_append wins inside cnf_name
     final_outdir = Path(outdir) if outdir else None
     out_name = cnf_name(config, 'tar', desc=desc)
@@ -748,53 +660,39 @@ def create_jobdef(config: Dict, fcl_path: str = 'template.fcl', job_args: List[s
     if out.exists():
         out.unlink()
 
-    # Build complete jobpars JSON
     jobpars = _build_jobpars_json(config, tbs)
 
-    # Prepare temporary files
     temp_files = {}
-    
-    # Create jobpars.json
     jobpars_path = Path(FILENAME_JSON)
-    
     jobpars_json = json.dumps(jobpars, indent=3, separators=(', ', ' : ')) + "\n"
     jobpars_path.write_text(jobpars_json)
-    
     temp_files[FILENAME_JSON] = jobpars_path
-    
-    # Validate and create mu2e.fcl
+
     tpl_path = Path(template_path)
-    
     if not tpl_path.exists():
         raise FileNotFoundError(f"FCL template not found: {tpl_path}")
-    
-    # Validate the template (either local file or original template)
+
     _validate_fcl_template(template_path)
-    
+
     mu2e_fcl_tmp = Path(FILENAME_FCL)
-    
-    # Handle --embed vs --include modes (matching Perl behavior)
+
     if fcl_embed_mode == 'embed':
-        # --embed: read the file content directly (whether original or modified)
         fcl_content = tpl_path.read_text()
     else:
-        # --include: use #include directive (only for original templates, not local modified files)
+        # --include normally emits an #include directive, except a local
+        # modified file (fcl_path == 'template.fcl') which is embedded directly.
         if fcl_path == 'template.fcl':
-            # Local modified file: embed the content directly
             fcl_content = tpl_path.read_text()
         else:
-            # Original template: use #include directive with original relative path (like Perl)
             fcl_content = f'#include "{fcl_path}"\n'
-    
+
     mu2e_fcl_tmp.write_text(fcl_content)
     temp_files[FILENAME_FCL] = mu2e_fcl_tmp
-    
-    # Create tarball with compression
+
     with tarfile.open(out, 'w:gz') as tar:
         for filename, filepath in temp_files.items():
             tar.add(filepath, arcname=filename)
-    
-    # Cleanup temp files
+
     for filepath in temp_files.values():
         try:
             filepath.unlink()
@@ -838,35 +736,30 @@ Note: For EmptyEvent source type, --run-number and --events-per-job are required
         """
     )
     
-    # Required arguments (mutually exclusive setup/code)
     setup_group = parser.add_mutually_exclusive_group(required=True)
     setup_group.add_argument('--setup', metavar='SCRIPT',
                             help='SimJob setup script path')
     setup_group.add_argument('--code', metavar='TARBALL',
                             help='Custom code tarball path')
-    
-    # Required arguments
+
     parser.add_argument('--dsconf', required=True,
                        help='Dataset configuration (e.g., MDC2020az)')
-    
-    # Description (mutually exclusive)
+
     desc_group = parser.add_mutually_exclusive_group(required=True)
     desc_group.add_argument('--desc', metavar='DESC',
                            help='Dataset description (e.g., CosmicCORSIKALow)')
     desc_group.add_argument('--auto-description', nargs='?', const='', metavar='SUFFIX',
                            help='Auto-extract description from input files (optional suffix)')
-    
+
     parser.add_argument('--dsowner', required=True,
                        help='Dataset owner (e.g., mu2e)')
-    
-    # FCL template handling (mutually exclusive)
+
     fcl_group = parser.add_mutually_exclusive_group(required=True)
     fcl_group.add_argument('--embed', metavar='FCL',
                           help='Embed FCL template content in jobdef')
     fcl_group.add_argument('--include', metavar='FCL',
                           help='Include FCL template by reference in jobdef')
-    
-    # Optional arguments
+
     parser.add_argument('--run-number', type=int,
                        help='Run number for job (required for EmptyEvent source type)')
     parser.add_argument('--events-per-job', type=int,
@@ -885,8 +778,7 @@ Note: For EmptyEvent source type, --run-number and --events-per-job are required
                        help='Output directory for jobdef tarball')
     
     args = parser.parse_args()
-    
-    # Build configuration dictionary
+
     config = {
         'simjob_setup': args.setup,
         'code': args.code,
@@ -900,10 +792,9 @@ Note: For EmptyEvent source type, --run-number and --events-per-job are required
         config['run'] = args.run_number
     if args.events_per_job:
         config['events'] = args.events_per_job
-    
-    # Build job arguments
+
     job_args = []
-    
+
     if args.inputs:
         job_args.extend(['--inputs', args.inputs])
     if args.merge_factor:
@@ -915,12 +806,10 @@ Note: For EmptyEvent source type, --run-number and --events-per-job are required
         for spec in args.samplinginput:
             job_args.extend(['--samplinginput', spec])
 
-    # Determine FCL path and embed mode
     fcl_path = args.embed or args.include
     embed_mode = 'embed' if args.embed else 'include'
-    
+
     try:
-        # Create job definition
         if args.verbose:
             print(f"Creating job definition with config: {config}")
             print(f"FCL template: {fcl_path} (mode: {embed_mode})")
