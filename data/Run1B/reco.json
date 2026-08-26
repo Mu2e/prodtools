@@ -165,5 +165,96 @@
 			"inloc": "tape",
 			"outloc": {"*.art": "tape"},
 			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bai/setup.sh"
+		},
+		{
+			"dsconf": "Run1Baw_best_v1_5",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.CeEndpointMix1BB.Run1Ban_best_v1_4-000.art": 1},
+				{"dig.mu2e.CeEndpoint.Run1Ban_best_v1_4-000.art": 1},
+				{"dig.mu2e.CosmicCRYAllMix1BB.Run1Ban_best_v1_4-000.art": 1},
+				{"dig.mu2e.CosmicCRYAll.Run1Ban_best_v1_4-000.art": 1},
+				{"dig.mu2e.FlateMinusMix1BB.Run1Ban_best_v1_4-000.art": 1},
+				{"dig.mu2e.FlateMinus.Run1Ban_best_v1_4-000.art": 1},
+				{"dig.mu2e.FlatGammaMix1BB.Run1Ban_best_v1_4-000.art": 1},
+				{"dig.mu2e.FlatGamma.Run1Ban_best_v1_4-000.art": 1},
+
+				{"dig.mu2e.MuCapNeutronTailCaloMix1BB.Run1Baq_best_v1_5.art": 1},
+				{"dig.mu2e.MuCapProtonTailCaloMix1BB.Run1Baq_best_v1_5.art": 1},
+				{"dig.mu2e.PolyFlatGammaCaloMix1BB.Run1Baq_best_v1_5.art": 1},
+
+				{"dig.mu2e.RPCExternalMix1BB.Run1Bap_best_v1_5-000.art": 1},
+				{"dig.mu2e.RPCInternalMix1BB.Run1Bap_best_v1_5-000.art": 1}
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_5",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"_comment_musing": [
+				"Run1Baq (Offline v13_34_10), NOT MDC2025aw, because these 13",
+				"datasets were written by v13_17_10/v13_32_10/v13_34_10, which",
+				"number Tracker_FEB_0_SurfIn at 120 and end the enum at",
+				"Tracker_FEB_18_SurfIn = 138. Offline v13_35_00 dropped three FEB",
+				"virtual detectors and renumbered: FEB_0 is 117 and lastEnum is",
+				"136, so reading this data under MDC2025av/aw throws",
+				"'Invalid VirtualDetectorID::enum_type : 136' out of SelectRecoMC.",
+				"The NoPrimary entries below DO use MDC2025aw: their inputs came",
+				"from MDC2025av (v13_35_00) and carry the new numbering.",
+				"Verified 2026-08-26: identical entry rc=1 under aw, rc=0 under",
+				"Run1Baq (20/20 events, VmHWM 618 MB)."
+			],
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh"
+		},
+		{
+			"dsconf": "Run1Baw_best_v1_5-001",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.NoPrimaryMix1BB.Run1Bav_best_v1_5-001.art": 1}
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_5",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aw/setup.sh"
+		},
+		{
+			"dsconf": "Run1Baw_best_v1_5-002",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.NoPrimaryMix1BB.Run1Bav_best_v1_5-002.art": 1}
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_5",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aw/setup.sh"
+		},
+		{
+			"dsconf": "Run1Baw_best_v1_5-003",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.NoPrimaryMix1BB.Run1Bav_best_v1_5-003.art": 1}
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_5",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aw/setup.sh"
 		}
 ]
