@@ -32,6 +32,9 @@ from samweb_client import Error as SAMError, FileNotFound  # type: ignore
 # ("Too many files requested (max 1000)") rather than truncating, so
 # every batch caller has to respect it.
 MAX_METADATA_BATCH = 1000
+# SAM rejects a locate request naming more than this many files outright
+# ("Too many files requested (max 1000)").
+MAX_LOCATE_BATCH = 1000
 
 # ---------------------------------------------------------------------------
 # SAM dimension grammar — query-string builders
@@ -284,10 +287,22 @@ class SAMWebWrapper:
         return self.client.locateFile(filename)
 
     def locate_files_strict(self, filenames: List[str]) -> Dict[str, List[Dict]]:
-        """Batch locate without error swallowing: one HTTP round-trip for
-        the whole list instead of one per file. Same record shape as
-        locate_file_strict, keyed by filename."""
-        return self.client.locateFiles(filenames)
+        """Batch locate without error swallowing: one HTTP round-trip per
+        MAX_LOCATE_BATCH files instead of one per file. Same record shape
+        as locate_file_strict, keyed by filename.
+
+        Chunking lives here for the same reason it does in
+        metadata_for_files: SAM rejects an oversized request outright
+        ("Too many files requested (max 1000)"), so an unchunked call is a
+        hard failure, not a slow path. A merge job with a high merge
+        factor names thousands of inputs -- factors of 2500 and 5000 are
+        in production use -- so this limit is reached in normal
+        operation, not just pathological cases."""
+        out: Dict[str, List[Dict]] = {}
+        for i in range(0, len(filenames), MAX_LOCATE_BATCH):
+            out.update(self.client.locateFiles(
+                filenames[i:i + MAX_LOCATE_BATCH]))
+        return out
 
     def metadata_for_files(self, filenames: List[str]) -> List[Dict]:
         """Batch metadata: one HTTP round-trip per MAX_METADATA_BATCH

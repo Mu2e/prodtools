@@ -154,9 +154,9 @@ _SIZE_RE = re.compile(r'^\d+(MB|GB)$')
 _LIFETIME_RE = re.compile(r'^\d+[smhd]$')
 
 # inloc forms utils/file_resolver.py actually accepts. 'scratch' is one:
-# FileResolver.locate falls through to a SAM locate preferring
-# location_type == inloc, and jobsub_argv._LOCATION_DEFAULT_PROTOCOL
-# carries a protocol for it. EXAMPLES.md has always documented it.
+# FileResolver computes a path under the scratch dataset root, and
+# jobsub_argv._LOCATION_DEFAULT_PROTOCOL carries a protocol for it.
+# EXAMPLES.md has always documented it.
 INLOC_SIMPLE = ('tape', 'disk', 'scratch', 'resilient', 'stash', 'none')
 
 

@@ -13,6 +13,7 @@ lazily imported on first use, so pure-function consumers (jobsub_argv,
 unit tests) and dir:-mode resolution work without the Mu2e ops env.
 """
 
+import errno
 import os
 import re
 import sys
@@ -97,6 +98,44 @@ def dataset_dir(dsname: str, location: str) -> str:
     if location == 'scratch':
         return f"/pnfs/mu2e/scratch/datasets/{base_path}/{ds_path}"
     return ""
+
+
+# Probe order when a dataset is absent from the declared inloc. Every
+# disk-resident area comes first and tape LAST: a dataset can hold copies
+# in two places at once (the pileup Cats are on resilient AND tape), and
+# reading the tape copy queues an Enstore recall that stalls the job for
+# minutes to hours. Stats are free — only the read pays — so trying tape
+# last never costs anything, while picking it first can cost a lease.
+_FALLBACK_ORDER = ('disk', 'scratch', 'resilient', 'stash', 'tape')
+
+
+def file_path_at(filename: str, location: str) -> str:
+    """Path `filename` WOULD have at `location`, from the name alone —
+    no SAM, no filesystem access. '' for a location with no known layout.
+
+    Two grammars: stash/resilient are flat under `datasets/<ds>/`, while
+    disk/tape/scratch interpose the sha256 hash subdirs that the Perl
+    `Mu2eFilename->relpathname()` defines. Both are pure functions of the
+    filename, which is what makes per-file location lookups unnecessary.
+    """
+    if location == 'stash':
+        return stash_read_path(filename)
+    if location == 'resilient':
+        return resilient_path(filename)
+    n = Mu2eName.parse(filename)
+    root = dataset_dir(str(n.dataset), location)
+    return f"{root}/{n.relpathname()}" if root else ''
+
+
+def file_exists_at(path: str) -> bool:
+    """True if `path` is readable. CVMFS is POSIX; /pnfs goes through
+    gfal2 xrootd so this answers correctly on a grid worker, which has no
+    dCache mount. A stat never triggers a tape recall — only a read does."""
+    if not path:
+        return False
+    if path.startswith('/pnfs/'):
+        return pnfs_exists(path)
+    return os.path.exists(path)
 
 
 # Mu2e standard location → dCache area name (under `/pnfs/mu2e/<area>/`).
@@ -277,12 +316,12 @@ def infer_dataset_location(dataset_name, first_file=_UNSET) -> str:
 _gfal2_ctx = None
 
 
-def resilient_file_exists(pnfs_path: str) -> bool:
-    """Check if a resilient /pnfs/ file exists via gfal2 xrootd.
+def pnfs_exists(pnfs_path: str) -> bool:
+    """Check if a /pnfs/ path exists via gfal2 xrootd.
 
     gfal2 gives reliable xrootd access on both interactive and grid
     worker nodes (no POSIX dCache required). Returns False if gfal2 is
-    unavailable or the stat fails, so the caller falls through to SAM.
+    unavailable or the stat fails, so the caller tries the next area.
 
     The context is created once and reused — creation loads plugins and
     dominates the cost of a per-file stat (a resilient mixing job checks
@@ -296,8 +335,22 @@ def resilient_file_exists(pnfs_path: str) -> bool:
             _gfal2_ctx = gfal2.creat_context()
         _gfal2_ctx.stat(xroot_url)
         return True
-    except Exception:
-        return False
+    except Exception as e:
+        # Only a genuine "no such file" means absent. Anything else --
+        # an expired token stats as EBADE(52), a dead door, gfal2 not
+        # installed — is a failure to ANSWER the question, and must not
+        # render as "the file is not there": that turns an auth outage
+        # into a bogus claim about the data. Fail loud instead.
+        if getattr(e, 'code', None) == errno.ENOENT:
+            return False
+        raise RuntimeError(
+            f"could not check {pnfs_path}: {e}. This is not evidence the "
+            f"file is absent — an expired bearer token stats as "
+            f"'Invalid exchange' (code 52). Run getToken and retry.") from e
+
+
+# Historical name, kept: reads as intent at resilient call sites.
+resilient_file_exists = pnfs_exists
 
 
 # ---------------------------------------------------------------------------
@@ -308,96 +361,80 @@ class FileResolver:
     """Resolve Mu2e filenames to physical paths / read URLs for a fixed
     (inloc, proto) pair — the per-jobdef configuration jobfcl runs with.
 
-    locate() and url() reproduce the historical Mu2eJobFCL behavior
-    exactly (the worker's inner loop is production-critical):
-    - dir:<path>  → literal join, no existence check
-    - stash       → CVMFS path if present, else SAM fallback
-    - resilient   → /pnfs path if gfal2-stat succeeds, else SAM fallback
-    - disk/tape   → SAM locate, preferring the requested location_type
+    Paths are COMPUTED, not looked up. Every file of a dataset sits under
+    one root, and the leaf path is a pure function of the filename (see
+    file_path_at). So the only open question is which area holds a given
+    DATASET — one question per dataset, answered by a single stat. A
+    20,000-file merge asks it once instead of issuing 20,000 SAM locates,
+    which is also why no batch size limit applies any more.
+
+    - dir:<path>      → literal join, no existence check
+    - everything else → computed path at the dataset's resolved area
+
+    A dataset absent from the declared inloc is resolved against
+    _FALLBACK_ORDER and the substitution is announced on stderr. That
+    path is load-bearing, not a safety net: every mixing job declares
+    `inloc: resilient` for its pileup Cats while its primaries live on
+    disk. A dataset found in no area raises — reading from an
+    unintended place is worse than stopping.
     """
 
     def __init__(self, inloc: str = 'tape', proto: str = 'file'):
         self.inloc = inloc
         self.proto = proto
-        # filename -> SAM locations, filled by prefetch(); misses fall
-        # through to a per-file locate, so error semantics are unchanged.
-        self._location_cache = {}
-
-    def _sam_always_used(self) -> bool:
-        """True when locate() goes to SAM for every file: non-dir:,
-        non-stash, non-resilient inloc (those probe CVMFS/gfal2 first),
-        with a proto that needs a physical path."""
-        return (not self.inloc.startswith('dir:')
-                and self.inloc not in ('stash', 'resilient')
-                and self.proto in ('file', 'root'))
+        # dataset name -> area holding it. One entry per dataset, not per
+        # file: that ratio is the whole point of this class.
+        self._dataset_loc = {}
 
     def prefetch(self, filenames) -> None:
-        """Batch-locate `filenames` in one SAM round-trip (vs one per file
-        — a mixing job resolves ~90). Best-effort: on failure the cache
-        stays empty and per-file resolution proceeds as before. No-op for
-        inlocs that don't deterministically hit SAM, so e.g. fully
-        resilient jobs don't pay a SAM call they never made."""
-        if not self._sam_always_used():
+        """Resolve every dataset named in `filenames` up front, one stat
+        each. Purely an ordering choice — locate() resolves lazily and
+        caches identically — but doing it here fails a bad input set
+        before any fcl is written, rather than midway through.
+
+        No-op for `dir:` inloc, which names files on a mounted
+        filesystem that were never declared to SAM and have no dataset
+        layout to resolve — locate() joins those literally."""
+        if self.inloc.startswith('dir:'):
             return
-        todo = [f for f in filenames if f not in self._location_cache]
-        if not todo:
-            return
-        from .samweb_wrapper import locate_files_strict
-        try:
-            result = locate_files_strict(todo)
-        except (ValueError, RuntimeError, KeyError):
-            return
-        if not isinstance(result, dict):
-            return
-        self._location_cache.update(
-            {fname: locs for fname, locs in result.items()
-             if isinstance(locs, list)})
+        for filename in filenames:
+            self._dataset_location(filename)
+
+    def _dataset_location(self, filename: str) -> str:
+        """Area holding `filename`'s dataset, cached per dataset.
+
+        Probes with this filename as the sample. The declared inloc is
+        tried first so a correctly-staged job never stats anything else.
+        """
+        dataset = str(Mu2eName.parse(filename).dataset)
+        cached = self._dataset_loc.get(dataset)
+        if cached is not None:
+            return cached
+
+        others = [loc for loc in _FALLBACK_ORDER if loc != self.inloc]
+        for candidate in [self.inloc] + others:
+            if file_exists_at(file_path_at(filename, candidate)):
+                if candidate != self.inloc:
+                    print(f"Warning: {dataset} is not on '{self.inloc}'; "
+                          f"reading it from '{candidate}'", file=sys.stderr)
+                self._dataset_loc[dataset] = candidate
+                return candidate
+
+        raise ValueError(
+            f"Could not locate {filename}: absent from the declared "
+            f"inloc '{self.inloc}' and from {', '.join(others)}")
 
     def locate(self, filename: str) -> str:
         """Physical path for a file (no protocol formatting)."""
         if self.inloc.startswith('dir:'):
             local_dir = self.inloc[4:].rstrip('/')
             return f"{local_dir}/{filename}"
-
-        # No SAM involved; falls back to SAM lookup if not found on stash.
-        if self.inloc == 'stash':
-            stash_path = stash_read_path(filename)
-            if os.path.exists(stash_path):
-                return stash_path
-
-        if self.inloc == 'resilient':
-            res_path = resilient_path(filename)
-            if resilient_file_exists(res_path):
-                return res_path
-
-        return self._locate_via_sam(filename)
-
-    def _locate_via_sam(self, filename: str) -> str:
-        locations = self._location_cache.get(filename)
-        if locations is None:
-            from .samweb_wrapper import locate_file_strict
-            try:
-                locations = locate_file_strict(filename)
-            except Exception as e:
-                raise ValueError(f"Could not locate file: {filename}: {e}")
-
-        if not locations:
-            raise ValueError(f"Could not locate file: {filename}")
-
-        # Prefer the requested location type (disk/tape), else first.
-        preferred = [loc for loc in locations
-                     if loc.get('location_type') == self.inloc]
-        selected = preferred[0] if preferred else locations[0]
-
-        path = selected.get('full_path', '')
-        if not path:
-            raise ValueError(f"Could not determine path for file: {filename}")
-        return path
+        return file_path_at(filename, self._dataset_location(filename))
 
     def url(self, filename: str) -> str:
         """Read path/URL for a file, formatted per the resolver's proto."""
-        # Stash paths are always plain CVMFS, ignoring proto. If the file
-        # fell back to SAM, apply the root protocol below instead.
+        # Stash paths are always plain CVMFS, ignoring proto. If the
+        # dataset resolved to another area, apply the root protocol below.
         if self.inloc == 'stash':
             path = self.locate(filename)
             if path.startswith(stash_read_root()):
