@@ -194,19 +194,6 @@
 			},
 			"inloc": "tape",
 			"outloc": {"*.art": "tape"},
-			"_comment_musing": [
-				"Run1Baq (Offline v13_34_10), NOT MDC2025aw, because these 13",
-				"datasets were written by v13_17_10/v13_32_10/v13_34_10, which",
-				"number Tracker_FEB_0_SurfIn at 120 and end the enum at",
-				"Tracker_FEB_18_SurfIn = 138. Offline v13_35_00 dropped three FEB",
-				"virtual detectors and renumbered: FEB_0 is 117 and lastEnum is",
-				"136, so reading this data under MDC2025av/aw throws",
-				"'Invalid VirtualDetectorID::enum_type : 136' out of SelectRecoMC.",
-				"The NoPrimary entries below DO use MDC2025aw: their inputs came",
-				"from MDC2025av (v13_35_00) and carry the new numbering.",
-				"Verified 2026-08-26: identical entry rc=1 under aw, rc=0 under",
-				"Run1Baq (20/20 events, VmHWM 618 MB)."
-			],
 			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baq/setup.sh"
 		},
 		{
