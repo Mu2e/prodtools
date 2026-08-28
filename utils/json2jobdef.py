@@ -8,6 +8,7 @@ Usage (from the repo root, with `muse setup ops` sourced):
   - Direct file: python3 utils/json2jobdef.py --help
 """
 import os, sys
+import re
 import random
 # Run directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -331,6 +332,7 @@ def validate_required_fields(config):
     # setup script, or a code tarball that travels with the job.
     if bool(config.get('simjob_setup')) == bool(config.get('code')):
         sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
+    validate_era_agreement(config)
     try:
         for key in ENTRY_VALUE_KEYS:
             if key in config:
@@ -338,6 +340,56 @@ def validate_required_fields(config):
         validate_outloc(config['outloc'])
     except ValueError as exc:
         sys.exit(f"json2jobdef: {exc}")
+
+def _era_suffix(token):
+    """Trailing lowercase era letters of a dsconf head or Musing tag.
+
+    'Run1Baw' -> 'aw', 'MDC2025aw' -> 'aw', 'Run1Bab2' -> 'ab'.
+    Returns None when the token carries no era letters ('Run1B', 'MDC2025',
+    'v02_01_00'), which is the signal that the two are not comparable.
+    """
+    m = re.search(r'([a-z]+)\d*$', token)
+    return m.group(1) if m else None
+
+
+def validate_era_agreement(config):
+    """The dsconf era letters MUST match the Musing that reconstructs it.
+
+    A dsconf of Run1Baw_best_v1_5 built under SimJob/Run1Baq produces files
+    NAMED for an era they were not processed with: the name says v13_36_00,
+    the payload is v13_34_10. Nothing downstream can detect that -- the mcs
+    is valid, the reco exits 0, and the mislabel is only visible by reading
+    this JSON. It cost a ~6400-job round of Run1Baw_best_v1_5 mcs that were
+    actually reconstructed at Run1Baq.
+
+    Only the era letters are compared, so a dsconf may legitimately sit in a
+    different family from its Musing (Run1Baw under MDC2025aw is fine -- both
+    are 'aw'). Tokens with no era letters are skipped, not guessed at.
+
+    An entry that genuinely must cross eras states why:
+
+        "era_mismatch_ok": "<reason this dsconf is not the Musing's era>"
+
+    which is deliberately a sentence, not a bool, so the reason lands in the
+    JSON next to the pin instead of in someone's memory.
+    """
+    setup = config.get('simjob_setup')
+    if not setup:
+        return                       # --code tarball: no Musing tag to read
+    reason = config.get('era_mismatch_ok')
+    if reason:
+        return
+    tag = Path(str(setup)).parent.name          # .../Musings/SimJob/<TAG>/setup.sh
+    dsconf = str(config.get('dsconf') or '')
+    head = dsconf.split('_')[0].split('-')[0]
+    ds_era, mu_era = _era_suffix(head), _era_suffix(tag)
+    if ds_era and mu_era and ds_era != mu_era:
+        sys.exit(
+            f"json2jobdef: dsconf/Musing era mismatch: dsconf '{dsconf}' is era "
+            f"'{ds_era}' but simjob_setup pins '{tag}' (era '{mu_era}').\n"
+            f"  Outputs would be NAMED {ds_era} and PROCESSED {mu_era}.\n"
+            f"  Fix the dsconf or the Musing. If the cross-era pin is "
+            f"intentional, add \"era_mismatch_ok\": \"<reason>\" to the entry.")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
