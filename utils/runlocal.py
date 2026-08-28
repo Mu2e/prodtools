@@ -49,6 +49,8 @@ from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import _fetch_file_local
 from utils.runmu2e import (
     _synthesize_direct_fname,
+    _validate_outputs,
+    _validation_enabled,
     build_mu2e_cmd,
     process_jobdef,
 )
@@ -202,6 +204,8 @@ def child_argv(index, args):
         argv.append(f'--mu2e-options={args.mu2e_options}')
     if args.copy_input:
         argv.append('--copy-input')
+    if getattr(args, 'no_validate', False):
+        argv.append('--no-validate')
     if getattr(args, 'code_root', None):
         # Children get the already-unpacked directory, never --code: one
         # unpack serves all of them, no redoing several GB of extraction.
@@ -466,11 +470,20 @@ def run_one(index, args):
     manifest — is the worker's job and deliberately absent here.
     """
     jobdesc = synth_jobdesc(args.jobdef, args.inloc, args.indices)
-    fcl, simjob_setup, _infiles, _outputs, _inloc = process_jobdef(
+    fcl, simjob_setup, _infiles, outputs, _inloc = process_jobdef(
         jobdesc, _synthesize_direct_fname(index), args)
     cmd = build_mu2e_cmd(fcl, simjob_setup, args)
     print(f"[local] index {index}: {cmd}")
-    return subprocess.run(cmd).returncode
+    rc = subprocess.run(cmd).returncode
+    # Same read-back the worker does before its push (runmu2e), so a
+    # local smoke catches an unreadable output the way the grid would.
+    if rc == 0 and _validation_enabled(jobdesc, args):
+        produced = []
+        for o in outputs:
+            produced.extend(str(p) for p in sorted(Path('.').glob(o['dataset'])))
+        if _validate_outputs(produced, simjob_setup):
+            return 1
+    return rc
 
 
 def build_parser():
@@ -501,6 +514,10 @@ def build_parser():
     parser.add_argument('--copy-input', action='store_true',
                         help='stage inputs locally with mdh instead of '
                              'streaming them (worker --copy-input parity)')
+    parser.add_argument('--no-validate', action='store_true',
+                        help='skip the ROOT read-back of every .art/.root '
+                             'output after mu2e exits 0 (worker parity; '
+                             'the read-back is ~15 s per GB)')
     parser.add_argument('--timeout', type=float, default=DEFAULT_TIMEOUT,
                         metavar='SECONDS',
                         help=f'per-job wall-clock limit (default '

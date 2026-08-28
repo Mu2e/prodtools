@@ -16870,6 +16870,104 @@ class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
 
 
 
+class TestReadBackValidation(unittest.TestCase):
+    """After mu2e exits 0 and before anything is pushed, every .art/.root
+    output is read back entry by entry (utils/validate_root_outputs.py).
+    It is the only gate that looks at the payload — exit code, SHA256
+    manifest and pushOutput CRC all certify the bytes as written."""
+
+    def _run_capture(self, side_effect=None):
+        from utils import runmu2e
+        calls = []
+        def fake_run(cmd, shell=False, **kw):
+            calls.append(cmd)
+            if side_effect:
+                raise side_effect
+        return runmu2e, calls, fake_run
+
+    def test_only_root_files_are_read_back_and_none_means_no_run(self):
+        from utils import runmu2e
+        runmu2e_, calls, fake_run = self._run_capture()
+        with patch.object(runmu2e, 'run', fake_run):
+            self.assertFalse(runmu2e._validate_outputs(
+                ['out.log', 'etc.mu2e.index.000.0000001.txt'], '/setup.sh'))
+        self.assertEqual(calls, [])
+
+    def test_command_sources_the_job_setup_and_names_every_file(self):
+        from utils import runmu2e
+        _, calls, fake_run = self._run_capture()
+        with patch.object(runmu2e, 'run', fake_run):
+            failed = runmu2e._validate_outputs(
+                ['mcs.mu2e.A.B.001.art', 'nts.mu2e.A.B.001.root', 'x.log'],
+                '/cvmfs/m/setup.sh')
+        self.assertFalse(failed)
+        self.assertEqual(len(calls), 1)
+        argv = calls[0]
+        self.assertEqual(argv[:2], ['bash', '-c'])
+        self.assertTrue(argv[2].startswith('source /cvmfs/m/setup.sh && python3 '))
+        self.assertIn('validate_root_outputs.py', argv[2])
+        self.assertIn('mcs.mu2e.A.B.001.art', argv[2])
+        self.assertIn('nts.mu2e.A.B.001.root', argv[2])
+        self.assertNotIn('x.log', argv[2])
+
+    def test_unreadable_output_marks_the_job_failed(self):
+        from utils import runmu2e
+        _, calls, fake_run = self._run_capture(
+            subprocess.CalledProcessError(1, 'validate'))
+        with patch.object(runmu2e, 'run', fake_run):
+            self.assertTrue(runmu2e._validate_outputs(
+                ['mcs.mu2e.A.B.001.art'], '/setup.sh'))
+
+    def test_entry_key_wins_over_the_cli_and_must_be_bool(self):
+        from types import SimpleNamespace
+        from utils import runmu2e
+        cli_on = SimpleNamespace(no_validate=False)
+        cli_off = SimpleNamespace(no_validate=True)
+        self.assertTrue(runmu2e._validation_enabled({}, cli_on))
+        self.assertFalse(runmu2e._validation_enabled({}, cli_off))
+        self.assertFalse(runmu2e._validation_enabled({'validate_outputs': False}, cli_on))
+        self.assertTrue(runmu2e._validation_enabled({'validate_outputs': True}, cli_off))
+        with self.assertRaises(SystemExit):
+            runmu2e._validation_enabled({'validate_outputs': 'yes'}, cli_on)
+
+    def test_runlocal_forwards_no_validate_to_the_child(self):
+        from types import SimpleNamespace
+        from utils import runlocal
+        base = dict(entry_point='/x/runlocal.py', jobdef='cnf.tar', inloc='tape',
+                    indices=[3], nevts=-1, mu2e_options='', copy_input=False,
+                    code=None, code_root=None, no_validate=False)
+        argv = runlocal.child_argv(3, SimpleNamespace(**base))
+        self.assertNotIn('--no-validate', argv)
+        argv = runlocal.child_argv(3, SimpleNamespace(**{**base, 'no_validate': True}))
+        self.assertIn('--no-validate', argv)
+
+    def test_scan_finds_a_scrambled_block(self):
+        """End to end with real ROOT (skipped in an environment without
+        it, e.g. `muse setup ops`): a healthy tree reads OK; the same file
+        with 4 KiB overwritten mid-way reads BAD and exits 1 — the
+        fnpc18003 signature."""
+        try:
+            import ROOT  # noqa: F401
+        except ImportError:
+            self.skipTest('ROOT not importable here')
+        import os, random, io, contextlib
+        from array import array
+        from utils import validate_root_outputs as v
+        d = _mkdtemp(); p = os.path.join(d, 'nts.mu2e.T.C.001.root')
+        f = ROOT.TFile(p, 'RECREATE'); t = ROOT.TTree('Events', 'Events')
+        x = array('d', [0.0]); t.Branch('x', x, 'x/D')
+        rnd = random.Random(1)
+        for i in range(200000):
+            x[0] = rnd.random(); t.Fill()
+        t.Write(); f.Close()
+        self.assertEqual(v.main([p]), 0)
+        size = os.path.getsize(p)
+        with open(p, 'r+b') as fh:
+            fh.seek(size // 2); fh.write(bytes(rnd.getrandbits(8) for _ in range(4096)))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = v.main([p])
+        self.assertEqual(rc, 1)
         self.assertIn('BAD', out.getvalue())
 
 if __name__ == '__main__':
