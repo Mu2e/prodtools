@@ -100,13 +100,16 @@ def dataset_dir(dsname: str, location: str) -> str:
     return ""
 
 
-# Probe order when a dataset is absent from the declared inloc. Every
-# disk-resident area comes first and tape LAST: a dataset can hold copies
-# in two places at once (the pileup Cats are on resilient AND tape), and
-# reading the tape copy queues an Enstore recall that stalls the job for
-# minutes to hours. Stats are free — only the read pays — so trying tape
-# last never costs anything, while picking it first can cost a lease.
-_FALLBACK_ORDER = ('disk', 'scratch', 'resilient', 'stash', 'tape')
+# Probe order when a dataset is absent from the declared inloc. Order
+# only matters when a dataset holds copies in two areas at once. The
+# common case is a pileup Cat staged to resilient next to its tape
+# archive, so resilient comes before tape: a stat says "present" for a
+# cold file too, and reading it queues an Enstore recall that stalls the
+# job for minutes to hours. Stats are free — only the read pays.
+# Stash sits behind tape because it is rarely used; a dataset that must
+# be read from CVMFS declares `inloc: stash`, which is always probed
+# first. Scratch is last: evictable and never a staging target.
+_FALLBACK_ORDER = ('disk', 'resilient', 'tape', 'stash', 'scratch')
 
 
 def file_path_at(filename: str, location: str) -> str:
