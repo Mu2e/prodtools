@@ -336,6 +336,26 @@
     },
     {
         "desc": "MuCap1809keV",
+        "dsconf": "Run1Baw",
+        "fcl": "Production/JobConfig/primary/MuCap1809keVCalo.fcl",
+        "fcl_overrides": {
+            "physics.filters.PrimaryFilter.StrawGasSteps" : []
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
+        "events": 10000,
+        "njobs": 1000,
+        "run": 1470,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aw/setup.sh",
+        "owner": "mu2e",
+        "inloc": "resilient",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "desc": "MuCap1809keV",
         "dsconf": "Run1Bag",
         "fcl": "Production/JobConfig/primary/MuCap1809keVCalo.fcl",
         "fcl_overrides": {
