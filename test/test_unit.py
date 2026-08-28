@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Every temp dir this suite makes is removed at interpreter exit. Bare
 # tempfile.mkdtemp() leaks one directory per test; at ~1000 tests a run,
 # that walked /tmp into the ext4 65000-subdirectory ceiling on the gpvms,
-# after which NOTHING on the node could mkdir in /tmp -- including
+# after which NOTHING on the node could mkdir in /tmp — including
 # production submission (2026-08-13). Cleanup lives here, once, rather
 # than in 31 separate setUp methods that each have to remember.
 _TMPDIRS = []
@@ -542,61 +542,80 @@ class TestLocateFile(unittest.TestCase):
         self.assertEqual(path, "/a/b/c/x.art")
 
 
-class TestLocateFileSAM(unittest.TestCase):
-    """Tests for resolver.locate when SAM is involved (mocked)."""
+class TestLocateDatasetArea(unittest.TestCase):
+    """resolver.locate resolves a DATASET's area once, then computes every
+    file path from the name. file_exists_at is the only probe, so these
+    tests drive it directly rather than mocking SAM."""
+
+    _FNAME = 'dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art'
+    _DISK = ('/pnfs/mu2e/persistent/datasets/phy-sim/dts/mu2e/CeEndpoint/'
+             'Run1Bab/art/dd/7e/' + _FNAME)
+    _TAPE = ('/pnfs/mu2e/tape/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art/'
+             'dd/7e/' + _FNAME)
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
-        files = ["sim.mu2e.Test.MDC2025ac.001430_00000000.art"]
-        jp = _root_input_jobpars(files)
+        jp = _root_input_jobpars([self._FNAME])
         self.tar = _make_tarball(jp, "#include \"base.fcl\"\nmodule_type : RootInput\n")
         self.Cls = Mu2eJobFCL
 
     def tearDown(self):
         os.unlink(self.tar)
 
-    def test_tape_location_preferred(self):
-        locations = [
-            {'location_type': 'disk', 'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/f.art'},
-            {'location_type': 'tape', 'full_path': '/pnfs/mu2e/tape/phy-sim/f.art'},
-        ]
-        with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
+    @staticmethod
+    def _present(*paths):
+        """Patch file_exists_at so only `paths` exist."""
+        wanted = set(paths)
+        return patch('utils.file_resolver.file_exists_at',
+                     side_effect=lambda p: p in wanted)
+
+    def test_declared_inloc_used_when_present(self):
+        with self._present(self._TAPE, self._DISK):
             job = self.Cls(self.tar, inloc='tape', proto='file')
-            path = job._resolver.locate("f.art")
-        self.assertEqual(path, '/pnfs/mu2e/tape/phy-sim/f.art')
+            self.assertEqual(job._resolver.locate(self._FNAME), self._TAPE)
 
-    def test_disk_location_preferred(self):
-        locations = [
-            {'location_type': 'disk', 'full_path': '/pnfs/mu2e/persistent/datasets/phy-sim/f.art'},
-            {'location_type': 'tape', 'full_path': '/pnfs/mu2e/tape/phy-sim/f.art'},
-        ]
-        with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
+    def test_disk_inloc_used_when_present(self):
+        with self._present(self._TAPE, self._DISK):
             job = self.Cls(self.tar, inloc='disk', proto='file')
-            path = job._resolver.locate("f.art")
-        self.assertEqual(path, '/pnfs/mu2e/persistent/datasets/phy-sim/f.art')
+            self.assertEqual(job._resolver.locate(self._FNAME), self._DISK)
 
-    def test_fallback_to_first_when_no_match(self):
-        """When requested location_type isn't found, fall back to first entry."""
-        locations = [
-            {'location_type': 'tape', 'full_path': '/pnfs/mu2e/tape/phy-sim/f.art'},
-        ]
-        with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
-            job = self.Cls(self.tar, inloc='disk', proto='file')
-            path = job._resolver.locate("f.art")
-        self.assertEqual(path, '/pnfs/mu2e/tape/phy-sim/f.art')
+    def test_falls_back_to_disk_not_tape(self):
+        """A dataset absent from the declared inloc but present on BOTH
+        disk and tape must resolve to disk: reading the tape copy queues
+        an Enstore recall that can outlast the job's lease."""
+        with self._present(self._TAPE, self._DISK):
+            job = self.Cls(self.tar, inloc='resilient', proto='file')
+            self.assertEqual(job._resolver.locate(self._FNAME), self._DISK)
 
-    def test_no_locations_raises(self):
-        with patch('utils.samweb_wrapper.locate_file_strict', return_value=[]):
+    def test_tape_used_when_only_copy(self):
+        with self._present(self._TAPE):
+            job = self.Cls(self.tar, inloc='resilient', proto='file')
+            self.assertEqual(job._resolver.locate(self._FNAME), self._TAPE)
+
+    def test_absent_everywhere_raises(self):
+        with self._present():
             job = self.Cls(self.tar, inloc='tape', proto='file')
             with self.assertRaises(ValueError):
-                job._resolver.locate("f.art")
+                job._resolver.locate(self._FNAME)
 
-    def test_sam_exception_raises(self):
-        with patch('utils.samweb_wrapper.locate_file_strict',
-                   side_effect=Exception("SAM unavailable")):
+    def test_area_resolved_once_per_dataset(self):
+        """The probe count is per dataset, not per file — the property
+        that lets a 20,000-file merge resolve without a SAM batch."""
+        other = 'dts.mu2e.CeEndpoint.Run1Bab.001440_00009999.art'
+        with self._present(self._TAPE, self._DISK) as probe:
             job = self.Cls(self.tar, inloc='tape', proto='file')
-            with self.assertRaises(ValueError):
-                job._resolver.locate("f.art")
+            job._resolver.locate(self._FNAME)
+            calls_after_first = probe.call_count
+            job._resolver.locate(other)
+            self.assertEqual(probe.call_count, calls_after_first)
+
+    def test_no_sam_call(self):
+        """locate() must not touch SAM at all — that is the whole point."""
+        with self._present(self._TAPE), \
+             patch('utils.samweb_wrapper.locate_file_strict') as mock_sam:
+            job = self.Cls(self.tar, inloc='tape', proto='file')
+            job._resolver.locate(self._FNAME)
+        mock_sam.assert_not_called()
 
 
 class TestFormatFilename(unittest.TestCase):
@@ -637,16 +656,17 @@ class TestFormatFilename(unittest.TestCase):
                         f"Expected prefix: {expected_prefix}\nGot: {result}")
 
     def test_enstore_prefix_stripped_in_root_proto(self):
-        """enstore: prefix in SAM path should be stripped before xroot conversion."""
-        locations = [
-            {'location_type': 'tape',
-             'full_path': 'enstore:/pnfs/mu2e/tape/phy-sim/f.art'},
-        ]
-        with patch('utils.samweb_wrapper.locate_file_strict', return_value=locations):
-            from utils.jobfcl import Mu2eJobFCL
-            job = Mu2eJobFCL(self.tar, inloc='tape', proto='root')
-            result = job._format_filename("f.art")
-        self.assertTrue(result.startswith("xroot://fndcadoor.fnal.gov//pnfs/"))
+        """A storage prefix must be stripped before xroot conversion.
+
+        Computed paths never carry `enstore:`, but url() still runs
+        remove_storage_prefix for SAM-derived paths reaching it from
+        other consumers, so the stripping stays covered here.
+        """
+        from utils.file_resolver import remove_storage_prefix, xroot_read_url
+        stripped = remove_storage_prefix('enstore:/pnfs/mu2e/tape/phy-sim/f.art')
+        self.assertEqual(stripped, '/pnfs/mu2e/tape/phy-sim/f.art')
+        self.assertTrue(xroot_read_url(stripped).startswith(
+            "xroot://fndcadoor.fnal.gov//pnfs/"))
 
 
 # ---------------------------------------------------------------------------
@@ -1702,70 +1722,115 @@ class TestWriteFclFilenameDerivation(unittest.TestCase):
 # 17. stash SAM-fallback (file not on CVMFS)
 # ---------------------------------------------------------------------------
 
-class TestStashFallback(unittest.TestCase):
-    """When inloc='stash' and the file is not on CVMFS, resolver.locate falls back to SAM."""
+class TestStashMiss(unittest.TestCase):
+    """inloc='stash' with the file absent from CVMFS: the dataset resolves
+    to another area (load-bearing — mixing jobs declare one inloc while
+    their pileup and primaries sit in different areas)."""
 
-    _TAPE_DIR = '/pnfs/mu2e/tape/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art'
     _FNAME = 'dts.mu2e.CeEndpoint.Run1Bab.001440_00001234.art'
+    _TAPE = ('/pnfs/mu2e/tape/phy-sim/dts/mu2e/CeEndpoint/Run1Bab/art/'
+             'dd/7e/' + _FNAME)
 
     def setUp(self):
         from utils.jobfcl import Mu2eJobFCL
-        files = [self._FNAME]
-        jp = _root_input_jobpars(files)
+        jp = _root_input_jobpars([self._FNAME])
         self.tar = _make_tarball(jp, "module_type : RootInput\n")
         self.Cls = Mu2eJobFCL
-        # Simulate file NOT present on stash CVMFS
-        self._exists_patch = patch('os.path.exists', return_value=False)
-        self._exists_patch.start()
 
     def tearDown(self):
-        self._exists_patch.stop()
         os.unlink(self.tar)
 
-    def _sam_locations(self, location_type='tape'):
-        return [{'location_type': location_type, 'full_path': self._TAPE_DIR}]
+    @staticmethod
+    def _present(*paths):
+        wanted = set(paths)
+        return patch('utils.file_resolver.file_exists_at',
+                     side_effect=lambda p: p in wanted)
 
-    def test_sam_called_when_stash_file_missing(self):
-        """SAM is contacted as fallback when the stash CVMFS path does not exist."""
-        with patch('utils.samweb_wrapper.locate_file_strict',
-                   return_value=self._sam_locations()) as mock_locate:
-            from utils.jobfcl import Mu2eJobFCL
-            job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
+    def test_stash_hit_returns_cvmfs_path(self):
+        from utils.file_resolver import stash_read_path
+        stash = stash_read_path(self._FNAME)
+        with self._present(stash):
+            job = self.Cls(self.tar, inloc='stash', proto='file')
+            self.assertEqual(job._resolver.locate(self._FNAME), stash)
+
+    def test_stash_miss_resolves_elsewhere(self):
+        with self._present(self._TAPE):
+            job = self.Cls(self.tar, inloc='stash', proto='file')
+            self.assertEqual(job._resolver.locate(self._FNAME), self._TAPE)
+
+    def test_stash_miss_warns_which_area_was_used(self):
+        """The substitution must be announced: a silent area swap is how
+        an unintended tape recall used to go unnoticed."""
+        err = io.StringIO()
+        with self._present(self._TAPE), contextlib.redirect_stderr(err):
+            job = self.Cls(self.tar, inloc='stash', proto='file')
             job._resolver.locate(self._FNAME)
-        mock_locate.assert_called_once_with(self._FNAME)
+        self.assertIn('tape', err.getvalue())
+        self.assertIn('dts.mu2e.CeEndpoint.Run1Bab.art', err.getvalue())
 
-    def test_fallback_returns_sam_path(self):
-        """The SAM-provided path is returned when the stash file is absent."""
-        with patch('utils.samweb_wrapper.locate_file_strict',
-                   return_value=self._sam_locations()):
-            from utils.jobfcl import Mu2eJobFCL
-            job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
-            path = job._resolver.locate(self._FNAME)
-        self.assertEqual(path, self._TAPE_DIR)
-
-    def test_fallback_raises_when_sam_has_no_locations(self):
-        """ValueError is raised when the file is absent from stash and SAM finds nothing."""
-        with patch('utils.samweb_wrapper.locate_file_strict', return_value=[]):
-            from utils.jobfcl import Mu2eJobFCL
-            job = Mu2eJobFCL(self.tar, inloc='stash', proto='file')
+    def test_absent_everywhere_raises(self):
+        with self._present():
+            job = self.Cls(self.tar, inloc='stash', proto='file')
             with self.assertRaises(ValueError):
                 job._resolver.locate(self._FNAME)
 
-    def test_fallback_format_filename_applies_xroot(self):
-        """_format_filename with proto='root' converts the SAM tape path to an xroot URL."""
-        with patch('utils.samweb_wrapper.locate_file_strict',
-                   return_value=self._sam_locations()):
-            from utils.jobfcl import Mu2eJobFCL
-            job = Mu2eJobFCL(self.tar, inloc='stash', proto='root')
+    def test_root_proto_converts_resolved_path_to_xroot(self):
+        with self._present(self._TAPE):
+            job = self.Cls(self.tar, inloc='stash', proto='root')
             result = job._format_filename(self._FNAME)
-        self.assertTrue(result.startswith("xroot://"),
-                        f"Expected xroot URL for tape fallback, got: {result}")
-        self.assertIn(self._FNAME, result)
+        self.assertTrue(result.startswith(
+            "xroot://fndcadoor.fnal.gov//pnfs/"), result)
 
+    def test_fallback_to_stash_under_root_proto_reads_cvmfs(self):
+        """The read grammar follows the RESOLVED area, not the declared
+        inloc. A job declaring `inloc: disk` whose dataset is only on
+        stash used to ask xrootd for a /cvmfs path and raise, killing
+        every job in the campaign before art started."""
+        from utils.file_resolver import stash_read_path
+        stash = stash_read_path(self._FNAME)
+        with self._present(stash):
+            job = self.Cls(self.tar, inloc='disk', proto='root')
+            self.assertEqual(job._format_filename(self._FNAME), stash)
 
-# ---------------------------------------------------------------------------
-# 18. _create_inputs_file exclude logic (json2jobdef.py)
-# ---------------------------------------------------------------------------
+    def test_fallback_to_stash_under_file_proto_reads_cvmfs(self):
+        from utils.file_resolver import stash_read_path
+        stash = stash_read_path(self._FNAME)
+        with self._present(stash):
+            job = self.Cls(self.tar, inloc='tape', proto='file')
+            self.assertEqual(job._format_filename(self._FNAME), stash)
+
+    def test_resilient_inloc_falling_back_to_stash_reads_cvmfs(self):
+        """Mixing entries declare `inloc: resilient` for their pileup
+        Cats; a Cat staged to stash instead must still be readable."""
+        from utils.file_resolver import stash_read_path
+        stash = stash_read_path(self._FNAME)
+        with self._present(stash):
+            job = self.Cls(self.tar, inloc='resilient', proto='root')
+            self.assertEqual(job._format_filename(self._FNAME), stash)
+
+    def test_fallback_to_resilient_always_uses_xroot(self):
+        """Resilient has no CVMFS mirror, so it streams even when the
+        declared inloc's proto would have said 'file'."""
+        from utils.file_resolver import resilient_path
+        res = resilient_path(self._FNAME)
+        with self._present(res):
+            job = self.Cls(self.tar, inloc='disk', proto='file')
+            result = job._format_filename(self._FNAME)
+        self.assertTrue(result.startswith(
+            "xroot://fndcadoor.fnal.gov//pnfs/"), result)
+        self.assertIn('/resilient/', result)
+
+    def test_disk_hit_still_streams_via_xroot(self):
+        """Regression guard: the common no-fallback case is unchanged."""
+        from utils.file_resolver import file_path_at
+        disk = file_path_at(self._FNAME, 'disk')
+        with self._present(disk):
+            job = self.Cls(self.tar, inloc='disk', proto='root')
+            result = job._format_filename(self._FNAME)
+        self.assertTrue(result.startswith(
+            "xroot://fndcadoor.fnal.gov//pnfs/"), result)
+        self.assertIn('/persistent/datasets/', result)
+
 
 class TestCreateInputsFileExclude(unittest.TestCase):
     """Verify that _create_inputs_file honours the exclude_files parameter."""
@@ -2170,7 +2235,7 @@ class TestGenericTarballGuard(unittest.TestCase):
 
     def test_build_skips_guard_for_generic_tarball(self):
         """build_jobdef must NOT call validate_output_filenames when
-        generic_tarball is set -- the deferred {desc}/sequencer cannot resolve
+        generic_tarball is set — the deferred {desc}/sequencer cannot resolve
         at build time, so running the guard would abort the build."""
         from unittest.mock import patch
         from utils import json2jobdef
@@ -3528,7 +3593,7 @@ class TestLatestPerDescription(unittest.TestCase):
         stale = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020aw_best_v1_3_v06_06_00.root"
         newest = "nts.mu2e.CeEndpointMix1BBTriggered.MDC2020-001.root"
         dates = {stale: _dt.datetime(2025, 9, 6), newest: _dt.datetime(2026, 3, 10)}
-        # dsconf order picks the stale one -- this is the bug being fixed
+        # dsconf order picks the stale one — this is the bug being fixed
         rows, _ = latest_per_description([stale, newest])
         self.assertEqual(rows[0][2], stale)
         # the injected key picks the actually-newest
@@ -3537,7 +3602,7 @@ class TestLatestPerDescription(unittest.TestCase):
 
     def test_superseded_honors_same_order_key(self):
         """--superseded means 'every version that is not the latest', so it must
-        order by the SAME key -- otherwise a dataset lands in both listings or
+        order by the SAME key — otherwise a dataset lands in both listings or
         in neither."""
         import datetime as _dt
         from utils.latestDatasets import (latest_per_description,
@@ -3579,7 +3644,7 @@ class TestLatestPerDescription(unittest.TestCase):
         self.assertEqual(key(b_only), _dt.datetime.min)
 
     def test_creation_date_key_fails_loud_on_missing_date(self):
-        """No date for a contended dataset must abort, naming it -- never
+        """No date for a contended dataset must abort, naming it — never
         silently revert to lexicographic order."""
         import datetime as _dt
         from utils import latestDatasets
@@ -3593,7 +3658,7 @@ class TestLatestPerDescription(unittest.TestCase):
         self.assertIn(undated, str(cm.exception))
 
     def test_dsconf_mode_makes_no_sam_calls(self):
-        """The default path must stay free of SAM round trips -- the --emit
+        """The default path must stay free of SAM round trips — the --emit
         chain relies on it."""
         from utils import latestDatasets
 
@@ -3609,7 +3674,7 @@ class TestLatestPerDescription(unittest.TestCase):
 
     def test_duplicate_name_not_split_across_latest_and_superseded(self):
         """A repeated input name (e.g. `cat a.txt b.txt | --stdin`) must not
-        land in both the latest and superseded listings -- that would
+        land in both the latest and superseded listings — that would
         nominate a live dataset for retirement."""
         from utils.latestDatasets import (latest_per_description,
                                           superseded_per_description)
@@ -4628,13 +4693,13 @@ class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
     Upstream mu2ejobsub derives a scope path by ONE rule
     (token_request_dirname): strip the /pnfs prefix, change nothing else.
     So `storage_scope(f, loc)` must be a prefix of `dataset_dir(ds, loc)`
-    with /pnfs removed -- for every location.
+    with /pnfs removed — for every location.
 
     tape breaks that if you insert `datasets/` unconditionally: the
     physical tape layout has no such component (see dataset_dir), so the
     scope named a path nothing lives at and granted nothing. Writes kept
     working via the separate broad `storage.create:/mu2e`, which under
-    the WLCG profile permits upload but NOT delete -- so pushOutput's
+    the WLCG profile permits upload but NOT delete — so pushOutput's
     recover path could never remove a stale file and 403'd forever
     (CeMLeadingLog 2/418, 2026-07-27).
     """
@@ -4667,7 +4732,7 @@ class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
                          '/mu2e/tape/phy-sim/dig/mu2e')
 
     def test_disk_scope_keeps_datasets_component(self):
-        """Don't over-correct -- disk's physical layout really does have it."""
+        """Don't over-correct — disk's physical layout really does have it."""
         from utils.file_resolver import storage_scope
         self.assertEqual(storage_scope(self.LOG, 'disk'),
                          '/mu2e/persistent/datasets/phy-etc/log/mu2e')
@@ -4905,7 +4970,7 @@ class TestTwoPhaseLedgerWrite(unittest.TestCase):
         self.assertTrue(_slice_overlaps_ledger(
             self.db, self.entry['tarball'], 0, 0, 3))
 
-    # -- reconcile: the ONLY exit from a blocking failed/stuck window ----
+    # — reconcile: the ONLY exit from a blocking failed/stuck window ----
     # Without it a failed submit deadlocked its campaign permanently:
     # the 'failed' row keeps overlapping, top_up re-pauses on every
     # tick, and `resume` cannot help because it is the ROW, not the
@@ -5528,7 +5593,7 @@ class TestSubmitEntryResourceWiring(unittest.TestCase):
 
 class TestJobsubArgvCodeTarball(unittest.TestCase):
     """The code tarball rides jobsub's --tar_file_name (RCDS/cvmfs,
-    published once, no per-job copy) -- NOT -f dropbox://, which
+    published once, no per-job copy) — NOT -f dropbox://, which
     transfers per job. mu2eprodsys:474-475 does the same."""
 
     def _argv(self, **extra):
@@ -6104,7 +6169,7 @@ class TestTopUp(unittest.TestCase):
 
     def test_campaign_filter_absent_ticks_every_active_campaign(self):
         # Omitting --campaign/only_campaign must keep ticking every
-        # active campaign -- the production cron calls `submissions run`
+        # active campaign — the production cron calls `submissions run`
         # with no filter and must not be scoped down by this change.
         from utils.submissions import top_up
         a = self._campaign(tarball='cnf.mu2e.A.C.0.tar', njobs=2, slice=2)
@@ -6139,7 +6204,7 @@ class TestTopUp(unittest.TestCase):
         self.assertEqual(c['cursor'], 0)            # DB untouched
         self.assertEqual(c['state'], 'active')
 
-    # -- crash-window / ledger-overlap guard (Fix 2) -----------------------
+    # — crash-window / ledger-overlap guard (Fix 2) -----------------------
 
     def test_overlap_pauses_without_submitting(self):
         """A ledger row already covering part of the next slice window
@@ -6215,7 +6280,7 @@ class TestTopUp(unittest.TestCase):
         self.assertEqual(c['cursor'], 0)            # DB untouched
         self.assertEqual(c['state'], 'active')
 
-    # -- self-heal fully-submitted-but-unclosed campaigns (Fix 3) ----------
+    # — self-heal fully-submitted-but-unclosed campaigns (Fix 3) ----------
 
     def test_self_heal_closes_stuck_complete_campaign(self):
         """cursor == njobs but state still 'active' (crash between
@@ -6803,7 +6868,7 @@ class TestDirectPathPreflight(unittest.TestCase):
     def test_musing_entry_real_cnf_passes_code_gate_unaffected(self):
         # The REAL check_code_tarball (not mocked) against a real cnf
         # tarball carrying no code_ref, and an entry carrying no 'code'
-        # -- the common Musing-entry case. Proves the code gate added
+        # — the common Musing-entry case. Proves the code gate added
         # to _preflight_inputs costs nothing for the production path:
         # one cnf parse, immediate short-circuit, no sha256.
         tmpdir = _mkdtemp()
@@ -8116,7 +8181,7 @@ class TestCheckCodeTarball(unittest.TestCase):
     def test_corrupt_cnf_reports_query_error_instead_of_raising(self):
         """Mu2eJobBase.__init__ opens the cnf with tarfile.open unguarded;
         a garbage/truncated cnf raises tarfile.ReadError there. That must
-        surface as a Problem, not an uncaught traceback -- the draining
+        surface as a Problem, not an uncaught traceback — the draining
         branch never used to parse the cnf at all, so this is the only
         thing standing between a half-staged cnf and a crash mid-enqueue."""
         from utils.check_inputs import check_code_tarball
@@ -8235,8 +8300,8 @@ class TestEnqueueInputGate(unittest.TestCase):
 
     def test_failing_code_check_blocks_and_creates_no_campaign(self):
         """A code_mismatch from check_code_tarball must gate the NORMAL
-        branch exactly like a check_inputs failure does -- exit 2, no
-        ledger row -- even though check_inputs itself passed clean."""
+        branch exactly like a check_inputs failure does — exit 2, no
+        ledger row — even though check_inputs itself passed clean."""
         from utils import submit
         entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
                  "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
@@ -8895,7 +8960,7 @@ class TestMcpCondor(unittest.TestCase):
 
     def test_node_version_banner_never_inherits_stdin(self):
         """_node_version_banner shells to condor_version(1) INSIDE the MCP
-        server, whose own stdin IS the JSON-RPC channel -- a child that
+        server, whose own stdin IS the JSON-RPC channel — a child that
         inherits it can consume protocol bytes and hang the server. This
         is the same trap the write server's runner.run_cli pins near
         test/test_unit.py:10189 (`push_cnf`'s `cat $BEARER_TOKEN_FILE`
@@ -9471,7 +9536,7 @@ class TestMcpCampaignStatus(unittest.TestCase):
         seam must reach queue_block()'s `reason` unchanged. Every other
         clusters_fn double in this suite returns (something, None), so a
         dropped `reason=queue_reason` at the call site is invisible to
-        them -- an `unknown` block would silently fall back to
+        them — an `unknown` block would silently fall back to
         queue_block's fixed 'could not reach every schedd' text, which
         blames the wrong layer (see queue_block's docstring)."""
         from prodtools_mcp.tools import status
@@ -9653,7 +9718,7 @@ class TestMcpReadIdentity(unittest.TestCase):
         # db_path is the injection seam the existing tests use; `mine`
         # must not take it away from them. mine=True so resolved_db is
         # non-None and there is something for db_path to actually win
-        # over -- with mine defaulted, resolved_db is None and this test
+        # over — with mine defaulted, resolved_db is None and this test
         # is vacuous.
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
@@ -10512,7 +10577,7 @@ class TestWriteToolParameterTypes(unittest.TestCase):
                     # (push_cnf's slice_size selects the enqueue mode).
                     # A bare `int = None` would pass a naive identity
                     # check while advertising a schema that disagrees
-                    # with the default -- the same class of lying
+                    # with the default — the same class of lying
                     # signature this test exists to catch. What matters
                     # is only that the model is never told "string".
                     self.assertIn(
@@ -10530,15 +10595,15 @@ class TestWriteToolParameterTypes(unittest.TestCase):
                     self.assertIs(
                         param.annotation, bool,
                         f'{name}(confirm) must be bool: require_confirmed '
-                        f'tests `not confirm`, and a non-empty string -- '
-                        f'including "false" -- is truthy')
+                        f'tests `not confirm`, and a non-empty string — '
+                        f'including "false" — is truthy')
         self.assertEqual(seen, self.NUMERIC | {'confirm'},
                          'a parameter this test pins has been renamed or '
                          'removed; update the test with the signature')
 
     def test_require_confirmed_is_defeated_by_a_string(self):
         """Pins WHY confirm must be typed bool. This is not asserting
-        desired behaviour -- it documents that the gate cannot defend
+        desired behaviour — it documents that the gate cannot defend
         itself against a mistyped parameter, so the annotation above is
         the actual control."""
         from prodtools_mcp_write import runner
@@ -10695,7 +10760,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         for forbidden in ('htgettoken', 'getToken', 'kinit', 'voms-proxy-init'):
             self.assertNotIn(forbidden, joined)
 
-    # -- Round-1 review fixes: injection, allowlist, run_as/cwd validation --
+    # — Round-1 review fixes: injection, allowlist, run_as/cwd validation --
 
     def test_ksu_wrapper_quotes_the_executable_path_too(self):
         # The Critical: argv[0] used to be interpolated unquoted into
@@ -10744,7 +10809,7 @@ class TestWriteRunnerGate(unittest.TestCase):
 
     def test_setup_chain_is_conjunctive_not_sequential(self):
         # A failed CVMFS source or `muse setup ops` must abort the
-        # command -- via `|| { ...; exit 1; }` chained onward with &&,
+        # command — via `|| { ...; exit 1; }` chained onward with &&,
         # not run silently in a broken environment (both setup lines
         # redirect stdout/stderr to /dev/null, so a bare sequence of
         # statements would hide the failure entirely).
@@ -10783,7 +10848,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         # Minor fix: every setup line used to redirect BOTH stdout and
         # stderr to /dev/null, so a failed CVMFS source, `muse setup
         # ops`, or Musing source returned rc != 0 with EMPTY stdout and
-        # stderr -- push_cnf would raise RuntimeError("... rc=1): ")
+        # stderr — push_cnf would raise RuntimeError("... rc=1): ")
         # with nothing to debug. Each step must name itself on stderr
         # before exiting.
         setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh'
@@ -10817,12 +10882,12 @@ class TestWriteRunnerGate(unittest.TestCase):
             self.runner.run_cli(['bin/submissions'], 'mu2epro',
                                 cwd='/tmp/somewhere')
 
-    # -- Round-2 review fixes: no Musing on either identity's env chain --
+    # — Round-2 review fixes: no Musing on either identity's env chain --
 
     def test_ksu_wrapper_sources_the_musing_setup_before_the_command(self):
         # setupmu2e-art.sh + muse setup ops + setup OfflineOps alone
         # leaves MUSE_DIR set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH
-        # empty -- bin/json2jobdef hard-exits in that state. The
+        # empty — bin/json2jobdef hard-exits in that state. The
         # Musing must be sourced from the entry's own simjob_setup,
         # after OfflineOps and before the command.
         setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh'
@@ -10845,8 +10910,8 @@ class TestWriteRunnerGate(unittest.TestCase):
 
     def test_self_path_was_a_bare_subprocess_with_no_env_setup_now_fixed(self):
         # Critical: run_as='self' used to be a bare subprocess with NO
-        # environment setup at all -- no setupmu2e-art.sh, no muse
-        # setup ops, no Musing -- and failed for the same reason as the
+        # environment setup at all — no setupmu2e-art.sh, no muse
+        # setup ops, no Musing — and failed for the same reason as the
         # ksu path. It must now run the identical setup chain, wrapped
         # in `bash -c` instead of ksu.
         setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bap/setup.sh'
@@ -11028,7 +11093,7 @@ class TestChildStdinIsClosed(unittest.TestCase):
 
     Measured 2026-08-09 on a real push_cnf: the child's fd 0 and the
     server's fd 0 were the same socket inode. OfflineOps `pushOutput`
-    trips it -- its unconditional `debugprint` runs `cat
+    trips it — its unconditional `debugprint` runs `cat
     $BEARER_TOKEN_FILE`, that variable is empty in this chain, the
     argument vanishes, and `cat` reads stdin. The call hung 30 minutes,
     the client gave up and reported failure, and the child kept running.
@@ -11064,7 +11129,7 @@ class TestChildStdinIsClosed(unittest.TestCase):
     def test_devnull_actually_stops_a_stdin_reading_child(self):
         # Why DEVNULL and not a closed fd or a timeout: a bare `cat` is
         # the exact shape that hung, and with DEVNULL it reads EOF and
-        # exits at once. The timeout is the assertion -- if this ever
+        # exits at once. The timeout is the assertion — if this ever
         # blocks, the remedy is wrong, and the suite says so instead of
         # hanging forever.
         proc = subprocess.run(['cat'], capture_output=True, text=True,
@@ -11174,7 +11239,7 @@ class TestPushCnfTool(unittest.TestCase):
         self.last_run = run
         return out
 
-    # -- the production gate ------------------------------------------
+    # — the production gate ------------------------------------------
 
     def test_mu2epro_without_confirm_refused_before_running_anything(self):
         with patch('prodtools_mcp_write.runner.run_cli') as run:
@@ -11185,7 +11250,7 @@ class TestPushCnfTool(unittest.TestCase):
 
     def test_argument_checks_run_after_the_production_gate(self):
         """An unconfirmed mu2epro call must be refused as a permission
-        problem, not reported as malformed arguments -- otherwise the
+        problem, not reported as malformed arguments — otherwise the
         operator fixes the wrong thing."""
         with patch('prodtools_mcp_write.runner.run_cli') as run:
             with self.assertRaises(PermissionError):
@@ -11194,11 +11259,11 @@ class TestPushCnfTool(unittest.TestCase):
                                     run_as='mu2epro')
         run.assert_not_called()
 
-    # -- slice_size is checked BEFORE the irreversible push ------------
+    # — slice_size is checked BEFORE the irreversible push ------------
 
     def test_bad_slice_size_refused_before_running_anything(self):
         """create_campaign's own `slice_size must be >= 1` fires inside
-        the CLI -- i.e. AFTER _pushout_to_sam has irreversibly registered
+        the CLI — i.e. AFTER _pushout_to_sam has irreversibly registered
         the cnf. Checking here is the difference between a refused call
         and a pushed cnf with no campaign."""
         for bad in (0, -1, True, 'lots', None):
@@ -11210,7 +11275,7 @@ class TestPushCnfTool(unittest.TestCase):
                             slice_size=bad, run_as='self')
                 run.assert_not_called()
 
-    # -- the argv, and where the Musing comes from ---------------------
+    # — the argv, and where the Musing comes from ---------------------
 
     def test_builds_the_one_command_argv_and_derives_the_musing(self):
         self._push([], [self._camp(7)])
@@ -11223,7 +11288,7 @@ class TestPushCnfTool(unittest.TestCase):
         self.assertIn('500', argv)
         # The map file is gone from this path entirely.
         self.assertNotIn('--jobdefs', argv)
-        # The Musing comes from the entry's own simjob_setup -- push_cnf
+        # The Musing comes from the entry's own simjob_setup — push_cnf
         # takes no Musing argument, so a caller can never pass one that
         # disagrees with the entry.
         self.assertEqual(kwargs.get('simjob_setup'), self.simjob_setup)
@@ -11252,7 +11317,7 @@ class TestPushCnfTool(unittest.TestCase):
         self.assertIn('list_campaigns', msg)
         self.assertIn('SAM', msg)
 
-    # -- which campaign did THIS call create? --------------------------
+    # — which campaign did THIS call create? --------------------------
 
     def test_prefers_the_campaign_this_call_created(self):
         """A tarball accumulates campaigns over its life (complete,
@@ -11274,7 +11339,7 @@ class TestPushCnfTool(unittest.TestCase):
         """rc=0 with nothing fresh means the snapshot and the write
         disagree about the database. Returning the pre-existing campaign
         would send run_submissions at an unrelated PRODUCTION campaign
-        while the new one is never fed -- so refuse.
+        while the new one is never fed — so refuse.
 
         A successful --enqueue always INSERTs (create_campaign), and a
         duplicate live tarball raises -> rc!=0, so this state is never a
@@ -11370,10 +11435,10 @@ class TestPushCnfTool(unittest.TestCase):
                                         run_as='self')
         self.assertIn('no such Musing', str(ctx.exception))
 
-    # -- entry selection (shared with json2jobdef itself) --------------
+    # — entry selection (shared with json2jobdef itself) --------------
 
     def test_no_matching_json_entry_raises_without_guessing(self):
-        # find_json_entry's own "found 0" message -- reused verbatim
+        # find_json_entry's own "found 0" message — reused verbatim
         # (via a ValueError wrapping its SystemExit) rather than
         # rephrased, so this can't drift from what json2jobdef itself
         # reports for the same input.
@@ -11392,7 +11457,7 @@ class TestPushCnfTool(unittest.TestCase):
         self.assertIn('simjob_setup', str(ctx.exception))
 
     def test_find_json_entry_ambiguity_becomes_valueerror_not_systemexit(self):
-        # find_json_entry sys.exit()s on 0 or >1 matches -- fine for a
+        # find_json_entry sys.exit()s on 0 or >1 matches — fine for a
         # CLI, fatal for a long-running server process if it leaked
         # through uncaught.
         path = os.path.join(self._tmpdir, 'dup.json')
@@ -11418,7 +11483,7 @@ class TestPushCnfTool(unittest.TestCase):
         setup, tarball_desc = self.tools._select_push_params(
             mix_json, 'CeEndpointMixLow', 'Run1Bab_best_v1_2')
         self.assertEqual(setup, expected_setup)
-        # No tarball_append on a mixing entry -- tarball_desc falls
+        # No tarball_append on a mixing entry — tarball_desc falls
         # back to the (derived) desc itself.
         self.assertEqual(tarball_desc, 'CeEndpointMixLow')
 
@@ -11445,7 +11510,7 @@ class TestPushCnfTool(unittest.TestCase):
                 'desc': 'D', 'dsconf': 'C', 'simjob_setup': self.simjob_setup,
                 'fcl': 'x.fcl', 'outloc': {'*.art': 'disk'},
             }], f)
-        # 'mu2e' -- the identity ksu actually ran as, not this test
+        # 'mu2e' — the identity ksu actually ran as, not this test
         # process's own $USER.
         out = self._push([], [self._camp(7, tarball='cnf.mu2e.D.C.0.tar')],
                          json_path=path, run_as='mu2epro', confirm=True)
@@ -11454,7 +11519,7 @@ class TestPushCnfTool(unittest.TestCase):
     def test_tarball_append_collision_returns_the_reco_campaign_not_digi(self):
         # Real regression against data/mdc2025/reco.json's
         # CosmicCRYExtracted / MDC2025au_best_v1_5 entry, which has
-        # tarball_append='-reco' -- its real tarball is
+        # tarball_append='-reco' — its real tarball is
         # cnf.mu2e.CosmicCRYExtracted-reco.MDC2025au_best_v1_5.0.tar.
         # Matching on the bare desc would find a DIFFERENT stage's
         # campaign sharing the same desc+dsconf with no append.
@@ -11582,7 +11647,7 @@ class TestRunSubmissionsTool(unittest.TestCase):
         run.assert_not_called()
         msg = str(ctx.exception)
         self.assertIn('paused', msg)
-        # Distinct wording from the "unknown id" case -- a paused
+        # Distinct wording from the "unknown id" case — a paused
         # campaign needs `submissions resume`, a typo'd id needs a
         # different fix, and an operator needs to tell them apart.
         self.assertNotIn('no campaign', msg)
@@ -11712,7 +11777,7 @@ class TestLedgerExpected(unittest.TestCase):
         RPCInternalPhysicalMix1BB's real submission rows: campaign 1 covered
         indices 0..249 (njobs=250), campaign 2 covered 0..1666 (njobs=1667,
         already a superset of the first). Expected is max(250, 1667) = 1667,
-        not their sum 1917 -- summing double-counted the first window and
+        not their sum 1917 — summing double-counted the first window and
         made two actually-complete datasets (this one and
         RPCExternalPhysicalMix1BB) report INCOMPLETE. The tarball is
         resolved only once regardless."""
@@ -11801,7 +11866,7 @@ class TestLedgerExpectedDraining(unittest.TestCase):
         desc==desc assumption. expected_outputs_for is the arbiter: when the
         cnf does not actually produce this dataset, it keeps '—' rather than
         being handed the input count. Guards the trap the contract already
-        names -- FlatGamma is a prefix of FlatGammaCalo."""
+        names — FlatGamma is a prefix of FlatGammaCalo."""
         class SuffixPars:
             def __init__(self, path): pass
             def job_outputs(self, i, override_desc=None, override_seq=None):
@@ -12550,7 +12615,7 @@ class TestDrainingState(unittest.TestCase):
 
     def test_non_dataset_definition_names_are_ignored(self):
         # drainingn-era junk (`..._slice_0_stage_2`) still parses as a
-        # legal 5-field dataset name -- it is caught by the input_pattern
+        # legal 5-field dataset name — it is caught by the input_pattern
         # field match, not by the is_dataset guard. The fake lister DOES
         # return a file for the junk name, so this fails without the
         # fix (the junk file would leak into inputs/pending).
@@ -13033,7 +13098,7 @@ class TestDrainTick(unittest.TestCase):
         self.assertEqual(summary, {})
         self.assertEqual(submitted, [])
 
-    # -- multi-campaign control-flow contracts -----------------------
+    # — multi-campaign control-flow contracts -----------------------
 
     def test_cap_wait_breaks_before_next_campaign(self):
         # camp_a's batch alone exceeds the cap -> drain-cap-wait AND
@@ -13381,7 +13446,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
 
     def test_prod_requires_enqueue(self):
         """A bare --prod would push the cnf to SAM and then register no
-        campaign -- a silent no-op that reports success."""
+        campaign — a silent no-op that reports success."""
         msg = self._run_main(
             ['--json', 'data/Run1B/resampler_beam.json',
              '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
@@ -13390,7 +13455,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
 
     def test_jobdefs_flag_is_gone(self):
         """`--jobdefs` wrote a submission map for a human to hand-edit
-        and feed to submit_map -- the POMS-era two-step. It was the only
+        and feed to submit_map — the POMS-era two-step. It was the only
         thing in prodtools that produced an operator-facing map file, and
         that hand-edit window was an unvalidated door into the ledger.
         argparse must reject it outright rather than ignore it."""
@@ -13419,7 +13484,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         """json2jobdef writes no submission map at all any more. Runs
         from a scratch cwd so a stray file left by another test/run
         cannot fool the assertion, and checks the whole directory rather
-        than one filename -- the historical bug was a fall-back to a
+        than one filename — the historical bug was a fall-back to a
         DEFAULT name (./jobdefs_list.json), so naming the file we expect
         to be absent is exactly the assertion that missed it."""
         from utils import json2jobdef
@@ -13491,7 +13556,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                               return_value=db_path):
                 # Computed under the same patches process_single_entry uses,
                 # so this is exactly what build_jobdesc produced for the
-                # run under test -- not a second, differently-mocked call.
+                # run under test — not a second, differently-mocked call.
                 expected_entry = json2jobdef.build_jobdesc(dict(config))
                 json2jobdef.process_single_entry(
                     dict(config), pushout=True, no_cleanup=True,
@@ -13515,7 +13580,7 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
     A misspelled inloc is the expensive typo. `file_resolver.locate`
     finds no such location and falls through to `_locate_via_sam`, so
     the campaign runs to completion reading from SAM while the operator
-    believes it reads from resilient -- no error, wrong provenance,
+    believes it reads from resilient — no error, wrong provenance,
     wrong wall-clock. `set-entry` rejected that spelling; json2jobdef,
     which is how every campaign is BORN, did not.
 
@@ -13568,7 +13633,7 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
 
         Pinned because validating a raw, unexpanded config would reject
         49 production entries across data/Run1B, data/mdc2025 and
-        data/mdc2030 -- so this ordering is what makes the value check
+        data/mdc2030 — so this ordering is what makes the value check
         safe to run unconditionally."""
         import json as _json
         import tempfile
@@ -13593,7 +13658,7 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
         self.json2jobdef.validate_required_fields(configs[0])
 
     def test_absent_inloc_accepted(self):
-        """inloc is optional -- process_single_entry defaults it to
+        """inloc is optional — process_single_entry defaults it to
         'none'. Validating a key that isn't there would reject every
         config in data/ that omits it."""
         self.json2jobdef.validate_required_fields(self._cfg())
@@ -13631,9 +13696,9 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
 
         The assertIs above pins a name binding, which a copy-pasted
         second validator would satisfy while diverging. There are three
-        doors into the ledger -- json2jobdef (where a campaign is born),
+        doors into the ledger — json2jobdef (where a campaign is born),
         submit_map --enqueue (a foreign map), and set-entry (editing a
-        live campaign) -- and an operator must not meet three different
+        live campaign) — and an operator must not meet three different
         answers.
         """
         from utils import json2jobdef, submit, submission_ledger
@@ -14682,7 +14747,7 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
         return self.sl.create_campaign(self.db, tarball=tarball,
                                        entry=entry, slice_size=slice)
 
-    # -- submit_slice, direct --------------------------------------------
+    # — submit_slice, direct --------------------------------------------
 
     def test_submit_slice_false_on_returned_failed_status(self):
         """A submit_fn that returns the non-raising 'failed' shape and
@@ -14712,7 +14777,7 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
                                       submit_fn=fake_submit_entry)
         self.assertTrue(ok)
 
-    # -- submit_drain_batch, direct ---------------------------------------
+    # — submit_drain_batch, direct ---------------------------------------
 
     def test_submit_drain_batch_false_on_returned_failed_status(self):
         from utils import submissions
@@ -14742,7 +14807,7 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
             submit_fn=fake_submit_entry)
         self.assertTrue(ok)
 
-    # -- top_up integration: cursor must not advance -----------------------
+    # — top_up integration: cursor must not advance -----------------------
 
     def test_top_up_pauses_without_advancing_on_returned_failure(self):
         """End-to-end through the REAL submit_slice (top_up's own
@@ -14789,7 +14854,7 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
         self.assertEqual(s['slice'], 3)
         self.assertEqual(counter[0], 3)
 
-    # -- drain_tick integration: no cursor, but must still pause ----------
+    # — drain_tick integration: no cursor, but must still pause ----------
 
     def test_drain_tick_pauses_on_returned_failure(self):
         """The draining analog: no cursor to protect, but the campaign
@@ -15591,7 +15656,7 @@ class TestRunlocalCode(unittest.TestCase):
         os.remove(lib)  # simulate a partial extract that got past setup.sh
         self.assertEqual(unpack_code(self.code, self.dir), root)
         # Sentinel was still present, so the second call trusted it and
-        # did not re-extract -- the missing file stays missing.
+        # did not re-extract — the missing file stays missing.
         self.assertFalse(os.path.isfile(lib))
 
     def test_missing_sentinel_forces_re_extraction(self):
@@ -16202,7 +16267,7 @@ class TestBuildJobdefCodeModeReturnValue(unittest.TestCase):
     a code-mode config (no simjob_setup). That dict is metadata for
     test/parity_test.py's Perl comparison, which only runs in --setup
     mode, so `None` is the truthful value for simjob_setup in code
-    mode -- not a placeholder and not the code path's own value."""
+    mode — not a placeholder and not the code path's own value."""
 
     def test_code_mode_reaches_return_without_keyerror(self):
         from unittest.mock import patch
@@ -16225,7 +16290,7 @@ class TestCommonIncludePrecedence(unittest.TestCase):
     """A campaign default must never beat an entry that pins the key.
 
     Reversed, `data/Run1B/common.json` would move the 42 frozen entries
-    (geom_run1_b_v01/v03/v06) onto v40 -- a job that runs to completion
+    (geom_run1_b_v01/v03/v06) onto v40 — a job that runs to completion
     and produces a wrong world, which is the failure this file exists to
     make impossible. write_fcl_template owns the ordering so no caller
     can get it wrong; dict order is not relied on."""
@@ -16356,7 +16421,7 @@ class TestCommonOverlayScope(unittest.TestCase):
 
 class TestCommonPlainKeyDefaults(unittest.TestCase):
     """common.json may state its defaults as plain keys instead of an
-    include -- what a campaign uses while its FCL is still an unmerged
+    include — what a campaign uses while its FCL is still an unmerged
     Production PR, since including a FCL that does not exist aborts every
     build in fhicl-get and no entry-level override can suppress it.
 
@@ -16415,7 +16480,7 @@ class TestCommonPlainKeyDefaults(unittest.TestCase):
 
     def test_no_reserved_include_key_is_emitted(self):
         """With no '#include' in common.json the reserved key must not
-        appear at all -- an empty one would write a stray blank include."""
+        appear at all — an empty one would write a stray blank include."""
         from utils.prod_utils import COMMON_INCLUDE_KEY
         ov = self._load([self._entry()])[0]['fcl_overrides']
         self.assertNotIn(COMMON_INCLUDE_KEY, ov)
@@ -16446,7 +16511,7 @@ class TestRun1BCommonJson(unittest.TestCase):
         """The default must be redundant everywhere it lands, so adding it
         changes no job. An entry that states neither key inherits one from
         its base FCL's epilog (pileup/epilog.fcl sets bfgeom_no_tsu_ps_v01,
-        beam/POT.fcl sets bfgeom_no_ds_v01) and WOULD change -- six entries
+        beam/POT.fcl sets bfgeom_no_ds_v01) and WOULD change — six entries
         did, until they were pinned. A new such entry must be pinned too,
         or removed from applies_to."""
         prefix = self.common['dsconf_prefix']
@@ -16597,7 +16662,7 @@ class TestCopyToStashExitCode(unittest.TestCase):
     """A stash copy that lost files must not report success.
 
     `_copy_dataset` counted `n_fail`, printed it, then returned `n_ok`
-    alone -- and bin/copy_to_stash did `return 0 if n_copied >= 0 else 1`,
+    alone — and bin/copy_to_stash did `return 0 if n_copied >= 0 else 1`,
     a condition that cannot be false. A dataset copy that failed on every
     file exited 0, so any wrapping script read it as done.
     """

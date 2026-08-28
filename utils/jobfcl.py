@@ -157,8 +157,9 @@ class Mu2eJobFCL(Mu2eJobBase):
         if source_type == 'SamplingInput':
             config_lines.append(f"source.samplingSeed: {1 + index}")
 
-        # Batch-locate all input files in one SAM round-trip first — per-file
-        # lookups cost ~90 sequential HTTP calls for a mixing job.
+        # Resolve each input DATASET's area up front (one stat apiece).
+        # Paths are computed from the filenames after that, so this costs
+        # ~4 stats for a mixing job regardless of how many files it names.
         inputs = self.job_inputs(index)
         self._resolver.prefetch(
             [f for file_list in inputs.values() for f in file_list])

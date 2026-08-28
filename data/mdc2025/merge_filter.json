@@ -166,5 +166,19 @@
 		],
 		"outloc": [{"*.art": "tape"}],
 		"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ag/setup.sh"]
+	},
+	{
+		"dsconf": ["MDC2025av"],
+		"fcl": ["Production/JobConfig/common/artcat.fcl"],
+		"input_data": [
+			{"dts.mu2e.STMNeutralsToVD116.MDC2025av.art": 2000},
+			{"dts.mu2e.STMNeutralsToVD101.MDC2025av.art": 10000}
+		],
+		"inloc": ["disk"],
+		"fcl_overrides": [
+			{"outputs.out.fileName": "dts.owner.{desc}Cat.version.sequence.art"}
+		],
+		"outloc": [{"*.art": "tape"}],
+		"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025av/setup.sh"]
 	}
 ]

@@ -20,7 +20,7 @@
         "run": 1440,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Baa/setup.sh",
         "owner": "mu2e",
-        "inloc": "disk",
+        "inloc": "resilient",
         "outloc": {
             "*.art": "disk"
         },
@@ -350,7 +350,7 @@
         "run": 1450,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Run1Bag/setup.sh",
         "owner": "mu2e",
-        "inloc": "disk",
+        "inloc": "resilient",
         "outloc": {
             "*.art": "disk"
         },
