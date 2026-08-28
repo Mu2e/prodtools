@@ -41,6 +41,17 @@ setting on a live campaign is fixed with
 `submissions set-entry <ID> <key> <value> [--include-open-rows]` — the
 flag is what reaches recoveries.
 
+Campaigns do NOT advance on their own — no cron is installed. Each
+slice, verification and recovery needs a manual `submissions run`
+as mu2epro. A row stays `active` while ANY of its jobs is still in
+the queue, held included, so a tick fired before the cluster drains
+recovers nothing.
+
+**Never wrap `submissions run` in `timeout`.** The kill lands after
+jobsub has submitted but before the ledger records the cluster,
+orphaning it: it runs, nothing tracks it, recovery re-submits the
+same indices.
+
 ## MCP server
 
 A read-only MCP server at `mcp/` exposes campaign status and dataset
@@ -66,6 +77,9 @@ Another user's ledger is not reachable here — use
 
 Setup: `bash mcp/scripts/install.sh`. Health check:
 `bash mcp/scripts/start_mcp.sh --check`.
+
+MCP servers can disconnect mid-session. Do not improvise a CLI
+fallback — ask the user to run `/mcp` and reconnect.
 
 A second, write-capable server (`prodtools-write`) exposes submission:
 `push_cnf`, `run_submissions`. A campaign takes two

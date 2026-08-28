@@ -1283,3 +1283,19 @@ Source: docs/superpowers/plans/2026-08-08-run1b-consolidation.md Task 7 step 2
 ## [2026-08-20] ingest | jobwait 0/N ok — jobsub_history drops -name schedd
 Pages written: 2026-08-20-jobwait-jobsub-history-drops-schedd
 Pages updated: index.md
+## [2026-08-24] update | Incident: cosmic livetime integer truncation (Run1Ban dts = 0)
+
+## [2026-08-27] update | Incident: inloc fallback rendered with declared proto (campaign 94)
+Pages written: 2026-08-27-inloc-fallback-rendered-with-declared-proto
+Pages updated: index.md
+
+## [2026-08-28] update | Incident: corrupt basket in two digs passes integrity gates (campaign 83, fnpc18003)
+Pages written: 2026-08-28-corrupt-basket-dig-passes-integrity-gates
+Pages updated: index.md
+
+## [2026-08-28] update | Decision: workers run prodtools from cvmfs releases; dev tarball removed
+Pages written: 2026-08-28-workers-run-prodtools-from-cvmfs-releases
+Pages updated: index.md
+
+## [2026-08-28] update | Read-back validation gate added to the worker (corrupt-basket incident)
+Pages updated: 2026-08-28-corrupt-basket-dig-passes-integrity-gates
