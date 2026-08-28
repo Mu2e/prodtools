@@ -8,6 +8,7 @@ Usage (from the repo root, with `muse setup ops` sourced):
   - Direct file: python3 utils/json2jobdef.py --help
 """
 import os, sys
+import re
 import random
 # Run directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,7 +23,8 @@ from utils.jobdesc import (
     ENTRY_VALUE_KEYS, RESOURCE_KEYS, firstjob_of, is_dir_inloc,
     validate_entry_value,
     validate_outloc,
-    validate_window)
+    validate_window,
+                           PRODTOOLS_CVMFS_CURRENT, resolve_prodtools_dir)
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -331,6 +333,7 @@ def validate_required_fields(config):
     # setup script, or a code tarball that travels with the job.
     if bool(config.get('simjob_setup')) == bool(config.get('code')):
         sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
+    validate_era_agreement(config)
     try:
         for key in ENTRY_VALUE_KEYS:
             if key in config:
@@ -338,6 +341,56 @@ def validate_required_fields(config):
         validate_outloc(config['outloc'])
     except ValueError as exc:
         sys.exit(f"json2jobdef: {exc}")
+
+def _era_suffix(token):
+    """Trailing lowercase era letters of a dsconf head or Musing tag.
+
+    'Run1Baw' -> 'aw', 'MDC2025aw' -> 'aw', 'Run1Bab2' -> 'ab'.
+    Returns None when the token carries no era letters ('Run1B', 'MDC2025',
+    'v02_01_00'), which is the signal that the two are not comparable.
+    """
+    m = re.search(r'([a-z]+)\d*$', token)
+    return m.group(1) if m else None
+
+
+def validate_era_agreement(config):
+    """The dsconf era letters MUST match the Musing that reconstructs it.
+
+    A dsconf of Run1Baw_best_v1_5 built under SimJob/Run1Baq produces files
+    NAMED for an era they were not processed with: the name says v13_36_00,
+    the payload is v13_34_10. Nothing downstream can detect that -- the mcs
+    is valid, the reco exits 0, and the mislabel is only visible by reading
+    this JSON. It cost a ~6400-job round of Run1Baw_best_v1_5 mcs that were
+    actually reconstructed at Run1Baq.
+
+    Only the era letters are compared, so a dsconf may legitimately sit in a
+    different family from its Musing (Run1Baw under MDC2025aw is fine -- both
+    are 'aw'). Tokens with no era letters are skipped, not guessed at.
+
+    An entry that genuinely must cross eras states why:
+
+        "era_mismatch_ok": "<reason this dsconf is not the Musing's era>"
+
+    which is deliberately a sentence, not a bool, so the reason lands in the
+    JSON next to the pin instead of in someone's memory.
+    """
+    setup = config.get('simjob_setup')
+    if not setup:
+        return                       # --code tarball: no Musing tag to read
+    reason = config.get('era_mismatch_ok')
+    if reason:
+        return
+    tag = Path(str(setup)).parent.name          # .../Musings/SimJob/<TAG>/setup.sh
+    dsconf = str(config.get('dsconf') or '')
+    head = dsconf.split('_')[0].split('-')[0]
+    ds_era, mu_era = _era_suffix(head), _era_suffix(tag)
+    if ds_era and mu_era and ds_era != mu_era:
+        sys.exit(
+            f"json2jobdef: dsconf/Musing era mismatch: dsconf '{dsconf}' is era "
+            f"'{ds_era}' but simjob_setup pins '{tag}' (era '{mu_era}').\n"
+            f"  Outputs would be NAMED {ds_era} and PROCESSED {mu_era}.\n"
+            f"  Fix the dsconf or the Musing. If the cross-era pin is "
+            f"intentional, add \"era_mismatch_ok\": \"<reason>\" to the entry.")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
@@ -534,6 +587,11 @@ def main():
     p.add_argument('--prod', action='store_true', help='Production mode: enable pushout (SAM registration). Requires --enqueue, which registers a sliced-submission campaign in the ledger and prints its campaign id.')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
+    p.add_argument('--prodtools-dir', default=None,
+                   help='cvmfs prodtools release the campaign runs '
+                        '(default: /cvmfs/mu2e.opensciencegrid.org/bin/'
+                        'prodtools/current, resolved to its version dir '
+                        'and recorded in the ledger). Requires --enqueue.')
     p.add_argument('--enqueue', action='store_true',
                    help='After pushing the cnf, register the entry as a '
                         'sliced campaign in the ledger. Requires --prod.')
@@ -555,6 +613,8 @@ def main():
                  "needs the cnf in SAM)")
     if args.slice_size is not None and not args.enqueue:
         sys.exit("json2jobdef: --slice-size requires --enqueue")
+    if args.prodtools_dir is not None and not args.enqueue:
+        sys.exit("json2jobdef: --prodtools-dir requires --enqueue")
     if args.slice_size is None:
         args.slice_size = 1000
     if args.prod and not args.enqueue:
@@ -590,6 +650,7 @@ def main():
             enqueue=args.enqueue,
             slice_size=args.slice_size,
             json_path=args.json,
+            prodtools_dir=args.prodtools_dir,
         )
 
 def _build_job_args(config):
@@ -688,8 +749,13 @@ def _provenance(json_path, config):
 
 def process_single_entry(config, pushout=False, no_cleanup=True,
                          extend=False, ignore_empty=False,
-                         enqueue=False, slice_size=1000, json_path=None):
-    """Process a single configuration entry."""
+                         enqueue=False, slice_size=1000, json_path=None,
+                         prodtools_dir=None):
+    """Process a single configuration entry.
+
+    `prodtools_dir` is the cvmfs prodtools release the campaign's jobs
+    will run; None means the `current` release, resolved to its concrete
+    version dir here so the ledger records a version, not a symlink."""
     validate_required_fields(config)
     config['owner'] = config.get('owner', default_owner())
     config['inloc'] = config.get('inloc', 'none')
@@ -738,6 +804,12 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         from types import SimpleNamespace
         from utils.submit import enqueue_entry, _resolve_ledger_db
         entry = build_jobdesc(config)
+        try:
+            entry['prodtools_dir'] = resolve_prodtools_dir(
+                prodtools_dir or PRODTOOLS_CVMFS_CURRENT)
+        except ValueError as e:
+            sys.exit(f"json2jobdef: {e}")
+        print(f"Campaign will run prodtools from {entry['prodtools_dir']}")
         enqueue_entry(
             entry,
             ledger_db=_resolve_ledger_db(SimpleNamespace(ledger_db=None)),

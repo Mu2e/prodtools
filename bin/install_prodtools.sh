@@ -1,7 +1,11 @@
 #!/bin/bash
 # Install a prodtools release on CVMFS. Run on cvmfsmu2e@oasiscfs.fnal.gov.
-# Usage: ./install_prodtools.sh [-n] [-t [DIR]] v1.6.3
-#   -n          Dry run: check GitHub tag and install path, make no changes.
+# Usage: ./install_prodtools.sh [-n] [-t [DIR]] [--no-current] v1.6.3
+#   -n            Dry run: check GitHub tag and install path, make no changes.
+#   --no-current  Install the version but leave the 'current' symlink
+#                 alone: for a pre-release that campaigns pin explicitly
+#                 (json2jobdef --prodtools-dir) before it becomes the
+#                 default for everyone.
 #   -t [DIR]    Test mode: skip cvmfs_server calls, install into a local
 #               writable dir (default: a fresh mktemp -d) to exercise the
 #               fetch/extract/mv/symlink logic without touching CVMFS.
@@ -12,9 +16,11 @@ set -o pipefail
 DRY_RUN=false
 TEST_MODE=false
 TEST_BASE=""
+UPDATE_CURRENT=true
 while [[ "$1" == -* ]]; do
   case "$1" in
     -n) DRY_RUN=true; shift ;;
+    --no-current) UPDATE_CURRENT=false; shift ;;
     -t)
       TEST_MODE=true
       shift
@@ -73,7 +79,11 @@ fi
 
 if $DRY_RUN; then
   echo "[dry-run] Would install to ${INSTALL_BASE}/${VER}"
-  echo "[dry-run] Would update ${INSTALL_BASE}/current -> ${VER}"
+  if $UPDATE_CURRENT; then
+    echo "[dry-run] Would update ${INSTALL_BASE}/current -> ${VER}"
+  else
+    echo "[dry-run] Would leave ${INSTALL_BASE}/current untouched (--no-current)"
+  fi
   echo "[dry-run] No changes made."
   exit 0
 fi
@@ -93,8 +103,12 @@ curl -fsSL "https://github.com/Mu2e/prodtools/archive/refs/tags/${VER}.tar.gz" \
 SRC_DIR=$(ls -d ${TMPDIR}/prodtools-*/)
 mv "${SRC_DIR}" "${INSTALL_BASE}/${VER}"
 
-echo "Updating 'current' symlink to ${VER}..."
-ln -sfn "${VER}" "${INSTALL_BASE}/current"
+if $UPDATE_CURRENT; then
+  echo "Updating 'current' symlink to ${VER}..."
+  ln -sfn "${VER}" "${INSTALL_BASE}/current"
+else
+  echo "Leaving 'current' symlink untouched (--no-current); pin with json2jobdef --prodtools-dir ${INSTALL_BASE}/${VER}"
+fi
 
 if $TEST_MODE; then
   echo "Skipping cvmfs_server publish (test mode)"
@@ -105,4 +119,4 @@ else
 fi
 
 echo "Done. prodtools ${VER} is now available at ${INSTALL_BASE}/${VER}"
-echo "       'current' symlink points to ${VER}"
+echo "       'current' symlink points to $(readlink "${INSTALL_BASE}/current")"

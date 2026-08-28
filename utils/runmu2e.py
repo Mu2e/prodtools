@@ -648,6 +648,41 @@ def _execute_mu2e(fcl, simjob_setup, args):
         return True
 
 
+def _validate_outputs(files, simjob_setup):
+    """Read every ROOT/art output back before anything is pushed; True
+    iff a file is unreadable. The only gate that looks at the payload —
+    exit code, manifest and CRC all certify the bytes as written, which
+    is exactly what a worker whose storage layer scrambled a block hands
+    us (see utils/validate_root_outputs.py). Runs under the job's own
+    setup because the ops environment has no ROOT."""
+    files = [f for f in files if f.endswith(('.art', '.root'))]
+    if not files:
+        return False
+    script = Path(__file__).resolve().parent / 'validate_root_outputs.py'
+    inner = (f"source {simjob_setup} && python3 {shlex.quote(str(script))} "
+             + " ".join(shlex.quote(f) for f in files))
+    print(f"[direct] read-back validation of {len(files)} output(s)")
+    try:
+        run(['bash', '-c', inner], shell=False)
+        print("[direct] output validation: OK")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"=== output validation FAILED (rc={e.returncode}) — "
+              f"outputs will not be pushed; the log will be ===")
+        return True
+
+
+def _validation_enabled(jobdesc, args):
+    """Entry key `validate_outputs` wins over the CLI, like copy_input:
+    the per-entry opt-out is for outputs a job legitimately writes that
+    ROOT cannot read back as trees, not a global default."""
+    enabled = jobdesc.get('validate_outputs',
+                          not getattr(args, 'no_validate', False))
+    if not isinstance(enabled, bool):
+        fail(f"Error: validate_outputs must be true or false, got {enabled!r}")
+    return enabled
+
+
 def _direct_dispatch(args, ops, index):
     """Dispatch one direct-mode job: run the entry's
     prep — normal index mode via process_jobdef, or a draining batch
@@ -698,6 +733,12 @@ def _direct_dispatch(args, ops, index):
     track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
 
     job_failed = _execute_mu2e(fcl, simjob_setup, args)
+
+    if not job_failed and _validation_enabled(jobdesc, args):
+        produced = []
+        for o in outputs:
+            produced.extend(str(p) for p in sorted(Path('.').glob(o['dataset'])))
+        job_failed = _validate_outputs(produced, simjob_setup)
 
     # Append SHA256 manifest before pushing — mu2eClusterCheckAndMove
     # parses the log for `mu2egrid manifest`.
@@ -772,6 +813,9 @@ def _direct_main(args):
 def main():
     parser = argparse.ArgumentParser(description="Execute production jobs from job definitions.")
     parser.add_argument("--copy-input", action="store_true", help="Copy input files using mdh")
+    parser.add_argument("--no-validate", action="store_true",
+                        help="Skip the ROOT read-back of every .art/.root output "
+                             "before the push (entry key validate_outputs wins)")
     parser.add_argument('--dry-run', action='store_true', help='Print commands without actually running pushOutput')
     parser.add_argument('--nevts', type=int, default=-1, help='Number of events to process (-1 for all events, default: -1)')
     parser.add_argument('--mu2e-options', type=str, default='', help='Extra options to pass to mu2e command (e.g., "--no-timing --debug")')

@@ -159,6 +159,25 @@ def _empty_event_jobpars(run=1430, events=1000, owner='mu2e', dsconf='TestConf')
 # 1. Mu2eName Perl-parity contract (job_common.py, formerly Mu2eName)
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Fake prodtools release for submit/enqueue tests. Both boundaries require
+# an entry's prodtools_dir to be a real release tree (bin/setup.sh,
+# bin/runjob.sh, utils/runmu2e.py), checked on the submit host.
+# ---------------------------------------------------------------------------
+def _make_fake_prodtools_dir():
+    import atexit, shutil, tempfile
+    d = tempfile.mkdtemp(prefix='fake-prodtools-')
+    for rel in ('bin/setup.sh', 'bin/runjob.sh', 'utils/runmu2e.py'):
+        f = Path(d) / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text('# fake\nMU2EGRID_PRODTOOLS_DIR\n')
+    atexit.register(shutil.rmtree, d, True)
+    return d
+
+
+FAKE_PRODTOOLS_DIR = _make_fake_prodtools_dir()
+
 class TestMu2eNameParity(unittest.TestCase):
 
     def test_parse_standard_filename(self):
@@ -4811,7 +4830,7 @@ class TestSubmissionLedger(unittest.TestCase):
         from utils import submission_ledger as sl
         self.sl = sl
         self.db = os.path.join(_mkdtemp(), 'submissions.db')
-        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
 
@@ -4896,7 +4915,7 @@ class TestTwoPhaseLedgerWrite(unittest.TestCase):
         from utils import submission_ledger as sl
         self.sl = sl
         self.db = os.path.join(_mkdtemp(), 'submissions.db')
-        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
 
@@ -5042,7 +5061,7 @@ class TestCampaignLedger(unittest.TestCase):
         from utils import submission_ledger as sl
         self.sl = sl
         self.db = os.path.join(_mkdtemp(), 'submissions.db')
-        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                       'njobs': 10, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
 
@@ -5565,7 +5584,7 @@ class TestSubmitEntryResourceWiring(unittest.TestCase):
     def test_entry_memory_reaches_build_jobsub_argv(self):
         from utils.submit import submit_entry, SubmitOptions
 
-        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                  'njobs': 5, 'inloc': 'tape',
                  'outputs': [{'location': 'tape'}], 'memory': '4000MB'}
         options = SubmitOptions(
@@ -5579,9 +5598,7 @@ class TestSubmitEntryResourceWiring(unittest.TestCase):
             return ['--fake-argv']
 
         with patch('utils.submit._jobsub_argv.build_jobsub_argv',
-                   side_effect=fake_build_jobsub_argv), \
-             patch('utils.submit._bundle_prodtools',
-                   return_value=Path('/tmp/fake-prodtools.tar')):
+                   side_effect=fake_build_jobsub_argv):
             result = submit_entry(entry, 0, options)
 
         self.assertEqual(result['status'], 'dry_run')
@@ -5604,8 +5621,7 @@ class TestJobsubArgvCodeTarball(unittest.TestCase):
             jobset=[0, 1, 2],
             jobdef_path='/tmp/cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
             ops_json_path='/tmp/ops.json',
-            prodtools_tar_path='/tmp/prodtools-me.tar',
-            worker_script_path='/repo/bin/runjob.sh',
+            prodtools_dir='/cvmfs/fake/prodtools/v0.0.0',
             submitter='me',
             **extra)
 
@@ -5618,17 +5634,30 @@ class TestJobsubArgvCodeTarball(unittest.TestCase):
         idx = argv.index('--tar_file_name')
         self.assertEqual(argv[idx + 1], 'dropbox:///exp/build/Code.tar.bz2')
 
-    def test_code_tarball_does_not_displace_the_three_input_files(self):
+    def test_code_tarball_does_not_displace_the_two_input_files(self):
         # Regression guard: --tar_file_name is a DIFFERENT mechanism from
-        # -f dropbox://. The cnf, the ops JSON and the prodtools tarball
-        # must all still ship.
+        # -f dropbox://. The cnf and the ops JSON must still ship — and
+        # nothing else does: prodtools comes from cvmfs, never per job.
         argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
         shipped = [argv[i + 1] for i, a in enumerate(argv) if a == '-f']
-        self.assertEqual(len(shipped), 3)
+        self.assertEqual(len(shipped), 2)
         self.assertIn('dropbox:///tmp/ops.json', shipped)
         self.assertIn('dropbox:///tmp/cnf.mu2e.Demo.Run1Baq_best_v1_5.0.tar',
                       shipped)
-        self.assertIn('dropbox:///tmp/prodtools-me.tar', shipped)
+        self.assertFalse([x for x in shipped if 'prodtools' in x])
+
+    def test_worker_runs_the_release_named_by_env_and_executable(self):
+        """The release reaches the worker two ways, both required:
+        MU2EGRID_PRODTOOLS_DIR (runjob.sh cannot find itself — jobsub
+        copies the executable into the sandbox) and the executable path
+        (the release's own runjob.sh). No dropbox tarball, no
+        MU2EGRID_PRODTOOLS_TAR."""
+        argv = self._argv()
+        i = argv.index('-e', 0)
+        envs = [argv[j + 1] for j, a in enumerate(argv) if a == '-e']
+        self.assertIn('MU2EGRID_PRODTOOLS_DIR=/cvmfs/fake/prodtools/v0.0.0', envs)
+        self.assertFalse([e for e in envs if e.startswith('MU2EGRID_PRODTOOLS_TAR')])
+        self.assertEqual(argv[-1], 'file:///cvmfs/fake/prodtools/v0.0.0/bin/runjob.sh')
 
     def test_executable_stays_last(self):
         argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
@@ -5643,7 +5672,7 @@ class TestSubmitPassesCodeTarball(unittest.TestCase):
     def test_entry_code_reaches_build_jobsub_argv(self):
         from utils.submit import submit_entry, SubmitOptions
 
-        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                  'njobs': 5, 'inloc': 'tape',
                  'outputs': [{'location': 'tape'}],
                  'code': '/exp/build/Code.tar.bz2'}
@@ -5658,9 +5687,7 @@ class TestSubmitPassesCodeTarball(unittest.TestCase):
             return ['--fake-argv']
 
         with patch('utils.submit._jobsub_argv.build_jobsub_argv',
-                   side_effect=fake_build_jobsub_argv), \
-             patch('utils.submit._bundle_prodtools',
-                   return_value=Path('/tmp/fake-prodtools.tar')):
+                   side_effect=fake_build_jobsub_argv):
             result = submit_entry(entry, 0, options)
 
         self.assertEqual(result['status'], 'dry_run')
@@ -5669,7 +5696,7 @@ class TestSubmitPassesCodeTarball(unittest.TestCase):
     def test_musing_entry_passes_none(self):
         from utils.submit import submit_entry, SubmitOptions
 
-        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                  'njobs': 5, 'inloc': 'tape',
                  'outputs': [{'location': 'tape'}]}
         options = SubmitOptions(
@@ -5683,9 +5710,7 @@ class TestSubmitPassesCodeTarball(unittest.TestCase):
             return ['--fake-argv']
 
         with patch('utils.submit._jobsub_argv.build_jobsub_argv',
-                   side_effect=fake_build_jobsub_argv), \
-             patch('utils.submit._bundle_prodtools',
-                   return_value=Path('/tmp/fake-prodtools.tar')):
+                   side_effect=fake_build_jobsub_argv):
             submit_entry(entry, 0, options)
 
         self.assertIsNone(captured['code_tarball'])
@@ -5698,7 +5723,7 @@ class TestSubmitEntryCodeGate(unittest.TestCase):
     _preflight_inputs (or moving it back below the draining
     early-return) must fail this test."""
 
-    ENTRY = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+    ENTRY = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
              'njobs': 5, 'inloc': 'tape',
              'outputs': [{'location': 'tape'}],
              'code': '/exp/build/Code.tar.bz2'}
@@ -5733,8 +5758,6 @@ class TestSubmitEntryCodeGate(unittest.TestCase):
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
              patch.object(submit, 'check_code_tarball',
                           return_value=(False, bad)), \
-             patch.object(submit, '_bundle_prodtools',
-                          return_value=Path('/tmp/pt.tar')), \
              patch.object(submit, '_run_submit') as rs:
             with self.assertRaises(SystemExit):
                 submit.submit_entry(dict(self.ENTRY), 0, self._opts())
@@ -5755,7 +5778,7 @@ class TestEnqueue(unittest.TestCase):
         from utils import submit
         self.sl = sl
         self.db = os.path.join(_mkdtemp(), 'submissions.db')
-        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                       'njobs': 10, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
         # Task 6 enqueue gate reads the tarball; stub tarball resolution
@@ -5883,7 +5906,8 @@ class TestEnqueueErrorStyle(unittest.TestCase):
         self.addCleanup(cc_patcher.stop)
 
     def _entry(self, tarball='cnf.mu2e.E.C.0.tar'):
-        return {'tarball': tarball, 'njobs': 50}
+        return {'tarball': tarball, 'njobs': 50,
+                'prodtools_dir': FAKE_PRODTOOLS_DIR}
 
     def test_duplicate_enqueue_one_line_no_traceback(self):
         from utils.submit import enqueue_entry
@@ -6748,7 +6772,7 @@ class TestSubmitReservesBeforeSubmitting(unittest.TestCase):
         self.submit = submit
         self.sl = sl
         self.db = os.path.join(_mkdtemp(), 'submissions.db')
-        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
         self.opts = SubmitOptions(ledger_db=self.db, origin='/tmp/map.json',
@@ -6791,7 +6815,7 @@ class TestDirectPathPreflight(unittest.TestCase):
     def setUp(self):
         from utils import submit
         self.submit = submit
-        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar',
+        self.entry = {'tarball': 'cnf.mu2e.TestDesc.TestConf.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                       'njobs': 5, 'inloc': 'tape',
                       'outputs': [{'location': 'tape'}]}
 
@@ -8264,7 +8288,7 @@ class TestEnqueueInputGate(unittest.TestCase):
 
     def test_failing_check_blocks_and_creates_no_campaign(self):
         from utils import submit
-        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient", "prodtools_dir": FAKE_PRODTOOLS_DIR,
                  "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
                                             "location": "tape"}]}
         created = []
@@ -8284,7 +8308,7 @@ class TestEnqueueInputGate(unittest.TestCase):
 
     def test_passing_check_creates_campaign(self):
         from utils import submit
-        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient", "prodtools_dir": FAKE_PRODTOOLS_DIR,
                  "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
                                             "location": "tape"}]}
         with patch.object(submit, "_ensure_local_tarball",
@@ -8303,7 +8327,7 @@ class TestEnqueueInputGate(unittest.TestCase):
         branch exactly like a check_inputs failure does — exit 2, no
         ledger row — even though check_inputs itself passed clean."""
         from utils import submit
-        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient",
+        entry = {"tarball": "cnf.mu2e.T.C.0.tar", "inloc": "resilient", "prodtools_dir": FAKE_PRODTOOLS_DIR,
                  "njobs": 100, "outputs": [{"dataset": "dig.mu2e.*.art",
                                             "location": "tape"}]}
         created = []
@@ -12116,7 +12140,7 @@ class TestEnqueueDraining(unittest.TestCase):
     snapshotted entry; check_inputs is skipped (a generic cnf bakes no
     inputs — the tick gates each batch instead)."""
 
-    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
              'inloc': 'tape',
              'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
              'outputs': [{'dataset': 'mcs.*.art', 'location': 'tape'}]}
@@ -12256,7 +12280,7 @@ class TestSubmitEntryFiles(unittest.TestCase):
     """Files mode: jobset = positions, ledger row stores filenames,
     scopes derive from the mapped outputs of the batch."""
 
-    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar',
+    ENTRY = {'tarball': 'cnf.mu2e.reco.MDC2025au_best_v1_5.0.tar', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
              'inloc': 'tape',
              'input_pattern': 'dig.mu2e.%.MDC2025au_best_v1_5.art',
              'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
@@ -12292,8 +12316,6 @@ class TestSubmitEntryFiles(unittest.TestCase):
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
              patch.object(submit, 'check_code_tarball',
                           return_value=(True, [])), \
-             patch.object(submit, '_bundle_prodtools',
-                          return_value=Path('/tmp/pt.tar')), \
              patch.object(submit, '_run_submit',
                           return_value={'tarball': self.ENTRY['tarball'],
                                         'cluster_id': '123',
@@ -12359,8 +12381,6 @@ class TestSubmitEntryFiles(unittest.TestCase):
              patch('utils.jobquery.Mu2eJobPars', self.FakePars), \
              patch.object(submit, 'check_code_tarball',
                           return_value=(True, [])), \
-             patch.object(submit, '_bundle_prodtools',
-                          return_value=Path('/tmp/pt.tar')), \
              patch.object(submit, '_run_submit',
                           return_value={'tarball': entry['tarball'],
                                         'cluster_id': '123',
@@ -13507,7 +13527,8 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                 json2jobdef.process_single_entry(
                     dict(config), pushout=False, no_cleanup=True,
                     enqueue=True, slice_size=1000,
-                    json_path='data/Run1B/resampler_beam.json')
+                    json_path='data/Run1B/resampler_beam.json',
+                    prodtools_dir=FAKE_PRODTOOLS_DIR)
             self.assertEqual(sorted(os.listdir('.')), [],
                              'json2jobdef --enqueue wrote a file into cwd')
         finally:
@@ -13558,10 +13579,14 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                 # so this is exactly what build_jobdesc produced for the
                 # run under test — not a second, differently-mocked call.
                 expected_entry = json2jobdef.build_jobdesc(dict(config))
+                # process_single_entry adds the release the campaign runs;
+                # passed explicitly so the test does not depend on cvmfs.
+                expected_entry['prodtools_dir'] = FAKE_PRODTOOLS_DIR
                 json2jobdef.process_single_entry(
                     dict(config), pushout=True, no_cleanup=True,
                     enqueue=True, slice_size=7,
-                    json_path='data/x.json')
+                    json_path='data/x.json',
+                    prodtools_dir=FAKE_PRODTOOLS_DIR)
         finally:
             os.chdir(cwd)
 
@@ -15411,7 +15436,7 @@ class TestEnqueueRefusesOutstage(unittest.TestCase):
 
     def test_outstage_entry_refused(self):
         from utils.submit import enqueue_entry
-        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10,
+        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10, 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                  'inloc': 'tape',
                  'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
         with self.assertRaises(SystemExit):
@@ -15419,7 +15444,7 @@ class TestEnqueueRefusesOutstage(unittest.TestCase):
 
     def test_outstage_among_several_outputs_refused(self):
         from utils.submit import enqueue_entry
-        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10,
+        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10, 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                  'inloc': 'tape',
                  'outputs': [{'dataset': '*.root', 'location': 'disk'},
                              {'dataset': '*.art', 'location': 'outstage'}]}
@@ -15428,7 +15453,7 @@ class TestEnqueueRefusesOutstage(unittest.TestCase):
 
     def test_ordinary_entry_still_enqueues(self):
         from utils.submit import enqueue_entry
-        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10,
+        entry = {'tarball': 'cnf.mu2e.O.C.0.tar', 'njobs': 10, 'prodtools_dir': FAKE_PRODTOOLS_DIR,
                  'inloc': 'tape',
                  'outputs': [{'dataset': '*.art', 'location': 'disk'}]}
         self.assertIsNotNone(
@@ -16739,6 +16764,211 @@ class TestCopyToStashCliExit(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
+    """Every grid job runs prodtools from a cvmfs release recorded on the
+    entry at enqueue. There is no second way for worker code to reach a
+    job: no dev tarball, no checkout. Each boundary fails loudly."""
+
+    def test_current_symlink_resolves_to_a_version_dir(self):
+        import os, tempfile
+        from utils.jobdesc import resolve_prodtools_dir
+        base = tempfile.mkdtemp()
+        os.symlink(FAKE_PRODTOOLS_DIR, os.path.join(base, 'current'))
+        self.assertEqual(resolve_prodtools_dir(os.path.join(base, 'current')),
+                         os.path.realpath(FAKE_PRODTOOLS_DIR))
+
+    def test_validator_rejects_a_dir_that_is_not_a_release(self):
+        import tempfile
+        from utils.jobdesc import validate_entry_value
+        with self.assertRaises(ValueError) as cm:
+            validate_entry_value('prodtools_dir', tempfile.mkdtemp())
+        self.assertIn('bin/setup.sh', str(cm.exception))
+        with self.assertRaises(ValueError):
+            validate_entry_value('prodtools_dir', 'relative/path')
+
+    def test_validator_rejects_a_release_older_than_the_bootstrap(self):
+        """v3.2.0 and earlier ship a runjob.sh that untars a dropbox
+        tarball; pointing a campaign at one would kill every job in
+        setup. The layout check alone passes such a release."""
+        import os, shutil, tempfile
+        from utils.jobdesc import validate_entry_value
+        old = tempfile.mkdtemp()
+        shutil.copytree(FAKE_PRODTOOLS_DIR, old, dirs_exist_ok=True)
+        with open(os.path.join(old, 'bin', 'runjob.sh'), 'w') as fh:
+            fh.write('tar xf "$CONDOR_DIR_INPUT/$PRODTOOLS_TAR"\n')
+        with self.assertRaises(ValueError) as cm:
+            validate_entry_value('prodtools_dir', old)
+        self.assertIn('predates', str(cm.exception))
+
+    def test_entry_without_release_names_the_set_entry_fix(self):
+        from utils.jobdesc import prodtools_dir_of
+        with self.assertRaises(ValueError) as cm:
+            prodtools_dir_of({'tarball': 'cnf.mu2e.X.Y.0.tar'})
+        self.assertIn('set-entry', str(cm.exception))
+        self.assertIn('prodtools_dir', str(cm.exception))
+
+    def test_enqueue_refuses_an_entry_without_release(self):
+        from utils import submit
+        entry = {'tarball': 'cnf.mu2e.NoRel.C.0.tar', 'njobs': 3, 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+        with patch.object(submit.submission_ledger, 'create_campaign') as cc, \
+             self.assertRaises(SystemExit) as cm:
+            submit.enqueue_entry(entry, ledger_db='/tmp/never.db', slice_size=1)
+        self.assertIn('prodtools_dir', str(cm.exception))
+        cc.assert_not_called()
+
+    def test_submit_refuses_a_row_without_release(self):
+        from utils import submit
+        entry = {'tarball': 'cnf.mu2e.NoRel.C.0.tar', 'njobs': 3, 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'tape'}]}
+        options = submit.SubmitOptions(ledger_db='/tmp/never.db', dry_run=True,
+                                       origin='/tmp/m.json')
+        with patch.object(submit, '_run_submit') as rs, \
+             self.assertRaises(SystemExit):
+            submit.submit_entry(entry, 0, options)
+        rs.assert_not_called()
+
+    def test_set_entry_accepts_prodtools_dir(self):
+        """An old open row is given a release with the documented fix."""
+        import os
+        from utils import submission_ledger as sl
+        db = os.path.join(_mkdtemp(), 'submissions.db')
+        cid = sl.create_campaign(
+            db, tarball='cnf.mu2e.Old.C.0.tar', slice_size=5,
+            entry={'tarball': 'cnf.mu2e.Old.C.0.tar', 'njobs': 5, 'inloc': 'tape',
+                   'outputs': [{'dataset': '*.art', 'location': 'tape'}]})
+        previous, rows = sl.set_campaign_entry_key(db, cid, 'prodtools_dir',
+                                                   FAKE_PRODTOOLS_DIR)
+        self.assertIsNone(previous)
+        camp = [c for c in sl.active_campaigns(db) if c['id'] == cid][0]
+        self.assertEqual(camp['entry']['prodtools_dir'], FAKE_PRODTOOLS_DIR)
+
+    def test_runjob_sh_refuses_to_run_without_a_release(self):
+        """The worker script has one path. No env var → exit 1 before any
+        setup; a dir that is not a release on this worker → exit 1."""
+        import os, subprocess
+        script = os.path.join(os.path.dirname(__file__), '..', 'bin', 'runjob.sh')
+        env = {k: v for k, v in os.environ.items() if k != 'MU2EGRID_PRODTOOLS_DIR'}
+        r = subprocess.run(['bash', script], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('MU2EGRID_PRODTOOLS_DIR is not set', r.stderr)
+        env['MU2EGRID_PRODTOOLS_DIR'] = _mkdtemp()
+        r = subprocess.run(['bash', script], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('is not a prodtools release on this worker', r.stderr)
+
+    def test_json2jobdef_prodtools_dir_requires_enqueue(self):
+        import subprocess, sys
+        repo = os.path.join(os.path.dirname(__file__), '..')
+        r = subprocess.run([sys.executable, os.path.join(repo, 'utils', 'json2jobdef.py'),
+                            '--json', 'x.json', '--prodtools-dir', '/cvmfs/x'],
+                           capture_output=True, text=True, cwd=repo)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('--prodtools-dir requires --enqueue', r.stderr + r.stdout)
+
+
+
+class TestReadBackValidation(unittest.TestCase):
+    """After mu2e exits 0 and before anything is pushed, every .art/.root
+    output is read back entry by entry (utils/validate_root_outputs.py).
+    It is the only gate that looks at the payload — exit code, SHA256
+    manifest and pushOutput CRC all certify the bytes as written."""
+
+    def _run_capture(self, side_effect=None):
+        from utils import runmu2e
+        calls = []
+        def fake_run(cmd, shell=False, **kw):
+            calls.append(cmd)
+            if side_effect:
+                raise side_effect
+        return runmu2e, calls, fake_run
+
+    def test_only_root_files_are_read_back_and_none_means_no_run(self):
+        from utils import runmu2e
+        runmu2e_, calls, fake_run = self._run_capture()
+        with patch.object(runmu2e, 'run', fake_run):
+            self.assertFalse(runmu2e._validate_outputs(
+                ['out.log', 'etc.mu2e.index.000.0000001.txt'], '/setup.sh'))
+        self.assertEqual(calls, [])
+
+    def test_command_sources_the_job_setup_and_names_every_file(self):
+        from utils import runmu2e
+        _, calls, fake_run = self._run_capture()
+        with patch.object(runmu2e, 'run', fake_run):
+            failed = runmu2e._validate_outputs(
+                ['mcs.mu2e.A.B.001.art', 'nts.mu2e.A.B.001.root', 'x.log'],
+                '/cvmfs/m/setup.sh')
+        self.assertFalse(failed)
+        self.assertEqual(len(calls), 1)
+        argv = calls[0]
+        self.assertEqual(argv[:2], ['bash', '-c'])
+        self.assertTrue(argv[2].startswith('source /cvmfs/m/setup.sh && python3 '))
+        self.assertIn('validate_root_outputs.py', argv[2])
+        self.assertIn('mcs.mu2e.A.B.001.art', argv[2])
+        self.assertIn('nts.mu2e.A.B.001.root', argv[2])
+        self.assertNotIn('x.log', argv[2])
+
+    def test_unreadable_output_marks_the_job_failed(self):
+        from utils import runmu2e
+        _, calls, fake_run = self._run_capture(
+            subprocess.CalledProcessError(1, 'validate'))
+        with patch.object(runmu2e, 'run', fake_run):
+            self.assertTrue(runmu2e._validate_outputs(
+                ['mcs.mu2e.A.B.001.art'], '/setup.sh'))
+
+    def test_entry_key_wins_over_the_cli_and_must_be_bool(self):
+        from types import SimpleNamespace
+        from utils import runmu2e
+        cli_on = SimpleNamespace(no_validate=False)
+        cli_off = SimpleNamespace(no_validate=True)
+        self.assertTrue(runmu2e._validation_enabled({}, cli_on))
+        self.assertFalse(runmu2e._validation_enabled({}, cli_off))
+        self.assertFalse(runmu2e._validation_enabled({'validate_outputs': False}, cli_on))
+        self.assertTrue(runmu2e._validation_enabled({'validate_outputs': True}, cli_off))
+        with self.assertRaises(SystemExit):
+            runmu2e._validation_enabled({'validate_outputs': 'yes'}, cli_on)
+
+    def test_runlocal_forwards_no_validate_to_the_child(self):
+        from types import SimpleNamespace
+        from utils import runlocal
+        base = dict(entry_point='/x/runlocal.py', jobdef='cnf.tar', inloc='tape',
+                    indices=[3], nevts=-1, mu2e_options='', copy_input=False,
+                    code=None, code_root=None, no_validate=False)
+        argv = runlocal.child_argv(3, SimpleNamespace(**base))
+        self.assertNotIn('--no-validate', argv)
+        argv = runlocal.child_argv(3, SimpleNamespace(**{**base, 'no_validate': True}))
+        self.assertIn('--no-validate', argv)
+
+    def test_scan_finds_a_scrambled_block(self):
+        """End to end with real ROOT (skipped in an environment without
+        it, e.g. `muse setup ops`): a healthy tree reads OK; the same file
+        with 4 KiB overwritten mid-way reads BAD and exits 1 — the
+        fnpc18003 signature."""
+        try:
+            import ROOT  # noqa: F401
+        except ImportError:
+            self.skipTest('ROOT not importable here')
+        import os, random, io, contextlib
+        from array import array
+        from utils import validate_root_outputs as v
+        d = _mkdtemp(); p = os.path.join(d, 'nts.mu2e.T.C.001.root')
+        f = ROOT.TFile(p, 'RECREATE'); t = ROOT.TTree('Events', 'Events')
+        x = array('d', [0.0]); t.Branch('x', x, 'x/D')
+        rnd = random.Random(1)
+        for i in range(200000):
+            x[0] = rnd.random(); t.Fill()
+        t.Write(); f.Close()
+        self.assertEqual(v.main([p]), 0)
+        size = os.path.getsize(p)
+        with open(p, 'r+b') as fh:
+            fh.seek(size // 2); fh.write(bytes(rnd.getrandbits(8) for _ in range(4096)))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = v.main([p])
+        self.assertEqual(rc, 1)
+        self.assertIn('BAD', out.getvalue())
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

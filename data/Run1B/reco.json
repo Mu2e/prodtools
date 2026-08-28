@@ -168,6 +168,7 @@
 		},
 		{
 			"dsconf": "Run1Baw_best_v1_5",
+			"era_mismatch_ok": "Run1Baw names the reco ROUND; the Baq-era digs below can only be reconstructed by SimJob/Run1Baq (v13_34_10). MDC2025aw (v13_36_00) deleted VirtualDetectorIds 117-119, so aw throws 'Invalid VirtualDetectorID::enum_type : 136' on 12 of these 13 inputs. Campaigns 79-93 already carry this dsconf; the outputs are physically correct Run1Baq reco, only the name is aw.",
 			"tarball_append": "-reco",
 			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
 			"input_data": [
@@ -185,7 +186,9 @@
 				{"dig.mu2e.PolyFlatGammaCaloMix1BB.Run1Baq_best_v1_5.art": 1},
 
 				{"dig.mu2e.RPCExternalMix1BB.Run1Bap_best_v1_5-000.art": 1},
-				{"dig.mu2e.RPCInternalMix1BB.Run1Bap_best_v1_5-000.art": 1}
+				{"dig.mu2e.RPCInternalMix1BB.Run1Bap_best_v1_5-000.art": 1},
+
+				{"dig.mu2e.MuCap1809keVCalo.Run1Bah_best_v1_4-000.art": 1}
 			],
 			"fcl_overrides": {
 				"services.DbService.purpose": "Sim_best",

@@ -128,7 +128,43 @@ RESOURCE_KEYS = ('memory', 'disk', 'expected_lifetime')
 # json2jobdef (campaign born), submit.enqueue_entry (safety net before a
 # campaign is created), and submission_ledger (live campaign edited).
 # Three restatements is how `code` reached two of them and not the third.
-ENTRY_VALUE_KEYS = ('inloc', 'code') + RESOURCE_KEYS
+ENTRY_VALUE_KEYS = ('inloc', 'code', 'prodtools_dir') + RESOURCE_KEYS
+
+# The cvmfs release tree every grid job runs prodtools from. A campaign
+# records the CONCRETE version dir (the `current` symlink resolved at
+# enqueue), so every slice and every recovery runs the same code and the
+# ledger says which. There is no other way for worker code to reach a
+# job: no dev tarball, no checkout.
+PRODTOOLS_CVMFS_CURRENT = '/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current'
+PRODTOOLS_WORKER_FILES = ('bin/setup.sh', 'bin/runjob.sh', 'utils/runmu2e.py')
+
+
+def prodtools_dir_of(entry: dict) -> str:
+    """The prodtools release dir this entry's jobs run from. Required:
+    an entry without one predates the cvmfs bootstrap and must be given
+    one with `submissions set-entry <id> prodtools_dir <dir>
+    --include-open-rows` before it can be (re)submitted."""
+    import os
+    try:
+        value = entry['prodtools_dir']
+    except KeyError:
+        raise ValueError(
+            "entry has no prodtools_dir: it predates the cvmfs worker "
+            "bootstrap. Set one with `submissions set-entry <campaign> "
+            "prodtools_dir <dir> --include-open-rows`, <dir> being a "
+            f"release under {os.path.dirname(PRODTOOLS_CVMFS_CURRENT)}") from None
+    validate_entry_value('prodtools_dir', value)
+    return value
+
+
+def resolve_prodtools_dir(path: str) -> str:
+    """Absolute, symlink-free release dir: `.../current` becomes
+    `.../v3.2.0`, so what the ledger records is a version, not a pointer
+    that moves under a running campaign."""
+    import os
+    resolved = os.path.realpath(path)
+    validate_entry_value('prodtools_dir', resolved)
+    return resolved
 
 
 def resources_of(entry: dict) -> dict:
@@ -231,7 +267,7 @@ def validate_entry_value(key, value):
     Keys other than the ones it knows are ignored, not rejected: an entry
     legitimately carries tarball, outputs, njobs and friends.
     """
-    if key not in ('inloc', 'code') + RESOURCE_KEYS:
+    if key not in ('inloc', 'code', 'prodtools_dir') + RESOURCE_KEYS:
         return
     if not isinstance(value, str):
         raise ValueError(f"{key} must be a string, got {value!r}")
@@ -257,3 +293,26 @@ def validate_entry_value(key, value):
         if not value.startswith('/'):
             raise ValueError(
                 f"code must be an absolute path, got {value!r}")
+    elif key == 'prodtools_dir':
+        # A release tree, checked on the submit host (cvmfs is mounted
+        # there too). Missing worker files here means a whole cluster of
+        # setup-phase exit 1s on the grid.
+        import os
+        if not value.startswith('/'):
+            raise ValueError(
+                f"prodtools_dir must be an absolute path, got {value!r}")
+        missing = [f for f in PRODTOOLS_WORKER_FILES
+                   if not os.path.isfile(os.path.join(value, f))]
+        if missing:
+            raise ValueError(
+                f"prodtools_dir {value!r} is not a prodtools release: "
+                f"missing {', '.join(missing)}")
+        # Releases up to v3.2.0 have a runjob.sh that untars a dropbox
+        # tarball nothing ships any more; every job would die in setup.
+        with open(os.path.join(value, 'bin', 'runjob.sh')) as fh:
+            if 'MU2EGRID_PRODTOOLS_DIR' not in fh.read():
+                raise ValueError(
+                    f"prodtools_dir {value!r} predates the cvmfs worker "
+                    f"bootstrap (its bin/runjob.sh does not read "
+                    f"MU2EGRID_PRODTOOLS_DIR); publish a newer release "
+                    f"and pin that")

@@ -307,18 +307,20 @@ def _all_campaigns(db):
             f"as far as writing the ledger") from e
 
 
-def run_submissions(campaign_id: int, run_as: str, confirm: bool = False):
-    """Tick `submissions run`, scoped to one campaign's index top-up.
+def run_submissions(run_as: str, campaign_id: int | None = None,
+                    confirm: bool = False):
+    """Tick `submissions run`: all active campaigns, or one.
 
     `--campaign` only narrows the top-up phase: the recovery pass still
     processes every open ledger row, and `drain_tick` still feeds every
     draining campaign, exactly as a bare `submissions run` does. Only
     the slice-feeding for THIS campaign id is what's being scoped here.
 
-    `campaign_id` is required. `submissions run` with no filter ticks
-    every active campaign -- that is the cron's job, not an
-    interactive call from this tool, so there is no default that means
-    "everything".
+    `campaign_id=None` means the bare tick: top up EVERY active
+    campaign, the same thing the (nonexistent) cron would do. That is
+    an explicit request, not a default -- omitting the id is a
+    deliberate "all campaigns", which is why it does not fall foul of
+    the typo argument below.
 
     The id is validated against the ledger THIS identity writes
     (_ledger_path_for) BEFORE run_cli: a nonexistent or non-active id
@@ -333,6 +335,19 @@ def run_submissions(campaign_id: int, run_as: str, confirm: bool = False):
     runner.require_confirmed(run_as, confirm)
 
     db = _ledger_path_for(run_as)
+    if campaign_id is None:
+        # Bare tick: no id to validate, and an empty top-up here is a
+        # real answer ("nothing active"), not a masked typo.
+        result = runner.run_cli(['bin/submissions', 'run'], run_as)
+        if result['rc'] not in (0, 2):
+            raise RuntimeError(
+                f"submissions run failed (rc={result['rc']}): "
+                f"{_both_streams(result)}")
+        return {'rc': result['rc'],
+                'needs_attention': result['rc'] == 2,
+                'campaign_id': None,
+                'output': result['stdout']}
+
     campaigns = {c['id']: c for c in _all_campaigns(db)}
     campaign = campaigns.get(campaign_id)
     if campaign is None:

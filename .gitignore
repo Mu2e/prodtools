@@ -116,8 +116,6 @@ web/*.md
 poms_data.db
 
 # Scratch / local notes / test workspaces (root only)
-/os
-/sys
 /prompts*.txt
 /mu2e_common.gdml
 /MDC*-test.json
