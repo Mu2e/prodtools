@@ -91,8 +91,9 @@ json2jobdef --json data/mdc2025/evntuple.json --desc evnt \
 ```
 
 Flags: `--json` (required), `--desc`, `--dsconf`, `--index`, `--pushout`,
-`--prod`, `--enqueue`, `--slice-size N` (default 1000), `--extend`,
-`--ignore-empty`, `--event-count-positive`, `--no-cleanup`, `--verbose`.
+`--prod`, `--enqueue`, `--slice-size N` (default 1000), `--prodtools-dir
+DIR`, `--extend`, `--ignore-empty`, `--event-count-positive`,
+`--no-cleanup`, `--verbose`.
 
 Notes:
 
@@ -111,10 +112,24 @@ Notes:
 - `inloc` and any `memory`/`disk`/`expected_lifetime`/`code` in the
   config are validated before anything is built, by the same validator
   (`jobdesc.validate_entry_value`) that guards `submissions set-entry`.
-  A misspelled `inloc` does not fail at runtime — `file_resolver` finds
-  no such location and falls through to SAM, so the jobs run to
-  completion reading from the wrong place. That is why it is refused at
-  the boundary.
+  A misspelled `inloc` does not fail at runtime — `file_resolver`
+  probes the declared area, then `disk`, `resilient`, `tape`, `stash`,
+  `scratch` in that order, and reads from the first that holds the
+  dataset (announcing the substitution on the worker's stderr), so the
+  jobs run to completion reading from a place nobody chose. That is why
+  it is refused at the boundary.
+- `--enqueue` records the **prodtools release the campaign's jobs run**:
+  `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current` resolved to its
+  concrete version dir (e.g. `.../v3.3.0`), stored on the entry as
+  `prodtools_dir`, printed as `Campaign will run prodtools from ...`.
+  `--prodtools-dir DIR` pins a different release (a pre-release
+  installed with `install_prodtools.sh --no-current`, section 11).
+  Every slice and every recovery of the campaign runs that one release;
+  nothing from the submitting checkout reaches a worker (section 7). The
+  value must be a release tree whose `bin/runjob.sh` reads
+  `MU2EGRID_PRODTOOLS_DIR` — older releases (v3.2.0 and before) are
+  refused at enqueue, since their `runjob.sh` untars a tarball no
+  submission ships any more.
 - A bulk `--dsconf X --prod --enqueue` that skips any entry exits **2**
   and lists what it skipped. Entries that already processed are left
   alone — they are in SAM and in the ledger.
@@ -662,6 +677,20 @@ an "ops JSON" via dropbox, both landing under `$CONDOR_DIR_INPUT`, and
 the worker resolves its own job index from `$PROCESS` through the ops
 JSON's `jobs` lookup table.
 
+The code itself is not shipped. The job executable is `bin/runjob.sh`
+of the cvmfs prodtools release recorded on the campaign (`prodtools_dir`,
+section 3), and `MU2EGRID_PRODTOOLS_DIR` names that release for it —
+jobsub copies the executable into the sandbox, so the script cannot find
+its own tree. `runjob.sh` sources the Mu2e environment, `muse setup ops`,
+OfflineOps, then the release's `bin/setup.sh`, and execs its
+`utils/runmu2e.py`. It refuses to run (exit 1, before any setup) when
+the variable is unset or the directory is not a release on that worker —
+a version published within the hour may not have reached every cvmfs
+catalog yet, and that failure is what lets the recovery pass re-fire the
+index elsewhere later. There is no other way for worker code to reach a
+job: a fix to `runmu2e.py` or `file_resolver.py` reaches production only
+through a release (`install_prodtools.sh`, section 11).
+
 To simply run a cnf's jobs on this node — one index or a few dozen, with
 no ops JSON and no ledger row — use `runlocal` (section 11); it shares
 this worker's prep and stops before the push.
@@ -683,7 +712,7 @@ cd /tmp && MU2EGRID_JOBDEF=cnf.mu2e.NoPrimaryMix1BB.Run1Ban_best_v1_5-000.0.tar 
 Flags: `--dry-run` (print pushOutput commands without running them),
 `--nevts N` (default -1 = all), `--mu2e-options "..."` (extra `mu2e`
 arguments), `--copy-input` (stage inputs locally with `mdh` instead of
-streaming).
+streaming), `--no-validate` (skip the output read-back below).
 
 - The resolved index is carried internally as an `fname` whose sequencer
   field holds it: `etc.mu2e.index.000.NNNNNNN.txt`, seventh field
@@ -696,8 +725,22 @@ streaming).
   xroot drop wastes the most CPU. The entry key wins over the
   `--copy-input` CLI flag; `stash`/`resilient`/`dir:` inlocs always
   stream regardless.
-- Outputs are pushed only when `mu2e` exits 0; the log is pushed always,
-  including when the data push itself raises.
+- Outputs are pushed only when `mu2e` exits 0 **and every `.art`/`.root`
+  output reads back**: `utils/validate_root_outputs.py` runs under the
+  job's own setup and calls `GetEntry` on every entry of every TTree,
+  which decompresses every basket. It is the only gate that looks at the
+  payload — the exit code says art closed the file, the SHA256 manifest
+  and pushOutput's CRC certify the bytes as they sit on the worker's
+  disk, and dCache checks its copy against that CRC — so bytes that went
+  wrong between art's write and the disk pass all of them (2026-08-20:
+  two digs each with one displaced ~256 KiB block, declared with matching
+  checksums, caught by reco a week later). A failure logs
+  `=== output validation FAILED ... ===` with ROOT's own diagnostics,
+  marks the job failed (no data push, log pushed), and the recovery pass
+  re-runs the index elsewhere. Cost is ~15 s per GB, CPU-bound. The JSON
+  entry key `"validate_outputs": false` opts one entry out and wins over
+  the `--no-validate` flag; anything but a JSON boolean is refused.
+- The log is pushed always, including when the data push itself raises.
 - Outputs are partitioned by their entry's `outloc` location. Anything
   bound for `outstage` (section 3) is copied to
   `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` with `ifdh` and never reaches
@@ -709,7 +752,8 @@ streaming).
   from `$INPUT_TAR_DIR_LOCAL` — the directory jobsub itself populates
   on the worker when `--tar_file_name` was passed — instead of sourcing
   a `/cvmfs` Musing path. `bin/runjob.sh`'s startup diagnostics echo
-  `INPUT_TAR_DIR_LOCAL` alongside `CONDOR_DIR_INPUT`: an `unset` value
+  `INPUT_TAR_DIR_LOCAL` alongside `CONDOR_DIR_INPUT` and
+  `MU2EGRID_PRODTOOLS_DIR`: an `unset` value
   there on a failed job is the first thing to check, and it means
   `--tar_file_name` never reached the worker — the RCDS caveat in
   section 3 is the usual reason.
@@ -942,6 +986,7 @@ submissions set-slice 7 500        # retune the batch size from the next tick
 submissions set-memory 7 3000MB    # retune the memory request from the next tick
 submissions set-entry 7 inloc resilient --include-open-rows  # also fix open rows' recoveries
 submissions set-entry 7 code /exp/mu2e/data/users/mu2epro/code_tarballs/Code.tar.bz2
+submissions set-entry 7 prodtools_dir /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v3.3.0 --include-open-rows
 submissions reconcile 123 --note "checked jobsub_q, window free"
 submissions resubmit 4231 --indices 4000,4001,4055             # named indices
 submissions resubmit 4231 --indices-file gaps.txt --dry-run   # preview first
@@ -1012,7 +1057,10 @@ Verbs:
   tick and reach only future slices, never already-submitted rows.
 - `set-entry CAMP_ID KEY VALUE [--include-open-rows]` — the general form
   of the two retune verbs above: set one of `inloc`/`memory`/`disk`/
-  `expected_lifetime`/`code` on a live campaign's entry. Without
+  `expected_lifetime`/`code`/`prodtools_dir` on a live campaign's entry.
+  `prodtools_dir` is the cvmfs release the jobs run (section 3); a row
+  created before releases were recorded has none and its recovery is
+  refused until this is set **with** `--include-open-rows`. Without
   `--include-open-rows` the change reaches future slices only (same as
   `set-slice`/`set-memory`) — a resubmit builds its options from the
   row's own frozen entry snapshot, not the campaign's current one, so an
@@ -1192,7 +1240,8 @@ Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
 `--indices SPEC`, `-j/--parallel` (default 4), `--workdir` (default
 `.`), `--nevts` (default `-1` = whatever the FCL says),
 `--mu2e-options`, `--copy-input`, `--timeout SECONDS` (default 86400),
-`--json PATH`, `--code TARBALL` (a `muse tarball` build to run against
+`--json PATH`, `--no-validate` (skip the worker's output read-back,
+section 7), `--code TARBALL` (a `muse tarball` build to run against
 instead of the cnf's own `/cvmfs` setup, unpacked once into
 `<workdir>/code`).
 
@@ -1284,9 +1333,22 @@ window), `--poll-s` (default 300), `--outstage` (the submission's
 ### `install_prodtools.sh` / `submissions_cron`
 
 Operations scripts. `install_prodtools.sh` installs a versioned prodtools
-release on CVMFS from a GitHub tag — run it directly on
-`cvmfsmu2e@oasiscfs.fnal.gov`; `-n` is a dry run and `-t [DIR]` installs
-into a local writable dir instead of touching CVMFS.
+release under `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/vX.Y.Z` from
+the `Mu2e/prodtools` GitHub tag of that name and points `current` at it —
+run it directly on `cvmfsmu2e@oasiscfs.fnal.gov`; propagation to workers
+takes about an hour. `-n` is a dry run, `-t [DIR]` installs into a local
+writable dir instead of touching CVMFS, and `--no-current` installs the
+version without moving `current` — for a pre-release that campaigns pin
+explicitly with `json2jobdef --prodtools-dir` before it becomes the
+default. Grid jobs run only these releases (section 7), so a worker-side
+change is live in production once it is tagged, installed, and pinned
+or made `current`.
+
+```bash
+./bin/install_prodtools.sh -n v3.3.0                 # check the tag and the path, change nothing
+./bin/install_prodtools.sh --no-current v3.3.0-rc1   # publish for pinning, leave current alone
+./bin/install_prodtools.sh v3.3.0                    # install and make it current
+```
 `submissions_cron` sets up a quiet Mu2e environment and runs
 `submissions run` (the per-DB lock is taken inside `run` itself, not by
 the cron wrapper) for mu2epro's crontab, appending output to a
@@ -1316,6 +1378,31 @@ a one-time operator step (section 11 `submissions`, wiki page
 - `json2jobdef: --enqueue requires --prod (a campaign needs the cnf in
   SAM)` — `--enqueue` resolves the tarball from SAM, so the cnf must
   have been pushed first.
+- `json2jobdef: --prodtools-dir requires --enqueue` — the release is a
+  property of the campaign being registered; without `--enqueue` there
+  is nothing to record it on.
+- `prodtools_dir '<dir>' is not a prodtools release: missing bin/setup.sh,
+  ...` / `prodtools_dir must be an absolute path` — the release dir
+  (`--prodtools-dir`, or `submissions set-entry ... prodtools_dir`) is
+  checked on the submit host, where cvmfs is mounted too: a tree without
+  `bin/setup.sh`, `bin/runjob.sh` and `utils/runmu2e.py` would be a whole
+  cluster of setup-phase exit 1s on the grid.
+- `prodtools_dir '<dir>' predates the cvmfs worker bootstrap (its
+  bin/runjob.sh does not read MU2EGRID_PRODTOOLS_DIR); publish a newer
+  release and pin that` — releases up to v3.2.0 ship a `runjob.sh` that
+  untars a dropbox tarball no submission ships any more. Until a newer
+  release is installed (section 11) nothing can be enqueued; that is
+  deliberate.
+- `entry has no prodtools_dir: it predates the cvmfs worker bootstrap.
+  Set one with submissions set-entry <campaign> prodtools_dir <dir>
+  --include-open-rows` (prefixed `submit:` from a recovery, `json2jobdef:`
+  at enqueue) — a ledger row from before releases were recorded cannot be
+  resubmitted until it names one; the flag is what reaches the open rows.
+- Worker log `ERROR: MU2EGRID_PRODTOOLS_DIR is not set — this job was not
+  submitted with a prodtools release` / `ERROR: <dir> is not a prodtools
+  release on this worker` — `runjob.sh` exits 1 before any setup. The
+  second form on a freshly published version usually means that worker's
+  cvmfs catalog has not caught up; the recovery pass re-fires the index.
 - `json2jobdef: --slice-size requires --enqueue` — `--slice-size` only
   has meaning for the campaign `--enqueue` registers.
 - `json2jobdef: inloc must be one of tape, disk, scratch, resilient,
@@ -1392,6 +1479,15 @@ a one-time operator step (section 11 `submissions`, wiki page
 - `Could not locate file: <name>` — SAM has no location for an input
   file; check the entry's `inloc` against where the files actually live
   (`samweb locate-file <name>`).
+- `=== output validation FAILED (rc=1) — outputs will not be pushed; the
+  log will be ===`, preceded by `BAD <file> {'<tree>': (n, first, last)}`
+  and ROOT's `R__unzip` / `TBasket::Streamer` messages — an output could
+  not be read back entry by entry (section 7). The data is not pushed;
+  the recovery pass re-runs the index. If the same index fails the same
+  way on a different node, the input, not the worker, is corrupt: run
+  the validator on the input file.
+- `Error: validate_outputs must be true or false, got '<value>'` — the
+  entry key is a JSON boolean, not a string.
 - `Error: MU2EGRID_JOBDEF is not set. runmu2e runs only as the
   direct-backend worker ...` — `runmu2e` was invoked outside a
   direct-backend job. To run a cnf's jobs locally use `runlocal`
