@@ -23,7 +23,8 @@ from utils.jobdesc import (
     ENTRY_VALUE_KEYS, RESOURCE_KEYS, firstjob_of, is_dir_inloc,
     validate_entry_value,
     validate_outloc,
-    validate_window)
+    validate_window,
+                           PRODTOOLS_CVMFS_CURRENT, resolve_prodtools_dir)
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -586,6 +587,11 @@ def main():
     p.add_argument('--prod', action='store_true', help='Production mode: enable pushout (SAM registration). Requires --enqueue, which registers a sliced-submission campaign in the ledger and prints its campaign id.')
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
+    p.add_argument('--prodtools-dir', default=None,
+                   help='cvmfs prodtools release the campaign runs '
+                        '(default: /cvmfs/mu2e.opensciencegrid.org/bin/'
+                        'prodtools/current, resolved to its version dir '
+                        'and recorded in the ledger). Requires --enqueue.')
     p.add_argument('--enqueue', action='store_true',
                    help='After pushing the cnf, register the entry as a '
                         'sliced campaign in the ledger. Requires --prod.')
@@ -607,6 +613,8 @@ def main():
                  "needs the cnf in SAM)")
     if args.slice_size is not None and not args.enqueue:
         sys.exit("json2jobdef: --slice-size requires --enqueue")
+    if args.prodtools_dir is not None and not args.enqueue:
+        sys.exit("json2jobdef: --prodtools-dir requires --enqueue")
     if args.slice_size is None:
         args.slice_size = 1000
     if args.prod and not args.enqueue:
@@ -642,6 +650,7 @@ def main():
             enqueue=args.enqueue,
             slice_size=args.slice_size,
             json_path=args.json,
+            prodtools_dir=args.prodtools_dir,
         )
 
 def _build_job_args(config):
@@ -740,8 +749,13 @@ def _provenance(json_path, config):
 
 def process_single_entry(config, pushout=False, no_cleanup=True,
                          extend=False, ignore_empty=False,
-                         enqueue=False, slice_size=1000, json_path=None):
-    """Process a single configuration entry."""
+                         enqueue=False, slice_size=1000, json_path=None,
+                         prodtools_dir=None):
+    """Process a single configuration entry.
+
+    `prodtools_dir` is the cvmfs prodtools release the campaign's jobs
+    will run; None means the `current` release, resolved to its concrete
+    version dir here so the ledger records a version, not a symlink."""
     validate_required_fields(config)
     config['owner'] = config.get('owner', default_owner())
     config['inloc'] = config.get('inloc', 'none')
@@ -790,6 +804,12 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         from types import SimpleNamespace
         from utils.submit import enqueue_entry, _resolve_ledger_db
         entry = build_jobdesc(config)
+        try:
+            entry['prodtools_dir'] = resolve_prodtools_dir(
+                prodtools_dir or PRODTOOLS_CVMFS_CURRENT)
+        except ValueError as e:
+            sys.exit(f"json2jobdef: {e}")
+        print(f"Campaign will run prodtools from {entry['prodtools_dir']}")
         enqueue_entry(
             entry,
             ledger_db=_resolve_ledger_db(SimpleNamespace(ledger_db=None)),

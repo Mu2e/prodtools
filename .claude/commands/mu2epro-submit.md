@@ -183,10 +183,14 @@ actually been submitted before deciding anything.
 
 ## Notes
 
-- The direct backend ships this repo's `utils/`+`bin/` as
-  `/tmp/prodtools-mu2epro.tar` and runs `runjob.sh` on the worker, so the
-  worker executes THIS checkout's `runmu2e.py` (firstjob-aware). Submit from a
-  repo whose code you trust.
+- The worker runs the cvmfs prodtools release recorded on the campaign
+  at enqueue (`prodtools_dir`, e.g.
+  `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v3.3.0`) — its own
+  `bin/runjob.sh` and `utils/runmu2e.py`. Nothing from this checkout
+  reaches a worker; a fix to worker-side code reaches production only
+  through a release (`bin/install_prodtools.sh`). A row created before
+  the cvmfs bootstrap has no `prodtools_dir` and is refused until
+  `submissions set-entry <campaign> prodtools_dir <dir> --include-open-rows`.
 - `resubmit`'s reconstructed entry drops any `firstjob` window — the
   `--indices`/`--files` you pass are absolute (cnf index or input
   filename), not relative to the original entry's window.

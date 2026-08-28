@@ -3,7 +3,8 @@
 Direct-submit driver for Mu2e grid jobs (single backend).
 
 Builds the `jobsub_submit` argv directly and ships prodtools as a
-dropbox tarball. Worker bootstraps `bin/runjob.sh` -> `utils/runmu2e.py`
+the entry's cvmfs prodtools release (`prodtools_dir`, recorded at
+enqueue). Worker bootstraps that release's `bin/runjob.sh` -> `utils/runmu2e.py`
 direct mode -> per-job pushOutput. The Phase-1 mu2ejobsub backend was
 retired 2026-07-19: template/direct_input/g4bl entries and HPC
 submission run via the upstream mu2ejobsub/mu2eg4bl CLIs, never here.
@@ -21,7 +22,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -31,7 +31,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for)
-from utils.jobdesc import (ENTRY_VALUE_KEYS, tarball_of, outputs_of, njobs_of,
+from utils.jobdesc import (ENTRY_VALUE_KEYS, prodtools_dir_of,
+                           tarball_of, outputs_of, njobs_of,
                            inloc_of, firstjob_of, validate_window,
                            resources_of, is_draining, validate_entry_value,
                            OUTSTAGE_LOCATION, code_of)
@@ -41,8 +42,6 @@ from utils.check_inputs import (check_inputs, check_code_tarball,
                                 format_report, Problem)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_RUNJOB_SH = REPO_ROOT / 'bin' / 'runjob.sh'
-DEFAULT_PRODTOOLS_TAR = Path('/tmp') / f'prodtools-{getpass.getuser()}.tar'
 
 
 class SubmitOptions(NamedTuple):
@@ -66,7 +65,6 @@ class SubmitOptions(NamedTuple):
     files: Optional[list] = None
     origin: Optional[str] = None
     ledger_parent: Optional[int] = None
-    prodtools_tar: Optional[str] = None
     role: Optional[str] = None
     wftop: Optional[str] = None
     wfproject: Optional[str] = None
@@ -416,6 +414,10 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     """
     resources = resources or {}
     _validate_entry_values(entry)
+    try:
+        prodtools_dir_of(entry)
+    except ValueError as e:
+        sys.exit(f"json2jobdef: {e}")
     _refuse_outstage_campaign(entry)
     if is_draining(entry):
         return _enqueue_draining(entry, ledger_db=ledger_db,
@@ -486,38 +488,6 @@ def _create_campaign(ledger_db, entry, snap, slice_size, provenance):
             slice_size=slice_size, origin=provenance)
     except (ValueError, sqlite3.Error) as e:
         sys.exit(f"json2jobdef: {e}")
-
-
-def _bundle_prodtools(out_path=DEFAULT_PRODTOOLS_TAR):
-    """Tar `utils/` + `bin/` from this repo into a worker-shippable bundle.
-
-    `runjob.sh` extracts this under `$_CONDOR_SCRATCH_DIR/prodtools/`
-    and execs `utils/runmu2e.py` from there, avoiding a dependency on a
-    cvmfs-published prodtools version that might not have our changes.
-
-    Skips tarring if `out_path` is already newer than every Python
-    source file under utils/ — keeps repeated submissions cheap.
-    """
-    out = Path(out_path)
-    sources = list((REPO_ROOT / 'utils').rglob('*.py')) + \
-        list((REPO_ROOT / 'bin').glob('*'))
-    if out.is_file():
-        out_mtime = out.stat().st_mtime
-        if all(s.stat().st_mtime <= out_mtime for s in sources if s.is_file()):
-            return out
-
-    print(f"Bundling prodtools → {out}")
-    with tarfile.open(out, 'w') as tar:
-        for sub in ('utils', 'bin'):
-            src_dir = REPO_ROOT / sub
-            for f in sorted(src_dir.rglob('*')):
-                if not f.is_file():
-                    continue
-                if '__pycache__' in f.parts or f.suffix == '.pyc':
-                    continue
-                arcname = Path('prodtools') / f.relative_to(REPO_ROOT)
-                tar.add(f, arcname=str(arcname))
-    return out
 
 
 def _read_cnf_facts(tarball_path):
@@ -655,14 +625,23 @@ def _preflight_inputs(entry, tarball_path):
 
 
 def submit_entry(entry, idx, options):
-    """Submit one entry: build jobsub_submit argv via utils.jobsub_argv,
-    ship prodtools as a dropbox tarball, run `runjob.sh` on the worker.
+    """Submit one entry: build jobsub_submit argv via utils.jobsub_argv;
+    the worker runs `bin/runjob.sh` of the entry's cvmfs prodtools
+    release (`prodtools_dir`, recorded at enqueue).
 
     Returns the same dict shape (tarball/cluster_id/njobs/status).
     """
     tarball_name = tarball_of(entry)
     desc = _jobsub_argv.description_from_tarball(tarball_name)
     files = options.files
+
+    # The release this campaign was enqueued with. First, before any
+    # side effect: a row without one cannot be submitted, and
+    # prodtools_dir_of's message carries the set-entry fix.
+    try:
+        prodtools_dir = prodtools_dir_of(entry)
+    except ValueError as e:
+        sys.exit(f"submit: {e}")
 
     # Tarball must be locally accessible to ship via -f dropbox://.
     # Files mode always needs the REAL cnf (even on a dry run): the
@@ -754,9 +733,6 @@ def submit_entry(entry, idx, options):
     ops_path.write_text(json.dumps(ops, indent=2) + '\n')
     print(f"Wrote ops JSON: {ops_path}")
 
-    # Bundle prodtools so the worker has our patched runmu2e.py.
-    prodtools_tar = _bundle_prodtools(options.prodtools_tar or DEFAULT_PRODTOOLS_TAR)
-
     resources = _effective_resources(entry, options)
 
     # submitter is the effective UNIX user; role auto-defaults to
@@ -785,8 +761,7 @@ def submit_entry(entry, idx, options):
         jobset=jobset,
         jobdef_path=str(tarball_path),
         ops_json_path=str(ops_path),
-        prodtools_tar_path=str(prodtools_tar),
-        worker_script_path=str(DEFAULT_RUNJOB_SH),
+        prodtools_dir=prodtools_dir,
         submitter=submitter,
         extra_storage_modify=extra_scopes,
         role=options.role,

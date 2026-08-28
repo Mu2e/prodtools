@@ -187,8 +187,7 @@ def build_jobsub_argv(
     jobset,
     jobdef_path,
     ops_json_path,
-    prodtools_tar_path,
-    worker_script_path,
+    prodtools_dir,
     submitter,
     extra_storage_modify=(),
     role=None,
@@ -209,6 +208,12 @@ def build_jobsub_argv(
 
     All path arguments are absolute paths on the submitter's filesystem;
     `-f dropbox://<path>` ships them to the worker under `$CONDOR_DIR_INPUT`.
+
+    `prodtools_dir` is the cvmfs release the worker runs: its
+    `bin/runjob.sh` is the job executable and `MU2EGRID_PRODTOOLS_DIR`
+    tells that script where the rest of the release is (jobsub copies the
+    executable into the sandbox, so `$0` cannot find it). Nothing of
+    prodtools is shipped per job.
 
     `code_tarball`, when set, is an absolute path to a `muse tarball`
     Code.tar.bz2. It rides `--tar_file_name dropbox://`, NOT `-f
@@ -236,7 +241,7 @@ def build_jobsub_argv(
         "EXPERIMENT": "mu2e",
         "MU2EGRID_OPSJSON": os.path.basename(ops_json_path),
         "MU2EGRID_JOBDEF": os.path.basename(jobdef_path),
-        "MU2EGRID_PRODTOOLS_TAR": os.path.basename(prodtools_tar_path),
+        "MU2EGRID_PRODTOOLS_DIR": prodtools_dir,
         "MU2EGRID_CLUSTERNAME": cluster_name,
         "MU2EGRID_WFOUTSTAGE": outstage,
         "MU2EGRID_MU2ESETUP": mu2e_setup,
@@ -264,10 +269,9 @@ def build_jobsub_argv(
     argv.extend(["-N", str(len(jobset))])
     argv.extend(["-f", f"dropbox://{ops_json_path}"])
     argv.extend(["-f", f"dropbox://{jobdef_path}"])
-    argv.extend(["-f", f"dropbox://{prodtools_tar_path}"])
     if code_tarball:
         argv.extend(["--tar_file_name", f"dropbox://{code_tarball}"])
     if extra_jobsub_args:
         argv.extend(extra_jobsub_args)
-    argv.append(f"file://{worker_script_path}")
+    argv.append(f"file://{os.path.join(prodtools_dir, 'bin', 'runjob.sh')}")
     return argv
