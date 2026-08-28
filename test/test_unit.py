@@ -1781,6 +1781,56 @@ class TestStashMiss(unittest.TestCase):
         self.assertTrue(result.startswith(
             "xroot://fndcadoor.fnal.gov//pnfs/"), result)
 
+    def test_fallback_to_stash_under_root_proto_reads_cvmfs(self):
+        """The read grammar follows the RESOLVED area, not the declared
+        inloc. A job declaring `inloc: disk` whose dataset is only on
+        stash used to ask xrootd for a /cvmfs path and raise, killing
+        every job in the campaign before art started."""
+        from utils.file_resolver import stash_read_path
+        stash = stash_read_path(self._FNAME)
+        with self._present(stash):
+            job = self.Cls(self.tar, inloc='disk', proto='root')
+            self.assertEqual(job._format_filename(self._FNAME), stash)
+
+    def test_fallback_to_stash_under_file_proto_reads_cvmfs(self):
+        from utils.file_resolver import stash_read_path
+        stash = stash_read_path(self._FNAME)
+        with self._present(stash):
+            job = self.Cls(self.tar, inloc='tape', proto='file')
+            self.assertEqual(job._format_filename(self._FNAME), stash)
+
+    def test_resilient_inloc_falling_back_to_stash_reads_cvmfs(self):
+        """Mixing entries declare `inloc: resilient` for their pileup
+        Cats; a Cat staged to stash instead must still be readable."""
+        from utils.file_resolver import stash_read_path
+        stash = stash_read_path(self._FNAME)
+        with self._present(stash):
+            job = self.Cls(self.tar, inloc='resilient', proto='root')
+            self.assertEqual(job._format_filename(self._FNAME), stash)
+
+    def test_fallback_to_resilient_always_uses_xroot(self):
+        """Resilient has no CVMFS mirror, so it streams even when the
+        declared inloc's proto would have said 'file'."""
+        from utils.file_resolver import resilient_path
+        res = resilient_path(self._FNAME)
+        with self._present(res):
+            job = self.Cls(self.tar, inloc='disk', proto='file')
+            result = job._format_filename(self._FNAME)
+        self.assertTrue(result.startswith(
+            "xroot://fndcadoor.fnal.gov//pnfs/"), result)
+        self.assertIn('/resilient/', result)
+
+    def test_disk_hit_still_streams_via_xroot(self):
+        """Regression guard: the common no-fallback case is unchanged."""
+        from utils.file_resolver import file_path_at
+        disk = file_path_at(self._FNAME, 'disk')
+        with self._present(disk):
+            job = self.Cls(self.tar, inloc='disk', proto='root')
+            result = job._format_filename(self._FNAME)
+        self.assertTrue(result.startswith(
+            "xroot://fndcadoor.fnal.gov//pnfs/"), result)
+        self.assertIn('/persistent/datasets/', result)
+
 
 class TestCreateInputsFileExclude(unittest.TestCase):
     """Verify that _create_inputs_file honours the exclude_files parameter."""

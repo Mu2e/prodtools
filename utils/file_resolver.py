@@ -377,6 +377,10 @@ class FileResolver:
     `inloc: resilient` for its pileup Cats while its primaries live on
     disk. A dataset found in no area raises — reading from an
     unintended place is worse than stopping.
+
+    `proto` is therefore only a preference: url() renders each file in
+    the grammar of the area it RESOLVED to, so a fallback to stash reads
+    the CVMFS path even under `proto='root'`.
     """
 
     def __init__(self, inloc: str = 'tape', proto: str = 'file'):
@@ -432,23 +436,37 @@ class FileResolver:
         return file_path_at(filename, self._dataset_location(filename))
 
     def url(self, filename: str) -> str:
-        """Read path/URL for a file, formatted per the resolver's proto."""
-        # Stash paths are always plain CVMFS, ignoring proto. If the
-        # dataset resolved to another area, apply the root protocol below.
-        if self.inloc == 'stash':
-            path = self.locate(filename)
-            if path.startswith(stash_read_root()):
-                return path
-            physical_path = path
-        elif self.inloc == 'resilient':
-            # No CVMFS mirror for resilient disk — always use xrootd.
+        """Read path/URL for a file, formatted per the resolver's proto.
+
+        Keyed on the area the dataset RESOLVED to, never on the declared
+        inloc. The two differ whenever _dataset_location falls back, and
+        the read grammar belongs to the area actually holding the file: a
+        job declaring `inloc: disk` whose dataset is only on stash must
+        read the CVMFS path, not ask xrootd for a /cvmfs one (which
+        raises below, killing every job in the campaign before art
+        starts).
+        """
+        if self.inloc.startswith('dir:'):
+            # Literal join against a mounted path; nothing is resolved,
+            # so proto alone decides.
+            if self.proto == 'file':
+                return self.locate(filename)
+            if self.proto != 'root':
+                return filename
             physical_path = self.locate(filename)
-        elif self.proto == 'file':
-            return self.locate(filename)
-        elif self.proto != 'root':
-            return filename
         else:
-            physical_path = self.locate(filename)
+            area = self._dataset_location(filename)
+            physical_path = file_path_at(filename, area)
+            if area == 'stash':
+                # Stash reads are plain CVMFS, ignoring proto.
+                return physical_path
+            if area != 'resilient':
+                # No CVMFS mirror for resilient disk — it always uses
+                # xrootd. Every other area honours proto.
+                if self.proto == 'file':
+                    return physical_path
+                if self.proto != 'root':
+                    return filename
 
         clean_path = remove_storage_prefix(physical_path)
 
