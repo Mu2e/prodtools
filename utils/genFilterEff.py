@@ -17,10 +17,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 # loaded as utils.genFilterEff, while still supporting bin/ stubs that put
 # utils/ itself on the path.
 try:
-    from utils.samweb_wrapper import get_samweb_wrapper
+    from utils import samweb_wrapper
     from utils.job_common import Mu2eName
 except ImportError:
-    from samweb_wrapper import get_samweb_wrapper
+    import samweb_wrapper
     from job_common import Mu2eName
 
 
@@ -165,7 +165,7 @@ def main():
     if args.maxFilesToProcess is not None and args.maxFilesToProcess <= 0:
         parser.error(f"ERROR: Illegal maxFilesToProcess = {args.maxFilesToProcess}")
 
-    samweb = get_samweb_wrapper()
+    samweb = samweb_wrapper  # module IS the interface now
 
     summaries = []
     for dataset in args.datasets:

@@ -34,13 +34,13 @@ import sys
 # utils.famtree (web dashboard, cron), but still works from bin/ stubs
 # that put utils/ itself on the path.
 try:
-    from utils.samweb_wrapper import (file_lineage, first_file_in_definition,
-                                      get_samweb_wrapper)
+    from utils import samweb_wrapper
+    from utils.samweb_wrapper import file_lineage, first_file_in_definition
     from utils.genFilterEff import process_dataset
     from utils.job_common import Mu2eName
 except ImportError:
-    from samweb_wrapper import (file_lineage, first_file_in_definition,
-                                get_samweb_wrapper)
+    import samweb_wrapper
+    from samweb_wrapper import file_lineage, first_file_in_definition
     from genFilterEff import process_dataset
     from job_common import Mu2eName
 
@@ -186,7 +186,7 @@ def main():
 
     samweb = None
     if args.stats:
-        samweb = get_samweb_wrapper()
+        samweb = samweb_wrapper  # module IS the interface now
         print("Fetching efficiency statistics...")
 
     mermaid_lines = []

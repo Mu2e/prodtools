@@ -7753,10 +7753,8 @@ class TestFileSizesInDataset(unittest.TestCase):
             FI("dts.mu2e.Pile.CampB.001430_00000000.art", 1, 111, 9),
             FI("dts.mu2e.Pile.CampB.001430_00000001.art", 2, 222, 9),
         ]
-        wrapper = object.__new__(samweb_wrapper.SAMWebWrapper)
-        wrapper.client = fake_client
-        with patch.object(samweb_wrapper, "get_samweb_wrapper",
-                          return_value=wrapper):
+        with patch.object(samweb_wrapper, "_client",
+                          return_value=fake_client):
             out = samweb_wrapper.file_sizes_in_dataset("dts.mu2e.Pile.CampB.art")
         self.assertEqual(out, {
             "dts.mu2e.Pile.CampB.001430_00000000.art": 111,
@@ -10120,8 +10118,7 @@ class TestSamwebMetadataChunking(unittest.TestCase):
     2000-file draining batch hit this as a hard gate failure."""
 
     def _wrapper(self):
-        from utils.samweb_wrapper import SAMWebWrapper
-        w = SAMWebWrapper.__new__(SAMWebWrapper)
+        from utils import samweb_wrapper
         calls = []
 
         class Client:
@@ -10129,8 +10126,11 @@ class TestSamwebMetadataChunking(unittest.TestCase):
             def getMultipleMetadata(names):
                 calls.append(len(names))
                 return [{'file_name': n} for n in names]
-        w.client = Client()
-        return w, calls
+        self._patch = patch.object(samweb_wrapper, '_client',
+                                   return_value=Client())
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+        return samweb_wrapper, calls
 
     def test_oversized_list_is_split_and_concatenated(self):
         from utils.samweb_wrapper import MAX_METADATA_BATCH
@@ -10159,15 +10159,17 @@ class TestSamwebMetadataChunking(unittest.TestCase):
 
 class TestSamwebParentsOfFile(unittest.TestCase):
     def _wrapper(self, listfiles):
-        """A wrapper with a stub client. __init__ builds a real samweb
-        client and needs the Mu2e environment; __new__ does not."""
-        from utils.samweb_wrapper import SAMWebWrapper
-        w = SAMWebWrapper.__new__(SAMWebWrapper)
+        """The module with a stub client patched in — _client() is the
+        seam; a real client needs the Mu2e environment."""
+        from utils import samweb_wrapper
 
         class Client:
             listFiles = staticmethod(listfiles)
-        w.client = Client()
-        return w
+        self._patch = patch.object(samweb_wrapper, '_client',
+                                   return_value=Client())
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+        return samweb_wrapper
 
     def test_query_is_isparentof_on_file_name(self):
         from utils.samweb_wrapper import _q_parents_of_file
@@ -10191,8 +10193,8 @@ class TestSamwebParentsOfFile(unittest.TestCase):
         """file_lineage must not swallow SAM errors: [] is a physics claim
         ("no parents"), not an error state."""
         import inspect
-        from utils.samweb_wrapper import SAMWebWrapper
-        src = inspect.getsource(SAMWebWrapper.file_lineage)
+        from utils import samweb_wrapper
+        src = inspect.getsource(samweb_wrapper.file_lineage)
         self.assertNotIn('except Exception', src)
 
 
