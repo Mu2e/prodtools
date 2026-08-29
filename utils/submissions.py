@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import submission_ledger
 from utils import submit
-from utils.check_inputs import _default_locality, _LOC_TO_MDH
+from utils.check_inputs import _default_locality
+from utils.file_resolver import SAM_LOC_TO_MDH as _LOC_TO_MDH
 from utils.file_resolver import infer_dataset_location, sam_physical_path_or_none
 from utils.job_common import Mu2eName, expected_outputs_for
 from utils.jobdef_lookup import build_file_maps, extract_datasets_from_tarball

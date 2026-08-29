@@ -204,10 +204,10 @@ def is_dir_inloc(inloc):
     dataset queries, locality checks, parentage tracking — must be
     skipped for it, not attempted-and-failed.
 
-    Shared by json2jobdef and check_inputs. NOT yet the single home:
-    file_resolver, runmu2e and jobsub_argv still hand-roll the same
-    `startswith('dir:')` test. Migrate them here rather than adding a
-    seventh copy.
+    The single home of the `dir:` test: json2jobdef, check_inputs,
+    file_resolver, runmu2e and jobsub_argv all route through here (and
+    through dir_inloc_path for the path). Do not hand-roll
+    `startswith('dir:')` or `inloc[4:]` at a call site.
     """
     return isinstance(inloc, str) and inloc.startswith('dir:')
 

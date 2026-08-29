@@ -19,6 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName, sha256_file
 from utils.jobdesc import code_of, dir_inloc_path, is_dir_inloc
+from utils.file_resolver import DISK_LOCS as _DISK_LOCS
+from utils.file_resolver import SAM_LOC_TO_MDH as _LOC_TO_MDH
 from utils.file_resolver import resilient_path, infer_dataset_location
 # NB: utils.samweb_wrapper (-> samweb_client) is imported lazily inside
 # check_inputs, so `--help` and unit tests can load this module without
@@ -166,11 +168,7 @@ def check_dir(files, dir_path, file_size):
     return problems
 
 
-_LOC_TO_MDH = {'enstore': 'tape', 'dcache': 'disk'}
 _LOCALITY_TOKENS = ('ONLINE', 'NEARLINE', 'ONLINE_AND_NEARLINE')
-
-
-_DISK_LOCS = ('disk', 'scratch')
 
 # Files are looked up one at a time (mdh.query_dcache is per-file), so a
 # dataset spread over several areas resolves correctly. Threads hide the

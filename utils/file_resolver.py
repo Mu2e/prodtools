@@ -20,6 +20,7 @@ import sys
 from typing import Optional
 
 from .job_common import Mu2eName, remove_storage_prefix
+from .jobdesc import dir_inloc_path, is_dir_inloc
 
 # xrootd door prefixes: fcl read URLs use `xroot://`, gfal2 stat uses
 # `root://`. Both predate this module; kept as-is — worker fcl output
@@ -141,6 +142,25 @@ def file_exists_at(path: str) -> bool:
     return os.path.exists(path)
 
 
+# ---------------------------------------------------------------------------
+# Location facts — the single home
+#
+# One row per location name, one column per question. The legality
+# columns (which names an Entry may claim as inloc/outloc) live in
+# utils/jobdesc.py (INLOC_SIMPLE, OUTLOC_VALID) because they gate entry
+# validation; every physical column lives here. `dir:<path>` membership
+# is jobdesc.is_dir_inloc / dir_inloc_path.
+#
+# Declaration policy (see CONTEXT.md "Declared / Undeclared output"):
+# tape/disk/scratch outputs are pushOutput actions — copy AND declare to
+# SAM. 'outstage' copies to $MU2EGRID_WFOUTSTAGE and declares nothing.
+# 'scratch' is a storage area, not a declaration policy.
+#
+# The path/scope columns MIRROR upstream mdh location_def.py /
+# pushOutput locprefix / Mu2eFNBase::location_root — pinned by the
+# parity test (test/test_location.py) run under `muse setup ops`.
+# ---------------------------------------------------------------------------
+
 # Mu2e standard location → dCache area name (under `/pnfs/mu2e/<area>/`).
 # Mirrors Mu2eFNBase::location_root values.
 LOCATION_AREA = {
@@ -149,6 +169,44 @@ LOCATION_AREA = {
     "scratch": "scratch",
     "resilient": "resilient",
 }
+
+# Location → default read protocol for a worker (`inspec` column 1).
+# Tape/disk/scratch stage in via ifdh; resilient is meant to be
+# root-streamed (single-file pileup saturates xrootd otherwise — see
+# memory: mixing pileup goes to resilient precisely to stream it).
+# `dir:` defaults to ifdh; 'none' has no protocol at all.
+LOCATION_DEFAULT_PROTOCOL = {
+    "tape": "ifdh",
+    "disk": "ifdh",
+    "scratch": "ifdh",
+    "resilient": "root",
+}
+
+# SAM `location_type` → mdh location name (mdh's vocabulary has only
+# tape/disk/scratch/nersc; 'enstore' and 'dcache' are how SAM spells
+# the first two).
+SAM_LOC_TO_MDH = {'enstore': 'tape', 'dcache': 'disk'}
+
+# dCache areas an mdh locality probe should try for a "disk-resident"
+# answer, in order.
+DISK_LOCS = ('disk', 'scratch')
+
+# Inlocs a worker never copies locally: 'none' has no inputs; stash is
+# CVMFS-mounted; resilient is root-streamed by design. NOT the same
+# rule as FileResolver's "resolves without SAM" set — that one also
+# keys on proto and answers a different question.
+STAGE_LOCAL_EXEMPT = ('none', 'stash', 'resilient')
+
+
+def default_protocol_for_inloc(inloc):
+    """Default read protocol for a map entry's `inloc`. Returns `None`
+    for `inloc == 'none'` (jobs without input data — e.g. POT
+    generators)."""
+    if not inloc or inloc == "none":
+        return None
+    if is_dir_inloc(inloc):
+        return "ifdh"
+    return LOCATION_DEFAULT_PROTOCOL.get(inloc, "ifdh")
 
 
 def storage_scope(filename: str, location) -> Optional[str]:
@@ -180,7 +238,7 @@ def storage_scope(filename: str, location) -> Optional[str]:
     Returns None for `dir:<path>` locations, unknown locations, or
     unparseable filenames.
     """
-    if not location or str(location).startswith("dir:"):
+    if not location or is_dir_inloc(location):
         return None
     area = LOCATION_AREA.get(location)
     if not area:
@@ -402,7 +460,7 @@ class FileResolver:
         No-op for `dir:` inloc, which names files on a mounted
         filesystem that were never declared to SAM and have no dataset
         layout to resolve — locate() joins those literally."""
-        if self.inloc.startswith('dir:'):
+        if is_dir_inloc(self.inloc):
             return
         for filename in filenames:
             self._dataset_location(filename)
@@ -433,8 +491,8 @@ class FileResolver:
 
     def locate(self, filename: str) -> str:
         """Physical path for a file (no protocol formatting)."""
-        if self.inloc.startswith('dir:'):
-            local_dir = self.inloc[4:].rstrip('/')
+        if is_dir_inloc(self.inloc):
+            local_dir = dir_inloc_path(self.inloc).rstrip('/')
             return f"{local_dir}/{filename}"
         return file_path_at(filename, self._dataset_location(filename))
 
@@ -449,7 +507,7 @@ class FileResolver:
         raises below, killing every job in the campaign before art
         starts).
         """
-        if self.inloc.startswith('dir:'):
+        if is_dir_inloc(self.inloc):
             # Literal join against a mounted path; nothing is resolved,
             # so proto alone decides.
             if self.proto == 'file':
