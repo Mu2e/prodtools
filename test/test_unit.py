@@ -14657,7 +14657,12 @@ class TestOriginMigrationReadOnlyDb(unittest.TestCase):
             finally:
                 # Allow TemporaryDirectory cleanup to remove the file.
                 os.chmod(db, 0o644)
-            self.assertEqual(rows[0]['map_path'], '/tmp/ro-legacy.json')
+            # The origin shim now lives in the shared shapers
+            # (2026-08-28 un-fork), so even the CLI reader sees the
+            # normalized key on an un-migrated ledger — previously it
+            # got raw map_path and any origin consumer KeyError'd.
+            self.assertEqual(rows[0]['origin'], '/tmp/ro-legacy.json')
+            self.assertNotIn('map_path', rows[0])
             con = sqlite3.connect(db)
             try:
                 cols = [r[1] for r in

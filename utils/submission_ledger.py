@@ -22,6 +22,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.request import pathname2url
 
 from utils.jobdesc import ENTRY_VALUE_KEYS, validate_entry_value
 
@@ -196,6 +197,60 @@ def _migrate_map_path(con, table):
         raise
 
 
+def _connect_ro(db_path):
+    """Open the ledger read-only. No DDL, ever — not even the migration.
+
+    _connect issues CREATE/ALTER on every connect, so it needs write
+    access just to read; that is why the MCP's ledger_ro module forked
+    the read half in the first place. A non-owner reader (the read MCP,
+    a status query run by someone other than mu2epro) opens through
+    here instead: sqlite's mode=ro URI, so a schema surprise fails the
+    read loudly rather than half-migrating someone else's ledger.
+
+    Raises FileNotFoundError when the ledger does not exist (mode=ro
+    would otherwise report it as an opaque 'unable to open database').
+    """
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"submission ledger not found: {db_path}")
+    uri = f'file:{pathname2url(db_path)}?mode=ro'
+    con = sqlite3.connect(uri, uri=True, timeout=30)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def _normalize_origin(row):
+    """TRANSITION SHIM (2026-08-11): the map_path->origin column rename
+    migrates on a WRITE connection only (_connect's PRAGMA-guarded
+    ALTER TABLE) — a read-only open (_connect_ro) can be handed a
+    ledger no writer has reconnected to since the rename shipped.
+    Without this, an unconditional row['origin'] raises KeyError on
+    such a ledger until the next cron tick / CLI invocation / write
+    call happens to touch it — which may be never, for a personal or
+    idle ledger.
+
+    NOT safe to delete on a schedule (e.g. "once every ledger has been
+    touched by a writer"): _migrate_map_path swallows the ALTER's
+    read-only OperationalError rather than raise, for the production
+    ledger's non-mu2epro readers. That hardening removed the only
+    forcing function that used to make an un-migrated ledger visible
+    (a crash) — a ledger only ever opened by non-owner readers can stay
+    on map_path indefinitely, with nothing prompting a migration. This
+    shim is therefore the ONLY thing making such a ledger readable at
+    all, permanently, not a transition measure with a natural expiry.
+    Delete it only if _migrate_map_path's read-only tolerance is
+    removed first.
+
+    Applied inside _to_dict/_campaign_to_dict so EVERY reader — the
+    CLI's status path and the MCP alike — always sees 'origin',
+    regardless of which side of the migration the ledger is on.
+    (Lived in mcp ledger_ro only until 2026-08-28, leaving the CLI
+    reader unprotected.)
+    """
+    if 'origin' not in row and 'map_path' in row:
+        row['origin'] = row.pop('map_path')
+    return row
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -357,12 +412,12 @@ def _to_dict(row):
     d = dict(row)
     d['entry'] = json.loads(d.pop('entry_json'))
     d['indices'] = json.loads(d.pop('indices_json'))
-    return d
+    return _normalize_origin(d)
 
 
-def open_rows(db_path):
+def open_rows(db_path, readonly=False):
     """Active rows, oldest first, entry/indices JSON parsed."""
-    con = _connect(db_path)
+    con = _connect_ro(db_path) if readonly else _connect(db_path)
     try:
         rows = con.execute(
             "SELECT * FROM submissions WHERE state = 'active' ORDER BY id"
@@ -372,9 +427,9 @@ def open_rows(db_path):
         con.close()
 
 
-def all_rows(db_path):
+def all_rows(db_path, readonly=False):
     """Every row regardless of state, oldest first."""
-    con = _connect(db_path)
+    con = _connect_ro(db_path) if readonly else _connect(db_path)
     try:
         rows = con.execute(
             'SELECT * FROM submissions ORDER BY id').fetchall()
@@ -383,9 +438,9 @@ def all_rows(db_path):
         con.close()
 
 
-def row_by_id(db_path, row_id):
+def row_by_id(db_path, row_id, readonly=False):
     """One row by id, entry/indices JSON parsed, or None."""
-    con = _connect(db_path)
+    con = _connect_ro(db_path) if readonly else _connect(db_path)
     try:
         row = con.execute(
             'SELECT * FROM submissions WHERE id = ?', (row_id,)).fetchone()
@@ -455,15 +510,45 @@ def create_campaign(db_path, *, tarball, entry, slice_size, origin=None):
         con.close()
 
 
+def snapshot(db_path, readonly=True):
+    """(campaigns, rows) read through ONE connection and ONE transaction.
+
+    Calling all_campaigns() and all_rows() separately takes two
+    snapshots on two connections. The cron commits record_submission
+    and advance_campaign independently (utils/submissions.py), so a
+    read landing between them sees a `cursor` that disagrees with the
+    rows it is reported beside — a campaign that looks under-submitted,
+    or rows with no cursor to account for them.
+
+    An explicit BEGIN opens a deferred transaction: the shared read
+    lock is taken at the first SELECT and held until COMMIT, so both
+    tables come from one coherent view. Read-only by default — no DDL,
+    no write lock, and it does not take submissions.lock.
+
+    (Moved from mcp ledger_ro 2026-08-28 so the coherent-snapshot
+    guarantee is not an MCP-only privilege.)
+    """
+    con = _connect_ro(db_path) if readonly else _connect(db_path)
+    try:
+        con.execute('BEGIN')
+        camps = con.execute('SELECT * FROM campaigns ORDER BY id').fetchall()
+        subs = con.execute('SELECT * FROM submissions ORDER BY id').fetchall()
+        con.commit()
+    finally:
+        con.close()
+    return ([_campaign_to_dict(c) for c in camps],
+            [_to_dict(r) for r in subs])
+
+
 def _campaign_to_dict(row):
     d = dict(row)
     d['entry'] = json.loads(d.pop('entry_json'))
-    return d
+    return _normalize_origin(d)
 
 
-def active_campaigns(db_path):
+def active_campaigns(db_path, readonly=False):
     """Active campaigns, oldest first, entry JSON parsed."""
-    con = _connect(db_path)
+    con = _connect_ro(db_path) if readonly else _connect(db_path)
     try:
         rows = con.execute(
             "SELECT * FROM campaigns WHERE state = 'active' ORDER BY id"
@@ -473,9 +558,9 @@ def active_campaigns(db_path):
         con.close()
 
 
-def all_campaigns(db_path):
+def all_campaigns(db_path, readonly=False):
     """Every campaign regardless of state, oldest first."""
-    con = _connect(db_path)
+    con = _connect_ro(db_path) if readonly else _connect(db_path)
     try:
         rows = con.execute('SELECT * FROM campaigns ORDER BY id').fetchall()
         return [_campaign_to_dict(r) for r in rows]
