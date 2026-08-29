@@ -79,18 +79,25 @@ def output_storage_dirs(output_filenames, outputs):
     `/pnfs/mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>/...`
     — a path the WFOUTSTAGE-only token (all `mu2ejobsub.sh` needs) does
     NOT cover.
+
+    EVERY matching spec contributes a scope, not just the first: the
+    worker-side push (`runmu2e.push_data`) applies every matching
+    pattern, so stopping at the first match here would request one
+    location's scope while the worker pushes to several — the extra
+    pushes then 403 hours in, after the CPU is spent. (All current
+    entries carry a single outloc pattern, so this is a trap guard, not
+    a behaviour change; an extra requested scope is harmless, a missing
+    one kills the job.)
     """
     import fnmatch
     dirs = set()
     for fname in output_filenames or []:
-        spec = next((spec for spec in outputs or []
-                     if fnmatch.fnmatch(fname, spec.get("dataset") or "*")),
-                    None)
-        if spec is None:
-            continue
-        scope = storage_scope_for_file(fname, spec.get("location"))
-        if scope:
-            dirs.add(scope)
+        for spec in outputs or []:
+            if not fnmatch.fnmatch(fname, spec.get("dataset") or "*"):
+                continue
+            scope = storage_scope_for_file(fname, spec.get("location"))
+            if scope:
+                dirs.add(scope)
     return sorted(dirs)
 
 

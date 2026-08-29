@@ -107,5 +107,45 @@ class TestMdhParity(unittest.TestCase):
                         f"scope {scope!r} does not cover {physical!r}")
 
 
+
+
+class TestOutputStorageDirsAllMatches(unittest.TestCase):
+    """Submit-time scopes must cover everything the worker will push.
+
+    runmu2e.push_data applies EVERY outloc pattern that matches a file;
+    output_storage_dirs stopped at the first match until 2026-08-28, so
+    a file matching two patterns with different locations got one scope
+    requested and two pushes attempted — a 403 hours into the job.
+    """
+
+    FILES = ['mcs.mu2e.CeA.MDC2025au.001200_00000000.art',
+             'mcs.mu2e.CeB.MDC2025au.001200_00000001.art']
+
+    def test_disjoint_patterns_each_get_their_scope(self):
+        from utils.jobsub_argv import output_storage_dirs
+        outputs = [{'dataset': 'mcs.mu2e.CeA.*.art', 'location': 'tape'},
+                   {'dataset': 'mcs.mu2e.CeB.*.art', 'location': 'disk'}]
+        scopes = output_storage_dirs(self.FILES, outputs)
+        self.assertEqual(scopes, sorted([
+            '/mu2e/tape/phy-sim/mcs/mu2e',
+            '/mu2e/persistent/datasets/phy-sim/mcs/mu2e']))
+
+    def test_overlapping_patterns_request_both_scopes(self):
+        # The trap case: broad glob + narrower glob, different locations.
+        # The worker pushes to BOTH, so both scopes must be requested.
+        from utils.jobsub_argv import output_storage_dirs
+        outputs = [{'dataset': 'mcs.*.art', 'location': 'tape'},
+                   {'dataset': 'mcs.mu2e.CeB.*.art', 'location': 'disk'}]
+        scopes = output_storage_dirs(self.FILES, outputs)
+        self.assertIn('/mu2e/tape/phy-sim/mcs/mu2e', scopes)
+        self.assertIn('/mu2e/persistent/datasets/phy-sim/mcs/mu2e', scopes)
+
+    def test_single_pattern_unchanged(self):
+        from utils.jobsub_argv import output_storage_dirs
+        outputs = [{'dataset': 'mcs.*.art', 'location': 'tape'}]
+        self.assertEqual(output_storage_dirs(self.FILES, outputs),
+                         ['/mu2e/tape/phy-sim/mcs/mu2e'])
+
+
 if __name__ == '__main__':
     unittest.main()
