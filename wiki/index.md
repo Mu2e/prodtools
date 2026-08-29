@@ -5,6 +5,7 @@
 - [[run1ban-campaign]] — Run1B-series campaign on SimJob `Run1Ban`; same `v40` + DS-off geometry as Run1Bak but rebuilds MuminusStopsCat self-contained via MuBeamResampler `TargetStops` side output → artcat → MuonStopSelector _(seeded 2026-06-07)_
 
 ### Incidents
+- [[2026-08-28-self-submit-fails-on-expired-kerberos-ticket]] — self-account `jobsub_submit` dies at `condor_vault_storer` exit 256 when the kerberos ticket is past `renew until`, even with a fresh bearer token (htgettoken reuses the vault token; the credd path needs kerberos). Fix = `kinit`, reconcile the failed rows, resume, re-tick; ledger guards left no orphan. Grid smoke as oksuzian then verified end to end _(2026-08-28)_
 - [[2026-08-28-corrupt-basket-dig-passes-integrity-gates]] — two NoPrimaryMix1BB-002 digs with one corrupt basket each passed art rc=0 + dCache CRC; reco caught them; both from fnpc18003 in one window; local repro recipe _(2026-08-28)_
 - [[2026-08-27-inloc-fallback-rendered-with-declared-proto]] — campaign 94 died twice: resolver fell back disk→stash but url() rendered the CVMFS path as root://; fixed be9c027, fallback order now disk,resilient,tape,stash,scratch; Run1Baa resampler inputs staged to resilient _(2026-08-27)_
 - [[2026-07-05-run1ban-mix-recovery-data-loss]] — 54 NoPrimaryMix1BB outputs lost: POMS re-queued complete work, pushOutput recoverDelay=3600 clobber-rewrites, 53 rewrites vanished off-grid _(investigated 2026-07-09)_

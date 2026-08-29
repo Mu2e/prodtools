@@ -1299,3 +1299,6 @@ Pages updated: index.md
 
 ## [2026-08-28] update | Read-back validation gate added to the worker (corrupt-basket incident)
 Pages updated: 2026-08-28-corrupt-basket-dig-passes-integrity-gates
+
+## [2026-08-28] incident | Self-account submit blocked by expired kerberos ticket; grid smoke as oksuzian verified
+Pages updated: 2026-08-28-self-submit-fails-on-expired-kerberos-ticket, index.md
