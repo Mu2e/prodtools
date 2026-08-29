@@ -27,29 +27,30 @@ _SKIP_PREFIXES = ('JOBSUBJOBID', 'Attempting to ', 'Storing bearer token')
 
 def _jobsub_table_states(stdout):
     """One-letter condor states from jobsub_q's default table, or None if
-    untrustworthy. Requires the header line (proof we got the table, not
-    an error page); skips token-refresh noise and summary lines; any
-    other unrecognized line fails the whole parse — a miscount floods
-    the farm or starves campaigns, so never guess."""
-    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
-    if not any(ln.startswith('JOBSUBJOBID') for ln in lines):
+    untrustworthy.
+
+    A flat projection of _jobsub_table_cluster_states — same table, same
+    trust rules, ONE parser (they were two near-identical copies until
+    2026-08-28, each carrying the fail-the-whole-parse rule separately).
+    Order is cluster-then-row rather than strict row order; the only
+    consumer (submissions.total_queued) counts states, so order carries
+    no meaning."""
+    clusters = _jobsub_table_cluster_states(stdout)
+    if clusters is None:
         return None
-    states = []
-    for ln in lines:
-        if ln.startswith(_SKIP_PREFIXES) or ' total; ' in ln:
-            continue
-        fields = ln.split()
-        if (len(fields) < 6 or not _JOBID_RE.match(fields[0])
-                or fields[5] not in _KNOWN_STATES):
-            return None
-        states.append(fields[5])
-    return states
+    return [s for states in clusters.values() for s in states]
 
 
 def _jobsub_table_cluster_states(stdout):
     """{cluster_id: [states]} from jobsub_q's default table, or None if
-    untrustworthy (same rules as _jobsub_table_states). Cluster id is
-    the leading integer of JOBSUBJOBID, before the first '.'."""
+    untrustworthy. Cluster id is the leading integer of JOBSUBJOBID,
+    before the first '.'.
+
+    THE parser — _jobsub_table_states is a flat projection of it.
+    Requires the header line (proof we got the table, not an error
+    page); skips token-refresh noise and summary lines; any other
+    unrecognized line fails the whole parse — a miscount floods the
+    farm or starves campaigns, so never guess."""
     lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
     if not any(ln.startswith('JOBSUBJOBID') for ln in lines):
         return None

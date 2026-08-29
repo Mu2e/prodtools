@@ -16,7 +16,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import Mu2eName, log_storage_location
-from utils.jobdesc import OUTSTAGE_LOCATION
+from utils.jobdesc import OUTSTAGE_LOCATION, dir_inloc_path, is_dir_inloc
+from utils.file_resolver import STAGE_LOCAL_EXEMPT
 from utils.jobfcl import Mu2eJobFCL
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import (
@@ -173,7 +174,7 @@ def proto_for_inloc(inloc):
     /pnfs is dCache, never mounted on a worker, so it streams via xrootd
     like any other dCache location (file_resolver renders the xroot URL
     for dir:+root)."""
-    if inloc.startswith('dir:') and not inloc[4:].startswith('/pnfs/'):
+    if is_dir_inloc(inloc) and not dir_inloc_path(inloc).startswith('/pnfs/'):
         return 'file'
     return 'root'
 
@@ -258,7 +259,7 @@ def process_jobdef(jobdesc, fname, args):
         fail(f"Error: copy_input must be true or false, got {copy_input!r}")
 
     # Stash files are on CVMFS and resilient files use xrootd — no local copy needed
-    if copy_input and infiles.strip() and inloc not in ("none", "stash", "resilient"):
+    if copy_input and infiles.strip() and inloc not in STAGE_LOCAL_EXEMPT:
         print(f"Copying input files locally from {inloc}: {infiles}")
         fcl = _stage_inputs_locally(all_files, tarball, job_index_num)
         print(f"FCL: {fcl}")
@@ -730,7 +731,7 @@ def _direct_dispatch(args, ops, index):
 
     # `dir:<path>` inloc means inputs come from a locally-mounted FS and
     # have no SAM parents.
-    track_parents = not (isinstance(inloc, str) and inloc.startswith('dir:'))
+    track_parents = not is_dir_inloc(inloc)
 
     job_failed = _execute_mu2e(fcl, simjob_setup, args)
 

@@ -7753,10 +7753,8 @@ class TestFileSizesInDataset(unittest.TestCase):
             FI("dts.mu2e.Pile.CampB.001430_00000000.art", 1, 111, 9),
             FI("dts.mu2e.Pile.CampB.001430_00000001.art", 2, 222, 9),
         ]
-        wrapper = object.__new__(samweb_wrapper.SAMWebWrapper)
-        wrapper.client = fake_client
-        with patch.object(samweb_wrapper, "get_samweb_wrapper",
-                          return_value=wrapper):
+        with patch.object(samweb_wrapper, "_client",
+                          return_value=fake_client):
             out = samweb_wrapper.file_sizes_in_dataset("dts.mu2e.Pile.CampB.art")
         self.assertEqual(out, {
             "dts.mu2e.Pile.CampB.001430_00000000.art": 111,
@@ -10120,8 +10118,7 @@ class TestSamwebMetadataChunking(unittest.TestCase):
     2000-file draining batch hit this as a hard gate failure."""
 
     def _wrapper(self):
-        from utils.samweb_wrapper import SAMWebWrapper
-        w = SAMWebWrapper.__new__(SAMWebWrapper)
+        from utils import samweb_wrapper
         calls = []
 
         class Client:
@@ -10129,8 +10126,11 @@ class TestSamwebMetadataChunking(unittest.TestCase):
             def getMultipleMetadata(names):
                 calls.append(len(names))
                 return [{'file_name': n} for n in names]
-        w.client = Client()
-        return w, calls
+        self._patch = patch.object(samweb_wrapper, '_client',
+                                   return_value=Client())
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+        return samweb_wrapper, calls
 
     def test_oversized_list_is_split_and_concatenated(self):
         from utils.samweb_wrapper import MAX_METADATA_BATCH
@@ -10159,15 +10159,17 @@ class TestSamwebMetadataChunking(unittest.TestCase):
 
 class TestSamwebParentsOfFile(unittest.TestCase):
     def _wrapper(self, listfiles):
-        """A wrapper with a stub client. __init__ builds a real samweb
-        client and needs the Mu2e environment; __new__ does not."""
-        from utils.samweb_wrapper import SAMWebWrapper
-        w = SAMWebWrapper.__new__(SAMWebWrapper)
+        """The module with a stub client patched in — _client() is the
+        seam; a real client needs the Mu2e environment."""
+        from utils import samweb_wrapper
 
         class Client:
             listFiles = staticmethod(listfiles)
-        w.client = Client()
-        return w
+        self._patch = patch.object(samweb_wrapper, '_client',
+                                   return_value=Client())
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+        return samweb_wrapper
 
     def test_query_is_isparentof_on_file_name(self):
         from utils.samweb_wrapper import _q_parents_of_file
@@ -10191,8 +10193,8 @@ class TestSamwebParentsOfFile(unittest.TestCase):
         """file_lineage must not swallow SAM errors: [] is a physics claim
         ("no parents"), not an error state."""
         import inspect
-        from utils.samweb_wrapper import SAMWebWrapper
-        src = inspect.getsource(SAMWebWrapper.file_lineage)
+        from utils import samweb_wrapper
+        src = inspect.getsource(samweb_wrapper.file_lineage)
         self.assertNotIn('except Exception', src)
 
 
@@ -13888,7 +13890,7 @@ class TestCallSitesContainFailures(unittest.TestCase):
         def preflight_fail(entry, idx, options):
             raise SystemExit('input pre-flight FAILED')
 
-        camp = {'id': 1, 'cursor': 0,
+        camp = {'id': 1, 'cursor': 0, 'tarball': 'a.tar',
                 'entry': {'tarball': 'a.tar', 'njobs': 10}}
         self.assertFalse(
             submissions.submit_slice(camp, 5, '/tmp/x.db',
@@ -13900,7 +13902,7 @@ class TestCallSitesContainFailures(unittest.TestCase):
         def boom(entry, idx, options):
             raise RuntimeError('jobsub exploded')
 
-        camp = {'id': 2,
+        camp = {'id': 2, 'tarball': 'b.tar',
                 'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
         self.assertFalse(
             submissions.submit_drain_batch(camp, ['dts.mu2e.a.v.art'],
@@ -14657,7 +14659,12 @@ class TestOriginMigrationReadOnlyDb(unittest.TestCase):
             finally:
                 # Allow TemporaryDirectory cleanup to remove the file.
                 os.chmod(db, 0o644)
-            self.assertEqual(rows[0]['map_path'], '/tmp/ro-legacy.json')
+            # The origin shim now lives in the shared shapers
+            # (2026-08-28 un-fork), so even the CLI reader sees the
+            # normalized key on an un-migrated ledger — previously it
+            # got raw map_path and any origin consumer KeyError'd.
+            self.assertEqual(rows[0]['origin'], '/tmp/ro-legacy.json')
+            self.assertNotIn('map_path', rows[0])
             con = sqlite3.connect(db)
             try:
                 cols = [r[1] for r in
@@ -15185,7 +15192,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_slice_pre_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 1, 'cursor': 0,
+        camp = {'id': 1, 'cursor': 0, 'tarball': 'a.tar',
                 'entry': {'tarball': 'a.tar', 'njobs': 10}}
         raiser = self._raise_on_call(1)   # PRE-READ
         with tempfile.TemporaryDirectory() as td:
@@ -15200,7 +15207,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_slice_post_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 1, 'cursor': 0,
+        camp = {'id': 1, 'cursor': 0, 'tarball': 'a.tar',
                 'entry': {'tarball': 'a.tar', 'njobs': 10}}
         raiser = self._raise_on_call(2)   # POST-READ
         with tempfile.TemporaryDirectory() as td:
@@ -15215,7 +15222,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_drain_batch_pre_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 2,
+        camp = {'id': 2, 'tarball': 'b.tar',
                 'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
         raiser = self._raise_on_call(1)   # PRE-READ
         with tempfile.TemporaryDirectory() as td:
@@ -15230,7 +15237,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_drain_batch_post_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 2,
+        camp = {'id': 2, 'tarball': 'b.tar',
                 'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
         raiser = self._raise_on_call(2)   # POST-READ
         with tempfile.TemporaryDirectory() as td:

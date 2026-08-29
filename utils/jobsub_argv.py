@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import Mu2eName
 from utils.jobdesc import tarball_of, inloc_of
-from utils.file_resolver import storage_scope
+from utils.file_resolver import default_protocol_for_inloc, storage_scope
 
 
 # --- Mu2egrid-compatible defaults (mirrors mu2egrid::commonOptDefaultsJobsub) ---
@@ -79,18 +79,25 @@ def output_storage_dirs(output_filenames, outputs):
     `/pnfs/mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>/...`
     — a path the WFOUTSTAGE-only token (all `mu2ejobsub.sh` needs) does
     NOT cover.
+
+    EVERY matching spec contributes a scope, not just the first: the
+    worker-side push (`runmu2e.push_data`) applies every matching
+    pattern, so stopping at the first match here would request one
+    location's scope while the worker pushes to several — the extra
+    pushes then 403 hours in, after the CPU is spent. (All current
+    entries carry a single outloc pattern, so this is a trap guard, not
+    a behaviour change; an extra requested scope is harmless, a missing
+    one kills the job.)
     """
     import fnmatch
     dirs = set()
     for fname in output_filenames or []:
-        spec = next((spec for spec in outputs or []
-                     if fnmatch.fnmatch(fname, spec.get("dataset") or "*")),
-                    None)
-        if spec is None:
-            continue
-        scope = storage_scope_for_file(fname, spec.get("location"))
-        if scope:
-            dirs.add(scope)
+        for spec in outputs or []:
+            if not fnmatch.fnmatch(fname, spec.get("dataset") or "*"):
+                continue
+            scope = storage_scope_for_file(fname, spec.get("location"))
+            if scope:
+                dirs.add(scope)
     return sorted(dirs)
 
 
@@ -115,26 +122,10 @@ def campaign_from_tarball(tarball_name):
 
 # --- Inspec / ops JSON ---
 
-# mu2ejobsub disables the `file` protocol; valid choices on the worker are
-# `ifdh` (stage-in) and `root` (stream via xrootd). Tape locations cannot be
-# root-streamed, so they always map to `ifdh`.
-_LOCATION_DEFAULT_PROTOCOL = {
-    "tape": "ifdh",
-    "disk": "ifdh",
-    "scratch": "ifdh",
-    "resilient": "root",
-}
-
-
-def default_protocol_for_inloc(inloc):
-    """Pick a default protocol for a map entry's `inloc`. Returns `None` for
-    `inloc == 'none'` (jobs without input data — e.g. POT generators)."""
-    if not inloc or inloc == "none":
-        return None
-    if inloc.startswith("dir:"):
-        return "ifdh"
-    return _LOCATION_DEFAULT_PROTOCOL.get(inloc, "ifdh")
-
+# Protocol defaults live with the other location facts in
+# utils/file_resolver.py (default_protocol_for_inloc, imported above).
+# Note mu2ejobsub disables the `file` protocol on the worker; valid
+# choices there are `ifdh` (stage-in) and `root` (xrootd stream).
 
 def build_inspec(input_datasets, inloc):
     """`{dataset: [protocol, location]}` for every input dataset.

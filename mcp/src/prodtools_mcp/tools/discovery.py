@@ -6,6 +6,7 @@ Every response carries that caveat in `basis` so a caller cannot mistake
 one for the other.
 """
 from prodtools_mcp.adapters import ToolError, classify_catalog_error
+from utils.job_common import Mu2eName
 
 _BASIS = ('samweb list-definitions: a definition listing, not an '
           'existence check — zero-file definitions appear and -LH/-CH '
@@ -37,13 +38,18 @@ def _default_count_fn(dataset):
 
 
 def _parse(name):
-    """Split tier.owner.desc.dsconf.format. Returns None if it does not
-    have the five prodtools fields."""
-    parts = name.split('.')
-    if len(parts) != 5:
+    """The record dict for a 5-field dataset name, or None for anything
+    else (6-field file/tarball names included). Name grammar lives in
+    utils.job_common.Mu2eName; this only adapts to the record shape."""
+    try:
+        m = Mu2eName(name)
+    except ValueError:
         return None
-    return {'name': name, 'tier': parts[0], 'owner': parts[1],
-            'desc': parts[2], 'dsconf': parts[3], 'file_format': parts[4]}
+    if not m.is_dataset:
+        return None
+    return {'name': name, 'tier': m.tier, 'owner': m.owner,
+            'desc': m.description, 'dsconf': m.dsconf,
+            'file_format': m.extension}
 
 
 def defname_query(campaign=None, tier=None, desc=None, pattern=None):
