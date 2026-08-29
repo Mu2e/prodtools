@@ -13890,7 +13890,7 @@ class TestCallSitesContainFailures(unittest.TestCase):
         def preflight_fail(entry, idx, options):
             raise SystemExit('input pre-flight FAILED')
 
-        camp = {'id': 1, 'cursor': 0,
+        camp = {'id': 1, 'cursor': 0, 'tarball': 'a.tar',
                 'entry': {'tarball': 'a.tar', 'njobs': 10}}
         self.assertFalse(
             submissions.submit_slice(camp, 5, '/tmp/x.db',
@@ -13902,7 +13902,7 @@ class TestCallSitesContainFailures(unittest.TestCase):
         def boom(entry, idx, options):
             raise RuntimeError('jobsub exploded')
 
-        camp = {'id': 2,
+        camp = {'id': 2, 'tarball': 'b.tar',
                 'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
         self.assertFalse(
             submissions.submit_drain_batch(camp, ['dts.mu2e.a.v.art'],
@@ -15192,7 +15192,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_slice_pre_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 1, 'cursor': 0,
+        camp = {'id': 1, 'cursor': 0, 'tarball': 'a.tar',
                 'entry': {'tarball': 'a.tar', 'njobs': 10}}
         raiser = self._raise_on_call(1)   # PRE-READ
         with tempfile.TemporaryDirectory() as td:
@@ -15207,7 +15207,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_slice_post_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 1, 'cursor': 0,
+        camp = {'id': 1, 'cursor': 0, 'tarball': 'a.tar',
                 'entry': {'tarball': 'a.tar', 'njobs': 10}}
         raiser = self._raise_on_call(2)   # POST-READ
         with tempfile.TemporaryDirectory() as td:
@@ -15222,7 +15222,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_drain_batch_pre_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 2,
+        camp = {'id': 2, 'tarball': 'b.tar',
                 'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
         raiser = self._raise_on_call(1)   # PRE-READ
         with tempfile.TemporaryDirectory() as td:
@@ -15237,7 +15237,7 @@ class TestGuardedSubmitEvidenceReadsContained(unittest.TestCase):
 
     def test_submit_drain_batch_post_read_raise_contained(self):
         from utils import submissions, submission_ledger
-        camp = {'id': 2,
+        camp = {'id': 2, 'tarball': 'b.tar',
                 'entry': {'tarball': 'b.tar', 'input_pattern': 'dts.*.art'}}
         raiser = self._raise_on_call(2)   # POST-READ
         with tempfile.TemporaryDirectory() as td:

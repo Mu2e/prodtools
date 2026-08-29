@@ -620,15 +620,6 @@ def _guarded_submit(what, fn):
         return False
 
 
-def _camp_tarball(camp):
-    """The campaign's tarball for evidence-keying: the top-level column
-    (every real campaign row from submission_ledger has one), else the
-    snapshot entry's own 'tarball' key — a fallback for test doubles
-    that only set the latter; production entries always agree with the
-    campaign row's own tarball."""
-    return camp.get('tarball') or camp['entry'].get('tarball')
-
-
 def _guarded_submit_with_evidence(what, tarball, db_path, fn):
     """_guarded_submit, plus proof the ledger actually gained a new
     ACTIVE row for `tarball`. Returns True only when both hold.
@@ -692,7 +683,7 @@ def submit_slice(camp, n, db_path, submit_fn=None):
     )
     print(f"  campaign {camp['id']}: slice first={camp['cursor']} num={n}")
     return _guarded_submit_with_evidence(
-        f"campaign {camp['id']}", _camp_tarball(camp), db_path,
+        f"campaign {camp['id']}", camp['tarball'], db_path,
         lambda: submit_fn(camp['entry'], 0, options))
 
 
@@ -976,7 +967,7 @@ def submit_drain_batch(camp, files, db_path, submit_fn=None):
     )
     print(f"  campaign {camp['id']}: batch of {len(files)}")
     return _guarded_submit_with_evidence(
-        f"campaign {camp['id']}", _camp_tarball(camp), db_path,
+        f"campaign {camp['id']}", camp['tarball'], db_path,
         lambda: submit_fn(camp['entry'], 0, options))
 
 
