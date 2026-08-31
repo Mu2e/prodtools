@@ -193,5 +193,48 @@
         "inloc": ["tape"],
       "outloc": [{"*.root": "tape"}],
       "simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v01_02_00/setup.sh"]
-    }
+    },
+  {
+    "desc": "evnt",
+    "dsconf": "Run1Baw_best_v1_5",
+    "generic_tarball": true,
+    "input_pattern": "mcs.mu2e.%-KL.Run1Baw_best_v1_5.art",
+    "exclude_desc": ["NoPrimaryMix1BB-KL"],
+    "prestage": true,
+    "fcl": "EventNtuple/fcl/from_mcs-Run1B.fcl",
+    "fcl_overrides": {
+      "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+    },
+    "inloc": "tape",
+    "outloc": {"nts.*.root": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_01_00/setup.sh"
+  },
+  {
+    "desc": "evnt",
+    "dsconf": "Run1Baw_best_v1_5-001",
+    "generic_tarball": true,
+    "input_pattern": "mcs.mu2e.NoPrimaryMix1BB-KL.Run1Baw_best_v1_5-001.art",
+    "prestage": true,
+    "fcl": "EventNtuple/fcl/from_mcs-Run1B.fcl",
+    "fcl_overrides": {
+      "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+    },
+    "inloc": "tape",
+    "outloc": {"nts.*.root": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_01_00/setup.sh"
+  },
+  {
+    "desc": "evnt",
+    "dsconf": "Run1Baw_best_v1_5-002",
+    "generic_tarball": true,
+    "input_pattern": "mcs.mu2e.NoPrimaryMix1BB-KL.Run1Baw_best_v1_5-002.art",
+    "prestage": true,
+    "fcl": "EventNtuple/fcl/from_mcs-Run1B.fcl",
+    "fcl_overrides": {
+      "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+    },
+    "inloc": "tape",
+    "outloc": {"nts.*.root": "tape"},
+    "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_01_00/setup.sh"
+  }
 ]
