@@ -42,7 +42,7 @@ carries none of their marker keys).
   "main_input": "Mu2E.in",
   "events_per_job": 1000,
   "njobs": 10,
-  "outputs": [{"dataset": "nts.*.root", "location": "scratch"}]
+  "outloc": {"nts.*.root": "scratch"}
 }
 ```
 
@@ -52,9 +52,11 @@ carries none of their marker keys).
 - `main_input` — deck filename relative to `g4bl_dir`. Required; must
   exist inside `g4bl_dir`.
 - `events_per_job`, `njobs` — required integers.
-- `outputs` — standard prodtools outputs list. The histogram dataset
-  glob is `nts.*.root`. `location` follows the usual rules
-  (scratch for self-owned, tape/disk for mu2epro).
+- `outloc` — the standard prodtools entry key (dataset glob ->
+  location); `build_jobdesc` converts it to the ledger entry's
+  `outputs` list as for every other entry type. The histogram glob is
+  `nts.*.root`; location follows the usual rules (scratch for
+  self-owned, tape/disk for mu2epro).
 - Optional standard keys work unchanged: `memory`,
   `expected_lifetime`, `disk` (resource defaults otherwise), and the
   list-valued-key expansion axis (a list value expands into N entry
