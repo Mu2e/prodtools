@@ -211,18 +211,30 @@ class Mu2eName:
         return f"{h[:2]}/{h[2:4]}/{self.filename}"
 
 
-def log_storage_location(outputs) -> str:
-    """Where a job's log dataset goes, given its map-entry outputs list.
+def log_storage_location(outputs, owner=None) -> str:
+    """Where a job's log dataset goes, given its map-entry outputs list
+    and the dataset owner.
 
     Mu2e convention: logs live on persistent disk regardless of where the
     data lands, so they stay cheap to read without a tape recall (matches
-    push_logs()'s 'disk' default). Two exceptions where 'disk' is wrong:
+    push_logs()'s 'disk' default). Exceptions where 'disk' is wrong:
     `scratch` — a non-mu2epro account with data on scratch lacks
     storage.modify on /mu2e/persistent/datasets, so a 'disk' log push
-    would 403 (those runs keep logs beside their data); and `outstage` —
+    would 403 (those runs keep logs beside their data); `outstage` —
     the data was never declared to SAM, so a declared log would list
     parents SAM never heard of (the log follows the data into
-    $MU2EGRID_WFOUTSTAGE, also undeclared).
+    $MU2EGRID_WFOUTSTAGE, also undeclared); and a non-production
+    `owner` — user tokens carry NO /mu2e/persistent/datasets scope at
+    all (only scratch and tape log scopes), so ANY 'disk' log for a
+    user-owned dataset would fail. Found live 2026-08-31: a self-owned
+    tape campaign died at submit-time token acquisition on
+    storage.modify:/mu2e/persistent/datasets/usr-etc/log/oksuzian.
+    User-owned logs go to scratch instead.
+
+    `owner` is the dataset owner, best derived from the cnf/tarball name
+    (`Mu2eName(...).owner`) so the submit side and the worker side —
+    which must agree on the scope — read it off the same artifact.
+    None means production ('mu2e').
 
     Do NOT let logs inherit 'tape' — small logs on tape are wasteful and
     diverge from every sibling dataset (regression fixed 2026-07-21 after
@@ -232,10 +244,11 @@ def log_storage_location(outputs) -> str:
     """
     if isinstance(outputs, dict):
         outputs = outputs.get('outputs')
-    if not outputs:
-        return 'disk'
-    location = outputs[0].get('location')
-    return location if location in ('scratch', 'outstage') else 'disk'
+    location = outputs[0].get('location') if outputs else None
+    loc = location if location in ('scratch', 'outstage') else 'disk'
+    if loc == 'disk' and owner not in (None, 'mu2e'):
+        return 'scratch'
+    return loc
 
 def default_owner() -> str:
     """Dataset owner defaulted from $USER; mu2epro maps to mu2e (production

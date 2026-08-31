@@ -757,7 +757,8 @@ def _direct_dispatch(args, ops, index):
     # account whose data goes to `scratch` would still try to push the
     # log to `disk` (push_logs default), which
     # `/mu2e/persistent/datasets/...` doesn't grant.
-    log_location = log_storage_location(outputs)
+    log_location = log_storage_location(
+        outputs, owner=Mu2eName(Path(fcl).name).owner)
 
     def data_push():
         if job_failed:

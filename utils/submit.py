@@ -740,13 +740,17 @@ def submit_entry(entry, idx, options):
     submitter = getpass.getuser()
     # Token scopes for direct-mode pushOutput (CB1):
     #   - per data output: /mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>
-    #   - per log: same scheme with tier=log, but logs go to persistent disk
-    #     regardless of data location (log_storage_location), so a tape
-    #     campaign needs BOTH a tape data scope and a disk log scope.
+    #   - per log: same scheme with tier=log. Production logs go to
+    #     persistent disk regardless of data location, so a tape campaign
+    #     needs BOTH a tape data scope and a disk log scope; user-owned
+    #     logs go to scratch (user tokens have no persistent/datasets
+    #     scope) — log_storage_location owns the rule, keyed on the
+    #     tarball's owner field.
     extra_scopes = list(_jobsub_argv.output_storage_dirs(
         output_filenames, outputs_of(entry)))
     if output_filenames:
-        log_location = log_storage_location(entry)
+        log_location = log_storage_location(
+            entry, owner=Mu2eName(entry['tarball']).owner)
         # A cnf output that does not parse is a broken cnf: a silently
         # skipped log scope surfaces as a 403 on the worker's log push.
         first_out = Mu2eName.parse(output_filenames[0])

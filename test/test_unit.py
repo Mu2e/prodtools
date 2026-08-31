@@ -4416,6 +4416,40 @@ class TestLogStorageLocation(unittest.TestCase):
                    {'dataset': 'nts.mu2e.*.root', 'location': 'scratch'}]
         self.assertEqual(log_storage_location(outputs), 'disk')
 
+    # — owner-aware routing (2026-08-31): user tokens have NO
+    #   /mu2e/persistent/datasets scope, so a user-owned log can never
+    #   go to 'disk'. Found live: self-owned tape campaign failed
+    #   submit-time token acquisition on the persistent log scope. ——
+
+    def test_user_owner_tape_data_logs_to_scratch(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'sim.oksuzian.*.art', 'location': 'tape'}]
+        self.assertEqual(log_storage_location(outputs, owner='oksuzian'),
+                         'scratch')
+
+    def test_user_owner_disk_data_logs_to_scratch(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'sim.oksuzian.*.art', 'location': 'disk'}]
+        self.assertEqual(log_storage_location(outputs, owner='oksuzian'),
+                         'scratch')
+
+    def test_mu2e_owner_tape_data_logs_to_disk(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'}]
+        self.assertEqual(log_storage_location(outputs, owner='mu2e'), 'disk')
+
+    def test_user_owner_outstage_stays_outstage(self):
+        """outstage means undeclared — owner routing must not override."""
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': '*.art', 'location': 'outstage'}]
+        self.assertEqual(log_storage_location(outputs, owner='oksuzian'),
+                         'outstage')
+
+    def test_user_owner_missing_outputs_logs_to_scratch(self):
+        from utils.job_common import log_storage_location
+        self.assertEqual(log_storage_location([], owner='oksuzian'),
+                         'scratch')
+
 
 class TestPushLogsParents(unittest.TestCase):
     """The log push must never name a parents file that isn't on disk.
