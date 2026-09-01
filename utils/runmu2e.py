@@ -714,7 +714,13 @@ def _run_g4bl_job(jobdesc, index):
     """Extract the g4bl cnf (already fetched into cwd by _direct_main),
     run one g4bl process, stream its output to both stdout and the
     SAM-named log. Returns (histo_file, log_file, job_failed).
-    RuntimeError on prep failures — nothing ran, so no log to push."""
+    RuntimeError on prep failures — nothing ran, so no log to push.
+
+    Output owner comes from the cnf tarball name (Mu2eName), never a
+    literal 'mu2e': the owner field routes the dCache/pushOutput
+    namespace (production phy-nts/phy-etc vs. a user's own scratch/
+    tape scope), and a user bearer token cannot write production paths
+    — see the 2026-09-01 live-smoke finding (403 on gfal-copy)."""
     tarball = Path(jobdesc['tarball']).name
     if not Path(tarball).is_file():
         raise RuntimeError(f"g4bl cnf not found in cwd: {tarball}")
@@ -729,10 +735,11 @@ def _run_g4bl_job(jobdesc, index):
     events_per_job = int(jp['events_per_job'])
     if not (Path('work') / main_input).is_file():
         raise RuntimeError(f"main_input not found: work/{main_input}")
+    owner = Mu2eName(jobdesc['tarball']).owner
     sequencer = f"{index:08d}"
     first_event = index * events_per_job + 1
-    histo_file = f"nts.mu2e.{jp['desc']}.{jp['dsconf']}.{sequencer}.root"
-    log_file = f"log.mu2e.{jp['desc']}.{jp['dsconf']}.{sequencer}.log"
+    histo_file = f"nts.{owner}.{jp['desc']}.{jp['dsconf']}.{sequencer}.root"
+    log_file = f"log.{owner}.{jp['desc']}.{jp['dsconf']}.{sequencer}.log"
     script = _g4bl_script(main_input, first_event, events_per_job,
                           os.path.abspath(histo_file))
     print(f"[g4bl] events_per_job={events_per_job} "
