@@ -37,8 +37,8 @@ if [[ $# -eq 0 ]]; then
     exit 1
 fi
 
-if [[ -z "$MUSE_DIR" ]] || ! command -v mu2e >/dev/null 2>&1; then
-    echo "Error: Mu2e environment not set up. Run: muse setup ops, then muse setup SimJob <tag> (or source a Musing setup.sh)"
+if [[ -z "$MUSE_DIR" ]]; then
+    echo "Error: Mu2e environment not set up. Run: muse setup ops (art entries additionally need a Musing: muse setup SimJob <tag> or source a Musing setup.sh)"
     exit 1
 fi
 

@@ -80,10 +80,12 @@ def _select_push_params(json_path, desc, dsconf):
         raise ValueError(f"push_cnf: {e}") from e
 
     simjob_setup = entry.get('simjob_setup')
-    if not simjob_setup:
+    if not simjob_setup and entry.get('runner') != 'g4bl':
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
             f"{json_path!r} has no simjob_setup field")
+    if entry.get('runner') == 'g4bl':
+        simjob_setup = None   # no Musing: _musing_clause('') is a no-op
 
     tarball_desc = get_tarball_desc(entry) or desc
     return simjob_setup, tarball_desc

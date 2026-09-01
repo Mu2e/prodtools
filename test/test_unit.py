@@ -13554,7 +13554,9 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            with patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+            with patch.object(json2jobdef.shutil, 'which',
+                              return_value='/usr/bin/mu2e'), \
+                 patch.object(json2jobdef, '_build_job_args', return_value=[]), \
                  patch.object(json2jobdef, 'build_jobdef', return_value=None), \
                  patch.object(json2jobdef, 'get_parfile_name',
                               return_value='cnf.mu2e.PhysicalPionStops.Run1Bap.0.tar'), \
@@ -13599,7 +13601,9 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
 
         try:
             os.chdir(tmpdir)
-            with patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+            with patch.object(json2jobdef.shutil, 'which',
+                              return_value='/usr/bin/mu2e'), \
+                 patch.object(json2jobdef, '_build_job_args', return_value=[]), \
                  patch.object(json2jobdef, 'build_jobdef', return_value=None), \
                  patch.object(json2jobdef, 'get_parfile_name',
                               return_value=tarball), \
@@ -14030,6 +14034,27 @@ class TestG4blWorker(unittest.TestCase):
             failed = runmu2e._dispatch_g4bl(args, self._jobdesc(), 0)
         self.assertFalse(failed)
         push_all.assert_not_called()
+
+
+class TestG4blPushCnfParams(unittest.TestCase):
+    """MCP push_cnf parameter selection for g4bl entries: no Musing
+    to source, so simjob_setup comes back None (falsy -> _musing_clause
+    emits no source step)."""
+
+    def test_select_push_params_g4bl(self):
+        from prodtools_mcp_write import tools
+        tmp = tempfile.mkdtemp(prefix='g4bl_push_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cfg = os.path.join(tmp, 'g4bl.json')
+        Path(cfg).write_text(json.dumps([{
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': tmp, 'main_input': 'deck.in',
+            'events_per_job': 10, 'njobs': 1,
+            'outloc': {'nts.*.root': 'scratch'}}]))
+        setup, tarball_desc = tools._select_push_params(
+            cfg, 'G4blSmoke', 'TestConf')
+        self.assertIsNone(setup)
+        self.assertEqual(tarball_desc, 'G4blSmoke')
 
 
 class TestEnqueueDoorClosed(unittest.TestCase):

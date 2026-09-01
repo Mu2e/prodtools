@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import json
+import shutil
 import tarfile
 import tempfile
 from pathlib import Path
@@ -860,6 +861,11 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
                 return None
             elif extend:
                 sys.exit("--extend: no new input files to process")
+
+        if shutil.which('mu2e') is None:
+            sys.exit("json2jobdef: 'mu2e' not on PATH — art entries "
+                     "need a Musing (muse setup SimJob <tag> or source "
+                     "a Musing setup.sh)")
 
         job_args = _build_job_args(config)
         result = build_jobdef(config, job_args)
