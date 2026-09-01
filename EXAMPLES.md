@@ -38,7 +38,9 @@ ops` is required. Building job definitions (`json2jobdef`, `jobdef`)
 needs an Offline environment for `fhicl-get`, so source the SimJob
 Musing that the entry's `simjob_setup` names — or, for a cnf built
 against a `muse tarball` instead of a Musing (section 3), no `muse
-setup SimJob` is needed at all; the build travels with the cnf.
+setup SimJob` is needed at all; the build travels with the cnf. A g4bl
+entry (section 3) needs no Musing either — a bare `muse setup ops`
+environment builds its cnf.
 
 No tool in this repo needs SQLAlchemy or a `pyenv ana` shell — the
 submission ledger and the completeness check read plain sqlite3 from the
@@ -160,7 +162,8 @@ Required JSON fields per entry: exactly one of `simjob_setup` or `code`,
 plus `fcl`, `dsconf`, `outloc`. `desc` is derived from `input_data` when
 omitted; `owner` defaults to the current user (mapped to `mu2e` for
 mu2epro); `inloc` defaults to `none`; `njobs: -1` means "derive from the
-input file list".
+input file list". (`"runner": "g4bl"` entries have a different required
+set — see the g4bl subsection below.)
 
 Stage-1 (generator) entry:
 
@@ -425,6 +428,58 @@ it lists:
   is not in the Musing aborts every build in `fhicl-get` with a
   search_path error, and an entry-level override cannot suppress an
   include. State the keys inline until the FCL actually ships.
+
+### g4bl entries (`"runner": "g4bl"`)
+
+g4bl (Geant4 Beamline) is a direct-backend entry type independent of
+the Offline chain: no fcl, no Musing, no SAM inputs. The worker runs
+the spack `g4beamline` on a native AL9 environment and pushes the
+histogram file and log through the same pushOutput path as any other
+entry.
+
+```json
+{
+  "runner": "g4bl",
+  "desc": "G4blSmoke",
+  "dsconf": "MCPTest005",
+  "owner": "oksuzian",
+  "g4bl_dir": "/exp/mu2e/app/users/oksuzian/G4BeamlineScripts",
+  "main_input": "Mu2E.in",
+  "events_per_job": 10,
+  "njobs": 1,
+  "outloc": { "nts.*.root": "scratch" }
+}
+```
+
+```bash
+json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005
+json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
+            --prod --enqueue --slice-size 100
+```
+
+- `runner` must be the literal string `"g4bl"`.
+- `g4bl_dir` is a local directory holding the deck and its support
+  files; it is copied wholesale into the cnf as `work/` and must exist.
+  `main_input` is the deck filename relative to `g4bl_dir` and must
+  exist inside it. `events_per_job` and `njobs` are positive integers.
+  `outloc` is the standard dataset-glob → location map. `desc`,
+  `dsconf`, and `owner` are the same top-level keys every entry uses.
+- Forbidden alongside `runner: "g4bl"`: `fcl`, `simjob_setup`, `code`,
+  `input_data`, `resampler_name`, `pbeam`, `generic_tarball`,
+  `input_pattern`, `firstjob`, `inloc` — any of these is a validation
+  error, not a silently-ignored key.
+- `json2jobdef` packs a self-describing cnf (`work/` + `jobpars.json`)
+  instead of calling `mu2ejobdef`; a bare `muse setup ops` environment
+  is enough to build one — no SimJob Musing needs to be sourced.
+- Output and log names are owner-aware
+  (`nts.<owner>.<desc>.<dsconf>.<seq>.root`), with `<owner>` parsed
+  from the cnf tarball name — never a literal `mu2e`.
+- Grid execution needs prodtools `>= v3.3.1` on cvmfs (workers run only
+  their ledger entry's pinned `prodtools_dir`, section 7); until that
+  release lands, a g4bl campaign can be built and validated locally but
+  not submitted to the grid.
+- `--extend` is refused for g4bl entries — there are no SAM inputs to
+  exclude.
 
 ### Running against a code tarball instead of a Musing
 
@@ -1372,6 +1427,25 @@ a one-time operator step (section 11 `submissions`, wiki page
   neither.
 - `Please specify either --desc AND --dsconf, --dsconf only, or --index only`
   — json2jobdef entry selection is exactly one of those three forms.
+- `json2jobdef: 'mu2e' not on PATH — art entries need a Musing (muse
+  setup SimJob <tag> or source a Musing setup.sh)` — an art (non-g4bl)
+  entry was built in a bare `muse setup ops` shell; source the entry's
+  Musing first. g4bl entries never hit this check.
+- `json2jobdef: g4bl entry missing required field: <name>` — a g4bl
+  entry needs `desc`, `dsconf`, `outloc`, `g4bl_dir`, `main_input`,
+  `events_per_job`, `njobs` (section 3).
+- `json2jobdef: g4bl entry must not carry '<key>'` — an art-pipeline
+  key (`fcl`, `simjob_setup`, `inloc`, ...) on a g4bl entry; g4bl is
+  decoupled from Offline, so the key is refused rather than ignored.
+- `json2jobdef: g4bl entry '<key>' must be a positive integer, got
+  <value>` — `events_per_job`/`njobs` must be positive ints (not
+  booleans, not strings).
+- `json2jobdef: g4bl_dir not found: <dir>` / `json2jobdef: main_input
+  not found: <path>` — the deck directory (or the deck inside it) does
+  not exist; both are checked before anything is built.
+- `json2jobdef: --extend is not supported for g4bl entries (no SAM
+  inputs to exclude)` — drop `--extend`; a g4bl cnf has no input list
+  to diff against.
 - `json2jobdef: --prod requires --enqueue (otherwise a bare --prod
   pushes the cnf to SAM and registers no campaign -- a silent no-op)`
   — add `--enqueue`. There is no `--jobdefs` alternative any more.

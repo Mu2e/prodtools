@@ -384,10 +384,13 @@ reading the code:
   2026-08 (legacy stages recover from the `pre-poms-removal` git tag).
 - `direct_input` entries are not index-submittable — they run as
   draining batches (`submissions resubmit ROW_ID --files LIST.txt`). The
-  `template` and `g4bl` runner modes were deleted with the POMS backend
-  (2026-08, tag `pre-poms-removal`); g4bl and HPC submission go through
-  the upstream `mu2ejobsub`/`mu2eg4bl` CLIs, which never touch the
-  submission ledger.
+  `template` runner mode was deleted with the POMS backend (2026-08, tag
+  `pre-poms-removal`). The POMS-era `g4bl` runner was deleted then too,
+  but g4bl came back 2026-09 as a first-class direct-backend entry type
+  (`"runner": "g4bl"`, section 3) — fully ledger-tracked. The upstream
+  `mu2eg4bl` CLI remains only for one-off beamline studies that should
+  stay out of SAM and the ledger; HPC submission still goes through the
+  upstream `mu2ejobsub`.
 - `json2jobdef` writes NO file recording the campaign and has no
   `--jobdefs` flag. Never show one, and never show
   `/exp/mu2e/app/users/mu2epro/production_manager/{poms_map,direct_maps}/`
