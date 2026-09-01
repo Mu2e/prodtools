@@ -107,13 +107,21 @@ path:
    eval "$(spack load --sh g4beamline)"
    cd work/
    g4bl <main_input> viewer=none First_Event=<F> Num_Events=<N> \
-        histoFile=<abs path>/nts.mu2e.<desc>.<dsconf>.<seq>.root
+        histoFile=<abs path>/nts.<owner>.<desc>.<dsconf>.<seq>.root
    ```
 
    Native AL9, no container. CLI overrides use `key=value` form (g4bl
    3.08b rejects `param key=value` on the command line). Stdout/stderr
    streamed to both the runner stdout and
-   `log.mu2e.<desc>.<dsconf>.<seq>.log`.
+   `log.<owner>.<desc>.<dsconf>.<seq>.log`.
+
+   `<owner>` comes from the cnf tarball name
+   (`Mu2eName(jobdesc['tarball']).owner`), NOT a literal `mu2e`: the
+   owner field of the output name is what routes the dCache path
+   (`phy-*` for owner mu2e, `usr-*/<owner>` otherwise). The retired
+   401e3da recipe hardcoded `mu2e` because it only ever ran as
+   production; a self-owned run named that way dies with
+   `DESTINATION MAKE_PARENT HTTP 403` (found live, 2026-08-31 smoke).
 4. Shared tail, reused as-is: SHA256 manifest appended to the log;
    `push_data(outputs, infiles=[], track_parents=False)` on success;
    `push_logs(log_file=..., location=log_storage_location(outputs,

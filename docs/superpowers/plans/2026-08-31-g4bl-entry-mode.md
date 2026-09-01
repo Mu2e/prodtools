@@ -15,7 +15,7 @@
 - No fallbacks: validate at the boundary, fail loudly. No default values for `g4bl_dir`, `main_input`, `events_per_job`, `njobs`.
 - g4bl CLI overrides use `key=value` form, never `param key=value` (g4bl 3.08b rejects the `param` form on the command line).
 - Worker env recipe verbatim from 401e3da: `unset SPACK_ENV PYTHONHOME PYTHONPATH PYTHONNOUSERSITE`, then `source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh`, then `eval "$(spack load --sh g4beamline)"`.
-- Output names: `nts.mu2e.<desc>.<dsconf>.<%08d index>.root`, `log.mu2e.<desc>.<dsconf>.<%08d index>.log`. `First_Event = index * events_per_job + 1`.
+- Output names: `nts.<owner>.<desc>.<dsconf>.<%08d index>.root`, `log.<owner>.<desc>.<dsconf>.<%08d index>.log` — `<owner>` = `Mu2eName(jobdesc['tarball']).owner`, never a literal `mu2e` (owner field routes the dCache namespace; literal mu2e = production paths = 403 for user tokens). `First_Event = index * events_per_job + 1`.
 - No SAM parents for g4bl: `track_parents=False`, no `parents_list.txt`.
 - Tests run with `python -m pytest test/test_unit.py -k <pattern> -v` and must not require the Mu2e environment (mock subprocess; build tarballs in tmpdirs).
 - Full suite (`python -m pytest test/test_unit.py`) must stay green after every task.
