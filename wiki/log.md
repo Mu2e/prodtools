@@ -1302,3 +1302,24 @@ Pages updated: 2026-08-28-corrupt-basket-dig-passes-integrity-gates
 
 ## [2026-08-28] incident | Self-account submit blocked by expired kerberos ticket; grid smoke as oksuzian verified
 Pages updated: 2026-08-28-self-submit-fails-on-expired-kerberos-ticket, index.md
+
+## [2026-09-01] update | g4bl revived as a direct-backend entry mode; retired path marked historical
+Rewrote g4bl-runner.md's "Current execution path" section: g4bl is now
+`"runner": "g4bl"` in the prodtools direct backend (spec+plan
+2026-08-31, commits 8d5182c..469a2f6) — self-describing cnf
+(work/+jobpars.json), zero new MCP tools, ledger/slicing/recovery
+unchanged. Output/log names are owner-aware
+(`nts.<owner>.<desc>.<dsconf>.<seq>.root`, never a literal `mu2e`) —
+a hardcoded-`mu2e` defect inherited from the retired path was found
+live in the 2026-09-01 local smoke (`DESTINATION MAKE_PARENT HTTP
+403` for a self-submitted cnf) and fixed in dd0d437; the smoke then
+confirmed the push chain end to end as self (nts declared in SAM
+under the owner-routed usr-nts namespace; log push blocked only by a
+known local-harness limitation, not worker code). The mu2ejobsub-era
+`process_g4bl_jobdef` implementation and its POMS-map shape are
+retired (2026-07-19) and now documented as historical; the `401e3da`
+native-AL9-spack execution recipe is kept verbatim — it is exactly
+what the new worker branch runs, only the caller changed. Grid
+rollout is pending the prodtools v3.3.1 cvmfs release.
+Pages updated: g4bl-runner, index.md
+Source: docs/superpowers/specs/2026-08-31-g4bl-entry-mode-design.md, docs/superpowers/plans/2026-08-31-g4bl-entry-mode.md, .superpowers/sdd/2026-08-31-g4bl-entry-mode/progress.md

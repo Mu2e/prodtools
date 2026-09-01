@@ -105,6 +105,38 @@ When regenerating, read in this order:
    an entry-level override cannot suppress an include, so state the
    keys inline until the FCL ships.
 
+   **g4bl entries (`"runner": "g4bl"`)** — g4bl (Geant4 Beamline) is a
+   direct-backend entry type independent of the Offline chain: no fcl,
+   no Musing, no SAM inputs. Cover the JSON keys: `runner` (must be the
+   literal string `"g4bl"`), `g4bl_dir` (local directory holding the
+   deck and its support files — copied wholesale into the cnf's
+   `work/`; must exist), `main_input` (deck filename relative to
+   `g4bl_dir`; must exist inside it), `events_per_job` and `njobs`
+   (positive integers), and `outloc` (the standard dataset-glob ->
+   location map, e.g. `{"nts.*.root": "scratch"}`). `desc`, `dsconf`,
+   and `owner` are the same top-level keys every entry uses. Forbidden
+   alongside `runner: "g4bl"`: `fcl`, `simjob_setup`, `code`,
+   `input_data`, `resampler_name`, `pbeam`, `generic_tarball`,
+   `input_pattern`, `firstjob`, `inloc` — any of these is a validation
+   error, not a silently-ignored key. `json2jobdef` packs a
+   self-describing cnf (`work/` + `jobpars.json`) instead of calling
+   `mu2ejobdef`; a bare `muse setup ops` env is enough to build one — no
+   SimJob Musing needs to be sourced. Canonical invocation:
+
+   ```bash
+   json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005
+   json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
+               --prod --enqueue --slice-size 100
+   ```
+
+   Output/log names are owner-aware
+   (`nts.<owner>.<desc>.<dsconf>.<seq>.root`), where `<owner>` is
+   parsed from the cnf tarball name — never a literal `mu2e`. Note that
+   grid execution needs prodtools `>= v3.3.1` on cvmfs (workers run
+   only their ledger entry's pinned `prodtools_dir`); until that
+   release lands a g4bl campaign can be built and validated locally but
+   not submitted to the grid.
+
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
