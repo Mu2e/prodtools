@@ -213,6 +213,10 @@ class TestG4blBuilder(unittest.TestCase):
             'runner': 'g4bl',
             'desc': 'G4blSmoke', 'dsconf': 'TestConf', 'owner': 'testuser',
             'g4bl_dir': self.g4bl_dir, 'main_input': 'deck.in',
+            # inloc is FORBIDDEN on the raw entry (Task 1); it appears
+            # here because this config simulates the post-default state
+            # (process_single_entry sets inloc='none' after validation)
+            # and build_jobdesc reads config['inloc'] unconditionally.
             'events_per_job': 100, 'njobs': 2, 'inloc': 'none',
             'outloc': {'nts.*.root': 'scratch'},
         }
