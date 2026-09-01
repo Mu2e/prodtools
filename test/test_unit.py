@@ -7353,7 +7353,17 @@ class TestRecoverLoop(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 recover.verify_row(row, sam_lister=lambda ds: [])
 
-    def test_verify_row_nonart_outputs_raise_not_complete(self):
+    def test_verify_row_nonart_outputs_report_missing(self):
+        """A non-art (.root) output stream must verify normally, not raise.
+
+        output_datasets() used to coerce every parsed name through
+        .with_extension('art'), so a .root-only cnf derived a phantom
+        '...art' dataset that never matched the real '.root' filenames;
+        build_file_maps found nothing, every index fell into
+        expected-less 'unverifiable', and verify_row raised RuntimeError
+        — this test used to pin THAT (buggy) behavior. With the real
+        extension preserved, an empty SAM listing means every index is
+        genuinely missing, not unverifiable."""
         from utils import submissions as recover
         files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(2)]
         jpars = _root_input_jobpars(files)
@@ -7365,8 +7375,9 @@ class TestRecoverLoop(unittest.TestCase):
                    'indices': [0, 1], 'entry': {}, 'attempt': 1,
                    'jobsub_id': 'x'}
             with patch.object(recover, 'sam_physical_path_or_none', return_value=tar):
-                with self.assertRaises(RuntimeError):
-                    recover.verify_row(row, sam_lister=lambda ds: [])
+                missing, partial = recover.verify_row(row, sam_lister=lambda ds: [])
+            self.assertEqual(missing, [0, 1])
+            self.assertEqual(partial, [])
         finally:
             os.unlink(tar)
 
@@ -13945,6 +13956,70 @@ class TestG4blBuilder(unittest.TestCase):
             process_single_entry(config, extend=True)
 
 
+class TestG4blVerifyRow(unittest.TestCase):
+    """verify_row on a real g4bl cnf. Before the output_datasets() fix,
+    the derived dataset was a phantom '...art' name that never matched
+    any real '.root' filename: build_file_maps's per-dataset map stayed
+    empty, every index fell into `expected`-less 'unverifiable', and
+    verify_row raised RuntimeError on every g4bl row — a g4bl campaign
+    could never verify, complete, or recover."""
+
+    def setUp(self):
+        from utils import submissions as recover
+        self.recover = recover
+        self.tmp = tempfile.mkdtemp(prefix='g4bl_verify_')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        g4bl_dir = os.path.join(self.tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, cwd)
+        self.config = {
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 3,
+        }
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        _build_g4bl_tarball(self.config)
+        self.tarpath = os.path.join(self.tmp, get_parfile_name(self.config))
+        self.row = {'id': 1, 'tarball': get_parfile_name(self.config),
+                    'indices': [0, 1, 2], 'entry': {}, 'attempt': 1,
+                    'jobsub_id': 'x'}
+
+    def test_all_present_reports_none_missing(self):
+        from utils.jobquery import Mu2eJobPars
+        jp = Mu2eJobPars(self.tarpath)
+        self.assertEqual(jp.output_datasets(),
+                         ['nts.testuser.G4blSmoke.TestConf.root'])
+        all_files = {f for i in range(3) for f in jp.job_outputs(i).values()}
+
+        def fake_lister(ds):
+            return list(all_files)
+
+        with patch.object(self.recover, 'sam_physical_path_or_none',
+                          return_value=self.tarpath):
+            missing, partial = self.recover.verify_row(
+                self.row, sam_lister=fake_lister)
+        self.assertEqual((missing, partial), ([], []))
+
+    def test_one_absent_reports_that_index_missing(self):
+        from utils.jobquery import Mu2eJobPars
+        jp = Mu2eJobPars(self.tarpath)
+        absent = jp.job_outputs(1)['g4bl']
+
+        def fake_lister(ds):
+            return [f for i in range(3) for f in jp.job_outputs(i).values()
+                    if f != absent]
+
+        with patch.object(self.recover, 'sam_physical_path_or_none',
+                          return_value=self.tarpath):
+            missing, partial = self.recover.verify_row(
+                self.row, sam_lister=fake_lister)
+        self.assertEqual(missing, [1])
+        self.assertEqual(partial, [])
+
+
 class TestG4blPreflight(unittest.TestCase):
     """A g4bl cnf must sail through the enqueue input gate: no tbs
     block means no inputs to check. Pinned so a future check_inputs
@@ -16995,6 +17070,34 @@ class TestOutputDatasetsDerivedFromTbs(unittest.TestCase):
         self.addCleanup(os.unlink, tar)
         jp = self.Mu2eJobPars(tar)
         self.assertEqual(jp.output_datasets(), ['sim.mu2e.TestDesc.TestConf.art'])
+
+    def test_g4bl_output_dataset_not_coerced_to_art(self):
+        """A g4bl cnf's only output is a .root ntuple. output_datasets()
+        used to force every parsed name through .with_extension('art'),
+        so a g4bl cnf reported a phantom '...art' dataset that SAM never
+        holds a file under — build_file_maps then never matches the real
+        .root filenames, and verify_row raises 'no expected output
+        files' on every g4bl row forever. The dataset must come back
+        with its real extension."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        tmp = tempfile.mkdtemp(prefix='g4bl_outds_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        g4bl_dir = os.path.join(tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        config = {
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 2,
+        }
+        _build_g4bl_tarball(config)
+        name = get_parfile_name(config)
+        jp = self.Mu2eJobPars(name)
+        self.assertEqual(jp.output_datasets(),
+                         ['nts.testuser.G4blSmoke.TestConf.root'])
 
     def test_multiple_output_streams_are_all_reported(self):
         pars = _root_input_jobpars(files=['dts.mu2e.In.CampA.001430_00000000.art'])

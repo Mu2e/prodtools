@@ -69,6 +69,15 @@ class Mu2eJobPars(Mu2eJobBase):
         key — jobdef writes only code/setup/code_ref/tbs/jobname. Uses
         job_outputs(0), the same name-pattern resolution --output-files
         walks, so the two agree by construction.
+
+        Reports each name's OWN extension — never coerced to .art. A
+        g4bl cnf's only output is a .root ntuple; forcing '.art' derived
+        a phantom dataset SAM never holds a file under, so build_file_maps
+        (utils/jobdef_lookup.py) never matched the real filenames and
+        verify_row raised "no expected output files" on every g4bl row.
+        A no-op for art cnfs (the extension is already 'art'), and
+        matches the MCP status tool's uncoerced names
+        (mcp/src/prodtools_mcp/tools/status.py:_cnf_output_datasets).
         """
         datasets = set()
         for filename in self.job_outputs(0).values():
@@ -76,7 +85,7 @@ class Mu2eJobPars(Mu2eJobBase):
                 name = Mu2eName.parse(filename)
             except ValueError:
                 continue
-            datasets.add(str(name.with_extension('art').dataset))
+            datasets.add(str(name.dataset))
         return sorted(datasets)
     
     def codesize(self):
