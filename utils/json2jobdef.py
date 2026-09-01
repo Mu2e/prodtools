@@ -464,6 +464,10 @@ def _build_g4bl_tarball(config):
     plus jobpars.json. No fcl, no mu2ejobdef — the worker's g4bl
     branch consumes this shape directly (spec section 2)."""
     parfile_name = get_parfile_name(config)
+    # Same derivation the tarball name itself uses (get_parfile_name ->
+    # cnf_name), so a top-level owner is present for whoever reads this
+    # cnf through Mu2eJobBase (submit, verify) regardless of $USER.
+    owner = Mu2eName(parfile_name).owner
     jobpars = {
         'runner': 'g4bl',
         'desc': config['desc'],
@@ -471,6 +475,17 @@ def _build_g4bl_tarball(config):
         'main_input': config['main_input'],
         'events_per_job': config['events_per_job'],
         'njobs': config['njobs'],
+        'owner': owner,
+        # Mu2eJobBase has no g4bl-shaped reader of its own: submit's
+        # _read_cnf_facts and verify_row both go through job_outputs()/
+        # njobs(), which only look at tbs. njobs here must match the flat
+        # njobs above; the outfiles template's owner/version/sequencer
+        # tokens are substituted by job_outputs() from self.owner/
+        # self.dsconf/self.sequencer(index) — same as every other runner.
+        'tbs': {
+            'njobs': config['njobs'],
+            'outfiles': {'g4bl': f"nts.owner.{config['desc']}.version.sequencer.root"},
+        },
     }
     data = (json.dumps(jobpars, indent=2) + '\n').encode()
     with tarfile.open(parfile_name, 'w') as tar:

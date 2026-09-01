@@ -13893,7 +13893,36 @@ class TestG4blBuilder(unittest.TestCase):
             jp = json.load(t.extractfile('jobpars.json'))
         self.assertEqual(jp, {'runner': 'g4bl', 'desc': 'G4blSmoke',
                               'dsconf': 'TestConf', 'main_input': 'deck.in',
-                              'events_per_job': 100, 'njobs': 2})
+                              'events_per_job': 100, 'njobs': 2,
+                              'owner': 'testuser',
+                              'tbs': {'njobs': 2,
+                                      'outfiles': {'g4bl':
+                                          'nts.owner.G4blSmoke.version.sequencer.root'}}})
+
+    def test_readable_via_mu2ejobpars(self):
+        """Submit/verify read every cnf through Mu2eJobPars (utils.jobquery),
+        never runmu2e directly — this pins the g4bl jobpars.json shape
+        byte-for-byte against _run_g4bl_job's own output naming so
+        submit._read_cnf_facts (submit.py:495, called at --enqueue) and
+        verify_row don't crash or under-count. Before the fix, jobpars.json
+        had no tbs block and no top-level owner: sequencer() raised
+        ValueError('unsupported JSON content'), job_outputs() returned {},
+        and njobs() silently fell back to 0 (open-ended) instead of the
+        real count."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        from utils.jobquery import Mu2eJobPars
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        jp = Mu2eJobPars(name)
+        self.assertEqual(jp.njobs(), 2)
+        self.assertEqual(jp.sequencer(3), '00000003')
+        self.assertEqual(list(jp.job_outputs(0).values()),
+                         ['nts.testuser.G4blSmoke.TestConf.00000000.root'])
+        # Flat worker keys survive alongside the new tbs/owner additions.
+        self.assertEqual(jp.json_data['runner'], 'g4bl')
+        self.assertEqual(jp.json_data['main_input'], 'deck.in')
+        self.assertEqual(jp.json_data['events_per_job'], 100)
+        self.assertEqual(jp.json_data['owner'], 'testuser')
 
     def test_build_jobdesc_carries_runner(self):
         from utils.json2jobdef import build_jobdesc

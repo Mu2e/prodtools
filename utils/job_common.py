@@ -478,6 +478,13 @@ class Mu2eJobBase:
           SamplingInput          → source.run
           PBISequence            → source.runNumber
         """
+        # g4bl cnfs carry no tbs.event_id and no primary inputs (no SAM
+        # source at all) — the index IS the sequencer. Must match the
+        # worker's own naming (runmu2e._run_g4bl_job: sequencer =
+        # f"{index:08d}") byte-for-byte.
+        if self.json_data.get('runner') == 'g4bl':
+            return f"{index:08d}"
+
         tbs = self.json_data.get('tbs', {})
 
         event_id = tbs.get('event_id', {})
