@@ -87,7 +87,7 @@ class TestG4blEntryValidation(unittest.TestCase):
                          ('code', 'c.tar'), ('input_data', {'a': 'b'}),
                          ('resampler_name', 'r'), ('pbeam', '1BB'),
                          ('generic_tarball', True), ('input_pattern', 'p'),
-                         ('firstjob', 5)):
+                         ('firstjob', 5), ('inloc', 'tape')):
             with self.assertRaises(SystemExit, msg=key):
                 validate_required_fields(self._entry(**{key: val}))
 
@@ -127,7 +127,7 @@ b) New `_validate_g4bl_entry` directly above `validate_required_fields`:
 ```python
 G4BL_FORBIDDEN_KEYS = ('fcl', 'simjob_setup', 'code', 'input_data',
                        'resampler_name', 'pbeam', 'generic_tarball',
-                       'input_pattern', 'firstjob')
+                       'input_pattern', 'firstjob', 'inloc')
 
 def _validate_g4bl_entry(config):
     """Boundary validation for runner: g4bl entries. g4bl is decoupled
@@ -290,7 +290,7 @@ b) `process_single_entry` — branch after the `config['njobs'] = config.get('nj
              # build_jobdef flow, unchanged, indented into this else
 ```
 
-The tail of `process_single_entry` (`_pushout_to_sam`, `enqueue`) is shared and stays outside the branch — that is the whole point: `--prod --enqueue` and the MCP `push_cnf` path work for g4bl with no further changes. Keep the existing `validate_output_filenames` call inside the non-g4bl branch (it parses a mu2ejobdef cnf).
+The tail of `process_single_entry` (`_pushout_to_sam`, `enqueue`) is shared and stays outside the branch — that is the whole point: `--prod --enqueue` and the MCP `push_cnf` path work for g4bl with no further changes. `validate_output_filenames` needs no attention: it lives inside `build_jobdef` (utils/json2jobdef.py:473), which only the non-g4bl branch calls. Ordering note: `validate_required_fields` runs before the `config['inloc'] = config.get('inloc', 'none')` default, so forbidding `inloc` (Task 1) rejects only a USER-supplied value; the default applied afterwards is what `build_jobdesc` reads.
 
 c) `build_jobdesc` — right after `jobdef_entry` is first constructed:
 
