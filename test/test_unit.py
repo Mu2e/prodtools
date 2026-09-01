@@ -4459,9 +4459,13 @@ class TestPushLogsParents(unittest.TestCase):
     silent no-op — the log never reaches SAM. That bites hardest on the
     failure path, where push_data is skipped and the log is the only
     evidence left. Observed 2026-07-21 on index 519.
+
+    Whether parents are wanted at all is now the caller's `track_parents`
+    (the same flag push_data gets), not a guess from which filename
+    parameter was passed.
     """
 
-    def _capture(self, tmpdir, *, log_file=None, fcl=None, with_parents):
+    def _capture(self, tmpdir, *, log_file, track_parents, with_parents):
         """Run push_logs in tmpdir and return the parents column it chose."""
         from utils import runmu2e
         captured = {}
@@ -4471,22 +4475,17 @@ class TestPushLogsParents(unittest.TestCase):
             captured['specs'] = output_specs
             return 0
 
-        logname = log_file or runmu2e.replace_file_extensions(fcl, "log", "log")
-        (Path(tmpdir) / logname).write_text('log contents\n')
+        (Path(tmpdir) / log_file).write_text('log contents\n')
         if with_parents:
             (Path(tmpdir) / 'parents_list.txt').write_text('in1.art\n')
 
         cwd = os.getcwd()
-        env = dict(os.environ)
-        os.environ.pop('JSB_TMP', None)   # don't pull in a jobsub log
         try:
             os.chdir(tmpdir)
             with patch.object(runmu2e, 'push_output', fake_push_output):
-                runmu2e.push_logs(fcl=fcl, log_file=log_file)
+                runmu2e.push_logs(log_file, track_parents=track_parents)
         finally:
             os.chdir(cwd)
-            os.environ.clear()
-            os.environ.update(env)
 
         self.assertIn('specs', captured, "push_output was never called")
         self.assertEqual(len(captured['specs']), 1)
@@ -4495,39 +4494,98 @@ class TestPushLogsParents(unittest.TestCase):
     def test_art_success_uses_parents_list(self):
         """Data push ran and wrote parents_list.txt — use it."""
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
-                                    with_parents=True)
+            parents = self._capture(d, log_file='log.mu2e.X.MDC2025ar.519.log',
+                                    track_parents=True, with_parents=True)
             self.assertEqual(parents, 'parents_list.txt')
 
     def test_art_failure_falls_back_to_none(self):
         """mu2e failed, push_data was skipped, so parents_list.txt does not
         exist — the log must still be declarable."""
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
-                                    with_parents=False)
+            parents = self._capture(d, log_file='log.mu2e.X.MDC2025ar.519.log',
+                                    track_parents=True, with_parents=False)
             self.assertEqual(parents, 'none')
 
-    def test_untracked_parents_falls_back_to_none(self):
-        """track_parents=False (inloc dir:, non-SAM inputs) also leaves no
-        parents_list.txt even though the job succeeded."""
+    def test_untracked_parents_is_none_even_with_a_file(self):
+        """track_parents=False (inloc dir:, g4bl) — a stray parents_list.txt
+        must not be named: the job's inputs are not SAM parents."""
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, fcl='cnf.mu2e.Y.MDC2025ar.7.fcl',
-                                    with_parents=False)
+            parents = self._capture(d, log_file='log.mu2e.Y.MDC2025ar.7.log',
+                                    track_parents=False, with_parents=True)
             self.assertEqual(parents, 'none')
 
     def test_g4bl_still_none(self):
-        """g4bl passes log_file explicitly and has no SAM parents."""
+        """g4bl has no SAM parents (track_parents=False)."""
         with tempfile.TemporaryDirectory() as d:
             parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
-                                    with_parents=False)
+                                    track_parents=False, with_parents=False)
             self.assertEqual(parents, 'none')
 
-    def test_g4bl_ignores_stray_parents_file(self):
-        """Even if a parents_list.txt is lying around, g4bl stays 'none'."""
+    def test_missing_log_skips_push(self):
+        """No log on disk: warn and return 0, never call pushOutput."""
+        from utils import runmu2e
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
-                                    with_parents=True)
-            self.assertEqual(parents, 'none')
+            cwd = os.getcwd()
+            try:
+                os.chdir(d)
+                with patch.object(runmu2e, 'push_output') as po:
+                    rc = runmu2e.push_logs('log.mu2e.X.MDC2025ar.1.log')
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(rc, 0)
+            po.assert_not_called()
+
+
+class TestMaterializeLog(unittest.TestCase):
+    """The SAM-named log must exist BEFORE the manifest is appended.
+
+    Production logs never carried a manifest (2026-09-01: 0 `mu2egrid
+    manifest` lines in log.mu2e.CeEndpoint.Run1Ban-001.617) because
+    push_logs created the file from $JSB_TMP/JOBSUB_LOG_FILE only
+    after _emit_manifest had already found it missing. _materialize_log
+    is that copy, moved ahead of the manifest step.
+    """
+
+    LOG = 'log.mu2e.X.MDC2025ar.519.log'
+
+    def _run(self, tmpdir, *, jsb_content, preexisting=None):
+        from utils import runmu2e
+        jsb = Path(tmpdir) / 'jsb_tmp'
+        jsb.mkdir()
+        if jsb_content is not None:
+            (jsb / 'JOBSUB_LOG_FILE').write_text(jsb_content)
+        log = Path(tmpdir) / self.LOG
+        if preexisting is not None:
+            log.write_text(preexisting)
+        with patch.dict(os.environ, {'JSB_TMP': str(jsb)}):
+            runmu2e._materialize_log(str(log))
+        return log
+
+    def test_copies_jobsub_log_into_sam_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self._run(d, jsb_content='worker stdout\n')
+            self.assertEqual(log.read_text(), 'worker stdout\n')
+
+    def test_jobsub_log_overwrites_runner_written_log(self):
+        """The worker log is the superset (every runner streams to stdout)."""
+        with tempfile.TemporaryDirectory() as d:
+            log = self._run(d, jsb_content='full worker log\n',
+                            preexisting='partial\n')
+            self.assertEqual(log.read_text(), 'full worker log\n')
+
+    def test_missing_jobsub_log_keeps_existing_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self._run(d, jsb_content=None, preexisting='runner log\n')
+            self.assertEqual(log.read_text(), 'runner log\n')
+
+    def test_no_jsb_tmp_and_no_log_warns_only(self):
+        """Nothing to copy and nothing on disk: warn, create nothing."""
+        from utils import runmu2e
+        with tempfile.TemporaryDirectory() as d:
+            env = {k: v for k, v in os.environ.items() if k != 'JSB_TMP'}
+            with patch.dict(os.environ, env, clear=True):
+                runmu2e._materialize_log(str(Path(d) / self.LOG))
+            self.assertFalse((Path(d) / self.LOG).exists())
 
 
 class TestPushDataExcludesInputs(unittest.TestCase):
@@ -12558,6 +12616,42 @@ class TestDirectDispatchFiles(unittest.TestCase):
         ops = {'jobs': [0], 'jobdesc': dict(self.DRAIN)}
         with self.assertRaises(SystemExit):
             runmu2e._direct_dispatch(self._args(), ops, 0)
+
+    def test_manifest_lands_in_log_materialized_from_jsb_tmp(self):
+        """Regression for the production gap: the SAM log used to be
+        created by push_logs AFTER _emit_manifest found it missing, so
+        no direct-backend art log ever carried `mu2egrid manifest`."""
+        from utils import runmu2e
+        # validate_outputs=False: read-back validation shells out to
+        # `source {simjob_setup} && ...`, and fake_pdi's simjob_setup
+        # ('/cvmfs/setup.sh') is a placeholder, not a real script — every
+        # other test in this class dodges that subprocess by never
+        # matching an output glob against a real file. This test needs a
+        # real file (to prove it lands in the manifest), so validation
+        # must be turned off explicitly; it isn't what's under test here.
+        drain = dict(self.DRAIN,
+                     outputs=[{'dataset': 'mcs.*.art', 'location': 'tape'}],
+                     validate_outputs=False)
+        out_name = 'mcs.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art'
+        with tempfile.TemporaryDirectory() as d:
+            jsb = Path(d) / 'jsb_tmp'
+            jsb.mkdir()
+            (jsb / 'JOBSUB_LOG_FILE').write_text('worker stdout\n')
+            (Path(d) / out_name).write_bytes(b'x')
+            ops = {'jobs': [0], 'files': [self.FILES[0]], 'jobdesc': drain}
+            cwd = os.getcwd()
+            try:
+                os.chdir(d)
+                with patch.dict(os.environ, {'JSB_TMP': str(jsb)}):
+                    failed, calls, ffl, lfs = self._dispatch(ops, 0)
+            finally:
+                os.chdir(cwd)
+            self.assertFalse(failed)
+            log = Path(d) / 'log.mu2e.A.MDC2025au_best_v1_5.001202_00000001.log'
+            text = log.read_text()
+            self.assertTrue(text.startswith('worker stdout\n'), text[:80])
+            self.assertIn('mu2egrid manifest', text)
+            self.assertIn(out_name, text)
 
 
 # ---------------------------------------------------------------------------

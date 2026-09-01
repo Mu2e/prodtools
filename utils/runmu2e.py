@@ -390,12 +390,35 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
                          simjob_setup=simjob_setup) or rc
     return rc
 
-def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
-    """Declare/push the log file.
+def _materialize_log(log_file):
+    """Create the SAM-named log from the jobsub log, BEFORE the manifest.
 
-    Pass `fcl` (log filename derived via replace_file_extensions) or
-    `log_file` directly; at least one is required, and `log_file` wins if
-    both are given (for runners with no FCL, e.g. g4bl).
+    On a worker nothing writes `log.<owner>.<desc>.<dsconf>.<seq>.log`
+    itself — every runner streams to stdout, which jobsub captures in
+    `$JSB_TMP/JOBSUB_LOG_FILE`. Copying it here (rather than inside
+    push_logs, after the manifest step had already found the file
+    missing) is what puts `mu2egrid manifest` into production logs at
+    all — no direct-backend art log carried one before 2026-09-01.
+    The jobsub log is the superset, so it overwrites any partial file a
+    runner may have written. Without JSB_TMP (local runs) an existing
+    file is kept; a missing one is a warning, never invented.
+    """
+    jsb_tmp = os.getenv("JSB_TMP")
+    if jsb_tmp:
+        src = os.path.join(jsb_tmp, "JOBSUB_LOG_FILE")
+        if os.path.isfile(src):
+            print(f"Copying jobsub log from {src} to {log_file}")
+            shutil.copy(src, log_file)
+            return
+        print(f"Warning: Jobsub log not found at {src}")
+    if not Path(log_file).exists():
+        print(f"Warning: {log_file} does not exist and no jobsub log to "
+              f"copy — manifest and log push will be skipped")
+
+
+def push_logs(log_file, simjob_setup=None, location="disk", track_parents=True):
+    """Declare/push the SAM-named log file, already materialized in cwd
+    by _materialize_log (and carrying its manifest).
 
     `location` is a pushOutput destination class — "disk" (default,
     persistent), "scratch" (for user runs lacking `storage.modify` on
@@ -404,46 +427,24 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
     undeclared, matching a job whose data went to outstage (a declared
     log would name undeclared parents) — log_storage_location() routes
     it here.
+
+    `track_parents` is the same flag push_data received. parents_list.txt
+    is named only when it is wanted AND on disk: pushOutput reports
+    `ERROR - parents file ... not found` then exits 0, so a missing file
+    makes the log push a SILENT no-op — and it is routinely absent (mu2e
+    failed so push_data never ran; or track_parents=False for `dir:`
+    inputs and g4bl, which have no SAM parents).
     """
-
-    if log_file is not None:
-        logfile = log_file
-    elif fcl is not None:
-        logfile = replace_file_extensions(fcl, "log", "log")
-    else:
-        print("Warning: push_logs called with neither fcl nor log_file; nothing to push")
+    if not Path(log_file).exists():
+        print(f"Warning: Log file {log_file} not found, skipping log push")
         return 0
-
-    # Only meaningful when derived from fcl (JOBSUB_LOG_FILE is the
-    # canonical source); for explicit log_file the runner already
-    # streamed to it.
-    jsb_tmp = os.getenv("JSB_TMP")
-    if jsb_tmp and log_file is None:
-        src = os.path.join(jsb_tmp, "JOBSUB_LOG_FILE")
-        print(f"Copying jobsub log from {src} to {logfile}")
-        try:
-            shutil.copy(src, logfile)
-        except FileNotFoundError:
-            print(f"Warning: Jobsub log not found at {src}")
-
-    if Path(logfile).exists():
-        if location == OUTSTAGE_LOCATION:
-            return _copy_to_outstage([logfile])
-        # Name parents_list.txt only if it's actually on disk: pushOutput
-        # reports `ERROR - parents file ... not found` then exits 0, so a
-        # missing file makes the log push a SILENT no-op. push_data writes
-        # it, and it's routinely absent — mu2e failed (push_data skipped,
-        # exactly when the log is the only evidence left) or
-        # track_parents=False (inloc `dir:`, non-SAM inputs). G4bl passes
-        # log_file and never has SAM parents.
-        parents = ("parents_list.txt"
-                   if log_file is None and Path("parents_list.txt").is_file()
-                   else "none")
-        output_specs = [(location, logfile, parents)]
-        return push_output(output_specs, "log_output.txt", simjob_setup=simjob_setup)
-    else:
-        print(f"Warning: Log file {logfile} not found, skipping log push")
-        return 0
+    if location == OUTSTAGE_LOCATION:
+        return _copy_to_outstage([log_file])
+    parents = ("parents_list.txt"
+               if track_parents and Path("parents_list.txt").is_file()
+               else "none")
+    return push_output([(location, log_file, parents)], "log_output.txt",
+                       simjob_setup=simjob_setup)
 
 
 # ============================================================
@@ -769,6 +770,7 @@ def _dispatch_g4bl(args, jobdesc, index):
     manifest_files = ([histo_file]
                       if not job_failed and Path(histo_file).exists()
                       else [])
+    _materialize_log(log_file)
     if Path(log_file).exists():
         _emit_manifest(log_file, manifest_files)
 
@@ -780,8 +782,8 @@ def _dispatch_g4bl(args, jobdesc, index):
         _push_with_retry(push_data, outputs, "", track_parents=False)
 
     def log_push():
-        _push_with_retry(push_logs, log_file=log_file,
-                         location=log_location)
+        _push_with_retry(push_logs, log_file, location=log_location,
+                         track_parents=False)
 
     if args.dry_run:
         datasets = ('none (job failed)' if job_failed else histo_file)
@@ -863,6 +865,7 @@ def _direct_dispatch(args, ops, index):
     # Append SHA256 manifest before pushing — mu2eClusterCheckAndMove
     # parses the log for `mu2egrid manifest`.
     log_file = replace_file_extensions(fcl, "log", "log")
+    _materialize_log(log_file)
     if Path(log_file).exists():
         manifest_files = []
         if not job_failed:
@@ -886,8 +889,8 @@ def _direct_dispatch(args, ops, index):
                          simjob_setup=simjob_setup, track_parents=track_parents)
 
     def log_push():
-        _push_with_retry(push_logs, fcl, simjob_setup=simjob_setup,
-                         location=log_location)
+        _push_with_retry(push_logs, log_file, simjob_setup=simjob_setup,
+                         location=log_location, track_parents=track_parents)
 
     if args.dry_run:
         datasets = ('none (job failed)' if job_failed
