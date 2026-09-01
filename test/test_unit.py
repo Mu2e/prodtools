@@ -13912,6 +13912,34 @@ class TestG4blBuilder(unittest.TestCase):
             process_single_entry(config, extend=True)
 
 
+class TestG4blPreflight(unittest.TestCase):
+    """A g4bl cnf must sail through the enqueue input gate: no tbs
+    block means no inputs to check. Pinned so a future check_inputs
+    change that assumes a mu2ejobdef shape fails HERE, not at enqueue."""
+
+    def test_check_inputs_passes_g4bl_cnf(self):
+        from utils.json2jobdef import _build_g4bl_tarball
+        from utils.check_inputs import check_inputs
+        tmp = tempfile.mkdtemp(prefix='g4bl_pre_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        g4bl_dir = os.path.join(tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        _build_g4bl_tarball({
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 10, 'njobs': 1,
+        })
+        ok, problems = check_inputs(
+            'cnf.testuser.G4blSmoke.TestConf.0.tar', 'none',
+            sam_sizes=lambda ds: {})
+        self.assertTrue(ok, problems)
+        self.assertEqual(problems, [])
+
+
 class TestEnqueueDoorClosed(unittest.TestCase):
     """The only campaign-creation path is json2jobdef --prod --enqueue.
 
