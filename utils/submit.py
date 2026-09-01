@@ -6,8 +6,10 @@ Builds the `jobsub_submit` argv directly and ships prodtools as a
 the entry's cvmfs prodtools release (`prodtools_dir`, recorded at
 enqueue). Worker bootstraps that release's `bin/runjob.sh` -> `utils/runmu2e.py`
 direct mode -> per-job pushOutput. The Phase-1 mu2ejobsub backend was
-retired 2026-07-19: template/direct_input/g4bl entries and HPC
-submission run via the upstream mu2ejobsub/mu2eg4bl CLIs, never here.
+retired 2026-07-19. template entries died with it; direct_input entries
+run as ledger-tracked draining batches, and g4bl came back 2026-09 as a
+direct-backend entry type — both submit through here. Only HPC
+submission still goes via the upstream mu2ejobsub CLI.
 
 Plans:
 - wiki/pages/2026-04-29-remove-poms-from-submit-loop.md (Phase 1, POMS removal)

@@ -85,7 +85,7 @@ for owner `mu2e`, `usr-*/<owner>` otherwise). Found live in the
 2026-08-31/09-01 smoke below; fixed in commit `dd0d437` (spec and plan
 amended to match — see "Local end-to-end smoke").
 
-`push_data(outputs, infiles=[], track_parents=False)` (no SAM
+`push_data(outputs, infiles="", track_parents=False)` (no SAM
 parents — g4bl has no SAM inputs, so `parents_list.txt` is never
 written) and `push_logs(log_file=..., location=log_storage_location(
 outputs, owner))` reuse the same helpers as every other runner mode;
