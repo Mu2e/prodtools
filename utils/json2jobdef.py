@@ -487,9 +487,19 @@ def _build_g4bl_tarball(config):
             'outfiles': {'g4bl': f"nts.owner.{config['desc']}.version.sequencer.root"},
         },
     }
+    def _skip_vcs(tarinfo):
+        """Drop VCS internals (.git/.svn/.hg) from the cnf: g4bl_dir is
+        often a live checkout, and this tarball is pushed to SAM
+        permanently and dropbox-staged to every grid job — it must
+        never carry repo internals."""
+        if any(part in ('.git', '.svn', '.hg')
+               for part in tarinfo.name.split('/')):
+            return None
+        return tarinfo
+
     data = (json.dumps(jobpars, indent=2) + '\n').encode()
     with tarfile.open(parfile_name, 'w') as tar:
-        tar.add(config['g4bl_dir'], arcname='work')
+        tar.add(config['g4bl_dir'], arcname='work', filter=_skip_vcs)
         info = tarfile.TarInfo('jobpars.json')
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))

@@ -132,7 +132,17 @@ class Mu2eJobPars(Mu2eJobBase):
         try:
             fcl = self._extract_member('mu2e.fcl').decode()
         except ValueError:
-            lines.append("# (no embedded mu2e.fcl — code-tarball job definition)")
+            if self.json_data.get('runner') == 'g4bl':
+                # A g4bl cnf carries no mu2e.fcl and no code tarball at
+                # all — the worker runs the g4bl deck under work/
+                # directly (see _build_g4bl_tarball). Same "no fcl"
+                # symptom as a code-tarball cnf, but calling it that
+                # here is actively wrong — --recipe is the tool people
+                # point at a mystery cnf to identify it.
+                lines.append("# runner: g4bl — no embedded mu2e.fcl; "
+                             "work/ carries the g4bl deck directly")
+            else:
+                lines.append("# (no embedded mu2e.fcl — code-tarball job definition)")
         else:
             lines.append(fcl.rstrip('\n'))
         return '\n'.join(lines)

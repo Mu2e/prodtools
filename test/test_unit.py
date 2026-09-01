@@ -13910,6 +13910,25 @@ class TestG4blBuilder(unittest.TestCase):
                                       'outfiles': {'g4bl':
                                           'nts.owner.G4blSmoke.version.sequencer.root'}}})
 
+    def test_vcs_dirs_excluded_from_tarball(self):
+        """g4bl_dir is often a git checkout. tar.add used to sweep the
+        whole tree (arcname='work') with no filter, shipping .git/
+        internals into a cnf that is pushed to SAM permanently and
+        dropbox-staged to every grid job. .git/.svn/.hg must never
+        appear under work/, and the real deck must still survive."""
+        os.makedirs(os.path.join(self.g4bl_dir, '.git', 'objects'))
+        Path(self.g4bl_dir, '.git', 'objects', 'x').write_text('blob\n')
+        Path(self.g4bl_dir, '.git', 'HEAD').write_text('ref: refs/heads/main\n')
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        with tarfile.open(name) as t:
+            members = t.getnames()
+        self.assertFalse(any('.git' in m.split('/') for m in members),
+                         f"VCS members leaked into cnf: {members}")
+        self.assertIn('work/deck.in', members)
+        self.assertIn('work/Geometry/g.txt', members)
+
     def test_readable_via_mu2ejobpars(self):
         """Submit/verify read every cnf through Mu2eJobPars (utils.jobquery),
         never runmu2e directly — this pins the g4bl jobpars.json shape
@@ -13934,6 +13953,20 @@ class TestG4blBuilder(unittest.TestCase):
         self.assertEqual(jp.json_data['main_input'], 'deck.in')
         self.assertEqual(jp.json_data['events_per_job'], 100)
         self.assertEqual(jp.json_data['owner'], 'testuser')
+
+    def test_recipe_identifies_g4bl_not_code_tarball(self):
+        """--recipe is the tool people point at a mystery cnf. A g4bl
+        cnf has no embedded mu2e.fcl (same symptom as a code-tarball
+        cnf), and used to print the code-tarball line verbatim —
+        actively misleading for a g4bl job, which carries no code
+        tarball at all. The recipe must identify it as g4bl instead."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        from utils.jobquery import Mu2eJobPars
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        out = Mu2eJobPars(name).recipe()
+        self.assertIn('g4bl', out)
+        self.assertNotIn('code-tarball', out)
 
     def test_build_jobdesc_carries_runner(self):
         from utils.json2jobdef import build_jobdesc

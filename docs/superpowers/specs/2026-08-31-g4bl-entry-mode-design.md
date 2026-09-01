@@ -123,7 +123,7 @@ path:
    production; a self-owned run named that way dies with
    `DESTINATION MAKE_PARENT HTTP 403` (found live, 2026-08-31 smoke).
 4. Shared tail, reused as-is: SHA256 manifest appended to the log;
-   `push_data(outputs, infiles=[], track_parents=False)` on success;
+   `push_data(outputs, infiles="", track_parents=False)` on success;
    `push_logs(log_file=..., location=log_storage_location(outputs,
    owner))` always (the no-FCL `log_file` path in `push_logs` already
    exists for exactly this). `--dry_run` honored.
