@@ -13901,6 +13901,16 @@ class TestG4blBuilder(unittest.TestCase):
         self.assertEqual(entry['outputs'],
                          [{'dataset': 'nts.*.root', 'location': 'scratch'}])
 
+    def test_extend_not_supported(self):
+        """process_single_entry refuses --extend for g4bl entries (no SAM
+        inputs to exclude): plan-mandated behavior, pinned here so a future
+        refactor of process_single_entry can't silently drop the check."""
+        from utils.json2jobdef import process_single_entry
+        config = dict(self.config)
+        del config['inloc']  # forbidden on the raw entry (Task 1)
+        with self.assertRaises(SystemExit):
+            process_single_entry(config, extend=True)
+
 
 class TestEnqueueDoorClosed(unittest.TestCase):
     """The only campaign-creation path is json2jobdef --prod --enqueue.
