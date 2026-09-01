@@ -37,7 +37,7 @@ from typing import Optional
 from prodtools_mcp_write import runner
 from utils.config_utils import get_tarball_desc
 from utils.job_common import Mu2eName
-from utils.json2jobdef import load_json, find_json_entry
+from utils.json2jobdef import determine_job_type, load_json, find_json_entry
 
 
 def _select_push_params(json_path, desc, dsconf):
@@ -79,13 +79,15 @@ def _select_push_params(json_path, desc, dsconf):
     except SystemExit as e:
         raise ValueError(f"push_cnf: {e}") from e
 
-    simjob_setup = entry.get('simjob_setup')
-    if not simjob_setup and entry.get('runner') != 'g4bl':
+    # Classify via json2jobdef's own dispatcher (see module docstring:
+    # duplicated entry checks drift). g4bl entries carry no Musing —
+    # simjob_setup None makes _musing_clause('') a no-op.
+    is_g4bl = determine_job_type(entry) == 'g4bl'
+    simjob_setup = None if is_g4bl else entry.get('simjob_setup')
+    if not is_g4bl and not simjob_setup:
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
             f"{json_path!r} has no simjob_setup field")
-    if entry.get('runner') == 'g4bl':
-        simjob_setup = None   # no Musing: _musing_clause('') is a no-op
 
     tarball_desc = get_tarball_desc(entry) or desc
     return simjob_setup, tarball_desc

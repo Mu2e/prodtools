@@ -710,17 +710,12 @@ def _g4bl_script(main_input, first_event, num_events, histo_path):
     )
 
 
-def _run_g4bl_job(jobdesc, index):
+def _run_g4bl_job(jobdesc, index, owner):
     """Extract the g4bl cnf (already fetched into cwd by _direct_main),
     run one g4bl process, stream its output to both stdout and the
     SAM-named log. Returns (histo_file, log_file, job_failed).
     RuntimeError on prep failures — nothing ran, so no log to push.
-
-    Output owner comes from the cnf tarball name (Mu2eName), never a
-    literal 'mu2e': the owner field routes the dCache/pushOutput
-    namespace (production phy-nts/phy-etc vs. a user's own scratch/
-    tape scope), and a user bearer token cannot write production paths
-    — see the 2026-09-01 live-smoke finding (403 on gfal-copy)."""
+    `owner` is parsed from the cnf tarball name by _dispatch_g4bl."""
     tarball = Path(jobdesc['tarball']).name
     if not Path(tarball).is_file():
         raise RuntimeError(f"g4bl cnf not found in cwd: {tarball}")
@@ -735,11 +730,12 @@ def _run_g4bl_job(jobdesc, index):
     events_per_job = int(jp['events_per_job'])
     if not (Path('work') / main_input).is_file():
         raise RuntimeError(f"main_input not found: work/{main_input}")
-    owner = Mu2eName(jobdesc['tarball']).owner
     sequencer = f"{index:08d}"
     first_event = index * events_per_job + 1
-    histo_file = f"nts.{owner}.{jp['desc']}.{jp['dsconf']}.{sequencer}.root"
-    log_file = f"log.{owner}.{jp['desc']}.{jp['dsconf']}.{sequencer}.log"
+    name_fields = dict(owner=owner, description=jp['desc'],
+                       dsconf=jp['dsconf'], sequencer=sequencer)
+    histo_file = str(Mu2eName.build(tier='nts', extension='root', **name_fields))
+    log_file = str(Mu2eName.build(tier='log', extension='log', **name_fields))
     script = _g4bl_script(main_input, first_event, events_per_job,
                           os.path.abspath(histo_file))
     print(f"[g4bl] events_per_job={events_per_job} "
@@ -763,7 +759,12 @@ def _dispatch_g4bl(args, jobdesc, index):
     pushOutput comes from the worker bootstrap's `setup OfflineOps`
     (bin/runjob.sh), so no simjob_setup is passed."""
     outputs = jobdesc['outputs']
-    histo_file, log_file, job_failed = _run_g4bl_job(jobdesc, index)
+    # Owner comes from the cnf tarball name, never a literal 'mu2e' —
+    # the owner field routes the dCache/pushOutput namespace (production
+    # phy-nts/phy-etc vs. a user's own scope); a user bearer token
+    # cannot write production paths (2026-09-01 live-smoke 403).
+    owner = Mu2eName(jobdesc['tarball']).owner
+    histo_file, log_file, job_failed = _run_g4bl_job(jobdesc, index, owner)
 
     manifest_files = ([histo_file]
                       if not job_failed and Path(histo_file).exists()
@@ -771,8 +772,7 @@ def _dispatch_g4bl(args, jobdesc, index):
     if Path(log_file).exists():
         _emit_manifest(log_file, manifest_files)
 
-    log_location = log_storage_location(
-        outputs, owner=Mu2eName(jobdesc['tarball']).owner)
+    log_location = log_storage_location(outputs, owner=owner)
 
     def data_push():
         if job_failed:

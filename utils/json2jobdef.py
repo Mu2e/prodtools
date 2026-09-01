@@ -7,6 +7,7 @@ Usage (from the repo root, with `muse setup ops` sourced):
   - As module:   python3 -m utils.json2jobdef --help
   - Direct file: python3 utils/json2jobdef.py --help
 """
+import io
 import os, sys
 import re
 import random
@@ -17,7 +18,6 @@ import argparse
 import json
 import shutil
 import tarfile
-import tempfile
 from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
@@ -317,9 +317,16 @@ def get_parfile_name(config):
     """Generate consistent parfile name from config (see config_utils.cnf_name)."""
     return cnf_name(config, 'tar')
 
-G4BL_FORBIDDEN_KEYS = ('fcl', 'simjob_setup', 'code', 'input_data',
-                       'resampler_name', 'pbeam', 'generic_tarball',
-                       'input_pattern', 'firstjob', 'inloc')
+def _validate_entry_values(config):
+    """Value-check tail shared by art and g4bl entries: ENTRY_VALUE_KEYS
+    plus outloc, converted to a fail-loud CLI exit."""
+    try:
+        for key in ENTRY_VALUE_KEYS:
+            if key in config:
+                validate_entry_value(key, config[key])
+        validate_outloc(config['outloc'])
+    except ValueError as exc:
+        sys.exit(f"json2jobdef: {exc}")
 
 def _validate_g4bl_entry(config):
     """Boundary validation for runner: g4bl entries. g4bl is decoupled
@@ -329,7 +336,10 @@ def _validate_g4bl_entry(config):
                 'events_per_job', 'njobs'):
         if not config.get(req):
             sys.exit(f"json2jobdef: g4bl entry missing required field: {req}")
-    for key in G4BL_FORBIDDEN_KEYS:
+    forbidden = ('fcl', 'simjob_setup', 'code', 'input_data',
+                 'resampler_name', 'pbeam', 'generic_tarball',
+                 'input_pattern', 'firstjob', 'inloc')
+    for key in forbidden:
         if key in config:
             sys.exit(f"json2jobdef: g4bl entry must not carry '{key}'")
     for key in ('events_per_job', 'njobs'):
@@ -343,13 +353,7 @@ def _validate_g4bl_entry(config):
     if not (g4bl_dir / config['main_input']).is_file():
         sys.exit(f"json2jobdef: main_input not found: "
                  f"{g4bl_dir / config['main_input']}")
-    try:
-        for key in ENTRY_VALUE_KEYS:
-            if key in config:
-                validate_entry_value(key, config[key])
-        validate_outloc(config['outloc'])
-    except ValueError as exc:
-        sys.exit(f"json2jobdef: {exc}")
+    _validate_entry_values(config)
 
 def validate_required_fields(config):
     """Validate required fields, and that supplied entry values are well formed.
@@ -373,13 +377,7 @@ def validate_required_fields(config):
     if bool(config.get('simjob_setup')) == bool(config.get('code')):
         sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
     validate_era_agreement(config)
-    try:
-        for key in ENTRY_VALUE_KEYS:
-            if key in config:
-                validate_entry_value(key, config[key])
-        validate_outloc(config['outloc'])
-    except ValueError as exc:
-        sys.exit(f"json2jobdef: {exc}")
+    _validate_entry_values(config)
 
 def _era_suffix(token):
     """Trailing lowercase era letters of a dsconf head or Musing tag.
@@ -474,12 +472,12 @@ def _build_g4bl_tarball(config):
         'events_per_job': config['events_per_job'],
         'njobs': config['njobs'],
     }
-    with tempfile.TemporaryDirectory(prefix='g4bl_jobdef_') as td:
-        jp = Path(td) / 'jobpars.json'
-        jp.write_text(json.dumps(jobpars, indent=2) + '\n')
-        with tarfile.open(parfile_name, 'w') as tar:
-            tar.add(config['g4bl_dir'], arcname='work')
-            tar.add(jp, arcname='jobpars.json')
+    data = (json.dumps(jobpars, indent=2) + '\n').encode()
+    with tarfile.open(parfile_name, 'w') as tar:
+        tar.add(config['g4bl_dir'], arcname='work')
+        info = tarfile.TarInfo('jobpars.json')
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
     print(f"Created {parfile_name}")
 
 def build_jobdef(config, job_args):

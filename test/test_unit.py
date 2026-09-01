@@ -14009,9 +14009,8 @@ class TestG4blWorker(unittest.TestCase):
             return FakeProc()
 
         with patch.object(runmu2e.subprocess, 'Popen', fake_popen):
-            histo, log, failed = runmu2e._run_g4bl_job(self._jobdesc(), 3)
-        # Owner comes from the cnf tarball name (Mu2eName), never a
-        # literal 'mu2e' — see the 2026-09-01 live-smoke 403 finding.
+            histo, log, failed = runmu2e._run_g4bl_job(
+                self._jobdesc(), 3, 'testuser')
         self.assertEqual(histo, 'nts.testuser.G4blSmoke.TestConf.00000003.root')
         self.assertEqual(log, 'log.testuser.G4blSmoke.TestConf.00000003.log')
         self.assertNotIn('.mu2e.', histo)
@@ -14033,11 +14032,14 @@ class TestG4blWorker(unittest.TestCase):
         with patch.object(runmu2e, '_run_g4bl_job',
                           return_value=('nts.testuser.G4blSmoke.TestConf.00000000.root',
                                         'log.testuser.G4blSmoke.TestConf.00000000.log',
-                                        False)), \
+                                        False)) as run_job, \
              patch.object(runmu2e, '_push_all') as push_all:
             failed = runmu2e._dispatch_g4bl(args, self._jobdesc(), 0)
         self.assertFalse(failed)
         push_all.assert_not_called()
+        # Owner comes from the cnf tarball name (Mu2eName), never a
+        # literal 'mu2e' — see the 2026-09-01 live-smoke 403 finding.
+        self.assertEqual(run_job.call_args[0][2], 'testuser')
 
 
 class TestG4blPushCnfParams(unittest.TestCase):
