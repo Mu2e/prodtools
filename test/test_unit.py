@@ -13940,6 +13940,98 @@ class TestG4blPreflight(unittest.TestCase):
         self.assertEqual(problems, [])
 
 
+class TestG4blWorker(unittest.TestCase):
+    """Worker-side g4bl mode: jobdesc validation, command construction,
+    run mechanics with a stubbed g4bl, dispatch tail routing."""
+
+    def _jobdesc(self, **over):
+        d = {'runner': 'g4bl',
+             'tarball': 'cnf.testuser.G4blSmoke.TestConf.0.tar',
+             'outputs': [{'dataset': 'nts.*.root', 'location': 'scratch'}],
+             'njobs': 2}
+        d.update(over)
+        return d
+
+    def test_validate_jobdesc_g4bl(self):
+        from utils import runmu2e
+        self.assertEqual(runmu2e.validate_jobdesc(self._jobdesc()), 'g4bl')
+
+    def test_validate_jobdesc_g4bl_missing_field(self):
+        from utils import runmu2e
+        bad = self._jobdesc()
+        del bad['njobs']
+        with self.assertRaises(SystemExit):
+            runmu2e.validate_jobdesc(bad)
+
+    def test_g4bl_script_form(self):
+        from utils.runmu2e import _g4bl_script
+        s = _g4bl_script('deck.in', 101, 100, '/abs/nts.x.root')
+        self.assertIn('unset SPACK_ENV PYTHONHOME PYTHONPATH '
+                      'PYTHONNOUSERSITE', s)
+        self.assertIn('eval "$(spack load --sh g4beamline)"', s)
+        self.assertIn('viewer=none', s)
+        self.assertIn('First_Event=101', s)
+        self.assertIn('Num_Events=100', s)
+        self.assertIn('histoFile=/abs/nts.x.root', s)
+        self.assertNotIn('param ', s)
+
+    def _make_cnf(self, tmp):
+        g4bl_dir = os.path.join(tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        from utils.json2jobdef import _build_g4bl_tarball
+        _build_g4bl_tarball({
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 2})
+
+    def test_run_g4bl_job_names_and_first_event(self):
+        from utils import runmu2e
+        tmp = tempfile.mkdtemp(prefix='g4bl_run_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp)
+        captured = {}
+
+        class FakeProc:
+            stdout = io.StringIO("g4bl fake output\n")
+            def wait(self):
+                return 0
+
+        def fake_popen(cmd, **kw):
+            captured['script'] = cmd[2]
+            return FakeProc()
+
+        with patch.object(runmu2e.subprocess, 'Popen', fake_popen):
+            histo, log, failed = runmu2e._run_g4bl_job(self._jobdesc(), 3)
+        self.assertEqual(histo, 'nts.mu2e.G4blSmoke.TestConf.00000003.root')
+        self.assertEqual(log, 'log.mu2e.G4blSmoke.TestConf.00000003.log')
+        self.assertFalse(failed)
+        self.assertIn('First_Event=301', captured['script'])
+        self.assertIn('g4bl fake output', Path(log).read_text())
+
+    def test_dispatch_g4bl_rejects_draining(self):
+        from utils import runmu2e
+        ops = {'jobdesc': self._jobdesc(), 'files': ['a.art']}
+        args = types.SimpleNamespace(dry_run=True)
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(args, ops, 0)
+
+    def test_dispatch_g4bl_dry_run_skips_pushes(self):
+        from utils import runmu2e
+        args = types.SimpleNamespace(dry_run=True)
+        with patch.object(runmu2e, '_run_g4bl_job',
+                          return_value=('nts.mu2e.G4blSmoke.TestConf.00000000.root',
+                                        'log.mu2e.G4blSmoke.TestConf.00000000.log',
+                                        False)), \
+             patch.object(runmu2e, '_push_all') as push_all:
+            failed = runmu2e._dispatch_g4bl(args, self._jobdesc(), 0)
+        self.assertFalse(failed)
+        push_all.assert_not_called()
+
+
 class TestEnqueueDoorClosed(unittest.TestCase):
     """The only campaign-creation path is json2jobdef --prod --enqueue.
 

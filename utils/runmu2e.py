@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 
@@ -111,8 +112,8 @@ def replace_file_extensions(input_str, first_field, last_field):
 def validate_jobdesc(jobdesc):
     """Validate the job description and pick the dispatch mode.
 
-    Returns 'direct_input' or False (normal mode); exits via fail() on
-    invalid input.
+    Returns 'g4bl', 'direct_input' or False (normal mode); exits via
+    fail() on invalid input.
     """
     if not jobdesc:
         fail("Error: No job description found in ops")
@@ -123,6 +124,13 @@ def validate_jobdesc(jobdesc):
     if 'firstjob' in jobdesc and 'njobs' not in jobdesc:
         fail("Error: jobdesc has 'firstjob' but no 'njobs' — "
              "index windows require a fixed job count")
+
+    # g4bl mode: runner marker from the entry. No inloc (no inputs at
+    # all), no fcl — the tarball is self-describing (spec 2026-08-31).
+    if jobdesc.get('runner') == 'g4bl':
+        _require_fields(jobdesc, ['tarball', 'outputs', 'njobs'],
+                        'g4bl mode')
+        return 'g4bl'
 
     # Direct-input mode: tarball present, no njobs.
     if 'tarball' in jobdesc and 'njobs' not in jobdesc:
@@ -684,6 +692,102 @@ def _validation_enabled(jobdesc, args):
     return enabled
 
 
+def _g4bl_script(main_input, first_event, num_events, histo_path):
+    """Bash for one g4bl process — the proven 401e3da recipe: native
+    AL9 spack, selective env unset (muse setup ops leaves SPACK_ENV
+    pointing at ops-019, where g4beamline does not exist), and CLI
+    `key=value` overrides (g4bl 3.08b rejects `param k=v` on the
+    command line; that form is input-file syntax only)."""
+    return (
+        "unset SPACK_ENV PYTHONHOME PYTHONPATH PYTHONNOUSERSITE\n"
+        "source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh"
+        " > /dev/null 2>&1\n"
+        'eval "$(spack load --sh g4beamline)"\n'
+        "cd work\n"
+        f"g4bl {shlex.quote(main_input)} viewer=none "
+        f"First_Event={first_event} Num_Events={num_events} "
+        f"histoFile={shlex.quote(histo_path)}"
+    )
+
+
+def _run_g4bl_job(jobdesc, index):
+    """Extract the g4bl cnf (already fetched into cwd by _direct_main),
+    run one g4bl process, stream its output to both stdout and the
+    SAM-named log. Returns (histo_file, log_file, job_failed).
+    RuntimeError on prep failures — nothing ran, so no log to push."""
+    tarball = Path(jobdesc['tarball']).name
+    if not Path(tarball).is_file():
+        raise RuntimeError(f"g4bl cnf not found in cwd: {tarball}")
+    with tarfile.open(tarball) as t:
+        t.extractall('.')
+    if not Path('work').is_dir():
+        raise RuntimeError(f"tarball missing 'work/' subdir: {tarball}")
+    if not Path('jobpars.json').is_file():
+        raise RuntimeError(f"tarball missing jobpars.json: {tarball}")
+    jp = json.loads(Path('jobpars.json').read_text())
+    main_input = jp['main_input']
+    events_per_job = int(jp['events_per_job'])
+    if not (Path('work') / main_input).is_file():
+        raise RuntimeError(f"main_input not found: work/{main_input}")
+    sequencer = f"{index:08d}"
+    first_event = index * events_per_job + 1
+    histo_file = f"nts.mu2e.{jp['desc']}.{jp['dsconf']}.{sequencer}.root"
+    log_file = f"log.mu2e.{jp['desc']}.{jp['dsconf']}.{sequencer}.log"
+    script = _g4bl_script(main_input, first_event, events_per_job,
+                          os.path.abspath(histo_file))
+    print(f"[g4bl] events_per_job={events_per_job} "
+          f"first_event={first_event} histo={histo_file}")
+    proc = subprocess.Popen(['bash', '-c', script],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    with open(log_file, 'w') as log_f:
+        for line in proc.stdout:
+            log_f.write(line)
+            sys.stdout.write(line)
+            sys.stdout.flush()
+    proc.stdout.close()
+    rc = proc.wait()
+    return histo_file, log_file, rc != 0
+
+
+def _dispatch_g4bl(args, jobdesc, index):
+    """g4bl analog of the jobdef dispatch tail: run, manifest, push.
+    No fcl, no mu2e -c, no SAM parents (g4bl jobs have no SAM inputs).
+    pushOutput comes from the worker bootstrap's `setup OfflineOps`
+    (bin/runjob.sh), so no simjob_setup is passed."""
+    outputs = jobdesc['outputs']
+    histo_file, log_file, job_failed = _run_g4bl_job(jobdesc, index)
+
+    manifest_files = ([histo_file]
+                      if not job_failed and Path(histo_file).exists()
+                      else [])
+    if Path(log_file).exists():
+        _emit_manifest(log_file, manifest_files)
+
+    log_location = log_storage_location(
+        outputs, owner=Mu2eName(jobdesc['tarball']).owner)
+
+    def data_push():
+        if job_failed:
+            return
+        _push_with_retry(push_data, outputs, "", track_parents=False)
+
+    def log_push():
+        _push_with_retry(push_logs, log_file=log_file,
+                         location=log_location)
+
+    if args.dry_run:
+        datasets = ('none (job failed)' if job_failed else histo_file)
+        print(f"[g4bl] DRY RUN — would push data: {datasets}; "
+              f"would push log to '{log_location}'. Skipping pushes.")
+        return job_failed
+
+    if job_failed:
+        print("[g4bl] g4bl failed — skipping data push, still pushing log")
+    _push_all(data_push, log_push)
+    return job_failed
+
+
 def _direct_dispatch(args, ops, index):
     """Dispatch one direct-mode job: run the entry's
     prep — normal index mode via process_jobdef, or a draining batch
@@ -693,6 +797,14 @@ def _direct_dispatch(args, ops, index):
     files = ops.get('files')
 
     mode = validate_jobdesc(jobdesc)
+    if mode == 'g4bl':
+        if files is not None:
+            print("ERROR: ops carries a files list but the jobdesc is "
+                  "g4bl mode — g4bl entries have no input files and "
+                  "take no draining batches.")
+            sys.exit(1)
+        return _dispatch_g4bl(args, jobdesc, index)
+
     if files is not None:
         # Draining batch: PROCESS → position in the batch → input file.
         if mode != 'direct_input':
