@@ -13787,6 +13787,70 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
                         door(value)
 
 
+class TestG4blEntryValidation(unittest.TestCase):
+    """g4bl entry detection and boundary validation (json2jobdef)."""
+
+    def _entry(self, **over):
+        d = {
+            'runner': 'g4bl',
+            'desc': 'G4blSmoke', 'dsconf': 'TestConf', 'owner': 'testuser',
+            'g4bl_dir': self.g4bl_dir, 'main_input': 'deck.in',
+            'events_per_job': 100, 'njobs': 2,
+            'outloc': {'nts.*.root': 'scratch'},
+        }
+        d.update(over)
+        return d
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='g4bl_test_')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.g4bl_dir = os.path.join(self.tmp, 'scripts')
+        os.makedirs(os.path.join(self.g4bl_dir, 'Geometry'))
+        Path(self.g4bl_dir, 'deck.in').write_text('# deck\n')
+        Path(self.g4bl_dir, 'Geometry', 'g.txt').write_text('geom\n')
+
+    def test_determine_job_type_g4bl(self):
+        from utils.json2jobdef import determine_job_type
+        self.assertEqual(determine_job_type(self._entry()), 'g4bl')
+
+    def test_valid_entry_passes(self):
+        from utils.json2jobdef import validate_required_fields
+        validate_required_fields(self._entry())  # must not raise
+
+    def test_missing_required_key_fails(self):
+        from utils.json2jobdef import validate_required_fields
+        for key in ('desc', 'dsconf', 'outloc', 'g4bl_dir',
+                    'main_input', 'events_per_job', 'njobs'):
+            e = self._entry()
+            del e[key]
+            with self.assertRaises(SystemExit, msg=key):
+                validate_required_fields(e)
+
+    def test_forbidden_key_fails(self):
+        from utils.json2jobdef import validate_required_fields
+        for key, val in (('fcl', 'x.fcl'), ('simjob_setup', '/cvmfs/x'),
+                         ('code', 'c.tar'), ('input_data', {'a': 'b'}),
+                         ('resampler_name', 'r'), ('pbeam', '1BB'),
+                         ('generic_tarball', True), ('input_pattern', 'p'),
+                         ('firstjob', 5), ('inloc', 'tape')):
+            with self.assertRaises(SystemExit, msg=key):
+                validate_required_fields(self._entry(**{key: val}))
+
+    def test_nonpositive_counts_fail(self):
+        from utils.json2jobdef import validate_required_fields
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(njobs=0))
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(events_per_job=-5))
+
+    def test_missing_dir_and_deck_fail(self):
+        from utils.json2jobdef import validate_required_fields
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(g4bl_dir='/nonexistent/x'))
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(main_input='absent.in'))
+
+
 class TestEnqueueDoorClosed(unittest.TestCase):
     """The only campaign-creation path is json2jobdef --prod --enqueue.
 

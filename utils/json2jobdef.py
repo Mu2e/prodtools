@@ -314,6 +314,40 @@ def get_parfile_name(config):
     """Generate consistent parfile name from config (see config_utils.cnf_name)."""
     return cnf_name(config, 'tar')
 
+G4BL_FORBIDDEN_KEYS = ('fcl', 'simjob_setup', 'code', 'input_data',
+                       'resampler_name', 'pbeam', 'generic_tarball',
+                       'input_pattern', 'firstjob', 'inloc')
+
+def _validate_g4bl_entry(config):
+    """Boundary validation for runner: g4bl entries. g4bl is decoupled
+    from Offline: no fcl, no Musing, no SAM inputs — presence of any
+    art-pipeline key is a config error, not something to ignore."""
+    for req in ('desc', 'dsconf', 'outloc', 'g4bl_dir', 'main_input',
+                'events_per_job', 'njobs'):
+        if not config.get(req):
+            sys.exit(f"json2jobdef: g4bl entry missing required field: {req}")
+    for key in G4BL_FORBIDDEN_KEYS:
+        if key in config:
+            sys.exit(f"json2jobdef: g4bl entry must not carry '{key}'")
+    for key in ('events_per_job', 'njobs'):
+        v = config[key]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+            sys.exit(f"json2jobdef: g4bl entry '{key}' must be a "
+                     f"positive integer, got {v!r}")
+    g4bl_dir = Path(config['g4bl_dir'])
+    if not g4bl_dir.is_dir():
+        sys.exit(f"json2jobdef: g4bl_dir not found: {g4bl_dir}")
+    if not (g4bl_dir / config['main_input']).is_file():
+        sys.exit(f"json2jobdef: main_input not found: "
+                 f"{g4bl_dir / config['main_input']}")
+    try:
+        for key in ENTRY_VALUE_KEYS:
+            if key in config:
+                validate_entry_value(key, config[key])
+        validate_outloc(config['outloc'])
+    except ValueError as exc:
+        sys.exit(f"json2jobdef: {exc}")
+
 def validate_required_fields(config):
     """Validate required fields, and that supplied entry values are well formed.
 
@@ -326,6 +360,8 @@ def validate_required_fields(config):
     Keys are validated only when present — inloc defaults to 'none'
     (process_single_entry), and the resource keys usually come from CLI flags.
     """
+    if determine_job_type(config) == 'g4bl':
+        return _validate_g4bl_entry(config)
     for req in ('fcl', 'dsconf', 'outloc'):
         if not config.get(req):
             sys.exit(f"Missing required field: {req}")
@@ -401,10 +437,13 @@ def determine_job_type(config):
         'merge'     - File merging jobs with input_data dict
         'mixing'    - Pileup mixing jobs with pbeam
         'stage1'    - Primary simulation jobs (cosmic, beam, etc.)
+        'g4bl'      - G4Beamline jobs (runner: g4bl)
 
     Note: Order matters. chunk and resampler must be checked before
     the generic `merge` fallback that only tests for a dict input_data.
     """
+    if config.get('runner') == 'g4bl':
+        return 'g4bl'
     input_data = config.get('input_data')
     if isinstance(input_data, dict):
         specs = normalize_input_data(input_data)
