@@ -13851,6 +13851,57 @@ class TestG4blEntryValidation(unittest.TestCase):
             validate_required_fields(self._entry(main_input='absent.in'))
 
 
+class TestG4blBuilder(unittest.TestCase):
+    """g4bl cnf tarball contents and jobdesc projection."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='g4bl_build_')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.g4bl_dir = os.path.join(self.tmp, 'scripts')
+        os.makedirs(os.path.join(self.g4bl_dir, 'Geometry'))
+        Path(self.g4bl_dir, 'deck.in').write_text('# deck\n')
+        Path(self.g4bl_dir, 'Geometry', 'g.txt').write_text('geom\n')
+        self.cwd = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, self.cwd)
+        self.config = {
+            'runner': 'g4bl',
+            'desc': 'G4blSmoke', 'dsconf': 'TestConf', 'owner': 'testuser',
+            'g4bl_dir': self.g4bl_dir, 'main_input': 'deck.in',
+            # inloc is FORBIDDEN on the raw entry (Task 1); it appears
+            # here because this config simulates the post-default state
+            # (process_single_entry sets inloc='none' after validation)
+            # and build_jobdesc reads config['inloc'] unconditionally.
+            'events_per_job': 100, 'njobs': 2, 'inloc': 'none',
+            'outloc': {'nts.*.root': 'scratch'},
+        }
+
+    def test_tarball_contents(self):
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        self.assertEqual(name, 'cnf.testuser.G4blSmoke.TestConf.0.tar')
+        with tarfile.open(name) as t:
+            members = set(t.getnames())
+            self.assertIn('jobpars.json', members)
+            self.assertIn('work/deck.in', members)
+            self.assertIn('work/Geometry/g.txt', members)
+            jp = json.load(t.extractfile('jobpars.json'))
+        self.assertEqual(jp, {'runner': 'g4bl', 'desc': 'G4blSmoke',
+                              'dsconf': 'TestConf', 'main_input': 'deck.in',
+                              'events_per_job': 100, 'njobs': 2})
+
+    def test_build_jobdesc_carries_runner(self):
+        from utils.json2jobdef import build_jobdesc
+        entry = build_jobdesc(self.config)
+        self.assertEqual(entry['runner'], 'g4bl')
+        self.assertEqual(entry['njobs'], 2)
+        self.assertEqual(entry['tarball'],
+                         'cnf.testuser.G4blSmoke.TestConf.0.tar')
+        self.assertEqual(entry['outputs'],
+                         [{'dataset': 'nts.*.root', 'location': 'scratch'}])
+
+
 class TestEnqueueDoorClosed(unittest.TestCase):
     """The only campaign-creation path is json2jobdef --prod --enqueue.
 

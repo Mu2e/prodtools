@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import json
+import tarfile
+import tempfile
 from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
@@ -458,6 +460,27 @@ def determine_job_type(config):
     else:
         return 'stage1'
 
+def _build_g4bl_tarball(config):
+    """Pack the self-describing g4bl cnf: work/ (a copy of g4bl_dir)
+    plus jobpars.json. No fcl, no mu2ejobdef — the worker's g4bl
+    branch consumes this shape directly (spec section 2)."""
+    parfile_name = get_parfile_name(config)
+    jobpars = {
+        'runner': 'g4bl',
+        'desc': config['desc'],
+        'dsconf': config['dsconf'],
+        'main_input': config['main_input'],
+        'events_per_job': config['events_per_job'],
+        'njobs': config['njobs'],
+    }
+    with tempfile.TemporaryDirectory(prefix='g4bl_jobdef_') as td:
+        jp = Path(td) / 'jobpars.json'
+        jp.write_text(json.dumps(jobpars, indent=2) + '\n')
+        with tarfile.open(parfile_name, 'w') as tar:
+            tar.add(config['g4bl_dir'], arcname='work')
+            tar.add(jp, arcname='jobpars.json')
+    print(f"Created {parfile_name}")
+
 def build_jobdef(config, job_args):
     # Embed template.fcl to preserve fcl_overrides. Mixing jobs already have
     # it (written by build_pileup_args); non-mixing jobs create it here.
@@ -547,6 +570,9 @@ def build_jobdesc(config):
         "inloc": config['inloc'],
         "outputs": []
     }
+
+    if config.get('runner') == 'g4bl':
+        jobdef_entry['runner'] = 'g4bl'
 
     # Optional per-entry resource requests, read at submit time via
     # jobdesc.resources_of (CLI flag > entry key > built-in default).
@@ -800,36 +826,43 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     config['inloc'] = config.get('inloc', 'none')
     config['njobs'] = config.get('njobs', -1)
 
-    # Generic tarball mode: no input_data, {desc} deferred for runtime resolution
-    if config.get('generic_tarball'):
-        config['_defer_keys'] = {'desc'}
-        config['njobs'] = 0
+    if determine_job_type(config) == 'g4bl':
+        if extend:
+            sys.exit("json2jobdef: --extend is not supported for g4bl "
+                     "entries (no SAM inputs to exclude)")
+        _build_g4bl_tarball(config)
+        result = None
+    else:
+        # Generic tarball mode: no input_data, {desc} deferred for runtime resolution
+        if config.get('generic_tarball'):
+            config['_defer_keys'] = {'desc'}
+            config['njobs'] = 0
 
-    # Auto-generate desc from input_data (3rd field of the dataset name,
-    # e.g. "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")
-    if not config.get('desc'):
-        config = prepare_fields_for_job(config, job_type='standard')
+        # Auto-generate desc from input_data (3rd field of the dataset name,
+        # e.g. "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")
+        if not config.get('desc'):
+            config = prepare_fields_for_job(config, job_type='standard')
 
-    exclude_files = None
-    if extend:
-        exclude_files = _compute_extend_exclusions(config)
+        exclude_files = None
+        if extend:
+            exclude_files = _compute_extend_exclusions(config)
 
-    if config.get('input_data'):
-        _create_inputs_file(config, exclude_files=exclude_files)
+        if config.get('input_data'):
+            _create_inputs_file(config, exclude_files=exclude_files)
 
-    # Check for empty inputs (count once; one extend summary print)
-    remaining = sum(1 for _ in open('inputs.txt')) if Path('inputs.txt').exists() else 0
-    if extend and exclude_files is not None:
-        print(f"  Extend summary: {len(exclude_files)} excluded, {remaining} remaining input files")
-    if Path('inputs.txt').exists() and remaining == 0:
-        if ignore_empty:
-            print(f"  Skipping {config.get('desc', 'unknown')}: no input files available")
-            return None
-        elif extend:
-            sys.exit("--extend: no new input files to process")
+        # Check for empty inputs (count once; one extend summary print)
+        remaining = sum(1 for _ in open('inputs.txt')) if Path('inputs.txt').exists() else 0
+        if extend and exclude_files is not None:
+            print(f"  Extend summary: {len(exclude_files)} excluded, {remaining} remaining input files")
+        if Path('inputs.txt').exists() and remaining == 0:
+            if ignore_empty:
+                print(f"  Skipping {config.get('desc', 'unknown')}: no input files available")
+                return None
+            elif extend:
+                sys.exit("--extend: no new input files to process")
 
-    job_args = _build_job_args(config)
-    result = build_jobdef(config, job_args)
+        job_args = _build_job_args(config)
+        result = build_jobdef(config, job_args)
 
     parfile_name = get_parfile_name(config)
 
