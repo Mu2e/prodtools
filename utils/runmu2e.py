@@ -712,53 +712,6 @@ def _g4bl_script(main_input, first_event, num_events, histo_path):
     )
 
 
-def _run_g4bl_job(jobdesc, index):
-    """g4bl runner: extract the cnf (already fetched into cwd by
-    _direct_main), run one g4bl process through prod_utils.run — its
-    output reaches $JSB_TMP/JOBSUB_LOG_FILE via the worker's stdout like
-    every other job — and return the JobRun for _finish_job.
-    RuntimeError on prep failures: nothing ran, so there is no log to
-    push and the recovery pass re-fires the index."""
-    tarball = Path(jobdesc['tarball']).name
-    if not Path(tarball).is_file():
-        raise RuntimeError(f"g4bl cnf not found in cwd: {tarball}")
-    with tarfile.open(tarball) as t:
-        t.extractall('.')
-    if not Path('work').is_dir():
-        raise RuntimeError(f"tarball missing 'work/' subdir: {tarball}")
-    if not Path('jobpars.json').is_file():
-        raise RuntimeError(f"tarball missing jobpars.json: {tarball}")
-    jp = json.loads(Path('jobpars.json').read_text())
-    main_input = jp['main_input']
-    events_per_job = int(jp['events_per_job'])
-    if not (Path('work') / main_input).is_file():
-        raise RuntimeError(f"main_input not found: work/{main_input}")
-
-    # Owner comes from the cnf tarball name, never a literal 'mu2e' —
-    # the owner field routes the dCache/pushOutput namespace (production
-    # phy-nts/phy-etc vs. a user's own scope); a user bearer token
-    # cannot write production paths (2026-09-01 live-smoke 403).
-    owner = Mu2eName(jobdesc['tarball']).owner
-    sequencer = f"{index:08d}"
-    first_event = index * events_per_job + 1
-    name_fields = dict(owner=owner, description=jp['desc'],
-                       dsconf=jp['dsconf'], sequencer=sequencer)
-    histo_file = str(Mu2eName.build(tier='nts', extension='root', **name_fields))
-    log_file = str(Mu2eName.build(tier='log', extension='log', **name_fields))
-    script = _g4bl_script(main_input, first_event, events_per_job,
-                          os.path.abspath(histo_file))
-    print(f"[g4bl] events_per_job={events_per_job} "
-          f"first_event={first_event} histo={histo_file}")
-    try:
-        run(['bash', '-c', script], shell=False)
-        job_failed = False
-    except subprocess.CalledProcessError as e:
-        print(f"[g4bl] g4bl failed with exit code {e.returncode}")
-        job_failed = True
-    return JobRun(outputs=jobdesc['outputs'], log_file=log_file,
-                  job_failed=job_failed, owner=owner)
-
-
 class JobRun(NamedTuple):
     """What a runner hands _finish_job: the facts the shared push tail
     needs, and nothing about how the job was produced.
@@ -833,23 +786,58 @@ def _finish_job(args, job):
     return job.job_failed
 
 
-def _direct_dispatch(args, ops, index):
-    """Dispatch one direct-mode job: run the entry's
-    prep — normal index mode via process_jobdef, or a draining batch
-    (ops ships a `files` list) via process_direct_input — then the
-    shared mu2e -c → manifest → push (with retries) tail."""
-    jobdesc = ops['jobdesc']
-    files = ops.get('files')
+def _run_g4bl_job(jobdesc, index):
+    """g4bl runner: extract the cnf (already fetched into cwd by
+    _direct_main), run one g4bl process through prod_utils.run — its
+    output reaches $JSB_TMP/JOBSUB_LOG_FILE via the worker's stdout like
+    every other job — and return the JobRun for _finish_job.
+    RuntimeError on prep failures: nothing ran, so there is no log to
+    push and the recovery pass re-fires the index."""
+    tarball = Path(jobdesc['tarball']).name
+    if not Path(tarball).is_file():
+        raise RuntimeError(f"g4bl cnf not found in cwd: {tarball}")
+    with tarfile.open(tarball) as t:
+        t.extractall('.')
+    if not Path('work').is_dir():
+        raise RuntimeError(f"tarball missing 'work/' subdir: {tarball}")
+    if not Path('jobpars.json').is_file():
+        raise RuntimeError(f"tarball missing jobpars.json: {tarball}")
+    jp = json.loads(Path('jobpars.json').read_text())
+    main_input = jp['main_input']
+    events_per_job = int(jp['events_per_job'])
+    if not (Path('work') / main_input).is_file():
+        raise RuntimeError(f"main_input not found: work/{main_input}")
 
-    mode = validate_jobdesc(jobdesc)
-    if mode == 'g4bl':
-        if files is not None:
-            print("ERROR: ops carries a files list but the jobdesc is "
-                  "g4bl mode — g4bl entries have no input files and "
-                  "take no draining batches.")
-            sys.exit(1)
-        return _finish_job(args, _run_g4bl_job(jobdesc, index))
+    # Owner comes from the cnf tarball name, never a literal 'mu2e' —
+    # the owner field routes the dCache/pushOutput namespace (production
+    # phy-nts/phy-etc vs. a user's own scope); a user bearer token
+    # cannot write production paths (2026-09-01 live-smoke 403).
+    owner = Mu2eName(jobdesc['tarball']).owner
+    sequencer = f"{index:08d}"
+    first_event = index * events_per_job + 1
+    name_fields = dict(owner=owner, description=jp['desc'],
+                       dsconf=jp['dsconf'], sequencer=sequencer)
+    histo_file = str(Mu2eName.build(tier='nts', extension='root', **name_fields))
+    log_file = str(Mu2eName.build(tier='log', extension='log', **name_fields))
+    script = _g4bl_script(main_input, first_event, events_per_job,
+                          os.path.abspath(histo_file))
+    print(f"[g4bl] events_per_job={events_per_job} "
+          f"first_event={first_event} histo={histo_file}")
+    try:
+        run(['bash', '-c', script], shell=False)
+        job_failed = False
+    except subprocess.CalledProcessError as e:
+        print(f"[g4bl] g4bl failed with exit code {e.returncode}")
+        job_failed = True
+    return JobRun(outputs=jobdesc['outputs'], log_file=log_file,
+                  job_failed=job_failed, owner=owner)
 
+
+def _run_mu2e_job(args, jobdesc, files, mode, index):
+    """mu2e runner: the entry's prep — a draining batch (ops ships a
+    `files` list) via process_direct_input, or normal index mode via
+    process_jobdef — then `mu2e -c`, then the optional output read-back.
+    Returns the JobRun for _finish_job."""
     if files is not None:
         # Draining batch: PROCESS → position in the batch → input file.
         if mode != 'direct_input':
@@ -886,10 +874,6 @@ def _direct_dispatch(args, ops, index):
         fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(
             jobdesc, fname, args)
 
-    # `dir:<path>` inloc means inputs come from a locally-mounted FS and
-    # have no SAM parents.
-    track_parents = not is_dir_inloc(inloc)
-
     job_failed = _execute_mu2e(fcl, simjob_setup, args)
 
     if not job_failed and _validation_enabled(jobdesc, args):
@@ -898,14 +882,36 @@ def _direct_dispatch(args, ops, index):
             produced.extend(str(p) for p in sorted(Path('.').glob(o['dataset'])))
         job_failed = _validate_outputs(produced, simjob_setup)
 
-    return _finish_job(args, JobRun(
+    return JobRun(
         outputs=outputs,
         log_file=replace_file_extensions(fcl, "log", "log"),
         job_failed=job_failed,
         owner=Mu2eName(Path(fcl).name).owner,
         infiles=infiles,
         simjob_setup=simjob_setup,
-        track_parents=track_parents))
+        # `dir:<path>` inloc means inputs come from a locally-mounted FS
+        # and have no SAM parents.
+        track_parents=not is_dir_inloc(inloc))
+
+
+def _direct_dispatch(args, ops, index):
+    """Dispatch one direct-mode job: pick the runner for the jobdesc's
+    mode (g4bl, or mu2e in its draining / normal shapes), run it, and
+    hand its JobRun to the shared push tail."""
+    jobdesc = ops['jobdesc']
+    files = ops.get('files')
+
+    mode = validate_jobdesc(jobdesc)
+    if mode == 'g4bl':
+        if files is not None:
+            print("ERROR: ops carries a files list but the jobdesc is "
+                  "g4bl mode — g4bl entries have no input files and "
+                  "take no draining batches.")
+            sys.exit(1)
+        job = _run_g4bl_job(jobdesc, index)
+    else:
+        job = _run_mu2e_job(args, jobdesc, files, mode, index)
+    return _finish_job(args, job)
 
 
 def _direct_main(args):

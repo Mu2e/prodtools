@@ -12778,6 +12778,25 @@ class TestDirectDispatchFiles(unittest.TestCase):
             self.assertIn('mu2egrid manifest', text)
             self.assertIn(out_name, text)
 
+    def test_normal_mode_routes_through_run_mu2e_job(self):
+        """_direct_dispatch only picks the runner; the mu2e runner's
+        JobRun goes straight to _finish_job."""
+        from utils import runmu2e
+        from utils.runmu2e import JobRun
+        normal = dict(self.DRAIN, njobs=10)
+        normal.pop('input_pattern')
+        job = JobRun(outputs=normal['outputs'],
+                     log_file='log.mu2e.reco.MDC2025au_best_v1_5.001202_00000000.log',
+                     job_failed=False, owner='mu2e', infiles='a.art',
+                     simjob_setup='/cvmfs/setup.sh', track_parents=True)
+        args = self._args()
+        with patch.object(runmu2e, '_run_mu2e_job', return_value=job) as rm, \
+             patch.object(runmu2e, '_finish_job', return_value=False) as fj:
+            failed = runmu2e._direct_dispatch(args, {'jobs': [0], 'jobdesc': normal}, 0)
+        self.assertFalse(failed)
+        rm.assert_called_once_with(args, normal, None, False, 0)
+        fj.assert_called_once_with(args, job)
+
 
 # ---------------------------------------------------------------------------
 # 47. Draining campaigns: pending predicate + batch gates
