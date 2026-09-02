@@ -1346,3 +1346,33 @@ missing-manifest caveat.
 Pages written: incident-mu2e-log-manifest-never-landed
 Pages updated: g4bl-runner, index.md
 Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/task-5-brief.md
+
+## [2026-09-01] update | Manifest incident had a second, deeper layer: pushOutput's writeLog discards the file append
+Final-review pass on the runmu2e consolidation branch found that
+92dc555 (materialize the log before the manifest) was NOT sufficient:
+OfflineOps pushOutput's `writeLog` (Util/pushOutput.py:801)
+`os.remove()`s every `log`-tier file it pushes and rewrites it from
+`$JSB_TMP/JOBSUB_LOG_FILE` before declaring it, for every
+disk/scratch/tape destination — discarding whatever `_emit_manifest`
+had appended to the file. Only the `outstage` path (ifdh, no
+pushOutput) ever shipped runmu2e's own file untouched. Fixed in commit
+`987f987` ("fix(runmu2e): print the SAM manifest to stdout, not just
+the log file"): `_emit_manifest` now builds the manifest block once,
+appends it to the file (still serving `outstage`), and prints the
+identical block to stdout — which IS `$JSB_TMP/JOBSUB_LOG_FILE` on a
+worker, so it survives `writeLog`'s rewrite. Also wrapped the
+materialize/manifest step in `_finish_job` in `try/except OSError` so
+a failure there (e.g. ENOSPC) can never skip `_push_all` (M1), and
+fixed two stale comments: `utils/jobsub_argv.py:147` named
+`runmu2e._direct_dispatch` as the `process_jobdef` consumer (it's
+`_run_mu2e_job`), and `_finish_job`'s manifest comment cited
+`mu2eClusterCheckAndMove` as a consumer, which has no implementation
+in this repo. Renamed incident-mu2e-log-manifest-never-landed →
+2026-09-01-mu2e-log-manifest-never-landed (date-prefix convention) and
+rewrote its Root cause as the two stacked layers above; updated
+`docs/superpowers/specs/2026-09-01-runmu2e-runner-consolidation-design.md`
+(§1, §2.3, §3.1, §6) and `docs/EXAMPLES_schema.md` §7 to describe the
+print-based mechanism.
+Pages written: 2026-09-01-mu2e-log-manifest-never-landed (renamed from incident-mu2e-log-manifest-never-landed)
+Pages updated: g4bl-runner, index.md
+Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/final-fix-report.md

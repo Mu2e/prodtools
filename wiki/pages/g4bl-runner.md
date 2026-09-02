@@ -93,8 +93,11 @@ for owner `mu2e`, `usr-*/<owner>` otherwise). Found live in the
 amended to match — see "Local end-to-end smoke").
 
 The shared tail `_finish_job` then materializes the SAM log from the
-jobsub log (`_materialize_log`), appends the SHA256 manifest, and
-pushes data (success only) and the log (always) via
+jobsub log (`_materialize_log`), appends the SHA256 manifest to that
+file AND prints the identical block to stdout — stdout is what
+survives OfflineOps pushOutput's `writeLog` rewrite into a
+pushOutput-declared SAM log, where the file append alone does not —
+and pushes data (success only) and the log (always) via
 `push_data(outputs, "", track_parents=False)` and
 `push_logs(log_file, location=log_storage_location(outputs,
 owner=owner), track_parents=False)` — the same shared tail every
@@ -102,7 +105,7 @@ other runner mode uses; `--dry_run` and the entire
 ledger/slicing/recovery/MCP surface (`push_cnf`, `run_submissions`,
 `campaign_status`) are unmodified. Since v3.3.2 the g4bl SAM log is
 the full worker log, identical in kind to mu2e logs — see
-[[incident-mu2e-log-manifest-never-landed]] for the pre-fix history.
+[[2026-09-01-mu2e-log-manifest-never-landed]] for the pre-fix history.
 
 Canonical invocation:
 
@@ -302,7 +305,7 @@ always builds a tarball.
   `utils/json2jobdef.py:_build_g4bl_tarball` (submit-side, current)
 - `utils/runmu2e.py:_run_g4bl_job`, `utils/runmu2e.py:_finish_job`,
   `utils/runmu2e.py:_g4bl_script` (worker-side, current)
-- [[incident-mu2e-log-manifest-never-landed]] (why the SAM log is now
+- [[2026-09-01-mu2e-log-manifest-never-landed]] (why the SAM log is now
   the full worker stdout, and how that differs from mu2e logs before
   v3.3.2)
 - Memory `reference_local_worker_harness.md` (how the 2026-09-01

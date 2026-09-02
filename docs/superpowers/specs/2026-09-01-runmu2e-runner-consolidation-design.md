@@ -24,7 +24,25 @@ point — `push_logs` creates it *afterwards* by copying
 `mu2egrid manifest` block (verified 2026-09-01 on
 `log.mu2e.CeEndpoint.Run1Ban-001.617-1781534797.log`: 0 matches, and
 its line 891 shows the copy happening). Only g4bl logs have a manifest,
-because `_run_g4bl_job` streams its own log file first.
+because `_run_g4bl_job` streams its own log file first. (That evidence
+log is itself POMS-era — its tail runs `runmu2e --jobdesc ...` — but
+the direct backend inherited the identical `_direct_dispatch` /
+`_emit_manifest` code, so the missing-manifest mechanism was the same
+under both.)
+
+A second, deeper defect surfaced only after this spec's fix (92dc555)
+landed: even a log that DOES exist when `_emit_manifest` appends to it
+does not keep what was appended. OfflineOps `pushOutput`'s `writeLog`
+(`/cvmfs/.../OfflineOps/v00_04_02/Util/pushOutput.py:801`) `os.remove()`s
+every `log`-tier file it pushes and rewrites it from
+`$JSB_TMP/JOBSUB_LOG_FILE` plus a `JOBSUB_ERR` banner before declaring
+it — for every `disk`/`scratch`/`tape` destination. So the file
+`_emit_manifest` appends to is discarded by pushOutput itself; only the
+`outstage` path (`_copy_to_outstage`, ifdh, no pushOutput) ever shipped
+runmu2e's own file. This spec's "mu2e SAM logs gain the manifest" claim
+(section 3.1) was therefore still false after 92dc555 — closed by a
+follow-up fix that also prints the manifest to stdout, which IS
+`$JSB_TMP/JOBSUB_LOG_FILE` on a worker and so survives `writeLog`.
 
 Also asymmetric: g4bl runs its process through a hand-rolled
 `subprocess.Popen` tee loop, while mu2e goes through `prod_utils.run`;
@@ -82,7 +100,11 @@ class JobRun(NamedTuple):
    that today lives inside `push_logs`, moved **before** the manifest.
 2. Manifest: `manifest_files = []` if `run.job_failed`, else every
    file matching any `o['dataset']` glob in `run.outputs`;
-   `_emit_manifest(run.log_file, manifest_files)` when the log exists.
+   `_emit_manifest(run.log_file, manifest_files)` when the log exists —
+   it appends the SHA256 block to the file (serving the `outstage`
+   path) AND prints the identical block to stdout, which is what
+   actually survives `writeLog` into a pushOutput-declared SAM log
+   (section 1).
 3. `log_location = log_storage_location(run.outputs, owner=run.owner)`.
 4. `data_push` (skipped when failed): `_push_with_retry(push_data,
    run.outputs, run.infiles, simjob_setup=run.simjob_setup,
@@ -110,10 +132,15 @@ for "this is an art job". `push_logs` has no callers outside
 
 ## 3. Behavior changes (deliberate)
 
-1. **mu2e production logs gain the SHA256 manifest** they were always
-   meant to carry (section 1). Regression test: `_finish_job` on a
-   `JobRun` with `$JSB_TMP/JOBSUB_LOG_FILE` present must produce a log
-   containing both the jobsub content and `mu2egrid manifest`.
+1. **mu2e SAM logs gain the SHA256 manifest** they were always meant
+   to carry — not because the file `_emit_manifest` writes reaches SAM
+   (pushOutput's `writeLog` rewrites that file away for every
+   disk/scratch/tape destination, section 1), but because the same
+   block is printed into the worker log, which IS
+   `$JSB_TMP/JOBSUB_LOG_FILE`, which `writeLog` copies into the SAM
+   log verbatim. Regression test: `_finish_job` on a `JobRun` with
+   `$JSB_TMP/JOBSUB_LOG_FILE` present must produce both a log file and
+   captured stdout containing `mu2egrid manifest`.
 2. **g4bl SAM logs become the full worker log** (runmu2e chatter +
    g4bl output + pushOutput debug), identical in kind to mu2e logs
    today, instead of g4bl's bare process output. Consistency, not loss.
@@ -152,4 +179,11 @@ for "this is an art job". `push_logs` has no callers outside
 Land on `code-tarball` after the v3.3.1 grid smoke passes; tag
 v3.3.2; publish with `install_prodtools.sh --no-current`, pin one
 campaign, promote to `current` after a production log is seen to
-carry the manifest.
+carry the manifest — this gate stays valid under the new mechanism
+(the block now reaches a SAM log via the stdout print, not the file
+append; section 1). Verify with `grep -c 'mu2egrid manifest' <log>`
+on a freshly declared log: expected **≥ 1**. Do not promise **2**
+(header + selfcheck) for a SAM-declared log the way the pre-fix
+incident page did — the selfcheck line's guaranteed presence is a
+property of the local file copy (which serves `outstage`), not of
+whatever `writeLog` ultimately assembles into the SAM copy.

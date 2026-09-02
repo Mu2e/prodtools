@@ -168,8 +168,13 @@ When regenerating, read in this order:
    reason.
 
    Say that every runner (mu2e and g4bl) ends in the same push tail: the
-   SAM-named log is created from `$JSB_TMP/JOBSUB_LOG_FILE`, the SHA256
-   `mu2egrid manifest` block is appended to it, then data is pushed on
+   SAM-named log is created from `$JSB_TMP/JOBSUB_LOG_FILE`, then the
+   SHA256 `mu2egrid manifest` block is printed into the worker log
+   (which OfflineOps pushOutput's `writeLog` copies into the SAM log,
+   since `writeLog` rebuilds every pushOutput-bound log from that same
+   jobsub log and would otherwise discard a plain file append) and also
+   appended to the file directly, which is what carries it on the
+   `outstage` path (ifdh copy, no pushOutput). Then data is pushed on
    success and the log always. Note that direct-backend art logs before
    prodtools v3.3.2 carry NO manifest (the log was created after the
    manifest step — fixed 2026-09), and that a g4bl SAM log is the full
