@@ -795,7 +795,14 @@ streaming), `--no-validate` (skip the output read-back below).
   re-runs the index elsewhere. Cost is ~15 s per GB, CPU-bound. The JSON
   entry key `"validate_outputs": false` opts one entry out and wins over
   the `--no-validate` flag; anything but a JSON boolean is refused.
-- The log is pushed always, including when the data push itself raises.
+- Every runner (mu2e and g4bl) ends in the same push tail: the SAM-named
+  log is created from `$JSB_TMP/JOBSUB_LOG_FILE`, the SHA256 `mu2egrid
+  manifest` block is appended to it, then data is pushed on success and
+  the log always — including when the data push itself raises.
+  Direct-backend art logs from releases before prodtools v3.3.2 carry
+  NO manifest (the log was created after the manifest step; fixed
+  2026-09). A g4bl SAM log is the full worker log, not just g4bl's own
+  output.
 - Outputs are partitioned by their entry's `outloc` location. Anything
   bound for `outstage` (section 3) is copied to
   `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` with `ifdh` and never reaches
