@@ -14355,25 +14355,46 @@ class TestG4blWorker(unittest.TestCase):
         self._make_cnf(tmp)
         captured = {}
 
-        class FakeProc:
-            stdout = io.StringIO("g4bl fake output\n")
-            def wait(self):
-                return 0
-
-        def fake_popen(cmd, **kw):
+        def fake_run(cmd, shell=False, **kw):
             captured['script'] = cmd[2]
-            return FakeProc()
+            return 0
 
-        with patch.object(runmu2e.subprocess, 'Popen', fake_popen):
-            histo, log, failed = runmu2e._run_g4bl_job(
-                self._jobdesc(), 3, 'testuser')
-        self.assertEqual(histo, 'nts.testuser.G4blSmoke.TestConf.00000003.root')
-        self.assertEqual(log, 'log.testuser.G4blSmoke.TestConf.00000003.log')
-        self.assertNotIn('.mu2e.', histo)
-        self.assertNotIn('.mu2e.', log)
-        self.assertFalse(failed)
+        with patch.object(runmu2e, 'run', fake_run):
+            job = runmu2e._run_g4bl_job(self._jobdesc(), 3)
+        # Owner comes from the cnf tarball name (Mu2eName), never a
+        # literal 'mu2e' — see the 2026-09-01 live-smoke 403 finding.
+        self.assertEqual(job.owner, 'testuser')
+        self.assertEqual(job.log_file, 'log.testuser.G4blSmoke.TestConf.00000003.log')
+        self.assertIn('histoFile=', captured['script'])
+        self.assertIn('nts.testuser.G4blSmoke.TestConf.00000003.root',
+                      captured['script'])
+        self.assertNotIn('.mu2e.', captured['script'])
+        self.assertNotIn('.mu2e.', job.log_file)
         self.assertIn('First_Event=301', captured['script'])
-        self.assertIn('g4bl fake output', Path(log).read_text())
+        self.assertFalse(job.job_failed)
+        self.assertEqual(job.outputs, self._jobdesc()['outputs'])
+        self.assertEqual(job.infiles, '')
+        self.assertIsNone(job.simjob_setup)
+        self.assertFalse(job.track_parents)
+
+    def test_run_g4bl_job_failure_is_reported_not_raised(self):
+        """A non-zero g4bl exit marks the JobRun failed so the tail still
+        pushes the log — it must not propagate as an exception."""
+        from utils import runmu2e
+        tmp = tempfile.mkdtemp(prefix='g4bl_fail_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp)
+
+        def failing_run(cmd, shell=False, **kw):
+            raise subprocess.CalledProcessError(3, cmd, output='g4bl: boom')
+
+        with patch.object(runmu2e, 'run', failing_run):
+            job = runmu2e._run_g4bl_job(self._jobdesc(), 0)
+        self.assertTrue(job.job_failed)
+        self.assertEqual(job.log_file, 'log.testuser.G4blSmoke.TestConf.00000000.log')
 
     def test_dispatch_g4bl_rejects_draining(self):
         from utils import runmu2e
@@ -14384,18 +14405,18 @@ class TestG4blWorker(unittest.TestCase):
 
     def test_dispatch_g4bl_dry_run_skips_pushes(self):
         from utils import runmu2e
+        from utils.runmu2e import JobRun
         args = types.SimpleNamespace(dry_run=True)
-        with patch.object(runmu2e, '_run_g4bl_job',
-                          return_value=('nts.testuser.G4blSmoke.TestConf.00000000.root',
-                                        'log.testuser.G4blSmoke.TestConf.00000000.log',
-                                        False)) as run_job, \
+        jobdesc = self._jobdesc()
+        job = JobRun(outputs=jobdesc['outputs'],
+                     log_file='log.testuser.G4blSmoke.TestConf.00000000.log',
+                     job_failed=False, owner='testuser')
+        with patch.object(runmu2e, '_run_g4bl_job', return_value=job) as rj, \
              patch.object(runmu2e, '_push_all') as push_all:
-            failed = runmu2e._dispatch_g4bl(args, self._jobdesc(), 0)
+            failed = runmu2e._direct_dispatch(args, {'jobdesc': jobdesc}, 0)
         self.assertFalse(failed)
         push_all.assert_not_called()
-        # Owner comes from the cnf tarball name (Mu2eName), never a
-        # literal 'mu2e' — see the 2026-09-01 live-smoke 403 finding.
-        self.assertEqual(run_job.call_args[0][2], 'testuser')
+        rj.assert_called_once_with(jobdesc, 0)
 
 
 class TestG4blPushCnfParams(unittest.TestCase):

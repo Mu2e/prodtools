@@ -712,12 +712,13 @@ def _g4bl_script(main_input, first_event, num_events, histo_path):
     )
 
 
-def _run_g4bl_job(jobdesc, index, owner):
-    """Extract the g4bl cnf (already fetched into cwd by _direct_main),
-    run one g4bl process, stream its output to both stdout and the
-    SAM-named log. Returns (histo_file, log_file, job_failed).
-    RuntimeError on prep failures — nothing ran, so no log to push.
-    `owner` is parsed from the cnf tarball name by _dispatch_g4bl."""
+def _run_g4bl_job(jobdesc, index):
+    """g4bl runner: extract the cnf (already fetched into cwd by
+    _direct_main), run one g4bl process through prod_utils.run — its
+    output reaches $JSB_TMP/JOBSUB_LOG_FILE via the worker's stdout like
+    every other job — and return the JobRun for _finish_job.
+    RuntimeError on prep failures: nothing ran, so there is no log to
+    push and the recovery pass re-fires the index."""
     tarball = Path(jobdesc['tarball']).name
     if not Path(tarball).is_file():
         raise RuntimeError(f"g4bl cnf not found in cwd: {tarball}")
@@ -732,6 +733,12 @@ def _run_g4bl_job(jobdesc, index, owner):
     events_per_job = int(jp['events_per_job'])
     if not (Path('work') / main_input).is_file():
         raise RuntimeError(f"main_input not found: work/{main_input}")
+
+    # Owner comes from the cnf tarball name, never a literal 'mu2e' —
+    # the owner field routes the dCache/pushOutput namespace (production
+    # phy-nts/phy-etc vs. a user's own scope); a user bearer token
+    # cannot write production paths (2026-09-01 live-smoke 403).
+    owner = Mu2eName(jobdesc['tarball']).owner
     sequencer = f"{index:08d}"
     first_event = index * events_per_job + 1
     name_fields = dict(owner=owner, description=jp['desc'],
@@ -742,17 +749,14 @@ def _run_g4bl_job(jobdesc, index, owner):
                           os.path.abspath(histo_file))
     print(f"[g4bl] events_per_job={events_per_job} "
           f"first_event={first_event} histo={histo_file}")
-    proc = subprocess.Popen(['bash', '-c', script],
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
-    with open(log_file, 'w') as log_f:
-        for line in proc.stdout:
-            log_f.write(line)
-            sys.stdout.write(line)
-            sys.stdout.flush()
-    proc.stdout.close()
-    rc = proc.wait()
-    return histo_file, log_file, rc != 0
+    try:
+        run(['bash', '-c', script], shell=False)
+        job_failed = False
+    except subprocess.CalledProcessError as e:
+        print(f"[g4bl] g4bl failed with exit code {e.returncode}")
+        job_failed = True
+    return JobRun(outputs=jobdesc['outputs'], log_file=log_file,
+                  job_failed=job_failed, owner=owner)
 
 
 class JobRun(NamedTuple):
@@ -829,23 +833,6 @@ def _finish_job(args, job):
     return job.job_failed
 
 
-def _dispatch_g4bl(args, jobdesc, index):
-    """g4bl analog of the jobdef dispatch tail: run, manifest, push.
-    No fcl, no mu2e -c, no SAM parents (g4bl jobs have no SAM inputs).
-    pushOutput comes from the worker bootstrap's `setup OfflineOps`
-    (bin/runjob.sh), so no simjob_setup is passed."""
-    outputs = jobdesc['outputs']
-    # Owner comes from the cnf tarball name, never a literal 'mu2e' —
-    # the owner field routes the dCache/pushOutput namespace (production
-    # phy-nts/phy-etc vs. a user's own scope); a user bearer token
-    # cannot write production paths (2026-09-01 live-smoke 403).
-    owner = Mu2eName(jobdesc['tarball']).owner
-    histo_file, log_file, job_failed = _run_g4bl_job(jobdesc, index, owner)
-
-    return _finish_job(args, JobRun(outputs=outputs, log_file=log_file,
-                                    job_failed=job_failed, owner=owner))
-
-
 def _direct_dispatch(args, ops, index):
     """Dispatch one direct-mode job: run the entry's
     prep — normal index mode via process_jobdef, or a draining batch
@@ -861,7 +848,7 @@ def _direct_dispatch(args, ops, index):
                   "g4bl mode — g4bl entries have no input files and "
                   "take no draining batches.")
             sys.exit(1)
-        return _dispatch_g4bl(args, jobdesc, index)
+        return _finish_job(args, _run_g4bl_job(jobdesc, index))
 
     if files is not None:
         # Draining batch: PROCESS → position in the batch → input file.
