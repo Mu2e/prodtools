@@ -68,11 +68,18 @@ live in the smoke below).
 The worker (`utils/runmu2e.py`, direct-dispatch mode) gained a third
 `validate_jobdesc` mode, `'g4bl'`: required `tarball`, `outputs`,
 `njobs`; a g4bl jobdesc paired with a draining `files` list is refused
-(g4bl jobs take no SAM input files). `_dispatch_g4bl` extracts the
-tarball, computes `First_Event = index * events_per_job + 1`, and runs
-g4bl via the `401e3da` recipe (unchanged — see "Execution recipe"
-below; only the caller moved, from the retired
-`process_g4bl_jobdef` to this direct-dispatch branch).
+(g4bl jobs take no SAM input files). `_direct_dispatch` recognises
+`runner: g4bl` and calls `_run_g4bl_job(jobdesc, index)`, which
+extracts the cnf, reads `jobpars.json`, derives the owner from the cnf
+tarball name, computes `First_Event = index * events_per_job + 1`,
+builds the output/log names via `Mu2eName.build` (see below), and
+runs g4bl through `prod_utils.run` via the `401e3da` recipe
+(unchanged — see "Execution recipe" below; only the caller moved,
+from the retired `process_g4bl_jobdef` to this runner). g4bl's output
+reaches the worker's stdout like every other runner (i.e.
+`$JSB_TMP/JOBSUB_LOG_FILE`). `_run_g4bl_job` returns a `JobRun`
+(`outputs`, `log_file`, `job_failed`, `owner`; `infiles=""`,
+`simjob_setup=None`, `track_parents=False`).
 
 Output/log names: `nts.<owner>.<desc>.<dsconf>.<%08d seq>.root` /
 `log.<owner>.<desc>.<dsconf>.<%08d seq>.log`, where `<owner>` is
@@ -85,12 +92,17 @@ for owner `mu2e`, `usr-*/<owner>` otherwise). Found live in the
 2026-08-31/09-01 smoke below; fixed in commit `dd0d437` (spec and plan
 amended to match — see "Local end-to-end smoke").
 
-`push_data(outputs, infiles="", track_parents=False)` (no SAM
-parents — g4bl has no SAM inputs, so `parents_list.txt` is never
-written) and `push_logs(log_file=..., location=log_storage_location(
-outputs, owner))` reuse the same helpers as every other runner mode;
-`--dry_run` and the entire ledger/slicing/recovery/MCP surface
-(`push_cnf`, `run_submissions`, `campaign_status`) are unmodified.
+The shared tail `_finish_job` then materializes the SAM log from the
+jobsub log (`_materialize_log`), appends the SHA256 manifest, and
+pushes data (success only) and the log (always) via
+`push_data(outputs, "", track_parents=False)` and
+`push_logs(log_file, location=log_storage_location(outputs,
+owner=owner), track_parents=False)` — the same shared tail every
+other runner mode uses; `--dry_run` and the entire
+ledger/slicing/recovery/MCP surface (`push_cnf`, `run_submissions`,
+`campaign_status`) are unmodified. Since v3.3.2 the g4bl SAM log is
+the full worker log, identical in kind to mu2e logs — see
+[[incident-mu2e-log-manifest-never-landed]] for the pre-fix history.
 
 Canonical invocation:
 
@@ -159,8 +171,8 @@ local worker harness (real spack `g4beamline`, self account
 The env/spack recipe below predates the entry-mode rewrite above and
 is reused **verbatim** by it — only the caller changed, from the
 retired mu2ejobsub-era `utils/prod_utils.py:process_g4bl_jobdef` to
-the direct-backend `utils/runmu2e.py` g4bl dispatch branch
-(`_g4bl_script` / `_dispatch_g4bl`).
+the direct-backend `utils/runmu2e.py:_run_g4bl_job` runner (which
+calls `_g4bl_script`).
 
 ```
 bash -c '
@@ -288,8 +300,11 @@ always builds a tarball.
   (7-task TDD implementation plan)
 - `utils/json2jobdef.py:_validate_g4bl_entry`,
   `utils/json2jobdef.py:_build_g4bl_tarball` (submit-side, current)
-- `utils/runmu2e.py:_dispatch_g4bl`, `utils/runmu2e.py:_g4bl_script`
-  (worker-side, current)
+- `utils/runmu2e.py:_run_g4bl_job`, `utils/runmu2e.py:_finish_job`,
+  `utils/runmu2e.py:_g4bl_script` (worker-side, current)
+- [[incident-mu2e-log-manifest-never-landed]] (why the SAM log is now
+  the full worker stdout, and how that differs from mu2e logs before
+  v3.3.2)
 - Memory `reference_local_worker_harness.md` (how the 2026-09-01
   smoke was run without a grid submission)
 - Memory `reference_g4bl_decoupled_from_offline.md` (place in chain)

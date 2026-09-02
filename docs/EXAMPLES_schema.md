@@ -166,6 +166,14 @@ When regenerating, read in this order:
    on a failed job means `--tar_file_name` never reached the worker, and
    `bin/runjob.sh`'s diagnostic echo block reports it for exactly that
    reason.
+
+   Say that every runner (mu2e and g4bl) ends in the same push tail: the
+   SAM-named log is created from `$JSB_TMP/JOBSUB_LOG_FILE`, the SHA256
+   `mu2egrid manifest` block is appended to it, then data is pushed on
+   success and the log always. Note that direct-backend art logs before
+   prodtools v3.3.2 carry NO manifest (the log was created after the
+   manifest step — fixed 2026-09), and that a g4bl SAM log is the full
+   worker log, not just g4bl's own output.
 8. **Sequential vs. pseudo-random auxiliary input selection** — the
    `tbs.sequential_aux` flag.
 9. **FCL overrides** — `fcl_overrides` dict, how template + `--embed`

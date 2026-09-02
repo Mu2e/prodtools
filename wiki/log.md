@@ -1323,3 +1323,26 @@ what the new worker branch runs, only the caller changed. Grid
 rollout is pending the prodtools v3.3.1 cvmfs release.
 Pages updated: g4bl-runner, index.md
 Source: docs/superpowers/specs/2026-08-31-g4bl-entry-mode-design.md, docs/superpowers/plans/2026-08-31-g4bl-entry-mode.md, .superpowers/sdd/2026-08-31-g4bl-entry-mode/progress.md
+
+## [2026-09-01] update | Incident: direct-backend art logs never carried the SAM manifest (fixed v3.3.2)
+Wrote incident-mu2e-log-manifest-never-landed: `_direct_dispatch`
+appended the `mu2egrid manifest` block only `if
+Path(log_file).exists()`, but nothing created the SAM-named log
+before that point on a worker — `push_logs` created it afterwards by
+copying the jobsub log, so the manifest step always found the file
+missing. g4bl was exempt only because its runner streamed its own
+log file first. Evidence:
+log.mu2e.CeEndpoint.Run1Ban-001.617-1781534797.log (0 matches for
+`mu2egrid manifest`; line 891 shows the jobsub-log copy happening
+after the point where the manifest would have been appended). Fixed
+in commit `92dc555` ("fix(runmu2e): materialize the SAM log before
+the manifest step"): `_materialize_log` now copies the jobsub log
+first, `_finish_job` appends the manifest for both runners. Also
+updated g4bl-runner.md (its references to the now-retired g4bl
+dispatch function were stale — the runner is now `_run_g4bl_job` ->
+`JobRun` -> the shared `_finish_job` tail) and EXAMPLES_schema.md
+section 7 with the shared push-tail description and the pre-v3.3.2
+missing-manifest caveat.
+Pages written: incident-mu2e-log-manifest-never-landed
+Pages updated: g4bl-runner, index.md
+Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/task-5-brief.md
