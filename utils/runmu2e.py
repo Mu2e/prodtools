@@ -398,8 +398,16 @@ def _materialize_log(log_file):
     itself — every runner streams to stdout, which jobsub captures in
     `$JSB_TMP/JOBSUB_LOG_FILE`. Copying it here (rather than inside
     push_logs, after the manifest step had already found the file
-    missing) is what puts `mu2egrid manifest` into production logs at
-    all — no direct-backend art log carried one before 2026-09-01.
+    missing) matters for two reasons, not one: (1) `push_output` only
+    lists files that already exist, so without this copy a pushOutput
+    destination (disk/scratch/tape) has nothing to push at all; (2) it
+    carries runmu2e's own content on the `outstage` path, which is
+    copied verbatim by ifdh and never passes through pushOutput. It is
+    NOT how the manifest reaches a SAM log — OfflineOps pushOutput's
+    `writeLog` (Util/pushOutput.py:801) rewrites every pushOutput-bound
+    `log`-tier file from this same `$JSB_TMP/JOBSUB_LOG_FILE` before
+    declaring it, discarding whatever runmu2e wrote here; `_emit_manifest`
+    reaches those logs by printing to stdout instead (see its docstring).
     The jobsub log is the superset, so it overwrites any partial file a
     runner may have written. Without JSB_TMP (local runs) an existing
     file is kept; a missing one is a warning, never invented.
@@ -419,7 +427,11 @@ def _materialize_log(log_file):
 
 def push_logs(log_file, simjob_setup=None, location="disk", track_parents=True):
     """Declare/push the SAM-named log file, already materialized in cwd
-    by _materialize_log (and carrying its manifest).
+    by `_materialize_log`. For a pushOutput destination (disk/scratch/
+    tape), OfflineOps `writeLog` rewrites the file again from
+    `$JSB_TMP/JOBSUB_LOG_FILE` before declaring it — the manifest
+    reaches those SAM logs because `_emit_manifest` also printed it to
+    stdout, not because of anything written to this file.
 
     `location` is a pushOutput destination class — "disk" (default,
     persistent), "scratch" (for user runs lacking `storage.modify` on
@@ -498,8 +510,19 @@ def _synthesize_direct_fname(index):
 
 def _emit_manifest(log_path, manifest_files):
     """Append the SHA256 manifest block to the log file, in a format
-    `mu2eClusterCheckAndMove` can parse. Port of `addManifest` from
+    `mu2eClusterCheckAndMove` can parse, AND print the identical block
+    to stdout. Port of `addManifest` from
     mu2egrid::impl/mu2ejobsub.sh:44-56.
+
+    The file append by itself never reaches a pushOutput-declared SAM
+    log: OfflineOps pushOutput's `writeLog` (Util/pushOutput.py:801)
+    rewrites every `log`-tier file it pushes from
+    `$JSB_TMP/JOBSUB_LOG_FILE` plus a JOBSUB_ERR banner, discarding
+    whatever this function wrote to the file on disk. On a worker,
+    stdout IS `$JSB_TMP/JOBSUB_LOG_FILE`, so printing the block is what
+    actually lands it in a disk/scratch/tape SAM log; the file append
+    only serves the `outstage` destination, which ifdh copies verbatim
+    and which pushOutput/writeLog never touches.
 
     Format (the parser is regex-strict):
 
@@ -529,22 +552,24 @@ def _emit_manifest(log_path, manifest_files):
     ls = subprocess.run(['ls', '-al'], capture_output=True, text=True,
                         env={**os.environ, 'LC_ALL': 'C'}, check=False)
 
+    lines = [f"mu2egrid diskUse = {du_out}\n",
+             "#" + "=" * 64 + "\n",
+             "# mu2egrid manifest\n"]
+    for line in ls.stdout.splitlines():
+        lines.append(f"# {line}\n")
+    lines.append("#" + "-" * 64 + "\n")
+    lines.append("# algorithm: sha256sum\n")
+    for fname in manifest_files:
+        if not Path(fname).exists():
+            continue
+        h = hashlib.sha256()
+        with open(fname, 'rb') as g:
+            for chunk in iter(lambda: g.read(1 << 20), b''):
+                h.update(chunk)
+        lines.append(f"{h.hexdigest()}  {fname}\n")
+
     with log.open('a') as f:
-        f.write(f"mu2egrid diskUse = {du_out}\n")
-        f.write("#" + "=" * 64 + "\n")
-        f.write("# mu2egrid manifest\n")
-        for line in ls.stdout.splitlines():
-            f.write(f"# {line}\n")
-        f.write("#" + "-" * 64 + "\n")
-        f.write("# algorithm: sha256sum\n")
-        for fname in manifest_files:
-            if not Path(fname).exists():
-                continue
-            h = hashlib.sha256()
-            with open(fname, 'rb') as g:
-                for chunk in iter(lambda: g.read(1 << 20), b''):
-                    h.update(chunk)
-            f.write(f"{h.hexdigest()}  {fname}\n")
+        f.writelines(lines)
 
     # Selfcheck: sha256sum of everything written so far, in `sha256sum <
     # log` format ("  -" trailer, no filename).
@@ -552,8 +577,15 @@ def _emit_manifest(log_path, manifest_files):
     with log.open('rb') as g:
         for chunk in iter(lambda: g.read(1 << 20), b''):
             sc.update(chunk)
+    selfcheck_line = f"# mu2egrid manifest selfcheck: {sc.hexdigest()}  -\n"
     with log.open('a') as f:
-        f.write(f"# mu2egrid manifest selfcheck: {sc.hexdigest()}  -\n")
+        f.write(selfcheck_line)
+    lines.append(selfcheck_line)
+
+    # Print the SAME block to stdout — see the docstring above for why
+    # this, not the file write, is what a SAM log actually ends up with.
+    print(''.join(lines), end='')
+    sys.stdout.flush()
 
 
 def _is_terminal_push_error(output):
@@ -741,18 +773,29 @@ def _finish_job(args, job):
     append the SHA256 manifest, push data (success only) then the log
     (always — including when the data push raises, see _push_all),
     honoring --dry-run. Returns job.job_failed."""
-    _materialize_log(job.log_file)
+    # A failed materialize/manifest step (e.g. ENOSPC writing the log)
+    # must never take the pushes down with it — _push_all is the last
+    # chance to get SOMETHING registered in SAM for this job.
+    try:
+        _materialize_log(job.log_file)
 
-    # Append the SHA256 manifest before pushing — mu2eClusterCheckAndMove
-    # parses the log for `mu2egrid manifest`. A failed job names no
-    # outputs (nothing is pushed for it).
-    manifest_files = []
-    if not job.job_failed:
-        for o in job.outputs:
-            manifest_files.extend(
-                str(p) for p in sorted(Path('.').glob(o['dataset'])))
-    if Path(job.log_file).exists():
-        _emit_manifest(job.log_file, manifest_files)
+        # Append the SHA256 manifest before pushing, and print the
+        # identical block to stdout — on a worker stdout IS
+        # $JSB_TMP/JOBSUB_LOG_FILE, which is what actually carries the
+        # manifest into a pushOutput-declared SAM log (writeLog rewrites
+        # the file copy away); the file append only serves `outstage`,
+        # which pushOutput never touches. A failed job names no outputs
+        # (nothing is pushed for it).
+        manifest_files = []
+        if not job.job_failed:
+            for o in job.outputs:
+                manifest_files.extend(
+                    str(p) for p in sorted(Path('.').glob(o['dataset'])))
+        if Path(job.log_file).exists():
+            _emit_manifest(job.log_file, manifest_files)
+    except OSError as e:
+        print(f"[direct] WARNING: log materialize/manifest step failed "
+              f"({e}); pushing anyway")
 
     # Logs share the first output's location so the worker token's
     # storage.modify scope covers both. Without this, a non-mu2epro

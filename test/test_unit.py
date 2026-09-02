@@ -4683,14 +4683,24 @@ class TestFinishJob(unittest.TestCase):
         (jsb / 'JOBSUB_LOG_FILE').write_text('worker stdout\n')
         out_name = 'mcs.testuser.X.TestConf.00000000.art'
         (d / out_name).write_bytes(b'x')
+        captured = io.StringIO()
         with patch.dict(os.environ, {'JSB_TMP': str(jsb)}), \
-             patch.object(runmu2e, '_push_all'):
+             patch.object(runmu2e, '_push_all'), \
+             patch('sys.stdout', captured):
             runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
                                 self._job())
         text = (d / self.LOG).read_text()
         self.assertTrue(text.startswith('worker stdout\n'), text[:80])
         self.assertIn('mu2egrid manifest', text)
         self.assertIn(out_name, text)
+
+        # C1: the manifest must also reach stdout — on a worker that IS
+        # $JSB_TMP/JOBSUB_LOG_FILE, which is what pushOutput's writeLog
+        # rewrites a pushOutput-bound SAM log from (see the module's
+        # verified writeLog fact), so the file append alone never ships.
+        stdout_text = captured.getvalue()
+        self.assertIn('mu2egrid manifest', stdout_text)
+        self.assertIn(out_name, stdout_text)
 
     def test_failed_job_manifest_names_no_outputs(self):
         from utils import runmu2e
@@ -4711,6 +4721,52 @@ class TestFinishJob(unittest.TestCase):
         # line for the same file has one space before the name, so this
         # distinguishes them.
         self.assertNotIn(f"  {out_name}", text)
+
+    def test_manifest_step_failure_does_not_block_pushes(self):
+        """M1: an OSError out of the materialize/manifest step (e.g. an
+        ENOSPC writing the log) must not skip _push_all — the pushes are
+        the last chance to get anything registered in SAM for this job."""
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')  # so _emit_manifest is reached
+        with patch.object(runmu2e, '_emit_manifest',
+                          side_effect=OSError('disk full')), \
+             patch.object(runmu2e, '_push_all') as pa:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                         self._job())
+        self.assertFalse(failed)
+        pa.assert_called_once()
+
+
+class TestEmitManifest(unittest.TestCase):
+    """C1: the manifest block _emit_manifest appends to the log file must
+    also be printed to stdout, byte-for-byte identical. On a worker,
+    stdout IS $JSB_TMP/JOBSUB_LOG_FILE, which OfflineOps pushOutput's
+    writeLog rewrites every pushOutput-bound log from (discarding the
+    file append) — the print is what actually lands the manifest in a
+    disk/scratch/tape SAM log."""
+
+    def test_printed_block_equals_appended_block(self):
+        from utils import runmu2e
+        d = tempfile.mkdtemp(prefix='emit_manifest_')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, cwd)
+
+        log = Path(d) / 'log.testuser.X.TestConf.00000000.log'
+        log.write_text('')  # starts empty: file content == appended block
+        out_name = 'mcs.testuser.X.TestConf.00000000.art'
+        (Path(d) / out_name).write_bytes(b'payload')
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            runmu2e._emit_manifest(str(log), [out_name])
+
+        self.assertEqual(captured.getvalue(), log.read_text())
+        self.assertIn('mu2egrid manifest', captured.getvalue())
+        self.assertIn('mu2egrid manifest selfcheck', captured.getvalue())
+        self.assertIn(out_name, captured.getvalue())
 
 
 class TestPushDataExcludesInputs(unittest.TestCase):
@@ -14422,9 +14478,27 @@ class TestG4blWorker(unittest.TestCase):
         with self.assertRaises(SystemExit):
             runmu2e._direct_dispatch(args, ops, 0)
 
+    def _in_tmp(self):
+        """Same pattern as TestFinishJob._in_tmp: this test runs the real
+        _finish_job tail (only _push_all is stubbed), which globs cwd for
+        manifest files and calls _materialize_log — both must not touch
+        the test-process cwd or pick up a stray JSB_TMP from the real
+        environment."""
+        d = tempfile.mkdtemp(prefix='g4bl_dispatch_')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, cwd)
+        env = {k: v for k, v in os.environ.items() if k != 'JSB_TMP'}
+        patcher = patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return Path(d)
+
     def test_dispatch_g4bl_dry_run_skips_pushes(self):
         from utils import runmu2e
         from utils.runmu2e import JobRun
+        self._in_tmp()
         args = types.SimpleNamespace(dry_run=True)
         jobdesc = self._jobdesc()
         job = JobRun(outputs=jobdesc['outputs'],
