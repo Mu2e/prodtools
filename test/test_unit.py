@@ -4588,6 +4588,131 @@ class TestMaterializeLog(unittest.TestCase):
             self.assertFalse((Path(d) / self.LOG).exists())
 
 
+class TestFinishJob(unittest.TestCase):
+    """The shared direct-mode push tail. Runners hand it a JobRun; it
+    materializes the log, appends the manifest, and pushes data (success
+    only) then the log (always), honoring --dry-run."""
+
+    OUTPUTS = [{'dataset': 'mcs.*.art', 'location': 'scratch'}]
+    LOG = 'log.testuser.X.TestConf.00000000.log'
+
+    def _job(self, **over):
+        from utils.runmu2e import JobRun
+        d = dict(outputs=self.OUTPUTS, log_file=self.LOG, job_failed=False,
+                 owner='testuser', infiles='in1.art in2.art',
+                 simjob_setup='/cvmfs/setup.sh', track_parents=True)
+        d.update(over)
+        return JobRun(**d)
+
+    def _in_tmp(self):
+        d = tempfile.mkdtemp(prefix='finish_job_')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, cwd)
+        env = {k: v for k, v in os.environ.items() if k != 'JSB_TMP'}
+        patcher = patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return Path(d)
+
+    def test_jobrun_defaults_describe_a_parentless_job(self):
+        from utils.runmu2e import JobRun
+        job = JobRun(outputs=self.OUTPUTS, log_file=self.LOG,
+                     job_failed=False, owner='testuser')
+        self.assertEqual(job.infiles, '')
+        self.assertIsNone(job.simjob_setup)
+        self.assertFalse(job.track_parents)
+
+    def test_dry_run_skips_pushes(self):
+        from utils import runmu2e
+        self._in_tmp()
+        with patch.object(runmu2e, '_push_all') as pa:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=True),
+                                         self._job())
+        self.assertFalse(failed)
+        pa.assert_not_called()
+
+    def test_failed_job_pushes_log_only(self):
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        with patch.object(runmu2e, 'push_data') as pd, \
+             patch.object(runmu2e, 'push_logs') as pl:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                         self._job(job_failed=True))
+        self.assertTrue(failed)
+        pd.assert_not_called()
+        pl.assert_called_once_with(self.LOG, simjob_setup='/cvmfs/setup.sh',
+                                   location='scratch', track_parents=True)
+
+    def test_success_forwards_jobrun_fields_to_both_pushes(self):
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        with patch.object(runmu2e, 'push_data') as pd, \
+             patch.object(runmu2e, 'push_logs') as pl:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                         self._job())
+        self.assertFalse(failed)
+        pd.assert_called_once_with(self.OUTPUTS, 'in1.art in2.art',
+                                   simjob_setup='/cvmfs/setup.sh',
+                                   track_parents=True)
+        pl.assert_called_once_with(self.LOG, simjob_setup='/cvmfs/setup.sh',
+                                   location='scratch', track_parents=True)
+
+    def test_log_location_follows_owner_and_outputs(self):
+        """A user's data on scratch means the log goes to scratch too —
+        the worker token has no persistent-disk log scope for users."""
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        with patch.object(runmu2e, 'push_data'), \
+             patch.object(runmu2e, 'push_logs') as pl:
+            runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                self._job())
+        self.assertEqual(pl.call_args.kwargs['location'], 'scratch')
+
+    def test_manifest_appended_after_jobsub_log_copy(self):
+        """Ordering pin for the production fix: the copied worker log
+        comes first, the manifest naming the outputs is appended after."""
+        from utils import runmu2e
+        d = self._in_tmp()
+        jsb = d / 'jsb_tmp'
+        jsb.mkdir()
+        (jsb / 'JOBSUB_LOG_FILE').write_text('worker stdout\n')
+        out_name = 'mcs.testuser.X.TestConf.00000000.art'
+        (d / out_name).write_bytes(b'x')
+        with patch.dict(os.environ, {'JSB_TMP': str(jsb)}), \
+             patch.object(runmu2e, '_push_all'):
+            runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                self._job())
+        text = (d / self.LOG).read_text()
+        self.assertTrue(text.startswith('worker stdout\n'), text[:80])
+        self.assertIn('mu2egrid manifest', text)
+        self.assertIn(out_name, text)
+
+    def test_failed_job_manifest_names_no_outputs(self):
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        out_name = 'mcs.testuser.X.TestConf.00000000.art'
+        (d / out_name).write_bytes(b'x')
+        with patch.object(runmu2e, '_push_all'):
+            runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                self._job(job_failed=True))
+        text = (d / self.LOG).read_text()
+        self.assertIn('mu2egrid manifest', text)
+        # _emit_manifest's `ls -al` block (unconditional, out of this
+        # test's scope) legitimately lists every file in cwd, stray
+        # outputs included — that's a diagnostic dump, not the pushed
+        # manifest. What must be empty for a failed job is the SHA256
+        # section, whose lines are "<hex>  <file>" (two spaces); the ls
+        # line for the same file has one space before the name, so this
+        # distinguishes them.
+        self.assertNotIn(f"  {out_name}", text)
+
+
 class TestPushDataExcludesInputs(unittest.TestCase):
     """A job's inputs must never appear in the push manifest.
 

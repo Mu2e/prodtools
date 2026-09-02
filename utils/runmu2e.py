@@ -12,6 +12,7 @@ import sys
 import tarfile
 import time
 from pathlib import Path
+from typing import NamedTuple, Optional
 
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -754,6 +755,80 @@ def _run_g4bl_job(jobdesc, index, owner):
     return histo_file, log_file, rc != 0
 
 
+class JobRun(NamedTuple):
+    """What a runner hands _finish_job: the facts the shared push tail
+    needs, and nothing about how the job was produced.
+
+    outputs        jobdesc['outputs']: [{'dataset': glob, 'location': ...}]
+    log_file       SAM-named log in cwd; may not exist yet (the tail
+                   materializes it from the jobsub log)
+    job_failed     True iff the payload process failed
+    owner          routes the log location and the dCache namespace —
+                   parsed from the cnf/fcl name, never a literal 'mu2e'
+    infiles        space-separated SAM parents; "" = none
+    simjob_setup   Musing setup.sh to source for pushOutput; None = the
+                   worker bootstrap's own OfflineOps (g4bl)
+    track_parents  whether infiles are SAM-registered parents
+    """
+    outputs: list
+    log_file: str
+    job_failed: bool
+    owner: str
+    infiles: str = ""
+    simjob_setup: Optional[str] = None
+    track_parents: bool = False
+
+
+def _finish_job(args, job):
+    """Shared direct-mode tail for every runner: materialize the log,
+    append the SHA256 manifest, push data (success only) then the log
+    (always — including when the data push raises, see _push_all),
+    honoring --dry-run. Returns job.job_failed."""
+    _materialize_log(job.log_file)
+
+    # Append the SHA256 manifest before pushing — mu2eClusterCheckAndMove
+    # parses the log for `mu2egrid manifest`. A failed job names no
+    # outputs (nothing is pushed for it).
+    manifest_files = []
+    if not job.job_failed:
+        for o in job.outputs:
+            manifest_files.extend(
+                str(p) for p in sorted(Path('.').glob(o['dataset'])))
+    if Path(job.log_file).exists():
+        _emit_manifest(job.log_file, manifest_files)
+
+    # Logs share the first output's location so the worker token's
+    # storage.modify scope covers both. Without this, a non-mu2epro
+    # account whose data goes to `scratch` would still try to push the
+    # log to `disk`, which `/mu2e/persistent/datasets/...` doesn't grant.
+    log_location = log_storage_location(job.outputs, owner=job.owner)
+
+    def data_push():
+        if job.job_failed:
+            return
+        _push_with_retry(push_data, job.outputs, job.infiles,
+                         simjob_setup=job.simjob_setup,
+                         track_parents=job.track_parents)
+
+    def log_push():
+        _push_with_retry(push_logs, job.log_file,
+                         simjob_setup=job.simjob_setup,
+                         location=log_location,
+                         track_parents=job.track_parents)
+
+    if args.dry_run:
+        datasets = ('none (job failed)' if job.job_failed
+                    else ', '.join(o['dataset'] for o in job.outputs))
+        print(f"[direct] DRY RUN — would push data: {datasets}; "
+              f"would push log to '{log_location}'. Skipping pushes.")
+        return job.job_failed
+
+    if job.job_failed:
+        print("[direct] job failed — skipping data push, still pushing log")
+    _push_all(data_push, log_push)
+    return job.job_failed
+
+
 def _dispatch_g4bl(args, jobdesc, index):
     """g4bl analog of the jobdef dispatch tail: run, manifest, push.
     No fcl, no mu2e -c, no SAM parents (g4bl jobs have no SAM inputs).
@@ -767,34 +842,8 @@ def _dispatch_g4bl(args, jobdesc, index):
     owner = Mu2eName(jobdesc['tarball']).owner
     histo_file, log_file, job_failed = _run_g4bl_job(jobdesc, index, owner)
 
-    manifest_files = ([histo_file]
-                      if not job_failed and Path(histo_file).exists()
-                      else [])
-    _materialize_log(log_file)
-    if Path(log_file).exists():
-        _emit_manifest(log_file, manifest_files)
-
-    log_location = log_storage_location(outputs, owner=owner)
-
-    def data_push():
-        if job_failed:
-            return
-        _push_with_retry(push_data, outputs, "", track_parents=False)
-
-    def log_push():
-        _push_with_retry(push_logs, log_file, location=log_location,
-                         track_parents=False)
-
-    if args.dry_run:
-        datasets = ('none (job failed)' if job_failed else histo_file)
-        print(f"[g4bl] DRY RUN — would push data: {datasets}; "
-              f"would push log to '{log_location}'. Skipping pushes.")
-        return job_failed
-
-    if job_failed:
-        print("[g4bl] g4bl failed — skipping data push, still pushing log")
-    _push_all(data_push, log_push)
-    return job_failed
+    return _finish_job(args, JobRun(outputs=outputs, log_file=log_file,
+                                    job_failed=job_failed, owner=owner))
 
 
 def _direct_dispatch(args, ops, index):
@@ -862,50 +911,14 @@ def _direct_dispatch(args, ops, index):
             produced.extend(str(p) for p in sorted(Path('.').glob(o['dataset'])))
         job_failed = _validate_outputs(produced, simjob_setup)
 
-    # Append SHA256 manifest before pushing — mu2eClusterCheckAndMove
-    # parses the log for `mu2egrid manifest`.
-    log_file = replace_file_extensions(fcl, "log", "log")
-    _materialize_log(log_file)
-    if Path(log_file).exists():
-        manifest_files = []
-        if not job_failed:
-            for o in outputs:
-                pattern = o['dataset']
-                manifest_files.extend(sorted(Path('.').glob(pattern)))
-        _emit_manifest(log_file, [str(f) for f in manifest_files])
-
-    # Logs share the first output's location so the worker token's
-    # storage.modify scope covers both. Without this, a non-mu2epro
-    # account whose data goes to `scratch` would still try to push the
-    # log to `disk` (push_logs default), which
-    # `/mu2e/persistent/datasets/...` doesn't grant.
-    log_location = log_storage_location(
-        outputs, owner=Mu2eName(Path(fcl).name).owner)
-
-    def data_push():
-        if job_failed:
-            return
-        _push_with_retry(push_data, outputs, infiles,
-                         simjob_setup=simjob_setup, track_parents=track_parents)
-
-    def log_push():
-        _push_with_retry(push_logs, log_file, simjob_setup=simjob_setup,
-                         location=log_location, track_parents=track_parents)
-
-    if args.dry_run:
-        datasets = ('none (job failed)' if job_failed
-                    else ', '.join(o['dataset'] for o in outputs))
-        print(f"[direct] DRY RUN — would push data: {datasets}; "
-              f"would push log to '{log_location}'. Skipping pushes.")
-        return job_failed
-
-    if job_failed:
-        print("[direct] mu2e failed — skipping data push, still pushing log")
-    # Push outputs only on success; the log ALWAYS — including when the
-    # data push itself raises (see _push_all).
-    _push_all(data_push, log_push)
-
-    return job_failed
+    return _finish_job(args, JobRun(
+        outputs=outputs,
+        log_file=replace_file_extensions(fcl, "log", "log"),
+        job_failed=job_failed,
+        owner=Mu2eName(Path(fcl).name).owner,
+        infiles=infiles,
+        simjob_setup=simjob_setup,
+        track_parents=track_parents))
 
 
 def _direct_main(args):
