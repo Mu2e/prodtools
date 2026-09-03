@@ -1384,3 +1384,7 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 ## [2026-09-02] update | g4bl grid smoke passed via dev prodtools tarball
 
 `g4bl-runner` gains the grid smoke section (self campaign 5, cluster 29824782@jobsub04, 3 jobs exit 0, nts+logs in SAM, SAM log shows tar mode and 2 manifest lines); `2026-09-01-mu2e-log-manifest-never-landed` records the first SAM-declared log carrying the manifest; the cvmfs-release decision page notes the validation.
+
+## [2026-09-02] update | data/g4bl/g4bl.json checked in
+
+`g4bl-runner` now points at the checked-in config `data/g4bl/g4bl.json` (G4blSmoke entry, dsconf MCPTest007 next free); EXAMPLES regenerated for the three command sites.

@@ -77,7 +77,7 @@ When regenerating, read in this order:
    `$_CONDOR_SCRATCH_DIR`). Every later submit — slice, direct, recovery
    — re-hashes the tar and refuses a mismatch. Refused for `mu2epro`:
    production runs a published release only. Show the canonical dev
-   smoke: `json2jobdef --json g4bl.json --desc X --dsconf Y --prod
+   smoke: `json2jobdef --json data/g4bl/g4bl.json --desc X --dsconf Y --prod
    --enqueue --slice-size N --prodtools-dir $PWD` run as yourself.
 
    **Code-tarball builds (`code` vs `simjob_setup`)** — a JSON config
@@ -139,9 +139,12 @@ When regenerating, read in this order:
    `mu2ejobdef`; a bare `muse setup ops` env is enough to build one — no
    SimJob Musing needs to be sourced. Canonical invocation:
 
+   The checked-in config is `data/g4bl/g4bl.json` (one `G4blSmoke`
+   entry; bump `dsconf` per campaign — a dsconf is used once).
+
    ```bash
-   json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005
-   json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
+   json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005
+   json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
                --prod --enqueue --slice-size 100
    ```
 

@@ -109,12 +109,17 @@ the full worker log, identical in kind to mu2e logs — see
 
 Canonical invocation:
 
+The checked-in config is `data/g4bl/g4bl.json` (one `G4blSmoke` entry
+pointing at the user's clone of `Mu2e/G4BeamlineScripts`; bump `dsconf`
+per campaign). Smoke configs before it lived only in
+`claude-scratch/g4blsmoke/`.
+
 ```bash
 # local build, no SAM
-json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005
+json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005
 
 # production campaign
-json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
+json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
             --prod --enqueue --slice-size 100
 ```
 
@@ -124,7 +129,7 @@ workers run their ledger entry's pinned `prodtools_dir`). Before that
 release lands, a self-owned grid smoke can pin the checkout instead:
 
 ```bash
-json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
+json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
             --prod --enqueue --slice-size 100 --prodtools-dir $PWD
 ```
 

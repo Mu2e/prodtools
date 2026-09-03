@@ -149,7 +149,7 @@ Notes:
   worker code, run from the checkout as yourself:
 
   ```bash
-  json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
+  json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
       --prod --enqueue --slice-size 100 --prodtools-dir $PWD
   ```
 - A bulk `--dsconf X --prod --enqueue` that skips any entry exits **2**
@@ -471,9 +471,12 @@ entry.
 }
 ```
 
+The checked-in config is `data/g4bl/g4bl.json` (one `G4blSmoke` entry;
+bump `dsconf` per campaign — a dsconf is used once).
+
 ```bash
-json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005
-json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
+json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005
+json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
             --prod --enqueue --slice-size 100
 ```
 
