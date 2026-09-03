@@ -44,6 +44,8 @@ def _check_root(path, root):
 
 
 def _check_pins(path, pins):
+    if pins is not None and not isinstance(pins, dict):
+        raise EpochFileError(f'{path}: pins must be an object, got {type(pins).__name__}')
     out = {k: [] for k in PIN_KINDS}
     for kind, entries in (pins or {}).items():
         if kind not in PIN_KINDS:

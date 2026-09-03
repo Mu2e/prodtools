@@ -125,6 +125,14 @@ class TestEpochFiles(unittest.TestCase):
         with self.assertRaises(EpochFileError):
             load_epoch_files(d)
 
+    def test_non_dict_pins_rejected(self):
+        d = _tmpdir()
+        self._write(d, 'MDC2025au', {'name': 'MDC2025au', 'purpose': '', 'status': 'current',
+                                     'roots': ['dig.mu2e.%.MDC2025au_%.art'],
+                                     'pins': ['oops']})
+        with self.assertRaises(EpochFileError):
+            load_epoch_files(d)
+
     def test_propose_from_sample_dsconf(self):
         data = propose_epoch('MDC2025au_best_v1_5')
         self.assertEqual(data['name'], 'MDC2025au')
