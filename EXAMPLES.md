@@ -132,6 +132,26 @@ Notes:
   `MU2EGRID_PRODTOOLS_DIR` — older releases (v3.2.0 and before) are
   refused at enqueue, since their `runjob.sh` untars a tarball no
   submission ships any more.
+- **`--prodtools-dir` with a path OUTSIDE
+  `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/` is a dev checkout** —
+  an explicit opt-in, never a fallback. Its `bin/` + `utils/` are tarred
+  once, at enqueue, into
+  `/exp/mu2e/data/users/$USER/prodtools/prodtools-tarballs/prodtools-<sha12>.tar`
+  (content-addressed, `__pycache__` excluded); the entry records
+  `prodtools_tar` and `prodtools_ref = {sha256, size, source_path}`, and
+  the tar ships to every job via `-f dropbox://` with
+  `MU2EGRID_PRODTOOLS_TAR` replacing `MU2EGRID_PRODTOOLS_DIR`
+  (`runjob.sh` extracts it under `$_CONDOR_SCRATCH_DIR`, section 7).
+  Every later submit — slice, direct, recovery — re-hashes the tar and
+  refuses a mismatch, the same gate `code_ref` applies to an Offline
+  build. Refused for `mu2epro`: production runs a published release
+  only. The canonical use is a self-owned grid smoke of unreleased
+  worker code, run from the checkout as yourself:
+
+  ```bash
+  json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
+      --prod --enqueue --slice-size 100 --prodtools-dir $PWD
+  ```
 - A bulk `--dsconf X --prod --enqueue` that skips any entry exits **2**
   and lists what it skipped. Entries that already processed are left
   alone — they are in SAM and in the ledger.
@@ -474,10 +494,11 @@ json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
 - Output and log names are owner-aware
   (`nts.<owner>.<desc>.<dsconf>.<seq>.root`), with `<owner>` parsed
   from the cnf tarball name — never a literal `mu2e`.
-- Grid execution needs prodtools `>= v3.3.1` on cvmfs (workers run only
-  their ledger entry's pinned `prodtools_dir`, section 7); until that
-  release lands, a g4bl campaign can be built and validated locally but
-  not submitted to the grid.
+- Grid execution needs the g4bl worker code, which is in prodtools
+  `>= v3.3.1` on cvmfs (workers run their ledger entry's pinned
+  `prodtools_dir`, section 7). Before that release lands, a self-owned
+  smoke can pin the checkout with `--prodtools-dir $PWD` — the dev
+  tarball described under the `json2jobdef` notes above.
 - `--extend` is refused for g4bl entries — there are no SAM inputs to
   exclude.
 
@@ -732,18 +753,26 @@ an "ops JSON" via dropbox, both landing under `$CONDOR_DIR_INPUT`, and
 the worker resolves its own job index from `$PROCESS` through the ops
 JSON's `jobs` lookup table.
 
-The code itself is not shipped. The job executable is `bin/runjob.sh`
-of the cvmfs prodtools release recorded on the campaign (`prodtools_dir`,
-section 3), and `MU2EGRID_PRODTOOLS_DIR` names that release for it —
-jobsub copies the executable into the sandbox, so the script cannot find
-its own tree. `runjob.sh` sources the Mu2e environment, `muse setup ops`,
-OfflineOps, then the release's `bin/setup.sh`, and execs its
-`utils/runmu2e.py`. It refuses to run (exit 1, before any setup) when
-the variable is unset or the directory is not a release on that worker —
-a version published within the hour may not have reached every cvmfs
-catalog yet, and that failure is what lets the recovery pass re-fire the
-index elsewhere later. There is no other way for worker code to reach a
-job: a fix to `runmu2e.py` or `file_resolver.py` reaches production only
+For a release entry the code itself is not shipped. The job executable
+is `bin/runjob.sh` of the cvmfs prodtools release recorded on the
+campaign (`prodtools_dir`, section 3), and `MU2EGRID_PRODTOOLS_DIR`
+names that release for it — jobsub copies the executable into the
+sandbox, so the script cannot find its own tree. `runjob.sh` sources the
+Mu2e environment, `muse setup ops`, OfflineOps, then the release's
+`bin/setup.sh`, and execs its `utils/runmu2e.py`. It refuses to run
+(exit 1, before any setup) when the directory is not a release on that
+worker — a version published within the hour may not have reached every
+cvmfs catalog yet, and that failure is what lets the recovery pass
+re-fire the index elsewhere later.
+
+The one other way for worker code to reach a job is the dev-checkout
+opt-in (section 3): the entry carries `prodtools_tar`, the submission
+ships that tar via `-f dropbox://`, and `MU2EGRID_PRODTOOLS_TAR` names
+it INSTEAD of `MU2EGRID_PRODTOOLS_DIR`. `runjob.sh` then extracts it
+under `$_CONDOR_SCRATCH_DIR/prodtools` and continues through the same
+release check, setup and exec. Both variables set, or neither, is an
+exit 1 — never a guess. Production campaigns (mu2epro) cannot use it: a
+fix to `runmu2e.py` or `file_resolver.py` reaches production only
 through a release (`install_prodtools.sh`, section 11).
 
 To simply run a cnf's jobs on this node — one index or a few dozen, with
@@ -1127,7 +1156,10 @@ Verbs:
   `expected_lifetime`/`code`/`prodtools_dir` on a live campaign's entry.
   `prodtools_dir` is the cvmfs release the jobs run (section 3); a row
   created before releases were recorded has none and its recovery is
-  refused until this is set **with** `--include-open-rows`. Without
+  refused until this is set **with** `--include-open-rows`. Give it a
+  cvmfs release: `set-entry` bundles nothing, so a checkout path here
+  is invisible to the worker (dev tarballs exist only through
+  `json2jobdef --enqueue --prodtools-dir`). Without
   `--include-open-rows` the change reaches future slices only (same as
   `set-slice`/`set-memory`) — a resubmit builds its options from the
   row's own frozen entry snapshot, not the campaign's current one, so an
@@ -1407,9 +1439,10 @@ takes about an hour. `-n` is a dry run, `-t [DIR]` installs into a local
 writable dir instead of touching CVMFS, and `--no-current` installs the
 version without moving `current` — for a pre-release that campaigns pin
 explicitly with `json2jobdef --prodtools-dir` before it becomes the
-default. Grid jobs run only these releases (section 7), so a worker-side
-change is live in production once it is tagged, installed, and pinned
-or made `current`.
+default. Production grid jobs run only these releases (section 7), so a
+worker-side change is live in production once it is tagged, installed,
+and pinned or made `current`; a self-owned smoke of unreleased code can
+pin a checkout instead (`--prodtools-dir $PWD`, section 3).
 
 ```bash
 ./bin/install_prodtools.sh -n v3.3.0                 # check the tag and the path, change nothing
@@ -1484,11 +1517,30 @@ a one-time operator step (section 11 `submissions`, wiki page
   --include-open-rows` (prefixed `submit:` from a recovery, `json2jobdef:`
   at enqueue) — a ledger row from before releases were recorded cannot be
   resubmitted until it names one; the flag is what reaches the open rows.
-- Worker log `ERROR: MU2EGRID_PRODTOOLS_DIR is not set — this job was not
-  submitted with a prodtools release` / `ERROR: <dir> is not a prodtools
-  release on this worker` — `runjob.sh` exits 1 before any setup. The
-  second form on a freshly published version usually means that worker's
-  cvmfs catalog has not caught up; the recovery pass re-fires the index.
+- `json2jobdef: --prodtools-dir <dir> is not a cvmfs release; mu2epro
+  campaigns run a published release under
+  /cvmfs/mu2e.opensciencegrid.org/bin/prodtools only` — the dev-checkout
+  tarball (section 3) is a self-account tool; as mu2epro, publish and pin
+  a release.
+- `prodtools_tar '<tar>' sha256 <a> does not match the entry's
+  prodtools_ref <b> (... bytes now, ... at enqueue): the tarball changed
+  under the campaign. Re-enqueue from the checkout` / `prodtools_tar
+  '<tar>' no longer exists` (prefixed `submit:` from a slice or recovery,
+  `json2jobdef:` at enqueue) — the dev tarball is digest-pinned to the
+  campaign; a rebuilt, edited or deleted tar is refused rather than
+  shipped with stale provenance. Enqueue a new campaign from the current
+  checkout.
+- Worker log `ERROR: MU2EGRID_PRODTOOLS_DIR is not set and no
+  MU2EGRID_PRODTOOLS_TAR was shipped — this job was not submitted with a
+  prodtools release` / `ERROR: <dir> is not a prodtools release on this
+  worker` — `runjob.sh` exits 1 before any setup. The second form on a
+  freshly published version usually means that worker's cvmfs catalog
+  has not caught up; the recovery pass re-fires the index.
+- Worker log `ERROR: both MU2EGRID_PRODTOOLS_DIR and MU2EGRID_PRODTOOLS_TAR
+  are set` / `ERROR: tar xf <input>/<tar> failed` — the first cannot come
+  from `jobsub_argv` (it emits exactly one); the second means the dropbox
+  file did not land or is not a tar — check the tar under
+  `prodtools-tarballs/` on the submit host still matches `prodtools_ref`.
 - `json2jobdef: --slice-size requires --enqueue` — `--slice-size` only
   has meaning for the campaign `--enqueue` registers.
 - `json2jobdef: inloc must be one of tape, disk, scratch, resilient,

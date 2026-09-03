@@ -119,10 +119,19 @@ json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
 ```
 
 Grid execution needs the worker's g4bl branch, which ships in
-prodtools `>= v3.3.1` on cvmfs (not yet released as of 2026-09-01 —
-workers run only their ledger entry's pinned `prodtools_dir`). Until
-that release lands, a g4bl campaign can be built and validated locally
-(see the smoke below) but not submitted to the grid.
+prodtools `>= v3.3.1` on cvmfs (not yet released as of 2026-09-02;
+workers run their ledger entry's pinned `prodtools_dir`). Before that
+release lands, a self-owned grid smoke can pin the checkout instead:
+
+```bash
+json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
+            --prod --enqueue --slice-size 100 --prodtools-dir $PWD
+```
+
+`--prodtools-dir` outside the cvmfs release root tars the checkout's
+`bin/` + `utils/` once, pins the digest on the entry, and ships the tar
+to every job (`MU2EGRID_PRODTOOLS_TAR`); refused for `mu2epro`. See
+[[2026-08-28-workers-run-prodtools-from-cvmfs-releases]] (amendment).
 
 ## Local end-to-end smoke (2026-09-01)
 

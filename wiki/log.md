@@ -1376,3 +1376,7 @@ print-based mechanism.
 Pages written: 2026-09-01-mu2e-log-manifest-never-landed (renamed from incident-mu2e-log-manifest-never-landed)
 Pages updated: g4bl-runner, index.md
 Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/final-fix-report.md
+
+## [2026-09-02] update | dev prodtools tarball restored as opt-in
+
+Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechanism from 4314038^, opt-in via non-cvmfs `--prodtools-dir`, digest-pinned `prodtools_tar`/`prodtools_ref`, mu2epro refused) and `g4bl-runner` (grid smoke without a cvmfs release).

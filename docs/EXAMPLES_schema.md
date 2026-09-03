@@ -64,6 +64,22 @@ When regenerating, read in this order:
    `--jobdefs` flag: `json2jobdef` writes no file recording the
    campaign at all.
 
+   **`--prodtools-dir` (requires `--enqueue`)** — which prodtools the
+   campaign's workers run, recorded on the entry as `prodtools_dir`.
+   Default: `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current`,
+   resolved to its concrete version dir. A path OUTSIDE that cvmfs root
+   is a dev **checkout** (explicit opt-in, never a fallback): its
+   `bin/` + `utils/` are tarred once at enqueue into
+   `/exp/mu2e/data/users/$USER/prodtools/prodtools-tarballs/prodtools-<sha12>.tar`,
+   the digest recorded as `prodtools_ref`, and the tar shipped to every
+   job via `-f dropbox://` (`MU2EGRID_PRODTOOLS_TAR` replaces
+   `MU2EGRID_PRODTOOLS_DIR`; `runjob.sh` extracts it under
+   `$_CONDOR_SCRATCH_DIR`). Every later submit — slice, direct, recovery
+   — re-hashes the tar and refuses a mismatch. Refused for `mu2epro`:
+   production runs a published release only. Show the canonical dev
+   smoke: `json2jobdef --json g4bl.json --desc X --dsconf Y --prod
+   --enqueue --slice-size N --prodtools-dir $PWD` run as yourself.
+
    **Code-tarball builds (`code` vs `simjob_setup`)** — a JSON config
    entry's top-level `simjob_setup` (a `/cvmfs` Musing `setup.sh`) and
    `code` (an absolute path to a `muse tarball` `Code.tar.bz2`) are
@@ -132,10 +148,10 @@ When regenerating, read in this order:
    Output/log names are owner-aware
    (`nts.<owner>.<desc>.<dsconf>.<seq>.root`), where `<owner>` is
    parsed from the cnf tarball name — never a literal `mu2e`. Note that
-   grid execution needs prodtools `>= v3.3.1` on cvmfs (workers run
-   only their ledger entry's pinned `prodtools_dir`); until that
-   release lands a g4bl campaign can be built and validated locally but
-   not submitted to the grid.
+   grid execution needs the g4bl worker code, which is in prodtools
+   `>= v3.3.1` on cvmfs; before that release lands, a self-owned smoke
+   can pin the checkout with `--prodtools-dir $PWD` (dev tarball, see
+   the `--prodtools-dir` paragraph above).
 
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
