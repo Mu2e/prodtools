@@ -1999,7 +1999,7 @@ Claude-Session: https://claude.ai/code/session_0115w5JympLoYF5uk2FkXiAC"
   - `index-cnfs` — rebuild/extend `data/epochs/cnf_index.json`.
   - `publish --out PATH [--family F]`
   - common: `--epochs-dir` (default `<repo>/data/epochs`), `--input-depth` (default 3).
-  - Families default to those of the loaded epoch files; `propose` takes explicit `--family` and refuses to run with none.
+  - Every verb except `propose` loads EVERY epoch file and lets `build_catalog` discover the dig families from SAM (`families=None`); `--family` and `--epoch` filter the PRINTED rows only, never what is loaded, so status and retire are always judged on the complete catalog (ruling of 2026-09-03: a partial catalog proposed deleting MDC2025 stop catalogues that only unloaded MDC2025 digs used). `propose` takes explicit `--family` and refuses to run with none.
   - Exit codes: 0 ok; 2 usage/curation error (`EpochFileError`); 3 SAM/parse error.
 
 - [ ] **Step 1: Append the tests**
