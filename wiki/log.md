@@ -1380,3 +1380,7 @@ Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/final-fix-repor
 ## [2026-09-02] update | dev prodtools tarball restored as opt-in
 
 Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechanism from 4314038^, opt-in via non-cvmfs `--prodtools-dir`, digest-pinned `prodtools_tar`/`prodtools_ref`, mu2epro refused) and `g4bl-runner` (grid smoke without a cvmfs release).
+
+## [2026-09-02] update | g4bl grid smoke passed via dev prodtools tarball
+
+`g4bl-runner` gains the grid smoke section (self campaign 5, cluster 29824782@jobsub04, 3 jobs exit 0, nts+logs in SAM, SAM log shows tar mode and 2 manifest lines); `2026-09-01-mu2e-log-manifest-never-landed` records the first SAM-declared log carrying the manifest; the cvmfs-release decision page notes the validation.

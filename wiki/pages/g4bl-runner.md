@@ -2,7 +2,7 @@
 title: g4bl runner architecture (native AL9 spack)
 tags: [reference, runner, g4bl, spack, al9, entry-mode]
 sources: [2026-04-27-g4bl-runner-integration]
-updated: 2026-09-01
+updated: 2026-09-02
 ---
 
 # g4bl runner architecture
@@ -132,6 +132,41 @@ json2jobdef --json g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
 `bin/` + `utils/` once, pins the digest on the entry, and ships the tar
 to every job (`MU2EGRID_PRODTOOLS_TAR`); refused for `mu2epro`. See
 [[2026-08-28-workers-run-prodtools-from-cvmfs-releases]] (amendment).
+
+## Grid end-to-end smoke (2026-09-02) — PASSED
+
+First g4bl campaign on FermiGrid through the direct backend, run as
+`oksuzian` from the `code-tarball` checkout via the dev-tarball opt-in
+(no cvmfs release involved):
+
+- Enqueue: `json2jobdef --json g4bl_smoke_006.json --desc G4blSmoke
+  --dsconf MCPTest006 --prod --enqueue --slice-size 100 --prodtools-dir
+  $PWD` in a `setupmu2e-art.sh && muse setup ops && setup OfflineOps &&
+  getToken` shell (no Musing; `setup OfflineOps` supplies `pushOutput`).
+  Self ledger campaign 5, `prodtools_tar =
+  .../prodtools-tarballs/prodtools-37d4024e0bf9.tar` (706560 bytes).
+- Tick: `submissions --db <self.db> run --campaign 5` → cluster
+  `29824782@jobsub04.fnal.gov`, 3 jobs (10 events each), row 11. All
+  three ran within a minute of submission, exit 0, wall 239–344 s.
+- Worker log (`log.oksuzian.G4blSmoke.MCPTest006.00000000-1788407754.log`,
+  SAM-declared, 12393 lines): line 17 `MU2EGRID_PRODTOOLS_TAR=
+  prodtools-37d4024e0bf9.tar`, line 25 `=== extracting dev prodtools
+  tarball ...`, line 30 `=== exec python3 runmu2e.py ===`; g4beamline
+  3.08 (spack, native AL9) `simulation complete`; `Copied nts...root to
+  /pnfs/mu2e/scratch/datasets/usr-nts/nts/oksuzian/G4blSmoke/MCPTest006`
+  + `Declare SAM`. **`grep -c 'mu2egrid manifest'` = 2** in the
+  SAM-declared log — the first SAM log ever seen carrying the manifest
+  (see [[2026-09-01-mu2e-log-manifest-never-landed]]).
+- SAM: 3 × `nts.oksuzian.G4blSmoke.MCPTest006.0000000N.root`, 3 logs.
+  Verification tick closed row 11 `complete (3 indices)`; campaign 5
+  `complete 3/3`.
+
+What this proves beyond the local smoke: RCDS/dropbox delivery of the
+prodtools tar, `runjob.sh` tar mode on a real worker, the user bearer
+token's scopes for `usr-nts`/`usr-etc` scratch pushes, and the
+`_finish_job` manifest reaching a SAM-declared log. Still unproven: the
+same chain from a cvmfs release (v3.3.1 tag at `7abdea7` is the plan; the
+smoke ran the branch HEAD, which also carries the runmu2e consolidation).
 
 ## Local end-to-end smoke (2026-09-01)
 

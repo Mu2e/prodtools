@@ -89,7 +89,10 @@ decision's substance:
 "Keep the tarball as a `run_as=self`-only dev path" below was rejected
 in August because it "works when the env var is forgotten"; the
 restored form cannot be reached by forgetting anything — only by naming
-a non-cvmfs directory.
+a non-cvmfs directory. Validated the same day: self campaign 5
+(`cnf.oksuzian.G4blSmoke.MCPTest006.0.tar`, cluster 29824782@jobsub04)
+ran three jobs from the shipped tar, exit 0, outputs and logs in SAM —
+see [[g4bl-runner]].
 
 ## Alternatives considered
 - Keep the tarball as a `run_as=self`-only dev path: rejected in August —

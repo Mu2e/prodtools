@@ -2,7 +2,7 @@
 title: Direct-backend art logs never carried the SAM manifest (fixed v3.3.2)
 tags: [incident, runmu2e, logs, manifest, mu2e, g4bl, direct-backend, pushoutput]
 sources: []
-updated: 2026-09-01
+updated: 2026-09-02
 ---
 
 # Direct-backend art logs never carried the SAM manifest
@@ -86,6 +86,16 @@ log: expected **≥ 1**. Do not promise **2** (header + selfcheck) the
 way this page originally did — that count was a property of the local
 file copy, not of whatever `writeLog` ultimately assembles into the
 SAM-declared log.
+
+**Verified 2026-09-02:** the first SAM-declared log produced by the fixed
+tail (`_finish_job`, branch HEAD `bdd677f` shipped as a dev tarball) —
+`log.oksuzian.G4blSmoke.MCPTest006.00000000-1788407754.log`, g4bl grid
+smoke, campaign 5 / cluster 29824782@jobsub04 — carries **2** manifest
+lines (header at 10200, selfcheck at 10229, sha256 of the nts between).
+So under the stdout-print mechanism the selfcheck line does survive
+`writeLog` too; the gate stays "≥ 1" because that is what the mechanism
+guarantees. This was a g4bl job; the same `_finish_job` tail serves mu2e
+jobs, but no mu2e SAM log has been checked yet.
 
 ## Related
 
