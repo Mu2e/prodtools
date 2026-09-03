@@ -128,8 +128,15 @@ When regenerating, read in this order:
    deck and its support files — copied wholesale into the cnf's
    `work/`; must exist), `main_input` (deck filename relative to
    `g4bl_dir`; must exist inside it), `events_per_job` and `njobs`
-   (positive integers), and `outloc` (the standard dataset-glob ->
-   location map, e.g. `{"nts.*.root": "scratch"}`). `desc`, `dsconf`,
+   (positive integers), `outloc` (the standard dataset-glob ->
+   location map, e.g. `{"nts.*.root": "scratch"}`), and the optional
+   `g4bl_params` (dict of g4bl parameter name -> string or number; each
+   pair is appended to the g4bl command line as `key=value`, overriding
+   the deck's `param -unset` defaults, so e.g. `{"READ_Beam_File": 1}`
+   selects a deck mode without editing the `.in`; names must be
+   identifiers, values never bool, and `First_Event`, `Num_Events`,
+   `histoFile`, `viewer` are the worker's own and are refused).
+   `jobquery --recipe` prints them. `desc`, `dsconf`,
    and `owner` are the same top-level keys every entry uses. Forbidden
    alongside `runner: "g4bl"`: `fcl`, `simjob_setup`, `code`,
    `input_data`, `resampler_name`, `pbeam`, `generic_tarball`,

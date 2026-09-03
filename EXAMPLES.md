@@ -487,6 +487,15 @@ json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
   exist inside it. `events_per_job` and `njobs` are positive integers.
   `outloc` is the standard dataset-glob → location map. `desc`,
   `dsconf`, and `owner` are the same top-level keys every entry uses.
+- `g4bl_params` (optional) is a dict of g4bl parameter name → string or
+  number. Each pair is appended to the g4bl command line as `key=value`,
+  after the worker's own `First_Event`/`Num_Events`/`histoFile`, and
+  overrides the deck's `param -unset` default of that name — so
+  `{"READ_Beam_File": 1}` selects a deck mode from the JSON instead of an
+  edited `.in`. Names must be identifiers, values are never booleans
+  (g4bl reads 0/1), and `First_Event`, `Num_Events`, `histoFile`,
+  `viewer` are refused because the worker sets them. They ride in
+  `jobpars.json` verbatim and `jobquery --recipe` prints them.
 - Forbidden alongside `runner: "g4bl"`: `fcl`, `simjob_setup`, `code`,
   `input_data`, `resampler_name`, `pbeam`, `generic_tarball`,
   `input_pattern`, `firstjob`, `inloc` — any of these is a validation
@@ -1488,6 +1497,13 @@ a one-time operator step (section 11 `submissions`, wiki page
 - `json2jobdef: g4bl entry '<key>' must be a positive integer, got
   <value>` — `events_per_job`/`njobs` must be positive ints (not
   booleans, not strings).
+- `json2jobdef: g4bl_params must be a dict of name -> value, got ...` /
+  `g4bl_params name '<name>' is not a g4bl parameter name` /
+  `g4bl_params must not set '<name>': the worker owns First_Event,
+  Num_Events, histoFile, viewer` / `g4bl_params['<name>'] must be a
+  string or number` — the entry's `g4bl_params` (section 3) is checked
+  at the boundary; a worker-owned name would silently move every job's
+  event range or output, so it is refused rather than overridden.
 - `json2jobdef: g4bl_dir not found: <dir>` / `json2jobdef: main_input
   not found: <path>` — the deck directory (or the deck inside it) does
   not exist; both are checked before anything is built.

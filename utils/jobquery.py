@@ -141,6 +141,10 @@ class Mu2eJobPars(Mu2eJobBase):
                 # point at a mystery cnf to identify it.
                 lines.append("# runner: g4bl — no embedded mu2e.fcl; "
                              "work/ carries the g4bl deck directly")
+                params = self.json_data.get('g4bl_params') or {}
+                if params:
+                    lines.append("# g4bl_params: " + " ".join(
+                        f"{k}={v}" for k, v in sorted(params.items())))
             else:
                 lines.append("# (no embedded mu2e.fcl — code-tarball job definition)")
         else:

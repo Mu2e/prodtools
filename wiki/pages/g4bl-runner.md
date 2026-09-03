@@ -45,7 +45,11 @@ A campaign JSON entry:
 returns `'g4bl'` before any other branch — and validates it with
 `_validate_g4bl_entry`: required `desc`, `dsconf`, `outloc`,
 `g4bl_dir`, `main_input`, `events_per_job`, `njobs` (positive ints for
-the last two); forbidden `fcl`, `simjob_setup`, `code`, `input_data`,
+the last two); optional `g4bl_params` (2026-09-03: dict of g4bl
+parameter name → string/number, appended to the g4bl command line as
+`key=value` after the worker's own overrides; `First_Event`,
+`Num_Events`, `histoFile`, `viewer` refused — e.g. `{"READ_Beam_File":
+1}` picks the deck's beam-file mode from the JSON); forbidden `fcl`, `simjob_setup`, `code`, `input_data`,
 `resampler_name`, `pbeam`, `generic_tarball`, `input_pattern`,
 `firstjob`, `inloc` — any art-pipeline key alongside `runner: "g4bl"`
 is a config error, not something to silently ignore. It then packs a
@@ -55,7 +59,8 @@ self-describing cnf tarball via `_build_g4bl_tarball`:
 cnf.<owner>.<desc>.<dsconf>.0.tar
 ├── work/            # copy of g4bl_dir: deck + Geometry/ + aux files
 └── jobpars.json     # {runner, desc, dsconf, main_input,
-                      #  events_per_job, njobs}
+                      #  events_per_job, njobs, owner, tbs,
+                      #  g4bl_params (only when set)}
 ```
 
 No `mu2ejobdef` call, no fcl, no Musing setup. `bin/json2jobdef`'s

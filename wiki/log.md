@@ -1388,3 +1388,7 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 ## [2026-09-02] update | data/g4bl/g4bl.json checked in
 
 `g4bl-runner` now points at the checked-in config `data/g4bl/g4bl.json` (G4blSmoke entry, dsconf MCPTest007 next free); EXAMPLES regenerated for the three command sites.
+
+## [2026-09-03] update | g4bl_params entry key
+
+`g4bl-runner` documents the optional `g4bl_params` dict (command-line `key=value` overrides, worker-owned names refused) so deck modes such as `READ_Beam_File=1` come from the JSON instead of an edited `.in`.

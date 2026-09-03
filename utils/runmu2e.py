@@ -726,12 +726,19 @@ def _validation_enabled(jobdesc, args):
     return enabled
 
 
-def _g4bl_script(main_input, first_event, num_events, histo_path):
+def _g4bl_script(main_input, first_event, num_events, histo_path, params=None):
     """Bash for one g4bl process — the proven 401e3da recipe: native
     AL9 spack, selective env unset (muse setup ops leaves SPACK_ENV
     pointing at ops-019, where g4beamline does not exist), and CLI
     `key=value` overrides (g4bl 3.08b rejects `param k=v` on the
-    command line; that form is input-file syntax only)."""
+    command line; that form is input-file syntax only).
+
+    `params` are the entry's `g4bl_params` (jobpars), appended after the
+    worker's own overrides in sorted order — a stable command line, and
+    the validator at enqueue guarantees no key collides with the
+    worker's (json2jobdef.G4BL_WORKER_PARAMS)."""
+    extra = "".join(f" {k}={shlex.quote(str(v))}"
+                    for k, v in sorted((params or {}).items()))
     return (
         "unset SPACK_ENV PYTHONHOME PYTHONPATH PYTHONNOUSERSITE\n"
         "source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh"
@@ -740,7 +747,7 @@ def _g4bl_script(main_input, first_event, num_events, histo_path):
         "cd work\n"
         f"g4bl {shlex.quote(main_input)} viewer=none "
         f"First_Event={first_event} Num_Events={num_events} "
-        f"histoFile={shlex.quote(histo_path)}"
+        f"histoFile={shlex.quote(histo_path)}" + extra
     )
 
 
@@ -862,10 +869,12 @@ def _run_g4bl_job(jobdesc, index):
                        dsconf=jp['dsconf'], sequencer=sequencer)
     histo_file = str(Mu2eName.build(tier='nts', extension='root', **name_fields))
     log_file = str(Mu2eName.build(tier='log', extension='log', **name_fields))
+    params = jp.get('g4bl_params') or {}
     script = _g4bl_script(main_input, first_event, events_per_job,
-                          os.path.abspath(histo_file))
+                          os.path.abspath(histo_file), params=params)
     print(f"[g4bl] events_per_job={events_per_job} "
-          f"first_event={first_event} histo={histo_file}")
+          f"first_event={first_event} histo={histo_file}"
+          + (f" params={params}" if params else ""))
     try:
         run(['bash', '-c', script], shell=False)
         job_failed = False

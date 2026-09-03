@@ -1,6 +1,6 @@
 [
     {
-	"_comment": "Mu2e beamline G4beamline run through the prodtools direct backend (runner g4bl). g4bl_dir is a clone of https://github.com/Mu2e/G4BeamlineScripts; its Mu2E.in and Geometry/ are copied into the cnf, so the campaign freezes whatever the clone holds at build time. Select the entry with --desc G4blSmoke --dsconf <dsconf>; a dsconf is used once (MCPTest005 = local smoke, MCPTest006 = grid smoke, 2026-09). Total events = njobs x events_per_job; job i starts at event i*events_per_job+1. Outputs are nts.<owner>.<desc>.<dsconf>.<index>.root with owner from $USER.",
+	"_comment": "Mu2e beamline G4beamline run through the prodtools direct backend (runner g4bl). g4bl_dir is a clone of https://github.com/Mu2e/G4BeamlineScripts; its Mu2E.in and Geometry/ are copied into the cnf, so the campaign freezes whatever the clone holds at build time. Select the entry with --desc G4blSmoke --dsconf <dsconf>; a dsconf is used once (MCPTest005 = local smoke, MCPTest006 = grid smoke, 2026-09). Total events = njobs x events_per_job; job i starts at event i*events_per_job+1. Outputs are nts.<owner>.<desc>.<dsconf>.<index>.root with owner from $USER. Optional g4bl_params, e.g. {\"READ_Beam_File\": 1}, are appended to the g4bl command line as key=value overrides of the deck's param -unset defaults (never First_Event/Num_Events/histoFile/viewer, which the worker sets).",
 	"runner": "g4bl",
 	"desc": "G4blSmoke",
 	"dsconf": "MCPTest007",

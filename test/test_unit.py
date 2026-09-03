@@ -14211,6 +14211,17 @@ class TestG4blBuilder(unittest.TestCase):
                                       'outfiles': {'g4bl':
                                           'nts.owner.G4blSmoke.version.sequencer.root'}}})
 
+    def test_g4bl_params_written_to_jobpars_only_when_configured(self):
+        """`g4bl_params` rides in jobpars verbatim so the worker can
+        append them to the g4bl command line; an entry without the key
+        writes no key (test_tarball_contents pins the exact dict)."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        self.config['g4bl_params'] = {'READ_Beam_File': 1, 'Proton_Dump_kill': 0}
+        _build_g4bl_tarball(self.config)
+        with tarfile.open(get_parfile_name(self.config)) as t:
+            jp = json.load(t.extractfile('jobpars.json'))
+        self.assertEqual(jp['g4bl_params'], {'READ_Beam_File': 1, 'Proton_Dump_kill': 0})
+
     def test_vcs_dirs_excluded_from_tarball(self):
         """g4bl_dir is often a git checkout. tar.add used to sweep the
         whole tree (arcname='work') with no filter, shipping .git/
@@ -14382,6 +14393,46 @@ class TestG4blPreflight(unittest.TestCase):
         self.assertEqual(problems, [])
 
 
+class TestG4blParamsValidation(unittest.TestCase):
+    """`g4bl_params` is validated at the entry boundary: a dict of
+    g4bl parameter names to scalars, never one of the params the worker
+    owns (First_Event, Num_Events, histoFile, viewer) — a collision
+    there would silently change every job's event range or output."""
+
+    def _config(self, params):
+        d = _mkdtemp()
+        Path(d, 'deck.in').write_text('# deck\n')
+        return {'runner': 'g4bl', 'desc': 'D', 'dsconf': 'C',
+                'g4bl_dir': d, 'main_input': 'deck.in',
+                'events_per_job': 10, 'njobs': 1,
+                'outloc': {'nts.*.root': 'scratch'}, 'g4bl_params': params}
+
+    def _refused(self, params, needle):
+        from utils.json2jobdef import _validate_g4bl_entry
+        with self.assertRaises(SystemExit) as cm:
+            _validate_g4bl_entry(self._config(params))
+        self.assertIn('g4bl_params', str(cm.exception))
+        self.assertIn(needle, str(cm.exception))
+
+    def test_valid_params_pass(self):
+        from utils.json2jobdef import _validate_g4bl_entry
+        _validate_g4bl_entry(self._config({'READ_Beam_File': 1, 'Target_Color': 'red',
+                                           'BsigmaT': 0.5}))
+
+    def test_not_a_dict_refused(self):
+        self._refused(['READ_Beam_File=1'], 'dict')
+
+    def test_reserved_worker_param_refused(self):
+        self._refused({'First_Event': 5}, 'First_Event')
+        self._refused({'histoFile': 'x.root'}, 'histoFile')
+
+    def test_bad_name_refused(self):
+        self._refused({'bad-name': 1}, 'bad-name')
+
+    def test_non_scalar_value_refused(self):
+        self._refused({'Target_Color': [1, 2]}, 'Target_Color')
+
+
 class TestG4blWorker(unittest.TestCase):
     """Worker-side g4bl mode: jobdesc validation, command construction,
     run mechanics with a stubbed g4bl, dispatch tail routing."""
@@ -14417,7 +14468,19 @@ class TestG4blWorker(unittest.TestCase):
         self.assertIn('histoFile=/abs/nts.x.root', s)
         self.assertNotIn('param ', s)
 
-    def _make_cnf(self, tmp):
+    def test_g4bl_script_appends_entry_params_after_the_worker_ones(self):
+        """Entry `g4bl_params` become extra `key=value` CLI overrides
+        (the only form g4bl 3.08b accepts on the command line), sorted
+        for a stable command, values shell-quoted."""
+        from utils.runmu2e import _g4bl_script
+        s = _g4bl_script('deck.in', 101, 100, '/abs/nts.x.root',
+                         params={'READ_Beam_File': 1, 'Target_Color': 'a b'})
+        tail = s.split('histoFile=/abs/nts.x.root', 1)[1]
+        self.assertEqual(tail, " READ_Beam_File=1 Target_Color='a b'")
+        self.assertEqual(_g4bl_script('deck.in', 101, 100, '/abs/nts.x.root'),
+                         _g4bl_script('deck.in', 101, 100, '/abs/nts.x.root', params={}))
+
+    def _make_cnf(self, tmp, params=None):
         g4bl_dir = os.path.join(tmp, 'scripts')
         os.makedirs(g4bl_dir)
         Path(g4bl_dir, 'deck.in').write_text('# deck\n')
@@ -14425,7 +14488,41 @@ class TestG4blWorker(unittest.TestCase):
         _build_g4bl_tarball({
             'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
             'owner': 'testuser', 'g4bl_dir': g4bl_dir,
-            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 2})
+            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 2,
+            **({'g4bl_params': params} if params else {})})
+
+    def test_run_g4bl_job_appends_jobpars_params_to_the_command(self):
+        """jobpars.g4bl_params reach the g4bl command line, after the
+        worker's own First_Event/Num_Events/histoFile."""
+        from utils import runmu2e
+        tmp = tempfile.mkdtemp(prefix='g4bl_params_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp, params={'READ_Beam_File': 1})
+        captured = {}
+
+        def fake_run(cmd, shell=False, **kw):
+            captured['script'] = cmd[2]
+            return 0
+
+        with patch.object(runmu2e, 'run', fake_run):
+            runmu2e._run_g4bl_job(self._jobdesc(), 0)
+        cmdline = captured['script'].splitlines()[-1]
+        self.assertTrue(cmdline.endswith(' READ_Beam_File=1'), cmdline)
+        self.assertLess(cmdline.index('histoFile='), cmdline.index('READ_Beam_File='))
+
+    def test_recipe_prints_g4bl_params(self):
+        from utils.jobquery import Mu2eJobPars
+        tmp = tempfile.mkdtemp(prefix='g4bl_recipe_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp, params={'READ_Beam_File': 1, 'BsigmaT': 0.5})
+        text = Mu2eJobPars('cnf.testuser.G4blSmoke.TestConf.0.tar').recipe()
+        self.assertIn('# g4bl_params: BsigmaT=0.5 READ_Beam_File=1', text)
 
     def test_run_g4bl_job_names_and_first_event(self):
         from utils import runmu2e

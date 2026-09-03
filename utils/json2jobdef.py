@@ -356,7 +356,38 @@ def _validate_g4bl_entry(config):
     if not (g4bl_dir / config['main_input']).is_file():
         sys.exit(f"json2jobdef: main_input not found: "
                  f"{g4bl_dir / config['main_input']}")
+    if 'g4bl_params' in config:
+        _validate_g4bl_params(config['g4bl_params'])
     _validate_entry_values(config)
+
+
+# Command-line params the worker itself sets on every g4bl job
+# (utils/runmu2e._g4bl_script). An entry override of one of these would
+# silently change every job's event range or output name, so it is a
+# config error.
+G4BL_WORKER_PARAMS = ('First_Event', 'Num_Events', 'histoFile', 'viewer')
+_G4BL_PARAM_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _validate_g4bl_params(params):
+    """`g4bl_params`: {g4bl parameter name: scalar}. Each pair becomes a
+    `key=value` command-line override for the deck's `param -unset`
+    defaults (e.g. READ_Beam_File=1), so the JSON, not an edited .in,
+    selects a deck mode. Values are str/int/float; bool is refused as
+    ambiguous (g4bl reads 0/1)."""
+    if not isinstance(params, dict):
+        sys.exit(f"json2jobdef: g4bl_params must be a dict of "
+                 f"name -> value, got {params!r}")
+    for name, value in params.items():
+        if not isinstance(name, str) or not _G4BL_PARAM_NAME.match(name):
+            sys.exit(f"json2jobdef: g4bl_params name {name!r} is not a "
+                     f"g4bl parameter name ([A-Za-z_][A-Za-z0-9_]*)")
+        if name in G4BL_WORKER_PARAMS:
+            sys.exit(f"json2jobdef: g4bl_params must not set {name!r}: "
+                     f"the worker owns {', '.join(G4BL_WORKER_PARAMS)}")
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            sys.exit(f"json2jobdef: g4bl_params[{name!r}] must be a "
+                     f"string or number, got {value!r}")
 
 def validate_required_fields(config):
     """Validate required fields, and that supplied entry values are well formed.
@@ -479,6 +510,9 @@ def _build_g4bl_tarball(config):
         'events_per_job': config['events_per_job'],
         'njobs': config['njobs'],
         'owner': owner,
+        # g4bl_params (validated at the boundary) ride verbatim; absent
+        # means absent, so older cnfs and the exact-shape test agree.
+        **({'g4bl_params': config['g4bl_params']} if config.get('g4bl_params') else {}),
         # Mu2eJobBase has no g4bl-shaped reader of its own: submit's
         # _read_cnf_facts and verify_row both go through job_outputs()/
         # njobs(), which only look at tbs. njobs here must match the flat
