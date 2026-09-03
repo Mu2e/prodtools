@@ -13,6 +13,14 @@ for _mod in ('samweb_client', 'ifdh'):
 
 from utils.epochs.dsconf import DsconfKey, DsconfParseError, parse_dsconf, family_of
 
+from utils.epochs.epoch_files import (EpochFile, EpochFileError, load_epoch_files,
+                                      propose_epoch, write_epoch_file, EPOCH_STATUSES)
+
+
+def _tmpdir():
+    d = tempfile.mkdtemp()
+    return d
+
 
 class TestDsconfParse(unittest.TestCase):
     def test_full_grammar(self):
@@ -70,6 +78,73 @@ class TestDsconfOrder(unittest.TestCase):
     def test_purpose_not_in_order(self):
         # best vs perfect are siblings by purpose; the order key ignores it
         self.assertEqual(self.key('MDC2020ar_best_v1_3'), self.key('MDC2020ar_perfect_v1_3'))
+
+
+class TestEpochFiles(unittest.TestCase):
+    def _write(self, d, name, data):
+        with open(os.path.join(d, name + '.json'), 'w') as f:
+            json.dump(data, f)
+
+    def test_load_minimal(self):
+        d = _tmpdir()
+        self._write(d, 'MDC2025au', {
+            'name': 'MDC2025au', 'purpose': 'Run-1 nominal', 'status': 'current',
+            'roots': ['dig.mu2e.%.MDC2025au_%.art']})
+        files = load_epoch_files(d)
+        e = files['MDC2025au']
+        self.assertEqual(e.family, 'MDC2025')
+        self.assertEqual(e.pins['exclude'], [])
+        self.assertEqual(e.pins['hold'], [])
+
+    def test_name_must_match_filename_and_parse(self):
+        d = _tmpdir()
+        self._write(d, 'MDC2025au', {'name': 'MDC2025an', 'purpose': '', 'status': 'current',
+                                     'roots': ['dig.mu2e.%.MDC2025an_%.art']})
+        with self.assertRaises(EpochFileError):
+            load_epoch_files(d)
+
+    def test_bad_status_rejected(self):
+        d = _tmpdir()
+        self._write(d, 'MDC2025au', {'name': 'MDC2025au', 'purpose': '', 'status': 'active',
+                                     'roots': ['dig.mu2e.%.MDC2025au_%.art']})
+        with self.assertRaises(EpochFileError):
+            load_epoch_files(d)
+
+    def test_pin_without_reason_rejected(self):
+        d = _tmpdir()
+        self._write(d, 'MDC2025au', {'name': 'MDC2025au', 'purpose': '', 'status': 'current',
+                                     'roots': ['dig.mu2e.%.MDC2025au_%.art'],
+                                     'pins': {'exclude': [{'dataset': 'mcs.mu2e.X.MDC2025au_best_v1_5.art'}]}})
+        with self.assertRaises(EpochFileError):
+            load_epoch_files(d)
+
+    def test_root_must_be_five_field_mu2e_pattern(self):
+        d = _tmpdir()
+        self._write(d, 'MDC2025au', {'name': 'MDC2025au', 'purpose': '', 'status': 'current',
+                                     'roots': ['dig.oksuzian.%.MDC2025au_%.art']})
+        with self.assertRaises(EpochFileError):
+            load_epoch_files(d)
+
+    def test_propose_from_sample_dsconf(self):
+        data = propose_epoch('MDC2025au_best_v1_5')
+        self.assertEqual(data['name'], 'MDC2025au')
+        self.assertEqual(data['roots'], ['dig.mu2e.%.MDC2025au_%.art'])
+        self.assertEqual(data['status'], 'current')
+        self.assertEqual(data['purpose'], '')
+        d = _tmpdir()
+        path = write_epoch_file(d, data)
+        self.assertTrue(path.endswith('MDC2025au.json'))
+        self.assertIn('MDC2025au', load_epoch_files(d))
+
+    def test_write_refuses_to_overwrite(self):
+        d = _tmpdir()
+        data = propose_epoch('MDC2025au_best_v1_5')
+        write_epoch_file(d, data)
+        with self.assertRaises(EpochFileError):
+            write_epoch_file(d, data)
+
+    def test_missing_dir_is_empty_not_error(self):
+        self.assertEqual(load_epoch_files(os.path.join(_tmpdir(), 'nope')), {})
 
 
 if __name__ == '__main__':
