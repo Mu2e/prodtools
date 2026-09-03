@@ -6,7 +6,6 @@ returns every child/parent FILE of the dataset; we group them back to
 5-field dataset names). Everything is injectable so the catalog core
 is testable without the Mu2e environment.
 """
-import re
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from utils.job_common import Mu2eName
@@ -53,9 +52,6 @@ def _default_definitions(defname=None, user=None):
 def _default_locate(fn):
     from utils.samweb_wrapper import locate_file
     return locate_file(fn)
-
-
-_LOC_RE = re.compile(r'^(?:dcache:|enstore:)?(/pnfs/[^(\s]+)')
 
 
 class SamSource:
@@ -113,11 +109,17 @@ class SamSource:
 
     def local_path(self, filename: str) -> str:
         """/pnfs path of a SAM file for direct reading on a gpvm; '' if
-        SAM does not know the file. Only used for cnf tarballs."""
+        SAM does not know the file. Only used for cnf tarballs.
+
+        `locate_file` returns a location record dict (e.g.
+        {'full_path': 'dcache:/pnfs/...', 'location_type': 'disk', ...})
+        or '' when SAM has no location for the file. We hand the record
+        to `path_from_sam_location`, the single home of the
+        locate -> full_path -> cleanup grammar (storage-prefix strip,
+        trailing '(pool@node)' strip, filename append), so a malformed
+        record raises ValueError there rather than being parsed twice."""
         loc = self._locate(filename)
         if not loc:
             return ''
-        m = _LOC_RE.match(loc)
-        if not m:
-            raise ValueError(f'unexpected SAM location for {filename}: {loc!r}')
-        return f'{m.group(1).rstrip("/")}/{filename}'
+        from utils.file_resolver import path_from_sam_location
+        return path_from_sam_location(filename, loc)

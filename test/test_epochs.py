@@ -231,8 +231,21 @@ class TestSamSourceQueries(unittest.TestCase):
         self.assertEqual(calls, ['ischildof: (dh.dataset mcs.mu2e.A.MDC2025au_best_v1_5.art)'])
         self.assertEqual(out, {'nts.mu2e.A.MDC2025au_best_v1_5.root': 1})
 
+    def test_parents_query_and_grouping(self):
+        calls = []
+        def fake_list_files(q):
+            calls.append(q)
+            return ['dts.mu2e.A.MDC2025ap.001430_00000000.art',
+                    'dts.mu2e.A.MDC2025ap.001430_00000001.art']
+        src = SamSource(list_files_fn=fake_list_files)
+        out = src.parents('mcs.mu2e.A.MDC2025au_best_v1_5.art')
+        self.assertEqual(calls, ['isparentof: (dh.dataset mcs.mu2e.A.MDC2025au_best_v1_5.art)'])
+        self.assertEqual(out, {'dts.mu2e.A.MDC2025ap.art': 2})
+
     def test_dig_datasets_filters_five_field_art_and_counts(self):
+        calls = []
         def fake_defs(defname=None, user=None):
+            calls.append(defname)
             return ['dig.mu2e.A.MDC2025au_best_v1_5.art',
                     'dig.mu2e.A.MDC2025au_best_v1_5.001430_00000007',   # per-index def
                     'dig.mu2e.B.MDC2025au_best_v1_3.art',
@@ -241,13 +254,49 @@ class TestSamSourceQueries(unittest.TestCase):
                   'dh.dataset dig.mu2e.B.MDC2025au_best_v1_3.art': 0}
         src = SamSource(definitions_fn=fake_defs, count_files_fn=lambda q: counts[q])
         self.assertEqual(src.dig_datasets('MDC2025'), {'dig.mu2e.A.MDC2025au_best_v1_5.art': 10})
+        self.assertEqual(calls, ['dig.mu2e.%.MDC2025%.art'])
+
+    def test_nfiles_and_first_file_queries(self):
+        count_calls = []
+        def fake_count_files(q):
+            count_calls.append(q)
+            return 42
+        src = SamSource(count_files_fn=fake_count_files)
+        self.assertEqual(src.nfiles('dts.mu2e.A.MDC2025ap.art'), 42)
+        self.assertEqual(count_calls, ['dh.dataset dts.mu2e.A.MDC2025ap.art'])
+
+        list_calls = []
+        def fake_list_files(q):
+            list_calls.append(q)
+            return ['dts.mu2e.A.MDC2025ap.001430_00000000.art']
+        src = SamSource(list_files_fn=fake_list_files)
+        self.assertEqual(src.first_file('dts.mu2e.A.MDC2025ap.art'),
+                         'dts.mu2e.A.MDC2025ap.001430_00000000.art')
+        self.assertEqual(list_calls, ['dh.dataset dts.mu2e.A.MDC2025ap.art with limit 1'])
+
+        src = SamSource(list_files_fn=lambda q: [])
+        self.assertEqual(src.first_file('dts.mu2e.A.MDC2025ap.art'), '')
+
+    def test_cnf_names_keeps_six_field_tar_only(self):
+        calls = []
+        def fake_defs(defname=None, user=None):
+            calls.append(defname)
+            return ['cnf.mu2e.A.B.0.tar', 'cnf.mu2e.A.B.0.tar',
+                    'cnf.mu2e.A.B.tar', 'cnf.mu2e.A.B.0.txt']
+        src = SamSource(definitions_fn=fake_defs)
+        self.assertEqual(src.cnf_names(), ['cnf.mu2e.A.B.0.tar'])
+        self.assertEqual(calls, ['cnf.mu2e.%'])
 
     def test_local_path_strips_dcache_prefix_and_appends_name(self):
-        src = SamSource(locate_fn=lambda f: 'dcache:/pnfs/mu2e/persistent/x/y(1@z)')
+        src = SamSource(locate_fn=lambda f: {'full_path': 'dcache:/pnfs/mu2e/persistent/x/y',
+                                             'location_type': 'disk'})
         self.assertEqual(src.local_path('cnf.mu2e.A.B.0.tar'),
                          '/pnfs/mu2e/persistent/x/y/cnf.mu2e.A.B.0.tar')
         src = SamSource(locate_fn=lambda f: '')
         self.assertEqual(src.local_path('cnf.mu2e.A.B.0.tar'), '')
+        src = SamSource(locate_fn=lambda f: 'dcache:/pnfs/x')
+        with self.assertRaises(ValueError):
+            src.local_path('cnf.mu2e.A.B.0.tar')
 
 
 if __name__ == '__main__':
