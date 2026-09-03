@@ -2,7 +2,7 @@
 
 Decisions 11, 12, 13. Nothing here reads a clock.
 """
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from utils.epochs.dsconf import parse_dsconf
 from utils.epochs.graph import Catalog, Member
@@ -56,38 +56,28 @@ def _member_children(cat: Catalog, name: str) -> List[str]:
     return sorted(c.name for c in cat.members.values() if name in c.parents)
 
 
-def _loaded_families(cat: Catalog) -> Set[str]:
-    """Families that have at least one loaded epoch file."""
-    return {e.family for e in cat.epochs.values()}
-
-
-def _newest_epoch_keys(cat: Catalog) -> Dict[str, tuple]:
-    """Newest DsconfKey.sort_key(), one per family with a loaded epoch.
-    Computed once so the retire() input loop is O(inputs + epochs), not
-    O(inputs * epochs)."""
-    out: Dict[str, tuple] = {}
-    for e in cat.epochs.values():
-        key = parse_dsconf(e.name + '_x_v0_0').sort_key()
-        if e.family not in out or key > out[e.family]:
-            out[e.family] = key
-    return out
-
-
-def foreign_family_inputs(cat: Catalog) -> List[str]:
-    """Inputs whose dsconf family has no loaded epoch (cat.epochs).
-
-    These cannot be judged live-vs-retirable until their own family's
-    epoch file is loaded (no epoch means no notion of "current" for
-    that family) — retire() skips them rather than guess, so the CLI
-    should warn about them separately instead of silently omitting
-    them.
-    """
-    loaded_families = _loaded_families(cat)
-    return sorted(name for name in cat.inputs
-                  if parse_dsconf(name.split('.')[3]).family not in loaded_families)
+def _newest_epoch_key(cat: Catalog, family: str):
+    # A bare lettered epoch name (e.g. 'MDC2025au') parses directly; no
+    # need to fabricate a purpose/version tail. None is legitimate here:
+    # by the time retire() calls this, `family` is known to be loaded
+    # (retire() refuses to run otherwise, see below), so None means the
+    # family has an epoch file but that epoch happens to own no digs at
+    # all — the input is then judged by its descendants alone.
+    keys = [parse_dsconf(e.name) for e in cat.epochs.values() if e.family == family]
+    return max((k.sort_key() for k in keys), default=None)
 
 
 def retire(cat: Catalog) -> List[Dict]:
+    if cat.missing_families or cat.unclaimed_digs:
+        bits = []
+        if cat.missing_families:
+            bits.append('families with digs but no epoch file: ' +
+                        ', '.join(sorted(cat.missing_families)))
+        if cat.unclaimed_digs:
+            digs = sorted(d for lst in cat.unclaimed_digs.values() for d in lst)
+            bits.append('digs matching no epoch root: ' + ', '.join(digs))
+        raise ValueError('retire refused: catalog is incomplete — ' + '; '.join(bits) +
+                         "; run 'epochs propose --family <F>' and edit the file, then retry")
     out = []
     for m in sorted(cat.members.values(), key=lambda m: m.name):
         if m.hold or m.status == 'excluded':
@@ -105,17 +95,13 @@ def retire(cat: Catalog) -> List[Dict]:
             continue
         out.append({'dataset': m.name, 'nfiles': m.nfiles, 'kind': 'member',
                     'reason': reason, 'children': _member_children(cat, m.name)})
-
-    loaded_families = _loaded_families(cat)
-    newest = _newest_epoch_keys(cat)
     live = {m.name for m in cat.members.values() if m.status in ('current', 'stale')}
     for name, rec in sorted(cat.inputs.items()):
         if any(d in live for d in rec['descendants']):
             continue
-        key = parse_dsconf(name.split('.')[3])
-        if key.family not in loaded_families:
-            continue          # its own family isn't loaded: cannot be judged
-        if key.sort_key()[0] > newest[key.family][0]:
+        key = parse_dsconf(name.split('.')[3]).sort_key()
+        newest = _newest_epoch_key(cat, parse_dsconf(name.split('.')[3]).family)
+        if newest is not None and key[0] > newest[0]:
             continue          # newer letters than any epoch: awaiting its mix
         out.append({'dataset': name, 'nfiles': rec['nfiles'], 'kind': 'input',
                     'reason': 'no current or stale descendant',

@@ -169,10 +169,14 @@ class FakeSource:
         self.cnfs = cnfs or {}
         self.files = files or {}
         self.foreign = set()
+        self.unparseable_defs = []
         self._parents = {}
         for p, rec in graph.items():
             for c in rec.get('children', []):
                 self._parents.setdefault(c, []).append(p)
+
+    def dig_families(self):
+        return {parse_dsconf(d.split('.')[3]).family for d in self.graph if d.startswith('dig.mu2e.')}
 
     def dig_datasets(self, family):
         return {d: r['n'] for d, r in self.graph.items()
@@ -258,6 +262,19 @@ class TestSamSourceQueries(unittest.TestCase):
         src = SamSource(definitions_fn=fake_defs, count_files_fn=lambda q: counts[q])
         self.assertEqual(src.dig_datasets('MDC2025'), {'dig.mu2e.A.MDC2025au_best_v1_5.art': 10})
         self.assertEqual(calls, ['dig.mu2e.%.MDC2025%.art'])
+
+    def test_dig_families_discovers_from_sam_and_reports_unparseable(self):
+        calls = []
+        def fake_defs(defname=None, user=None):
+            calls.append(defname)
+            return ['dig.mu2e.A.MDC2025au_best_v1_5.art',
+                     'dig.mu2e.B.Run1Ban_best_v1_4-000.art',
+                     'dig.mu2e.C.MDC2025-003.art',
+                     'dig.mu2e.D.weird.art']
+        src = SamSource(definitions_fn=fake_defs)
+        self.assertEqual(src.dig_families(), {'MDC2025', 'Run1B'})
+        self.assertEqual(calls, ['dig.mu2e.%.art'])
+        self.assertEqual(src.unparseable_defs, ['dig.mu2e.D.weird.art'])
 
     def test_nfiles_and_first_file_queries(self):
         count_calls = []
@@ -376,6 +393,24 @@ class TestBuildCatalog(unittest.TestCase):
     def test_dig_matching_no_root_is_unclaimed(self):
         cat = build_catalog({'MDC2025au': _epoch('MDC2025au')}, self.src, ['MDC2025'])
         self.assertEqual(cat.unclaimed_digs, {'MDC2025': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']})
+
+    def test_families_none_discovers_from_sam(self):
+        # only the au epoch is loaded; the family MDC2025 IS present
+        # (from au), so nothing is missing — the an dig is merely
+        # unclaimed (no root matches it), a different, already-tested
+        # condition.
+        cat = build_catalog({'MDC2025au': _epoch('MDC2025au')}, self.src, families=None)
+        self.assertEqual(cat.missing_families, [])
+        self.assertEqual(cat.unclaimed_digs, {'MDC2025': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']})
+
+        # now add a family with digs but no epoch file at all: it must
+        # be flagged as missing, and its digs still land in
+        # unclaimed_digs so the gap is visible.
+        g = _small_graph()
+        g['dig.mu2e.X.Run1Ban_best_v1_4.art'] = {'n': 1, 'children': []}
+        cat2 = build_catalog(self.epochs, FakeSource(g), families=None)
+        self.assertEqual(cat2.missing_families, ['Run1B'])
+        self.assertIn('dig.mu2e.X.Run1Ban_best_v1_4.art', cat2.unclaimed_digs['Run1B'])
 
     def test_unparseable_dsconf_reported_not_dropped_silently(self):
         g = _small_graph()
@@ -507,7 +542,7 @@ class TestStatus(unittest.TestCase):
         self.assertIn(('MDC2025', 'nts', 'CeEndpointOnSpill', 'best'), groups(cat))
 
 
-from utils.epochs.reports import gaps, retire, purge_lines, lookup, EXPECTED_TIERS, foreign_family_inputs
+from utils.epochs.reports import gaps, retire, purge_lines, lookup, EXPECTED_TIERS
 
 
 class TestGaps(unittest.TestCase):
@@ -581,25 +616,24 @@ class TestRetire(unittest.TestCase):
         self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025ap.art', out)     # feeds a current dig
         self.assertNotIn('dts.mu2e.Fresh.MDC2025av.art', out)
 
-    def test_input_of_unloaded_family_is_never_listed(self):
-        # Run1B digs are fed by MDC2025 stop catalogues; if only Run1B
-        # epochs are loaded, an MDC2025 input must never be proposed for
-        # deletion just because no MDC2025 epoch is present to judge it.
+    def test_retire_refuses_incomplete_catalog(self):
+        # Run1B digs are fed by MDC2025 stop catalogues; a Run1B-only
+        # catalog cannot tell a still-needed MDC2025 input from a
+        # retirable one. retire() must refuse rather than guess.
         g = _small_graph()
-        # the AN dig is superseded, so without the fix this input would
-        # be listed as retirable (no live descendant, family MDC2025
-        # happens to be loaded here — but pretend it's a foreign family:
-        # Foreign2019 has no epoch loaded at all).
-        g['sim.mu2e.Stops.Foreign2019bx.art'] = {'n': 42, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
-        cat = _cat(g)
-        self.assertNotIn('sim.mu2e.Stops.Foreign2019bx.art', {x['dataset'] for x in retire(cat)})
-        self.assertEqual(foreign_family_inputs(cat), ['sim.mu2e.Stops.Foreign2019bx.art'])
+        g['dig.mu2e.X.Run1Ban_best_v1_4.art'] = {'n': 1, 'children': []}
+        epochs = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+        cat = assign_status(build_catalog(epochs, FakeSource(g), families=None))
+        with self.assertRaises(ValueError) as ctx:
+            retire(cat)
+        self.assertIn('Run1B', str(ctx.exception))
 
     def test_letters_guard_true_branch(self):
-        # unlike the Fresh@av node above (which is never reached by any
-        # walk because nothing consumes it), this one IS an input with a
-        # real descendant, so the guard's key[0] > newest[0] branch must
-        # actually fire: av outranks the newest loaded epoch, au.
+        # unlike the Fresh@av node in the test above (never reached by
+        # any walk because nothing consumes it, so it never enters
+        # cat.inputs), this one IS a real input with no live descendant:
+        # the guard's key[0] > newest[0] branch must actually fire here,
+        # since av outranks the newest loaded epoch, au.
         g = _small_graph()
         g['dts.mu2e.Fresh.MDC2025av.art'] = {'n': 5, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
         cat = _cat(g)

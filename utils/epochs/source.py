@@ -8,6 +8,7 @@ is testable without the Mu2e environment.
 """
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
+from utils.epochs.dsconf import DsconfParseError, parse_dsconf
 from utils.job_common import Mu2eName
 
 DROP_TIERS = frozenset({'log', 'cnf', 'etc'})
@@ -64,8 +65,29 @@ class SamSource:
         self._defs = definitions_fn or _default_definitions
         self._locate = locate_fn or _default_locate
         self.foreign: Set[str] = set()
+        self.unparseable_defs: List[str] = []
 
     # -- discovery -------------------------------------------------------
+    def dig_families(self) -> Set[str]:
+        """Every family with at least one dig.mu2e.*.art definition in SAM
+        — discovered, not assumed from a caller's --family list, so the
+        catalog can tell when a family with real digs has no epoch file
+        loaded (decision: retire() refuses on an incomplete catalog
+        rather than silently judging inputs of a family it never
+        loaded). A definition whose dsconf does not parse is recorded in
+        `self.unparseable_defs`, never silently dropped and never
+        guessed into a family."""
+        out: Set[str] = set()
+        for name in self._defs(defname=f'dig.{OWNER}.%.art'):
+            parts = name.split('.')
+            if len(parts) != 5 or parts[4] != 'art' or parts[1] != OWNER:
+                continue
+            try:
+                out.add(parse_dsconf(parts[3]).family)
+            except DsconfParseError:
+                self.unparseable_defs.append(name)
+        return out
+
     def dig_datasets(self, family: str) -> Dict[str, int]:
         """5-field dig.mu2e.*.<family>*.art datasets with at least one file.
         Definitions are only a candidate list: existence is a file count."""

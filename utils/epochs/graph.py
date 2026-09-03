@@ -7,7 +7,7 @@ epoch: the one whose root its dig matched.
 """
 import fnmatch
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from utils.epochs.dsconf import DsconfKey, DsconfParseError, parse_dsconf
 from utils.epochs.epoch_files import EpochFile
@@ -43,6 +43,11 @@ class Catalog:
     unparseable: List[Tuple[str, str]] = field(default_factory=list)
     foreign: Set[str] = field(default_factory=set)
     unclaimed_digs: Dict[str, List[str]] = field(default_factory=dict)
+    # Families with at least one dig in SAM but no loaded EpochFile for
+    # that family (decision 2026-09-03: retire() refuses to run while
+    # this is non-empty — a partial catalog cannot tell a live input
+    # from a retirable one).
+    missing_families: List[str] = field(default_factory=list)
 
 
 def _claim(epochs: Dict[str, EpochFile], dig: str):
@@ -124,9 +129,19 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
             frontier.append((p, level + 1))
 
 
-def build_catalog(epochs: Dict[str, EpochFile], source, families: List[str],
+def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[str]] = None,
                   input_depth: int = 3) -> Catalog:
+    """`families=None` discovers every family with a dig in SAM
+    (`source.dig_families()`) instead of trusting the caller's list —
+    the catalog must be complete before deletions are proposed. A
+    family with digs but no loaded epoch still gets its digs walked
+    into `cat.unclaimed_digs` (that is what makes the gap visible) and
+    is recorded in `cat.missing_families`."""
+    if families is None:
+        families = sorted(source.dig_families())
     cat = Catalog(epochs=dict(epochs))
+    loaded_families = {e.family for e in epochs.values()}
+    cat.missing_families = [f for f in families if f not in loaded_families]
     for family in families:
         for dig, n in sorted(source.dig_datasets(family).items()):
             epoch = _claim(epochs, dig)
