@@ -17,6 +17,7 @@ from utils.epochs.epoch_files import (EpochFile, EpochFileError, load_epoch_file
                                       propose_epoch, write_epoch_file, EPOCH_STATUSES)
 
 from utils.epochs.graph import build_catalog, root_matches, Member, Catalog
+from utils.epochs.status import assign_status, group_key, groups, STATUSES
 
 
 def _tmpdir():
@@ -429,6 +430,81 @@ class TestBuildCatalog(unittest.TestCase):
         e = _epoch('MDC2025an', status='frozen')
         cat = build_catalog({'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e}, self.src, ['MDC2025'])
         self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AR}.root'].hold, 'epoch MDC2025an is frozen')
+
+
+def _cat(graph=None, epochs=None):
+    src = FakeSource(graph or _small_graph())
+    eps = epochs or {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+    return assign_status(build_catalog(eps, src, ['MDC2025']))
+
+
+class TestStatus(unittest.TestCase):
+    def test_newest_sibling_current_older_superseded(self):
+        cat = _cat()
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'].status, 'current')
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'].status, 'superseded')
+
+    def test_status_crosses_epochs_within_family(self):
+        cat = _cat()
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AR}.art'].status, 'superseded')
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'].status, 'current')
+        # its dig at an is superseded by the au dig (same desc, purpose best)
+        self.assertEqual(cat.members[f'dig.mu2e.CeEndpointOnSpill.{AN}.art'].status, 'superseded')
+
+    def test_stale_when_parent_moved_on_and_no_replacement(self):
+        g = _small_graph()
+        # re-reco'd mcs at -001 with no nts yet: old nts become stale, not superseded
+        g[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art')
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art'] = {'n': 100, 'children': []}
+        cat = _cat(g)
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art'].status, 'current')
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'].status, 'superseded')
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'].status, 'stale')
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'].status, 'superseded')
+
+    def test_parent_not_in_group_key(self):
+        # same desc/tier/purpose, different parents: newest still wins (decision 3)
+        g = _small_graph()
+        g[f'dig.mu2e.CeEndpointOnSpill.{AN}.art']['children'].append(f'mcs.mu2e.CeEndpointOnSpill.{AU3}.art')
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU3}.art'] = {'n': 5, 'children': []}
+        cat = _cat(g)
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU3}.art'].status, 'superseded')
+
+    def test_purpose_makes_siblings_not_versions(self):
+        g = _small_graph()
+        g[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append('mcs.mu2e.CeEndpointOnSpill.MDC2025au_perfect_v1_5.art')
+        g['mcs.mu2e.CeEndpointOnSpill.MDC2025au_perfect_v1_5.art'] = {'n': 100, 'children': []}
+        cat = _cat(g)
+        self.assertEqual(cat.members['mcs.mu2e.CeEndpointOnSpill.MDC2025au_perfect_v1_5.art'].status, 'current')
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'].status, 'current')
+
+    def test_excluded_member_never_competes_and_has_no_status(self):
+        e = _epoch('MDC2025au', pins={'exclude': [
+            {'dataset': f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', 'reason': 'bad build'}]})
+        cat = _cat(epochs={'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'].status, 'excluded')
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'].status, 'current')
+
+    def test_order_pin_overrides_winner(self):
+        e = _epoch('MDC2025au', pins={'order': [
+            {'tier': 'nts', 'desc': 'CeEndpointOnSpill', 'purpose': 'best',
+             'winner': AU, 'reason': '-001 is a 40-file top-up'}]})
+        cat = _cat(epochs={'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'].status, 'current')
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'].status, 'superseded')
+
+    def test_hold_does_not_change_status(self):
+        e = _epoch('MDC2025au', pins={'hold': [
+            {'dataset': f'nts.mu2e.CeEndpointOnSpill.{AU}.root', 'reason': 'paper'}]})
+        cat = _cat(epochs={'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        m = cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root']
+        self.assertEqual((m.status, m.hold), ('superseded', 'paper'))
+
+    def test_group_key_shape(self):
+        cat = _cat()
+        m = cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']
+        self.assertEqual(group_key(m), ('MDC2025', 'mcs', 'CeEndpointOnSpill', 'best'))
+        self.assertIn(('MDC2025', 'nts', 'CeEndpointOnSpill', 'best'), groups(cat))
 
 
 if __name__ == '__main__':
