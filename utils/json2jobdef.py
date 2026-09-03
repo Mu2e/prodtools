@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import argparse
 import json
 import shutil
+import getpass
 import tarfile
 from pathlib import Path
 from utils.prod_utils import *
@@ -27,7 +28,9 @@ from utils.jobdesc import (
     validate_entry_value,
     validate_outloc,
     validate_window,
-                           PRODTOOLS_CVMFS_CURRENT, resolve_prodtools_dir)
+                           PRODTOOLS_CVMFS_CURRENT, PRODTOOLS_CVMFS_ROOT,
+                           is_cvmfs_prodtools_dir, resolve_prodtools_dir)
+from utils.submit import bundle_prodtools
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -677,10 +680,13 @@ def main():
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--prodtools-dir', default=None,
-                   help='cvmfs prodtools release the campaign runs '
-                        '(default: /cvmfs/mu2e.opensciencegrid.org/bin/'
-                        'prodtools/current, resolved to its version dir '
-                        'and recorded in the ledger). Requires --enqueue.')
+                   help='prodtools the campaign runs (default: /cvmfs/'
+                        'mu2e.opensciencegrid.org/bin/prodtools/current, '
+                        'resolved to its version dir and recorded in the '
+                        'ledger). A path outside that cvmfs root is a dev '
+                        'CHECKOUT: its bin/ + utils/ are tarred once here, '
+                        'digest recorded, and shipped to every job — '
+                        'refused for mu2epro. Requires --enqueue.')
     p.add_argument('--enqueue', action='store_true',
                    help='After pushing the cnf, register the entry as a '
                         'sliced campaign in the ledger. Requires --prod.')
@@ -906,11 +912,16 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         from utils.submit import enqueue_entry, _resolve_ledger_db
         entry = build_jobdesc(config)
         try:
-            entry['prodtools_dir'] = resolve_prodtools_dir(
-                prodtools_dir or PRODTOOLS_CVMFS_CURRENT)
+            entry.update(prodtools_entry_keys(
+                resolve_prodtools_dir(prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
+                user=getpass.getuser()))
         except ValueError as e:
             sys.exit(f"json2jobdef: {e}")
         print(f"Campaign will run prodtools from {entry['prodtools_dir']}")
+        if 'prodtools_tar' in entry:
+            print(f"  dev checkout: {entry['prodtools_tar']} "
+                  f"(sha256 {entry['prodtools_ref']['sha256'][:12]}) ships "
+                  f"to every job")
         enqueue_entry(
             entry,
             ledger_db=_resolve_ledger_db(SimpleNamespace(ledger_db=None)),
@@ -923,6 +934,30 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         _cleanup_temp_files()
 
     return result
+
+def prodtools_entry_keys(prodtools_dir, user):
+    """Entry keys naming the prodtools every job of the campaign runs.
+    `prodtools_dir` is already resolved (resolve_prodtools_dir).
+
+    A release under the cvmfs root is recorded as-is; the worker runs it
+    in place. Any other dir is a dev CHECKOUT — an explicit opt-in via
+    `--prodtools-dir <checkout>`, never a fallback: it is tarred once
+    (utils.submit.bundle_prodtools) into the user's prodtools data dir,
+    the digest recorded as `prodtools_ref`, and shipped to every job
+    (jobdesc.prodtools_tar_of re-checks the digest at each submit).
+    Refused for mu2epro: production runs a published release only, the
+    provenance rule from 4314038."""
+    if is_cvmfs_prodtools_dir(prodtools_dir):
+        return {'prodtools_dir': prodtools_dir}
+    if user == 'mu2epro':
+        sys.exit(f"json2jobdef: --prodtools-dir {prodtools_dir} is not a "
+                 f"cvmfs release; mu2epro campaigns run a published "
+                 f"release under {PRODTOOLS_CVMFS_ROOT} only")
+    dest = f'/exp/mu2e/data/users/{user}/prodtools/prodtools-tarballs'
+    tar, ref = bundle_prodtools(prodtools_dir, dest)
+    return {'prodtools_dir': prodtools_dir, 'prodtools_tar': tar,
+            'prodtools_ref': ref}
+
 
 def is_already_expanded(configs):
     """True if every entry already has scalar values (no lists to expand)."""

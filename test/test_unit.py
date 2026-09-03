@@ -5910,7 +5910,8 @@ class TestJobsubArgvCodeTarball(unittest.TestCase):
     def test_code_tarball_does_not_displace_the_two_input_files(self):
         # Regression guard: --tar_file_name is a DIFFERENT mechanism from
         # -f dropbox://. The cnf and the ops JSON must still ship — and
-        # nothing else does: prodtools comes from cvmfs, never per job.
+        # nothing else does for a release entry: prodtools comes from
+        # cvmfs (the dev-checkout opt-in is TestDevProdtoolsTarball).
         argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
         shipped = [argv[i + 1] for i, a in enumerate(argv) if a == '-f']
         self.assertEqual(len(shipped), 2)
@@ -13866,7 +13867,9 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                  patch.object(json2jobdef, 'get_parfile_name',
                               return_value='cnf.mu2e.PhysicalPionStops.Run1Bap.0.tar'), \
                  patch('utils.submit._resolve_ledger_db', return_value=':memory:'), \
-                 patch('utils.submit.enqueue_entry', return_value=1):
+                 patch('utils.submit.enqueue_entry', return_value=1), \
+                 patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
+                              return_value=True):
                 json2jobdef.process_single_entry(
                     dict(config), pushout=False, no_cleanup=True,
                     enqueue=True, slice_size=1000,
@@ -13919,13 +13922,17 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                  patch.object(submit, 'check_code_tarball',
                               return_value=(True, [])), \
                  patch.object(submit, '_resolve_ledger_db',
-                              return_value=db_path):
+                              return_value=db_path), \
+                 patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
+                              return_value=True):
                 # Computed under the same patches process_single_entry uses,
                 # so this is exactly what build_jobdesc produced for the
                 # run under test — not a second, differently-mocked call.
                 expected_entry = json2jobdef.build_jobdesc(dict(config))
                 # process_single_entry adds the release the campaign runs;
-                # passed explicitly so the test does not depend on cvmfs.
+                # passed explicitly so the test does not depend on cvmfs,
+                # and declared a release (is_cvmfs_prodtools_dir patched)
+                # so the fake tmp dir is not bundled as a dev checkout.
                 expected_entry['prodtools_dir'] = FAKE_PRODTOOLS_DIR
                 json2jobdef.process_single_entry(
                     dict(config), pushout=True, no_cleanup=True,
@@ -17583,8 +17590,9 @@ class TestCopyToStashCliExit(unittest.TestCase):
 
 class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
     """Every grid job runs prodtools from a cvmfs release recorded on the
-    entry at enqueue. There is no second way for worker code to reach a
-    job: no dev tarball, no checkout. Each boundary fails loudly."""
+    entry at enqueue, or — explicit opt-in, TestDevProdtoolsTarball — a
+    digest-pinned checkout tarball. Nothing else, no fallback: each
+    boundary fails loudly."""
 
     def test_current_symlink_resolves_to_a_version_dir(self):
         import os, tempfile
@@ -17683,6 +17691,215 @@ class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('--prodtools-dir requires --enqueue', r.stderr + r.stdout)
 
+
+
+class TestDevProdtoolsTarball(unittest.TestCase):
+    """Opt-in second worker path, restored from 4314038^: a checkout named
+    by `--prodtools-dir` (anything outside the cvmfs release root) is
+    tarred ONCE at enqueue, content-addressed, and shipped per job via
+    -f dropbox://. The entry records the tar and its digest; every submit
+    re-hashes and refuses a mismatch. A cvmfs release entry is untouched:
+    no tar key, no MU2EGRID_PRODTOOLS_TAR, byte-identical argv."""
+
+    def _checkout(self):
+        """A fake checkout: the three worker files plus a pyc that must
+        not ship."""
+        import shutil
+        d = _mkdtemp()
+        shutil.copytree(FAKE_PRODTOOLS_DIR, d, dirs_exist_ok=True)
+        pyc = Path(d) / 'utils' / '__pycache__' / 'runmu2e.cpython-39.pyc'
+        pyc.parent.mkdir(parents=True)
+        pyc.write_bytes(b'\x00')
+        return d
+
+    def _bundled_entry(self):
+        from utils.submit import bundle_prodtools
+        tar, ref = bundle_prodtools(self._checkout(), _mkdtemp())
+        return {'tarball': 'cnf.oksuzian.Dev.C.0.tar', 'njobs': 2,
+                'inloc': 'none', 'outputs': [{'location': 'disk'}],
+                'prodtools_dir': FAKE_PRODTOOLS_DIR,
+                'prodtools_tar': tar, 'prodtools_ref': ref}
+
+    def test_bundle_is_content_addressed_and_skips_pycache(self):
+        import tarfile
+        from utils.submit import bundle_prodtools
+        from utils.job_common import sha256_file
+        checkout, dest = self._checkout(), _mkdtemp()
+        tar, ref = bundle_prodtools(checkout, dest)
+        digest, size = sha256_file(tar)
+        self.assertEqual(ref, {'sha256': digest, 'size': size,
+                               'source_path': checkout})
+        self.assertEqual(os.path.basename(tar), f'prodtools-{digest[:12]}.tar')
+        self.assertEqual(os.path.dirname(tar), dest)
+        with tarfile.open(tar) as t:
+            names = t.getnames()
+        self.assertIn('prodtools/bin/runjob.sh', names)
+        self.assertIn('prodtools/utils/runmu2e.py', names)
+        self.assertFalse([n for n in names if '__pycache__' in n or n.endswith('.pyc')])
+        # Same bytes in, same file out: a second enqueue reuses it.
+        self.assertEqual(bundle_prodtools(checkout, dest)[0], tar)
+
+    def test_release_entry_has_no_tar(self):
+        from utils.jobdesc import prodtools_tar_of
+        self.assertIsNone(prodtools_tar_of({'prodtools_dir': FAKE_PRODTOOLS_DIR}))
+
+    def test_tar_of_returns_the_verified_path(self):
+        from utils.jobdesc import prodtools_tar_of
+        entry = self._bundled_entry()
+        self.assertEqual(prodtools_tar_of(entry), entry['prodtools_tar'])
+
+    def test_tar_of_refuses_a_digest_mismatch(self):
+        from utils.jobdesc import prodtools_tar_of
+        entry = self._bundled_entry()
+        with open(entry['prodtools_tar'], 'ab') as fh:
+            fh.write(b'tampered')
+        with self.assertRaises(ValueError) as cm:
+            prodtools_tar_of(entry)
+        self.assertIn('sha256', str(cm.exception))
+
+    def test_tar_of_refuses_a_tar_without_ref_or_file(self):
+        from utils.jobdesc import prodtools_tar_of
+        entry = self._bundled_entry()
+        with self.assertRaises(ValueError) as cm:
+            prodtools_tar_of({**entry, 'prodtools_ref': None})
+        self.assertIn('prodtools_ref', str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            prodtools_tar_of({**entry, 'prodtools_tar': '/nonexistent/p.tar'})
+        self.assertIn('/nonexistent/p.tar', str(cm.exception))
+
+    def test_argv_ships_the_tar_and_names_it_instead_of_the_dir(self):
+        """Worker gets exactly one of the two env vars. The executable is
+        still the checkout's own runjob.sh (jobsub copies it into the
+        sandbox), and the cnf + ops JSON still ship beside the tar."""
+        from utils.jobsub_argv import build_jobsub_argv
+        argv = build_jobsub_argv(
+            entry={'tarball': 'cnf.oksuzian.Dev.C.0.tar', 'outputs': []},
+            jobset=[0], jobdef_path='/tmp/cnf.oksuzian.Dev.C.0.tar',
+            ops_json_path='/tmp/ops.json', submitter='me',
+            prodtools_dir='/exp/checkout/prodtools',
+            prodtools_tar='/exp/data/prodtools-tarballs/prodtools-abc123def456.tar')
+        envs = [argv[j + 1] for j, a in enumerate(argv) if a == '-e']
+        self.assertIn('MU2EGRID_PRODTOOLS_TAR=prodtools-abc123def456.tar', envs)
+        self.assertFalse([e for e in envs if e.startswith('MU2EGRID_PRODTOOLS_DIR')])
+        shipped = [argv[i + 1] for i, a in enumerate(argv) if a == '-f']
+        self.assertEqual(len(shipped), 3)
+        self.assertIn('dropbox:///exp/data/prodtools-tarballs/prodtools-abc123def456.tar', shipped)
+        self.assertEqual(argv[-1], 'file:///exp/checkout/prodtools/bin/runjob.sh')
+
+    def test_submit_passes_the_verified_tar(self):
+        from utils.submit import submit_entry, SubmitOptions
+        entry = self._bundled_entry()
+        options = SubmitOptions(ledger_db='/tmp/never.db', dry_run=True,
+                                origin='/tmp/m.json')
+        captured = {}
+        def fake_build(**kw):
+            captured.update(kw)
+            return ['--fake-argv']
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv', side_effect=fake_build):
+            submit_entry(entry, 0, options)
+        self.assertEqual(captured['prodtools_tar'], entry['prodtools_tar'])
+
+    def test_submit_refuses_a_tampered_tar_before_anything_runs(self):
+        from utils import submit
+        entry = self._bundled_entry()
+        with open(entry['prodtools_tar'], 'ab') as fh:
+            fh.write(b'x')
+        options = submit.SubmitOptions(ledger_db='/tmp/never.db', dry_run=True,
+                                       origin='/tmp/m.json')
+        with patch.object(submit, '_run_submit') as rs, \
+             patch('utils.submit._jobsub_argv.build_jobsub_argv') as bj, \
+             self.assertRaises(SystemExit) as cm:
+            submit.submit_entry(entry, 0, options)
+        self.assertIn('sha256', str(cm.exception))
+        rs.assert_not_called()
+        bj.assert_not_called()
+
+    def test_release_entry_submits_with_no_tar(self):
+        from utils.submit import submit_entry, SubmitOptions
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'prodtools_dir': FAKE_PRODTOOLS_DIR, 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}]}
+        options = SubmitOptions(ledger_db='/tmp/never.db', dry_run=True,
+                                origin='/tmp/m.json')
+        captured = {}
+        def fake_build(**kw):
+            captured.update(kw)
+            return ['--fake-argv']
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv', side_effect=fake_build):
+            submit_entry(entry, 0, options)
+        self.assertIsNone(captured['prodtools_tar'])
+
+    def test_enqueue_keys_for_a_cvmfs_release_are_just_the_dir(self):
+        from utils.json2jobdef import prodtools_entry_keys
+        d = '/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v3.3.1'
+        self.assertEqual(prodtools_entry_keys(d, user='oksuzian'),
+                         {'prodtools_dir': d})
+
+    def test_enqueue_keys_for_a_checkout_bundle_it(self):
+        from utils import json2jobdef
+        checkout = self._checkout()
+        with patch.object(json2jobdef, 'bundle_prodtools',
+                          return_value=('/data/prodtools-aaaaaaaaaaaa.tar',
+                                        {'sha256': 'a' * 64, 'size': 1,
+                                         'source_path': checkout})) as bp:
+            keys = json2jobdef.prodtools_entry_keys(checkout, user='oksuzian')
+        bp.assert_called_once()
+        self.assertEqual(bp.call_args[0][0], checkout)
+        self.assertEqual(bp.call_args[0][1],
+                         '/exp/mu2e/data/users/oksuzian/prodtools/prodtools-tarballs')
+        self.assertEqual(keys, {'prodtools_dir': checkout,
+                                'prodtools_tar': '/data/prodtools-aaaaaaaaaaaa.tar',
+                                'prodtools_ref': {'sha256': 'a' * 64, 'size': 1,
+                                                  'source_path': checkout}})
+
+    def test_enqueue_refuses_a_checkout_for_mu2epro(self):
+        """Production runs a release only: the provenance rule from
+        4314038 still binds the production account."""
+        from utils.json2jobdef import prodtools_entry_keys
+        with self.assertRaises(SystemExit) as cm:
+            prodtools_entry_keys(self._checkout(), user='mu2epro')
+        self.assertIn('mu2epro', str(cm.exception))
+        self.assertIn('cvmfs', str(cm.exception))
+
+    def _runjob(self, env_extra):
+        import subprocess
+        script = os.path.join(os.path.dirname(__file__), '..', 'bin', 'runjob.sh')
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('MU2EGRID_PRODTOOLS_DIR', 'MU2EGRID_PRODTOOLS_TAR')}
+        env.update(env_extra)
+        return subprocess.run(['bash', script], env=env, capture_output=True, text=True)
+
+    def test_runjob_sh_refuses_both_env_vars(self):
+        r = self._runjob({'MU2EGRID_PRODTOOLS_DIR': FAKE_PRODTOOLS_DIR,
+                          'MU2EGRID_PRODTOOLS_TAR': 'prodtools-x.tar'})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('both', r.stderr)
+
+    def test_runjob_sh_fails_when_the_shipped_tar_is_missing(self):
+        r = self._runjob({'MU2EGRID_PRODTOOLS_TAR': 'prodtools-x.tar',
+                          'CONDOR_DIR_INPUT': _mkdtemp(),
+                          '_CONDOR_SCRATCH_DIR': _mkdtemp()})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('ERROR: tar xf', r.stderr)
+        self.assertIn('prodtools-x.tar failed', r.stderr)
+        self.assertNotIn('is not a prodtools release on this worker', r.stderr)
+
+    def test_runjob_sh_extracts_the_tar_and_runs_from_scratch_dir(self):
+        """Extraction proven without reaching cvmfs: a tar lacking
+        utils/runmu2e.py trips the release check AT the extracted path."""
+        import tarfile
+        inp, scratch = _mkdtemp(), _mkdtemp()
+        src = _mkdtemp()
+        (Path(src) / 'prodtools' / 'bin').mkdir(parents=True)
+        (Path(src) / 'prodtools' / 'bin' / 'setup.sh').write_text('# x\n')
+        with tarfile.open(os.path.join(inp, 'prodtools-x.tar'), 'w') as t:
+            t.add(os.path.join(src, 'prodtools'), arcname='prodtools')
+        r = self._runjob({'MU2EGRID_PRODTOOLS_TAR': 'prodtools-x.tar',
+                          'CONDOR_DIR_INPUT': inp, '_CONDOR_SCRATCH_DIR': scratch})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f'{scratch}/prodtools is not a prodtools release on this worker',
+                      r.stderr)
+        self.assertTrue(os.path.isfile(os.path.join(scratch, 'prodtools', 'bin', 'setup.sh')))
 
 
 class TestReadBackValidation(unittest.TestCase):

@@ -180,6 +180,7 @@ def build_jobsub_argv(
     ops_json_path,
     prodtools_dir,
     submitter,
+    prodtools_tar=None,
     extra_storage_modify=(),
     role=None,
     wftop=None,
@@ -203,8 +204,16 @@ def build_jobsub_argv(
     `prodtools_dir` is the cvmfs release the worker runs: its
     `bin/runjob.sh` is the job executable and `MU2EGRID_PRODTOOLS_DIR`
     tells that script where the rest of the release is (jobsub copies the
-    executable into the sandbox, so `$0` cannot find it). Nothing of
-    prodtools is shipped per job.
+    executable into the sandbox, so `$0` cannot find it). For a release
+    entry nothing of prodtools is shipped per job.
+
+    `prodtools_tar`, when set, is the dev-checkout opt-in
+    (jobdesc.prodtools_tar_of): the checkout's `prodtools/{bin,utils}`
+    tarball rides `-f dropbox://` beside the cnf and
+    `MU2EGRID_PRODTOOLS_TAR` names it INSTEAD of `MU2EGRID_PRODTOOLS_DIR`;
+    runjob.sh extracts it under $_CONDOR_SCRATCH_DIR and runs from there.
+    The executable is still `<prodtools_dir>/bin/runjob.sh` — the
+    checkout's own copy.
 
     `code_tarball`, when set, is an absolute path to a `muse tarball`
     Code.tar.bz2. It rides `--tar_file_name dropbox://`, NOT `-f
@@ -232,11 +241,15 @@ def build_jobsub_argv(
         "EXPERIMENT": "mu2e",
         "MU2EGRID_OPSJSON": os.path.basename(ops_json_path),
         "MU2EGRID_JOBDEF": os.path.basename(jobdef_path),
-        "MU2EGRID_PRODTOOLS_DIR": prodtools_dir,
         "MU2EGRID_CLUSTERNAME": cluster_name,
         "MU2EGRID_WFOUTSTAGE": outstage,
         "MU2EGRID_MU2ESETUP": mu2e_setup,
     }
+    # Exactly one of the two: runjob.sh refuses both and neither.
+    if prodtools_tar:
+        env["MU2EGRID_PRODTOOLS_TAR"] = os.path.basename(prodtools_tar)
+    else:
+        env["MU2EGRID_PRODTOOLS_DIR"] = prodtools_dir
 
     argv = [
         "--resource-provides", DEFAULT_RESOURCE,
@@ -260,6 +273,8 @@ def build_jobsub_argv(
     argv.extend(["-N", str(len(jobset))])
     argv.extend(["-f", f"dropbox://{ops_json_path}"])
     argv.extend(["-f", f"dropbox://{jobdef_path}"])
+    if prodtools_tar:
+        argv.extend(["-f", f"dropbox://{prodtools_tar}"])
     if code_tarball:
         argv.extend(["--tar_file_name", f"dropbox://{code_tarball}"])
     if extra_jobsub_args:

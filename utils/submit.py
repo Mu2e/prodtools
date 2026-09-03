@@ -24,6 +24,8 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tarfile
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -32,9 +34,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
-                              expected_outputs_for)
+                              expected_outputs_for, sha256_file)
 from utils.jobdesc import (ENTRY_VALUE_KEYS, prodtools_dir_of,
-                           tarball_of, outputs_of, njobs_of,
+                           prodtools_tar_of, tarball_of, outputs_of, njobs_of,
                            inloc_of, firstjob_of, validate_window,
                            resources_of, is_draining, validate_entry_value,
                            OUTSTAGE_LOCATION, code_of)
@@ -418,6 +420,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     _validate_entry_values(entry)
     try:
         prodtools_dir_of(entry)
+        prodtools_tar_of(entry)
     except ValueError as e:
         sys.exit(f"json2jobdef: {e}")
     _refuse_outstage_campaign(entry)
@@ -490,6 +493,34 @@ def _create_campaign(ledger_db, entry, snap, slice_size, provenance):
             slice_size=slice_size, origin=provenance)
     except (ValueError, sqlite3.Error) as e:
         sys.exit(f"json2jobdef: {e}")
+
+
+def bundle_prodtools(checkout, dest_dir):
+    """Tar `bin/` + `utils/` of a prodtools checkout into a
+    content-addressed `<dest_dir>/prodtools-<sha12>.tar`, worker layout
+    `prodtools/{bin,utils}` (what runjob.sh extracts under
+    $_CONDOR_SCRATCH_DIR). Returns (tar_path, {'sha256', 'size',
+    'source_path'}) — the ref the entry records and prodtools_tar_of
+    re-checks at every submit.
+
+    Restored from 4314038^ without its mtime skip: the digest, not a
+    timestamp, decides whether a tar is reused, so the same checkout
+    bytes always map to the same file and a changed checkout to a new one.
+    """
+    checkout = os.path.abspath(checkout)
+    os.makedirs(dest_dir, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='prodtools-', suffix='.part', dir=dest_dir)
+    os.close(fd)
+    with tarfile.open(tmp, 'w') as tar:
+        for sub in ('bin', 'utils'):
+            for f in sorted(Path(checkout, sub).rglob('*')):
+                if not f.is_file() or '__pycache__' in f.parts or f.suffix == '.pyc':
+                    continue
+                tar.add(str(f), arcname=str(Path('prodtools') / f.relative_to(checkout)))
+    digest, size = sha256_file(tmp)
+    out = os.path.join(dest_dir, f'prodtools-{digest[:12]}.tar')
+    os.replace(tmp, out)
+    return out, {'sha256': digest, 'size': size, 'source_path': checkout}
 
 
 def _read_cnf_facts(tarball_path):
@@ -642,6 +673,7 @@ def submit_entry(entry, idx, options):
     # prodtools_dir_of's message carries the set-entry fix.
     try:
         prodtools_dir = prodtools_dir_of(entry)
+        prodtools_tar = prodtools_tar_of(entry)
     except ValueError as e:
         sys.exit(f"submit: {e}")
 
@@ -768,6 +800,7 @@ def submit_entry(entry, idx, options):
         jobdef_path=str(tarball_path),
         ops_json_path=str(ops_path),
         prodtools_dir=prodtools_dir,
+        prodtools_tar=prodtools_tar,
         submitter=submitter,
         extra_storage_modify=extra_scopes,
         role=options.role,
