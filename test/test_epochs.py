@@ -399,6 +399,24 @@ class TestBuildCatalog(unittest.TestCase):
         dig = cat.members[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']
         self.assertNotIn('dts.mu2e.X.weird.art', dig.inputs)
 
+    def test_input_that_is_also_a_member_is_not_an_input(self):
+        # dig...AU's own upward walk records dts.mu2e.CeEndpoint.MDC2025ap.art
+        # as an input first (AU sorts before Zed). A later-sorted dig
+        # ("Zed", processed after AU) then walks DOWN through that same
+        # dataset, making it a member. Member.inputs reconciliation alone
+        # is not enough: cat.inputs must drop the stale key too, or the
+        # retire report (a later task, which walks cat.inputs keys) would
+        # misreport a live member as retirable.
+        g = _small_graph()
+        zed = f'dig.mu2e.Zed.{AU}.art'
+        g[zed] = {'n': 5, 'children': ['dts.mu2e.CeEndpoint.MDC2025ap.art']}
+        cat = build_catalog(self.epochs, FakeSource(g), ['MDC2025'])
+        self.assertIn('dts.mu2e.CeEndpoint.MDC2025ap.art', cat.members)
+        self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025ap.art', cat.inputs)
+        dig_au = cat.members[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']
+        self.assertIn('dts.mu2e.CeEndpoint.MDC2025ap.art', dig_au.parents)
+        self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025ap.art', dig_au.inputs)
+
     def test_pins_mark_excluded_and_held(self):
         e = _epoch('MDC2025au', pins={
             'exclude': [{'dataset': f'nts.mu2e.CeEndpointOnSpill.{AU}.root', 'reason': 'calo bug'}],

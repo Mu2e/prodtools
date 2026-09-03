@@ -142,6 +142,14 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: List[str],
     # a parent recorded as an input before its own walk made it a member
     for m in cat.members.values():
         m.inputs -= set(cat.members)
+    # same invariant for the catalog-level inputs dict: a name recorded
+    # in cat.inputs by one dig's upward walk can later be turned into a
+    # member by a different dig's downward walk (dig processing order is
+    # alphabetical, not dependency order); the retire report (a later
+    # task) walks cat.inputs keys, so a stale one would misreport a live
+    # member as retirable.
+    for name in set(cat.inputs) & set(cat.members):
+        del cat.inputs[name]
     _apply_pins(cat)
     return cat
 
