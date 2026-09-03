@@ -155,5 +155,100 @@ class TestEpochFiles(unittest.TestCase):
         self.assertEqual(load_epoch_files(os.path.join(_tmpdir(), 'nope')), {})
 
 
+from utils.epochs.source import group_files_to_datasets, SamSource, DROP_TIERS
+
+
+class FakeSource:
+    """In-memory stand-in for SamSource. graph: {dataset: {'n': int, 'children': [...]}}.
+    Parents are derived by inverting children. cnfs: {cnf_name: local_path}."""
+    def __init__(self, graph, cnfs=None, files=None):
+        self.graph = graph
+        self.cnfs = cnfs or {}
+        self.files = files or {}
+        self.foreign = set()
+        self._parents = {}
+        for p, rec in graph.items():
+            for c in rec.get('children', []):
+                self._parents.setdefault(c, []).append(p)
+
+    def dig_datasets(self, family):
+        return {d: r['n'] for d, r in self.graph.items()
+                if d.startswith('dig.mu2e.') and f'.{family}' in d}
+
+    def children(self, dataset):
+        return {c: self.graph[c]['n'] for c in self.graph.get(dataset, {}).get('children', [])
+                if c.split('.')[0] not in DROP_TIERS}
+
+    def parents(self, dataset):
+        return {p: self.graph[p]['n'] for p in self._parents.get(dataset, [])}
+
+    def nfiles(self, dataset):
+        return self.graph[dataset]['n']
+
+    def cnf_names(self):
+        return sorted(self.cnfs)
+
+    def local_path(self, filename):
+        return self.cnfs.get(filename) or self.files.get(filename, '')
+
+    def first_file(self, dataset):
+        return self.graph[dataset].get('first', '')
+
+
+class TestGroupFiles(unittest.TestCase):
+    def test_groups_by_dataset_and_drops_log_cnf_etc(self):
+        names = ['mcs.mu2e.A.MDC2025au_best_v1_5.001430_00000000.art',
+                 'mcs.mu2e.A.MDC2025au_best_v1_5.001430_00000001.art',
+                 'log.mu2e.A.MDC2025au_best_v1_5.001430_00000000-1.log',
+                 'cnf.mu2e.A.MDC2025au_best_v1_5.0.tar',
+                 'etc.mu2e.A.MDC2025au_best_v1_5.0.txt']
+        groups, foreign = group_files_to_datasets(names)
+        self.assertEqual(groups, {'mcs.mu2e.A.MDC2025au_best_v1_5.art': 2})
+        self.assertEqual(foreign, set())
+
+    def test_non_mu2e_owner_goes_to_foreign(self):
+        groups, foreign = group_files_to_datasets(
+            ['nts.oksuzian.A.MDC2025au_best_v1_5.001430_00000000.root'])
+        self.assertEqual(groups, {})
+        self.assertEqual(foreign, {'nts.oksuzian.A.MDC2025au_best_v1_5.root'})
+
+    def test_unparseable_name_raises(self):
+        with self.assertRaises(ValueError):
+            group_files_to_datasets(['not-a-mu2e-name'])
+
+
+class TestSamSourceQueries(unittest.TestCase):
+    """SamSource only builds SAM query strings and groups; exercise it with
+    injected wrapper functions, no network."""
+    def test_children_query_and_grouping(self):
+        calls = []
+        def fake_list_files(q):
+            calls.append(q)
+            return ['nts.mu2e.A.MDC2025au_best_v1_5.001430_00000000.root',
+                    'log.mu2e.A.MDC2025au_best_v1_5.001430_00000000-1.log']
+        src = SamSource(list_files_fn=fake_list_files)
+        out = src.children('mcs.mu2e.A.MDC2025au_best_v1_5.art')
+        self.assertEqual(calls, ['ischildof: (dh.dataset mcs.mu2e.A.MDC2025au_best_v1_5.art)'])
+        self.assertEqual(out, {'nts.mu2e.A.MDC2025au_best_v1_5.root': 1})
+
+    def test_dig_datasets_filters_five_field_art_and_counts(self):
+        def fake_defs(defname=None, user=None):
+            return ['dig.mu2e.A.MDC2025au_best_v1_5.art',
+                    'dig.mu2e.A.MDC2025au_best_v1_5.001430_00000007',   # per-index def
+                    'dig.mu2e.B.MDC2025au_best_v1_3.art',
+                    'dig.mu2e.C.MDC2025au_best_v1_3-recovery']
+        counts = {'dh.dataset dig.mu2e.A.MDC2025au_best_v1_5.art': 10,
+                  'dh.dataset dig.mu2e.B.MDC2025au_best_v1_3.art': 0}
+        src = SamSource(definitions_fn=fake_defs, count_files_fn=lambda q: counts[q])
+        self.assertEqual(src.dig_datasets('MDC2025'), {'dig.mu2e.A.MDC2025au_best_v1_5.art': 10})
+
+    def test_local_path_strips_dcache_prefix_and_appends_name(self):
+        src = SamSource(locate_fn=lambda f: 'dcache:/pnfs/mu2e/persistent/x/y(1@z)')
+        self.assertEqual(src.local_path('cnf.mu2e.A.B.0.tar'),
+                         '/pnfs/mu2e/persistent/x/y/cnf.mu2e.A.B.0.tar')
+        src = SamSource(locate_fn=lambda f: '')
+        self.assertEqual(src.local_path('cnf.mu2e.A.B.0.tar'), '')
+
+
 if __name__ == '__main__':
     unittest.main()
