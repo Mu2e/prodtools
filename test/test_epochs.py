@@ -507,5 +507,105 @@ class TestStatus(unittest.TestCase):
         self.assertIn(('MDC2025', 'nts', 'CeEndpointOnSpill', 'best'), groups(cat))
 
 
+from utils.epochs.reports import gaps, retire, purge_lines, lookup, EXPECTED_TIERS
+
+
+class TestGaps(unittest.TestCase):
+    def test_missing_tier_and_stale_reported(self):
+        g = _small_graph()
+        g[f'dig.mu2e.DIOtail.{AU}.art'] = {'n': 10, 'children': []}      # dig with no mcs
+        g[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art')
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art'] = {'n': 100, 'children': []}   # re-reco, no nts yet
+        cat = _cat(g)
+        out = gaps(cat)
+        kinds = {(x['kind'], x['desc'], x['tier']) for x in out}
+        self.assertIn(('missing', 'DIOtail', 'mcs'), kinds)
+        self.assertIn(('missing', 'DIOtail', 'nts'), kinds)
+        self.assertIn(('stale', 'CeEndpointOnSpill', 'nts'), kinds)
+
+    def test_not_expected_pin_silences_missing(self):
+        g = _small_graph()
+        g[f'dig.mu2e.ensembleMDS3b.{AU}.art'] = {'n': 10, 'children': []}
+        e = _epoch('MDC2025au', pins={'not_expected': [
+            {'desc': 'ensembleMDS3b', 'tiers': ['mcs', 'nts'], 'reason': 'kept at dig'}]})
+        cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertFalse([x for x in gaps(cat) if x['desc'] == 'ensembleMDS3b'])
+
+    def test_frozen_epoch_reports_no_missing(self):
+        g = _small_graph()
+        g[f'dig.mu2e.DIOtail.{AN}.art'] = {'n': 10, 'children': []}
+        e = _epoch('MDC2025an', status='frozen')
+        cat = _cat(g, {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e})
+        self.assertFalse([x for x in gaps(cat) if x['desc'] == 'DIOtail'])
+
+    def test_nts_expected_only_where_mcs_exists_in_family(self):
+        # a superseded mcs still counts as "reached mcs"; nts missing is judged
+        # against the CURRENT mcs desc, so a stale-free family reports nothing
+        cat = _cat()
+        self.assertEqual([x for x in gaps(cat) if x['kind'] == 'missing'], [])
+
+
+class TestRetire(unittest.TestCase):
+    def test_superseded_not_held_listed_with_children(self):
+        cat = _cat()
+        names = {x['dataset']: x for x in retire(cat)}
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root', names)
+        mcs_ar = names[f'mcs.mu2e.CeEndpointOnSpill.{AR}.art']
+        self.assertEqual(mcs_ar['children'], [f'nts.mu2e.CeEndpointOnSpill.{AR}.root'])
+        self.assertIn('superseded by', mcs_ar['reason'])
+        self.assertNotIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', names)
+
+    def test_held_member_kept_off_the_list(self):
+        e = _epoch('MDC2025au', pins={'hold': [
+            {'dataset': f'nts.mu2e.CeEndpointOnSpill.{AU}.root', 'reason': 'paper'}]})
+        cat = _cat(epochs={'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertNotIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root', {x['dataset'] for x in retire(cat)})
+
+    def test_retired_epoch_lists_every_member(self):
+        e = _epoch('MDC2025an', status='retired')
+        cat = _cat(epochs={'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e})
+        names = {x['dataset']: x['reason'] for x in retire(cat)}
+        self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AN}.art', names)
+        self.assertIn('epoch MDC2025an is retired', names[f'dig.mu2e.CeEndpointOnSpill.{AN}.art'])
+
+    def test_input_with_no_live_descendant_listed_with_letters_guard(self):
+        g = _small_graph()
+        # an old dts@af whose only dig is superseded
+        g['dts.mu2e.CeEndpoint.MDC2025af.art'] = {'n': 500, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        # a fresh dts@av with no dig yet: newer letters than any epoch -> never listed
+        g['dts.mu2e.Fresh.MDC2025av.art'] = {'n': 5, 'children': []}
+        cat = _cat(g)
+        out = {x['dataset']: x for x in retire(cat)}
+        self.assertIn('dts.mu2e.CeEndpoint.MDC2025af.art', out)
+        self.assertEqual(out['dts.mu2e.CeEndpoint.MDC2025af.art']['kind'], 'input')
+        self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025ap.art', out)     # feeds a current dig
+        self.assertNotIn('dts.mu2e.Fresh.MDC2025av.art', out)
+
+    def test_purge_line_format(self):
+        cat = _cat()
+        entry = [x for x in retire(cat) if x['dataset'] == f'mcs.mu2e.CeEndpointOnSpill.{AR}.art'][0]
+        line = purge_lines([entry])[0]
+        cols = line.split('#')[0].split()
+        self.assertEqual(cols[:5], ['DELETE', '-', '-', 'YES', '50'])
+        self.assertEqual(cols[5], f'mcs.mu2e.CeEndpointOnSpill.{AR}.art')
+        self.assertEqual(cols[6], f'nts.mu2e.CeEndpointOnSpill.{AR}.root')
+        self.assertIn('superseded by', line.split('#', 1)[1])
+        leaf = [x for x in retire(cat) if x['dataset'] == f'nts.mu2e.CeEndpointOnSpill.{AR}.root'][0]
+        self.assertIn(' NO ', purge_lines([leaf])[0])
+        self.assertIn(' NONE ', purge_lines([leaf])[0])
+
+
+class TestLookup(unittest.TestCase):
+    def test_member_and_input_and_unknown(self):
+        cat = _cat()
+        m = lookup(cat, f'nts.mu2e.CeEndpointOnSpill.{AU}.root')
+        self.assertEqual((m['kind'], m['status'], m['epoch']), ('member', 'superseded', 'MDC2025au'))
+        self.assertEqual(m['superseded_by'], f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root')
+        i = lookup(cat, 'dts.mu2e.CeEndpoint.MDC2025ap.art')
+        self.assertEqual(i['kind'], 'input')
+        self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AU}.art', i['descendants'])
+        self.assertEqual(lookup(cat, 'nope.mu2e.x.y.art')['kind'], 'unknown')
+
+
 if __name__ == '__main__':
     unittest.main()
