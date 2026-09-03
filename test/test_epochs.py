@@ -16,6 +16,8 @@ from utils.epochs.dsconf import DsconfKey, DsconfParseError, parse_dsconf, famil
 from utils.epochs.epoch_files import (EpochFile, EpochFileError, load_epoch_files,
                                       propose_epoch, write_epoch_file, EPOCH_STATUSES)
 
+from utils.epochs.graph import build_catalog, root_matches, Member, Catalog
+
 
 def _tmpdir():
     d = tempfile.mkdtemp()
@@ -297,6 +299,118 @@ class TestSamSourceQueries(unittest.TestCase):
         src = SamSource(locate_fn=lambda f: 'dcache:/pnfs/x')
         with self.assertRaises(ValueError):
             src.local_path('cnf.mu2e.A.B.0.tar')
+
+
+AU = 'MDC2025au_best_v1_5'
+AU3 = 'MDC2025au_best_v1_3'
+AR = 'MDC2025ar_best_v1_1'
+AN = 'MDC2025an_best_v1_1'
+
+
+def _epoch(name, roots=None, status='current', pins=None):
+    from utils.epochs.dsconf import family_of
+    p = {k: [] for k in ('exclude', 'hold', 'not_expected', 'order', 'notes')}
+    p.update(pins or {})
+    return EpochFile(name=name, family=family_of(name + '_best_v1_0'), purpose='',
+                     status=status, roots=roots or [f'dig.mu2e.%.{name}_%.art'], pins=p)
+
+
+def _small_graph():
+    """dts@ap -> dig CE@au v1_5 -> mcs CE@au v1_5 -> nts (old) + nts -001
+       Cat@ac -> dts@ap
+       dig CE@an v1_1 -> mcs CE@ar v1_1 -> nts CE@ar (an dig re-reco'd under ar)"""
+    return {
+        'sim.mu2e.MuminusStopsCat.MDC2025ac.art': {'n': 1, 'children': ['dts.mu2e.CeEndpoint.MDC2025ap.art']},
+        'dts.mu2e.CeEndpoint.MDC2025ap.art': {'n': 1000, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AU}.art']},
+        f'dig.mu2e.CeEndpointOnSpill.{AU}.art': {'n': 100, 'children': [f'mcs.mu2e.CeEndpointOnSpill.{AU}.art',
+                                                                        f'log.mu2e.CeEndpointOnSpill.{AU}.log']},
+        f'log.mu2e.CeEndpointOnSpill.{AU}.log': {'n': 100, 'children': []},
+        f'mcs.mu2e.CeEndpointOnSpill.{AU}.art': {'n': 100, 'children': [f'nts.mu2e.CeEndpointOnSpill.{AU}.root',
+                                                                        f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']},
+        f'nts.mu2e.CeEndpointOnSpill.{AU}.root': {'n': 100, 'children': []},
+        f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root': {'n': 100, 'children': []},
+        f'dig.mu2e.CeEndpointOnSpill.{AN}.art': {'n': 50, 'children': [f'mcs.mu2e.CeEndpointOnSpill.{AR}.art']},
+        f'mcs.mu2e.CeEndpointOnSpill.{AR}.art': {'n': 50, 'children': [f'nts.mu2e.CeEndpointOnSpill.{AR}.root']},
+        f'nts.mu2e.CeEndpointOnSpill.{AR}.root': {'n': 50, 'children': []},
+    }
+
+
+class TestRootMatches(unittest.TestCase):
+    def test_percent_is_glob(self):
+        self.assertTrue(root_matches('dig.mu2e.%.MDC2025au_%.art', f'dig.mu2e.CeEndpointOnSpill.{AU}.art'))
+        self.assertFalse(root_matches('dig.mu2e.%.MDC2025au_%.art', f'dig.mu2e.CeEndpointOnSpill.{AN}.art'))
+        self.assertFalse(root_matches('dig.mu2e.%.MDC2025au_%.art', f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'))
+
+
+class TestBuildCatalog(unittest.TestCase):
+    def setUp(self):
+        self.src = FakeSource(_small_graph())
+        self.epochs = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+
+    def test_members_are_closure_below_roots_without_log(self):
+        cat = build_catalog(self.epochs, self.src, ['MDC2025'])
+        names = set(cat.members)
+        self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AU}.art', names)
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', names)
+        self.assertIn(f'mcs.mu2e.CeEndpointOnSpill.{AR}.art', names)
+        self.assertNotIn(f'log.mu2e.CeEndpointOnSpill.{AU}.log', names)
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AR}.art'].epoch, 'MDC2025an')
+
+    def test_parents_split_into_members_and_inputs(self):
+        cat = build_catalog(self.epochs, self.src, ['MDC2025'])
+        dig = cat.members[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']
+        self.assertEqual(dig.parents, set())
+        self.assertEqual(dig.inputs, {'dts.mu2e.CeEndpoint.MDC2025ap.art'})
+        nts = cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']
+        self.assertEqual(nts.parents, {f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'})
+
+    def test_inputs_walk_up_and_record_descendants(self):
+        cat = build_catalog(self.epochs, self.src, ['MDC2025'])
+        self.assertIn('sim.mu2e.MuminusStopsCat.MDC2025ac.art', cat.inputs)
+        dts = cat.inputs['dts.mu2e.CeEndpoint.MDC2025ap.art']
+        self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AU}.art', dts['descendants'])
+        cat_in = cat.inputs['sim.mu2e.MuminusStopsCat.MDC2025ac.art']
+        self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AU}.art', cat_in['descendants'])
+
+    def test_dig_matching_no_root_is_unclaimed(self):
+        cat = build_catalog({'MDC2025au': _epoch('MDC2025au')}, self.src, ['MDC2025'])
+        self.assertEqual(cat.unclaimed_digs, {'MDC2025': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']})
+
+    def test_unparseable_dsconf_reported_not_dropped_silently(self):
+        g = _small_graph()
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append('nts.mu2e.CeEndpointOnSpill.weird.root')
+        g['nts.mu2e.CeEndpointOnSpill.weird.root'] = {'n': 3, 'children': []}
+        cat = build_catalog(self.epochs, FakeSource(g), ['MDC2025'])
+        self.assertEqual([n for n, _ in cat.unparseable], ['nts.mu2e.CeEndpointOnSpill.weird.root'])
+        self.assertNotIn('nts.mu2e.CeEndpointOnSpill.weird.root', cat.members)
+
+    def test_walk_up_unparseable_parent_reported_and_excluded_from_inputs(self):
+        # A dig-of-dig-adjacent parent whose dsconf does not parse must be
+        # reported in cat.unparseable and never turn into a cat.inputs
+        # entry or a member's `inputs` edge (controller ruling amending
+        # this task's brief; a later task walks every cat.inputs key
+        # through parse_dsconf to compute the retire list, and one badly
+        # named ancestor must not crash the whole report).
+        g = _small_graph()
+        g['dts.mu2e.X.weird.art'] = {'n': 1, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AU}.art']}
+        cat = build_catalog(self.epochs, FakeSource(g), ['MDC2025'])
+        self.assertEqual([n for n, _ in cat.unparseable], ['dts.mu2e.X.weird.art'])
+        self.assertNotIn('dts.mu2e.X.weird.art', cat.inputs)
+        dig = cat.members[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']
+        self.assertNotIn('dts.mu2e.X.weird.art', dig.inputs)
+
+    def test_pins_mark_excluded_and_held(self):
+        e = _epoch('MDC2025au', pins={
+            'exclude': [{'dataset': f'nts.mu2e.CeEndpointOnSpill.{AU}.root', 'reason': 'calo bug'}],
+            'hold': [{'dataset': f'mcs.mu2e.CeEndpointOnSpill.{AU}.art', 'reason': 'paper 2026'}]})
+        cat = build_catalog({'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')}, self.src, ['MDC2025'])
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'].excluded, 'calo bug')
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'].hold, 'paper 2026')
+
+    def test_frozen_epoch_holds_every_member(self):
+        e = _epoch('MDC2025an', status='frozen')
+        cat = build_catalog({'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e}, self.src, ['MDC2025'])
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AR}.root'].hold, 'epoch MDC2025an is frozen')
 
 
 if __name__ == '__main__':
