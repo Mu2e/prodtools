@@ -507,7 +507,7 @@ class TestStatus(unittest.TestCase):
         self.assertIn(('MDC2025', 'nts', 'CeEndpointOnSpill', 'best'), groups(cat))
 
 
-from utils.epochs.reports import gaps, retire, purge_lines, lookup, EXPECTED_TIERS
+from utils.epochs.reports import gaps, retire, purge_lines, lookup, EXPECTED_TIERS, foreign_family_inputs
 
 
 class TestGaps(unittest.TestCase):
@@ -580,6 +580,31 @@ class TestRetire(unittest.TestCase):
         self.assertEqual(out['dts.mu2e.CeEndpoint.MDC2025af.art']['kind'], 'input')
         self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025ap.art', out)     # feeds a current dig
         self.assertNotIn('dts.mu2e.Fresh.MDC2025av.art', out)
+
+    def test_input_of_unloaded_family_is_never_listed(self):
+        # Run1B digs are fed by MDC2025 stop catalogues; if only Run1B
+        # epochs are loaded, an MDC2025 input must never be proposed for
+        # deletion just because no MDC2025 epoch is present to judge it.
+        g = _small_graph()
+        # the AN dig is superseded, so without the fix this input would
+        # be listed as retirable (no live descendant, family MDC2025
+        # happens to be loaded here — but pretend it's a foreign family:
+        # Foreign2019 has no epoch loaded at all).
+        g['sim.mu2e.Stops.Foreign2019bx.art'] = {'n': 42, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        cat = _cat(g)
+        self.assertNotIn('sim.mu2e.Stops.Foreign2019bx.art', {x['dataset'] for x in retire(cat)})
+        self.assertEqual(foreign_family_inputs(cat), ['sim.mu2e.Stops.Foreign2019bx.art'])
+
+    def test_letters_guard_true_branch(self):
+        # unlike the Fresh@av node above (which is never reached by any
+        # walk because nothing consumes it), this one IS an input with a
+        # real descendant, so the guard's key[0] > newest[0] branch must
+        # actually fire: av outranks the newest loaded epoch, au.
+        g = _small_graph()
+        g['dts.mu2e.Fresh.MDC2025av.art'] = {'n': 5, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        cat = _cat(g)
+        self.assertIn('dts.mu2e.Fresh.MDC2025av.art', cat.inputs)
+        self.assertNotIn('dts.mu2e.Fresh.MDC2025av.art', {x['dataset'] for x in retire(cat)})
 
     def test_purge_line_format(self):
         cat = _cat()
