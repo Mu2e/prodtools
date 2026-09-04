@@ -4,7 +4,9 @@ Grammar (decision 4 of the 2026-09-03 grill):
     <family><letters><rev?>[_<purpose>_v<major>_<minor>][_<extra>][-<suffix>]
     family  : starts with an uppercase letter, e.g. MDC2025, Run1B, MDC2020
     letters : one or two lowercase campaign letters; ABSENT for the dead
-              own-series ntuple names (MDC2025-003), which rank lowest
+              own-series ntuple names (MDC2025-003), which rank lowest.
+              A third lowercase letter is REFUSED, not reinterpreted as a
+              longer family (M9)
     rev     : optional single digit revision (Run1Bab2)
     extra   : legacy Offline-version tail (v06_06_00), ordered last, lexically
 
@@ -24,6 +26,12 @@ _RE = re.compile(
     r'(?:_(?P<extra>v\d+_\d+_\d+))?'
     r'(?:-(?P<suffix>\d+))?$'
 )
+# Three or more lowercase letters where the campaign tag belongs. The main
+# grammar would not reject it: the family is non-greedy, so `Run1Babc`
+# would quietly re-split as family `Run1Bab` + letters `c`, land in a
+# family of its own and never supersede `Run1Bab`. The module's stance is
+# "report it; never guess", so this is refused by name (M9).
+_TOO_MANY_LETTERS = re.compile(r'^[A-Z][A-Za-z0-9]*[A-Z0-9][a-z]{3}')
 
 
 class DsconfParseError(ValueError):
@@ -47,6 +55,10 @@ class DsconfKey(NamedTuple):
 
 
 def parse_dsconf(s: str) -> DsconfKey:
+    if _TOO_MANY_LETTERS.match(s or ''):
+        raise DsconfParseError(
+            f'dsconf has more than two campaign letters: {s!r} (one or two, '
+            f'optionally followed by a revision digit)')
     m = _RE.match(s or '')
     if not m:
         raise DsconfParseError(f'dsconf does not parse: {s!r}')

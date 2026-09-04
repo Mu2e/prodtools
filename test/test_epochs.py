@@ -42,6 +42,18 @@ class TestDsconfParse(unittest.TestCase):
         k = parse_dsconf('MDC2020r')
         self.assertEqual((k.family, k.letters), ('MDC2020', 'r'))
 
+    def test_three_campaign_letters_is_refused_not_reinterpreted(self):
+        # M9: the non-greedy family would quietly re-split Run1Babc as
+        # family Run1Bab + letters c, giving it a family of its own where
+        # it can never supersede Run1Bab. Silent, which is the opposite of
+        # this module's stated stance.
+        with self.assertRaises(DsconfParseError):
+            parse_dsconf('Run1Babc')
+        with self.assertRaises(DsconfParseError):
+            parse_dsconf('MDC2025abc_best_v1_0')
+        # two letters plus a revision digit still parse
+        self.assertEqual(parse_dsconf('Run1Bab2').letters, 'ab')
+
     def test_own_series_no_letters(self):
         k = parse_dsconf('MDC2025-003')
         self.assertEqual((k.family, k.letters, k.suffix), ('MDC2025', '', 3))
@@ -379,6 +391,19 @@ class TestRootMatches(unittest.TestCase):
         self.assertFalse(root_matches('dig.mu2e.%.MDC2025au_%.art', f'dig.mu2e.CeEndpointOnSpill.{AN}.art'))
         self.assertFalse(root_matches('dig.mu2e.%.MDC2025au_%.art', f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'))
 
+    def test_glob_metacharacters_in_a_root_are_literal(self):
+        # M10: only % is a wildcard. fnmatch gave ?, [ and ] shell-glob
+        # meaning in a hand-edited root, and a mis-parsed root silently
+        # claims (or fails to claim) digs.
+        self.assertFalse(root_matches('dig.mu2e.A?.MDC2025au_best_v1_5.art',
+                                      'dig.mu2e.AB.MDC2025au_best_v1_5.art'))
+        self.assertTrue(root_matches('dig.mu2e.A?.MDC2025au_best_v1_5.art',
+                                     'dig.mu2e.A?.MDC2025au_best_v1_5.art'))
+        self.assertFalse(root_matches('dig.mu2e.[AB].MDC2025au_best_v1_5.art',
+                                      'dig.mu2e.A.MDC2025au_best_v1_5.art'))
+        self.assertTrue(root_matches('dig.mu2e.%.MDC2025au_%.art',
+                                     f'dig.mu2e.CeEndpointOnSpill.{AU}.art'))
+
     def test_bare_dsconf_root_claims_bare_dig_only(self):
         self.assertTrue(root_matches('dig.mu2e.%.MDC2020aq.art', 'dig.mu2e.X.MDC2020aq.art'))
         self.assertFalse(root_matches('dig.mu2e.%.MDC2020aq.art', 'dig.mu2e.X.MDC2020aq2_best_v1_3.art'))
@@ -414,6 +439,27 @@ class TestBuildCatalog(unittest.TestCase):
         self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AU}.art', dts['descendants'])
         cat_in = cat.inputs['sim.mu2e.MuminusStopsCat.MDC2025ac.art']
         self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AU}.art', cat_in['descendants'])
+
+    def test_dig_already_a_member_is_not_rebuilt(self):
+        # M8: the dig loop assigned cat.members[name] unconditionally, so a
+        # dig already reached as another dig's child had its Member object
+        # replaced and its accumulated parents/inputs thrown away.
+        # _walk_down guards with cat.members.get(); the dig loop now does too.
+        from unittest.mock import patch
+        import utils.epochs.graph as graph_mod
+        g = _small_graph()
+        upper = f'dig.mu2e.Aupper.{AU}.art'   # sorts BEFORE the dig it feeds
+        lower = f'dig.mu2e.CeEndpointOnSpill.{AU}.art'
+        g[upper] = {'n': 7, 'children': [lower]}
+        real, made = graph_mod._make_member, []
+        def spy(name, nfiles, epoch, cat):
+            made.append(name)
+            return real(name, nfiles, epoch, cat)
+        with patch.object(graph_mod, '_make_member', spy):
+            cat = build_catalog(self.epochs, FakeSource(g), ['MDC2025'])
+        self.assertEqual(made.count(lower), 1)
+        self.assertIn(upper, cat.members[lower].parents)
+        self.assertIn('dts.mu2e.CeEndpoint.MDC2025ap.art', cat.members[lower].inputs)
 
     def test_dig_matching_no_root_is_unclaimed(self):
         cat = build_catalog({'MDC2025au': _epoch('MDC2025au')}, self.src, ['MDC2025'])

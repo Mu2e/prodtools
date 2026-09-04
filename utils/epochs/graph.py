@@ -5,7 +5,7 @@ Inputs = everything reached walking parents from a dig root, up to
 `input_depth` levels (decision 13). A dataset belongs to exactly one
 epoch: the one whose root its dig matched.
 """
-import fnmatch
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -15,8 +15,16 @@ from utils.job_common import Mu2eName
 
 
 def root_matches(root: str, dataset: str) -> bool:
-    """SAM '%' wildcard semantics on a 5-field dataset name."""
-    return fnmatch.fnmatchcase(dataset, root.replace('%', '*'))
+    """SAM '%' wildcard semantics on a 5-field dataset name.
+
+    `%` is the ONLY metacharacter: everything between the `%` is escaped,
+    so a hand-edited root carrying `?`, `[` or `]` matches those
+    characters literally instead of behaving like a shell glob (M10).
+    `fnmatch` gave them glob meaning, and a mis-parsed root silently
+    claims — or fails to claim — digs, which feeds `unclaimed_digs` and
+    therefore `retire()`'s refusal."""
+    rx = '^' + '.*'.join(re.escape(part) for part in root.split('%')) + '$'
+    return re.match(rx, dataset) is not None
 
 
 @dataclass
@@ -264,7 +272,15 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
             if epoch is None:
                 cat.unclaimed_digs.setdefault(family, []).append(dig)
                 continue
-            m = _make_member(dig, n, epoch, cat)
+            # M8: a dig can already be a member (reached as a child of
+            # another dig, or matched by two family globs -- dig_datasets
+            # globs `.{family}%`, so a family name that prefixes another
+            # returns both). Re-creating it would discard the parents and
+            # inputs the first object accumulated, exactly as `_walk_down`
+            # avoids by looking the child up first.
+            m = cat.members.get(dig)
+            if m is None:
+                m = _make_member(dig, n, epoch, cat)
             if m is None:
                 continue
             _walk_down(m, msource, cat)
