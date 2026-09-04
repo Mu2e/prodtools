@@ -262,7 +262,11 @@ When regenerating, read in this order:
       (old name superseded by a new one) needs a manual `exclude` pin
       with a reason, never inferred. A `hold`/`exclude` pin may name an
       INPUT as well as a member, and a held input is kept off the retire
-      list exactly as a held member is. `retire` refuses to run against
+      list exactly as a held member is; freezing an epoch holds its
+      inputs too (an input every one of whose digs belongs to a frozen or
+      retired epoch, at least one of them frozen), and an excluded member
+      keeps its own inputs off the list, since the tool refuses to delete
+      the member itself. `retire` refuses to run against
       an incomplete catalog — a dig letter family with no epoch file, a
       dig dataset matching none of the loaded roots, or a pin that could
       not be applied (it names nothing in the catalog, or something
@@ -270,7 +274,15 @@ When regenerating, read in this order:
       (`propose --family F`) in the refusal; a dropped protection pin is
       a refusal, never a silent no-op. An input whose own upward walk hit
       `--input-depth` is reported on stderr and held back from the retire
-      list until the depth is raised. Exit codes: `2` for
+      list until the depth is raised, and so is every input above such a
+      node: truncation belongs to the walk that was cut, not to the
+      node, so a dataset another dig's walk explored is still truncated
+      for the dig that stopped there. A pin of ANY kind that matches
+      nothing — a `hold`/`exclude` naming an unknown dataset, an `order`
+      pin whose group no member competes in, a `not_expected` pin naming
+      a desc no dig of the epoch has — is a refusal, not a no-op; a
+      `not_expected` pin naming a tier outside `mcs`/`nts` is refused
+      when the epoch file loads (exit 2). Exit codes: `2` for
       a malformed epoch file, `3` for a SAM error, a dsconf that fails
       to parse, or another catalog-completeness refusal, and `1` for
       `lookup` of a dataset the catalog does not know. A full catalog

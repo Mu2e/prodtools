@@ -402,3 +402,21 @@ def _apply_pins(cat: Catalog):
             for m in cat.members.values():
                 if m.epoch == e.name and not m.hold:
                     m.hold = f'epoch {e.name} is frozen'
+            # NEW-7: freezing an epoch protects its INPUTS too. An operator
+            # who freezes Run1Bah means "nothing here gets deleted", and a
+            # frozen epoch's digs are usually superseded (a newer letter is
+            # why it was frozen), so nothing live descends from their dts
+            # and the dts was a retire candidate. The hold is stamped when
+            # every dig the input feeds is a member of a frozen or retired
+            # epoch and at least one of them is a member of THIS frozen
+            # epoch: a descendant in a current epoch is a live line whose
+            # own status decides, and an input feeding only retired epochs
+            # stays retirable (decision 12).
+            for rec in cat.inputs.values():
+                if rec['hold']:
+                    continue
+                below = [cat.members[d].epoch for d in rec['descendants'] if d in cat.members]
+                if len(below) != len(rec['descendants']) or e.name not in below:
+                    continue
+                if all(cat.epochs[x].status in ('frozen', 'retired') for x in below):
+                    rec['hold'] = f'epoch {e.name} is frozen'

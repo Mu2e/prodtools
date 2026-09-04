@@ -968,6 +968,44 @@ class TestRetire(unittest.TestCase):
         self.assertTrue(any('feeds no dig of that epoch' in line for line in cat.pin_problems),
                         cat.pin_problems)
 
+    def test_an_excluded_member_keeps_its_input_off_the_list(self):
+        # NEW-6: retire() refuses to list an excluded member, but the
+        # member conferred no liveness, so the tool proposed deleting the
+        # sole input of a dataset it simultaneously refused to delete.
+        # We are keeping the dataset, so we keep what made it.
+        g = _small_graph()
+        g['dts.mu2e.Kept.MDC2025af.art'] = {'n': 500, 'children': [f'dig.mu2e.Solo.{AN}.art']}
+        g[f'dig.mu2e.Solo.{AN}.art'] = {'n': 10, 'children': []}
+        # mirror: an input whose dig is merely superseded is still listed,
+        # so this cannot pass by holding everything back
+        g['dts.mu2e.Gone.MDC2025af.art'] = {
+            'n': 500, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        e = _epoch('MDC2025an', pins={'exclude': [
+            {'dataset': f'dig.mu2e.Solo.{AN}.art', 'reason': 'ensemble input, keep'}]})
+        cat = _cat(g, {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e})
+        self.assertEqual(cat.members[f'dig.mu2e.Solo.{AN}.art'].status, 'excluded')
+        listed = {x['dataset'] for x in retire(cat)}
+        self.assertNotIn('dts.mu2e.Kept.MDC2025af.art', listed)
+        self.assertIn('dts.mu2e.Gone.MDC2025af.art', listed)
+
+    def test_a_frozen_epoch_holds_its_inputs_too(self):
+        # NEW-7: freezing an epoch stamped a hold on every MEMBER only, so
+        # the dts feeding a frozen epoch's (superseded) digs was still a
+        # retire candidate -- not what an operator who freezes Run1Bah
+        # means. An input feeding a CURRENT epoch's superseded dig is
+        # still listed: the hold follows the freeze, not the staleness.
+        g = _small_graph()
+        g['dts.mu2e.Frozen.MDC2025af.art'] = {
+            'n': 500, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        cat = _cat(g, {'MDC2025au': _epoch('MDC2025au'),
+                       'MDC2025an': _epoch('MDC2025an', status='frozen')})
+        self.assertEqual(cat.inputs['dts.mu2e.Frozen.MDC2025af.art']['hold'],
+                         'epoch MDC2025an is frozen')
+        self.assertNotIn('dts.mu2e.Frozen.MDC2025af.art', {x['dataset'] for x in retire(cat)})
+        live = _cat(g)          # same graph, MDC2025an current: listed again
+        self.assertEqual(live.inputs['dts.mu2e.Frozen.MDC2025af.art']['hold'], '')
+        self.assertIn('dts.mu2e.Frozen.MDC2025af.art', {x['dataset'] for x in retire(live)})
+
     def test_input_at_the_depth_frontier_is_not_proposed(self):
         # I6: --input-depth is a per-walk cap and was invisible. An input
         # whose own parents were never queried sits at the edge of what we

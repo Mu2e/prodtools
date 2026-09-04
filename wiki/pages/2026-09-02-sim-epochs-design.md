@@ -112,7 +112,14 @@ re-reco'd; no `ar` digs exist), so the epoch name is not the reco tag.
   several letter families, so roots are a short list, not one.
 - `status` ∈ {current, frozen, retired}: current = being worked on;
   frozen = a hold on every member, nothing expected to change, no gap
-  report; retired = every member is a delete candidate.
+  report; retired = every member is a delete candidate. **A freeze also
+  holds the epoch's inputs** (decided 2026-09-04): an input is held when
+  every dig it feeds is a member of a frozen or retired epoch and at
+  least one of them is frozen. Freezing Run1Bah means "nothing here gets
+  deleted", and its digs are normally superseded — a newer letter is why
+  it was frozen — so without this its dts were retire candidates. An
+  input that also feeds a current epoch's dig is judged by that line's
+  status as before; one feeding only retired epochs stays retirable.
 - `pins` are the escape hatch for the rare case the rule gets wrong:
   exclude a dataset, hold one dataset or generation as a reference,
   override a dsconf ordering inversion. Every pin carries a free-text
@@ -182,7 +189,12 @@ Members are computed, never listed by hand.
 6. **Input retire rule (derived, generalized 2026-09-03):** any input
    above the roots (dts, stop and pileup catalogues, at any depth) is
    retirable when no `current` or `stale` member descends from it, and
-   it is not held. Guard, letters only, no clock: an input whose
+   it is not held. An `excluded` member counts as a live descendant
+   (2026-09-04): the tool refuses to delete it, so it must not propose
+   deleting what made it. An input at the `--input-depth` frontier, or
+   anything above one, is never listed — truncation is a property of the
+   walk that was cut, not of the node, so a node another dig's walk
+   expanded is still truncated for the dig that stopped there. Guard, letters only, no clock: an input whose
    dsconf letters outrank the family's newest epoch (a fresh `dts@av`
    awaiting its mix while `au` is newest) is never listed.
 

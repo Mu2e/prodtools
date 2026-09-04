@@ -110,8 +110,15 @@ def incomplete_reasons(cat: Catalog) -> List[str]:
 
 
 def _live_reaching(cat: Catalog) -> set:
-    """Every member that is itself `current`/`stale`, or has such a member
-    anywhere in its downward closure.
+    """Every member that is itself `current`/`stale`/`excluded`, or has
+    such a member anywhere in its downward closure.
+
+    `excluded` is in the seed (NEW-6). `retire()` refuses to list an
+    excluded member — we are keeping the dataset — so proposing the
+    deletion of its sole upstream input in the same run is incoherent.
+    Keeping the dataset means keeping what made it; that is also the
+    fail-closed reading, and it is the documented rule (CONTEXT.md,
+    "Input").
 
     `cat.inputs[x]['descendants']` records only the DIG each upward walk
     started from, never the mcs/nts below it. Testing those dig names
@@ -126,7 +133,8 @@ def _live_reaching(cat: Catalog) -> set:
     catalog — no SAM query. `assign_status` has already rejected a
     parentage cycle, and the `in live` guard makes a re-entry cheap."""
     live: set = set()
-    frontier = [m for m in cat.members.values() if m.status in ('current', 'stale')]
+    frontier = [m for m in cat.members.values()
+                if m.status in ('current', 'stale', 'excluded')]
     while frontier:
         m = frontier.pop()
         if m.name in live:

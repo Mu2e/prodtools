@@ -141,6 +141,25 @@ are recorded for provenance and shared across Epochs; they are not
 members and do not take an Epoch's standing. An Input is retirable when
 nothing current or stale descends from it and it is not held.
 
+Three rules make that "nothing descends from it" fail closed rather than
+open:
+
+- An **excluded** member confers liveness exactly as a current or stale
+  one does. `retire` refuses to list an excluded member, so proposing to
+  delete its sole upstream Input in the same run would be incoherent: we
+  are keeping the dataset, so we keep what made it.
+- A **frozen** Epoch holds its Inputs as well as its members. An Input
+  is held when every dig it feeds is a member of a frozen or retired
+  Epoch and at least one of those Epochs is frozen. An Input that also
+  feeds a current Epoch's dig is judged by that line's status as before,
+  and one feeding only retired Epochs stays retirable.
+- An Input at the `--input-depth` frontier — one this walk stopped at,
+  or anything above such a node — is **truncated** and never listed.
+  Truncation is a property of the cut, not of the node: a node another
+  dig's walk expanded is still truncated for the dig that was cut off
+  there. Raising `--input-depth` until the reported count is zero is
+  what turns the boundary into a visible decision.
+
 ## Family
 
 A simulation line whose datasets compete for "current": the leading
