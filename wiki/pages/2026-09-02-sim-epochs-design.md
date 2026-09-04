@@ -276,8 +276,13 @@ therefore an attribute:
   `AnalysisMDC2025/v02_01_00`. Same field every tier. **Source
   (decided 2026-09-03, ADR 0003):** the cnf becomes a declared SAM
   parent of every output going forward (one line in `push_data`), and
-  legacy datasets are backfilled once from the cnf name in one log per
-  dataset. Both routes end at the cnf; `jobquery` does the rest.
+  everything else resolves through a cnf INDEX built once from every
+  cnf's own `tbs.outfiles` templates — a template without `{desc}`
+  claims its dataset, a generic one claims every dataset of that tier
+  and dsconf no explicit cnf claims. **Logs are not read** (ADR 0003
+  rejects that route outright: a generic entry names the log dataset
+  after its input, so two output generations share one log dataset).
+  Both routes end at the cnf; `jobquery` does the rest.
 - Query: `epoch_members(tier=mcs, generation=G)` gives a uniform set.
 - Report (confirmed 2026-09-03, report only, never a status): "current
   mcs spans 2 generations: G1 on 18 descs, G2 on 3 descs", with the
@@ -446,7 +451,7 @@ The part I expect you to push on: roots = dig rather than geometry+conditions. W
 | 3 | Group key | `(family, tier, desc, purpose)`; parent NOT in the key. |
 | 4 | "Newest" | Parsed dsconf order. No timestamps anywhere. File count is the one warning. |
 | 5 | Status set | current / stale / superseded. Stale = newest but parent moved on; never retired. |
-| 6 | Generation source | cnf declared as SAM parent (ADR 0003); legacy backfilled from logs. |
+| 6 | Generation source | cnf declared as SAM parent (ADR 0003); everything else via the cnf index built from `tbs.outfiles`. Logs are NOT read. |
 | 7 | Status scope | Across epochs within a family. Epoch retirable when no current/stale member. |
 | 8 | Renames | Manual `exclude` pin with reason. No `supersedes` inference. |
 | 9 | Granularity | One epoch per dig letter family, auto-proposed. |

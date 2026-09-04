@@ -13,6 +13,12 @@ root. It is the authoritative reference for CLI flags, JSON config
 shapes, and canonical invocations. Do not guess flags or copy patterns
 from memory — consult the current doc.
 
+`EXAMPLES.md` does not yet cover `epochs`: the schema entry and this
+pointer landed with the sim-epochs branch, but the derived artifact has
+not been regenerated. Run `/refresh-examples` before relying on it for
+`epochs`; until then read `docs/EXAMPLES_schema.md`'s `epochs` entry and
+`utils/epochs/cli.py`.
+
 `EXAMPLES.md` is a derived artifact, regenerated from source by the
 `/refresh-examples` slash command. The source of truth for its shape
 and tribal knowledge is `docs/EXAMPLES_schema.md`. If `EXAMPLES.md`

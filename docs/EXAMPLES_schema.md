@@ -243,7 +243,15 @@ When regenerating, read in this order:
       reads, with the richer fields carried alongside). `--family` and
       `--epoch` filter which rows a verb PRINTS — every verb still
       judges the complete catalog discovered from SAM, so a filtered
-      `retire` cannot omit a cross-family dependency. `status` is
+      `retire` cannot omit a cross-family dependency. Say exactly which
+      verbs honour them, because not all of them do: `members`, `gaps`
+      and `retire` apply both; `consistency` applies `--family` only and
+      accepts `--epoch` without using it; `lookup` accepts `--family`,
+      `--epoch` and `--json` and uses none of them (it always prints
+      JSON); `index-cnfs` accepts `--family` (no `--epoch`) and uses
+      neither; `publish` takes only `--out`. `--input-depth N`
+      (default 3) is a top-level flag, before the verb, and caps how far
+      above a dig the input walk goes. `status` is
       `current | stale | superseded`, always recomputed from SAM,
       never stored in the epoch file; `frozen` is an epoch standing (a
       hold against deletion), never a dataset status. No timestamps
@@ -252,17 +260,31 @@ When regenerating, read in this order:
       dataset has far fewer files than a sibling. `-NNN` on a dsconf is
       a bare collision counter, not a version — a rename across desc
       (old name superseded by a new one) needs a manual `exclude` pin
-      with a reason, never inferred. `retire` refuses to run against an
-      incomplete catalog — a dig letter family with no epoch file, or a
-      dig dataset matching none of the loaded roots — and names the
-      remedy (`propose --family F`) in the refusal. Exit codes: `2` for
+      with a reason, never inferred. A `hold`/`exclude` pin may name an
+      INPUT as well as a member, and a held input is kept off the retire
+      list exactly as a held member is. `retire` refuses to run against
+      an incomplete catalog — a dig letter family with no epoch file, a
+      dig dataset matching none of the loaded roots, or a pin that could
+      not be applied (it names nothing in the catalog, or something
+      owned by another epoch) — and names the remedy
+      (`propose --family F`) in the refusal; a dropped protection pin is
+      a refusal, never a silent no-op. An input whose own upward walk hit
+      `--input-depth` is reported on stderr and held back from the retire
+      list until the depth is raised. Exit codes: `2` for
       a malformed epoch file, `3` for a SAM error, a dsconf that fails
       to parse, or another catalog-completeness refusal, and `1` for
       `lookup` of a dataset the catalog does not know. A full catalog
       build over the three families (MDC2025, Run1B, MDC2020) takes
-      about 7 minutes; `index-cnfs` takes about 3.5 minutes. Needs the
-      Mu2e ops environment (`source .../setupmu2e-art.sh` then `muse
-      setup ops`) for `samweb_client`. Design:
+      about 7 minutes; `index-cnfs` takes about 3.5 minutes. Setup,
+      verified against the imports on 2026-09-04: the only external
+      dependency is `samweb_client`, reached lazily through
+      `utils.samweb_wrapper` (`list_files`, `count_files`,
+      `definitions_matching`, `locate_file`); `utils.jobquery` and
+      `utils.file_resolver`, which `index-cnfs` and `consistency` also
+      use, add stdlib and in-repo modules only. So the section-1
+      environment — `source .../setupmu2e-art.sh` then `muse setup ops`,
+      which is where `samweb` comes from — is exactly what `epochs`
+      needs; no Musing and no `muse setup SimJob`. Design:
       `wiki/pages/2026-09-02-sim-epochs-design.md`, glossary
       `CONTEXT.md`, ADRs 0003 and 0004.
     - `submissions` — name, one-line role ("direct-submission subsystem
