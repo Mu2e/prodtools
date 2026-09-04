@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from utils.epochs.dsconf import DsconfKey, DsconfParseError, parse_dsconf
 from utils.epochs.epoch_files import EpochFile
+from utils.epochs.progress import Progress
 from utils.job_common import Mu2eName
 
 
@@ -196,7 +197,7 @@ def _walk_down(root_member: Member, source, cat: Catalog):
 
 
 def build_catalog(epochs: Dict[str, EpochFile], source,
-                  families: Optional[List[str]] = None) -> Catalog:
+                  families: Optional[List[str]] = None, progress=None) -> Catalog:
     """`families=None` discovers every family with a dig in SAM
     (`source.dig_families()`) instead of trusting the caller's list —
     the catalog must be complete before a member is judged. A family
@@ -207,7 +208,12 @@ def build_catalog(epochs: Dict[str, EpochFile], source,
     `source` is wrapped once, here, in `_Memo`: every dig's
     `_walk_down` shares the same cache, so a dataset entered from many
     different digs (a stops catalogue shared by hundreds of dts
-    datasets) is asked at most once per build."""
+    datasets) is asked at most once per build.
+
+    `progress` is a `progress.Progress` (or anything carrying the same
+    three events). The default is a disabled one that prints nothing, so
+    no caller has to branch on whether progress was wanted."""
+    progress = progress or Progress(enabled=False)
     msource = _Memo(source)
     if families is None:
         families = sorted(msource.dig_families())
@@ -215,37 +221,47 @@ def build_catalog(epochs: Dict[str, EpochFile], source,
     loaded_families = {e.family for e in epochs.values()}
     cat.missing_families = [f for f in families if f not in loaded_families]
     for family in families:
-        for dig, n in sorted(msource.dig_datasets(family).items()):
-            epoch = _claim(epochs, dig)
-            if epoch is None:
-                cat.unclaimed_digs.setdefault(family, []).append(dig)
-                continue
-            # M8: a dig can already be a member (reached as a child of
-            # another dig, or matched by two family globs -- dig_datasets
-            # globs `.{family}%`, so a family name that prefixes another
-            # returns both). Re-creating it would discard the parents the
-            # first object accumulated, exactly as `_walk_down` avoids by
-            # looking the child up first.
-            m = cat.members.get(dig)
-            if m is None:
-                m = _make_member(dig, n, epoch, cat)
-            elif m.epoch != epoch:
-                # NEW-3: M8's guard (keep the object, keep its accumulated
-                # parents) also changed WHICH epoch wins — a dig already
-                # reached as another dig's child kept the epoch
-                # _walk_down inherited from its parent. For a dig the root
-                # claim is the authoritative answer; that is what roots are
-                # for. Fix it and report: members below it still carry the
-                # inherited epoch, and losing a frozen epoch's hold is a
-                # false DELETE.
-                cat.epoch_conflicts.append(
-                    f'dig {dig} was walked in as a member of epoch {m.epoch} but its own root '
-                    f'claim is epoch {epoch}; the root claim wins, and datasets below it may '
-                    f'still carry {m.epoch}')
-                m.epoch = epoch
-            if m is None:
-                continue
-            _walk_down(m, msource, cat)
+        digs = sorted(msource.dig_datasets(family).items())
+        progress.family(family, len(digs))
+        for dig, n in digs:
+            # `finally`, not a call after the body: two `continue` paths
+            # below (an unclaimed dig, an unparseable dsconf) are still a
+            # dig gone past, and a progress counter that skips them would
+            # never reach the family's total.
+            try:
+                epoch = _claim(epochs, dig)
+                if epoch is None:
+                    cat.unclaimed_digs.setdefault(family, []).append(dig)
+                    continue
+                # M8: a dig can already be a member (reached as a child of
+                # another dig, or matched by two family globs -- dig_datasets
+                # globs `.{family}%`, so a family name that prefixes another
+                # returns both). Re-creating it would discard the parents the
+                # first object accumulated, exactly as `_walk_down` avoids by
+                # looking the child up first.
+                m = cat.members.get(dig)
+                if m is None:
+                    m = _make_member(dig, n, epoch, cat)
+                elif m.epoch != epoch:
+                    # NEW-3: M8's guard (keep the object, keep its accumulated
+                    # parents) also changed WHICH epoch wins — a dig already
+                    # reached as another dig's child kept the epoch
+                    # _walk_down inherited from its parent. For a dig the root
+                    # claim is the authoritative answer; that is what roots are
+                    # for. Fix it and report: members below it still carry the
+                    # inherited epoch, and losing a frozen epoch's hold is a
+                    # false DELETE.
+                    cat.epoch_conflicts.append(
+                        f'dig {dig} was walked in as a member of epoch {m.epoch} but its own root '
+                        f'claim is epoch {epoch}; the root claim wins, and datasets below it may '
+                        f'still carry {m.epoch}')
+                    m.epoch = epoch
+                if m is None:
+                    continue
+                _walk_down(m, msource, cat)
+            finally:
+                progress.dig(len(cat.members))
+    progress.finish(len(cat.members))
     cat.foreign |= getattr(msource, 'foreign', set())
     _apply_pins(cat)
     return cat

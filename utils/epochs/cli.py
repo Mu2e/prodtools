@@ -20,6 +20,7 @@ from utils.epochs.epoch_files import (EpochFileError, load_epoch_files, propose_
                                       write_epoch_file)
 from utils.epochs.generation import build_cnf_index, generations
 from utils.epochs.graph import build_catalog
+from utils.epochs.progress import Progress
 from utils.epochs.publish import catalog_document, write_catalog
 from utils.epochs.reports import consistency, count_warnings, gaps, lookup, purge_lines, retire
 from utils.epochs.status import assign_status
@@ -67,6 +68,16 @@ def _load_index(epochs_dir) -> Dict:
         return json.load(f)
 
 
+def _progress(args):
+    """Build progress for this invocation. `--quiet` turns it off
+    outright; otherwise `Progress` decides from the stream, which means
+    a TTY gets it and a redirected stderr does not. stdout is never
+    touched (see `utils/epochs/progress.py`)."""
+    if getattr(args, 'quiet', False):
+        return Progress(enabled=False)
+    return Progress()
+
+
 def _catalog(args, source):
     """Load every epoch file in `args.epochs_dir` and build the COMPLETE
     catalog — families are discovered from SAM (`families=None`), never
@@ -76,7 +87,7 @@ def _catalog(args, source):
     if not epochs:
         raise EpochFileError(f"no epoch files in {args.epochs_dir}; "
                              f"run 'epochs propose --family F' first")
-    cat = build_catalog(epochs, source, families=None)
+    cat = build_catalog(epochs, source, families=None, progress=_progress(args))
     return assign_status(cat)
 
 
@@ -244,6 +255,14 @@ def cmd_publish(args, source, now_fn):
     return 0
 
 
+def _quiet(sp):
+    """Every verb takes `--quiet`, on the verb rather than before it: the
+    command a user actually types is `epochs members --epoch X --quiet`,
+    and a top-level-only flag would be a usage error there."""
+    sp.add_argument('--quiet', action='store_true',
+                    help='suppress the stderr build-progress lines')
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog='epochs', description=__doc__)
     p.add_argument('--epochs-dir', default=DEFAULT_EPOCHS_DIR)
@@ -254,6 +273,7 @@ def build_parser():
         if epoch:
             sp.add_argument('--epoch')
         sp.add_argument('--json', action='store_true')
+        _quiet(sp)
 
     common(sub.add_parser('propose'), epoch=False)
     s = sub.add_parser('members'); common(s)
@@ -263,7 +283,7 @@ def build_parser():
     common(sub.add_parser('retire'))
     s = sub.add_parser('lookup'); common(s); s.add_argument('dataset')
     common(sub.add_parser('index-cnfs'), epoch=False)
-    s = sub.add_parser('publish'); s.add_argument('--out', required=True)
+    s = sub.add_parser('publish'); s.add_argument('--out', required=True); _quiet(s)
     return p
 
 

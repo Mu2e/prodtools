@@ -1305,14 +1305,90 @@ class TestPublish(unittest.TestCase):
 import io
 import contextlib
 from utils.epochs import cli as epochs_cli
+from utils.epochs.progress import Progress
 
 
-def _run(argv, source, epochs_dir):
-    out, err = io.StringIO(), io.StringIO()
+class _Tty(io.StringIO):
+    """A StringIO that claims to be a terminal. `redirect_stderr` hands
+    the CLI a plain StringIO, whose isatty() is False, so without this
+    the progress output can never be exercised end to end -- and progress
+    on a non-TTY is precisely what must NOT happen."""
+    def isatty(self):
+        return True
+
+
+def _ticking_clock(step=0.1):
+    """A monotonic clock that advances a fixed step per read, so the
+    redraw throttle and the elapsed figure are deterministic."""
+    state = {'t': 0.0}
+
+    def clock():
+        state['t'] += step
+        return state['t']
+    return clock
+
+
+def _run(argv, source, epochs_dir, tty=False):
+    out = io.StringIO()
+    err = _Tty() if tty else io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = epochs_cli.main(['--epochs-dir', epochs_dir] + argv, source=source,
                              now_fn=lambda: '2026-09-03T00:00:00Z')
     return rc, out.getvalue(), err.getvalue()
+
+
+class TestProgress(unittest.TestCase):
+    def _progress(self, interval=0.0):
+        stream = io.StringIO()
+        return stream, Progress(stream=stream, enabled=True, interval=interval,
+                                clock=_ticking_clock())
+
+    def _drive(self, p):
+        p.family('MDC2020', 3)
+        for _ in range(3):
+            p.dig(10)
+        p.family('MDC2025', 2)
+        for _ in range(2):
+            p.dig(20)
+        p.finish(30)
+
+    def test_one_line_per_family_plus_one_summary(self):
+        # The requirement is "one updating line per family, or one line
+        # per N digs -- one line per SAM call is not". A build with 400
+        # digs must therefore emit 3 newline-terminated lines, not 400.
+        stream, p = self._progress()
+        self._drive(p)
+        lines = [ln for ln in stream.getvalue().split('\n') if ln.strip()]
+        self.assertEqual(len(lines), 3)
+        self.assertIn('MDC2020 3/3 digs', lines[0])
+        self.assertIn('MDC2025 2/2 digs', lines[1])
+        self.assertIn('built 2 families, 5 digs, 30 members in ', lines[2])
+
+    def test_a_family_line_is_rewritten_in_place(self):
+        stream, p = self._progress()
+        self._drive(p)
+        first = stream.getvalue().split('\n')[0]
+        # header + 3 digs + the forced final redraw the next family triggers
+        self.assertEqual(first.count('\r'), 5)
+        self.assertIn('MDC2020 1/3 digs', first)
+
+    def test_disabled_writes_nothing_at_all(self):
+        stream = io.StringIO()
+        p = Progress(stream=stream, enabled=False, interval=0.0, clock=_ticking_clock())
+        self._drive(p)
+        self.assertEqual(stream.getvalue(), '')
+
+    def test_enabled_defaults_to_whether_the_stream_is_a_tty(self):
+        self.assertTrue(Progress(stream=_Tty()).enabled)
+        self.assertFalse(Progress(stream=io.StringIO()).enabled)
+
+    def test_redraws_are_throttled_between_forced_events(self):
+        # A forced redraw (family start/end) always lands; the per-dig
+        # ones inside the interval do not.
+        stream, p = self._progress(interval=1000.0)
+        self._drive(p)
+        first = stream.getvalue().split('\n')[0]
+        self.assertEqual(first.count('\r'), 2)          # header + the forced final draw
 
 
 class TestCli(unittest.TestCase):
@@ -1358,6 +1434,36 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         with open(p) as f:
             self.assertEqual(json.load(f)['generated_at'], '2026-09-03T00:00:00Z')
+
+    def test_progress_is_on_stderr_on_a_tty_and_never_on_stdout(self):
+        rc, out, err = _run(['members'], self.src, self.d, tty=True)
+        self.assertEqual(rc, 0)
+        self.assertIn('epochs: MDC2025 ', err)
+        self.assertIn('members in ', err)
+        self.assertNotIn('epochs:', out)
+        # and stdout is byte-identical to the run that prints no progress
+        rc2, out2, err2 = _run(['members'], self.src, self.d)
+        self.assertEqual(rc2, 0)
+        self.assertEqual(out, out2)
+        self.assertNotIn('epochs:', err2)
+
+    def test_progress_is_silent_when_stderr_is_redirected(self):
+        # The rule that keeps a redirected log from collecting thousands
+        # of progress lines. Nothing is asserted about stdout here that
+        # the test above does not already cover.
+        for verb in (['members'], ['gaps'], ['retire'],
+                     ['publish', '--out', os.path.join(_tmpdir(), 'c.json')]):
+            rc, out, err = _run(verb, self.src, self.d)
+            self.assertEqual(rc, 0, verb)
+            self.assertNotIn('epochs: built', err, verb)
+
+    def test_quiet_suppresses_progress_on_every_verb(self):
+        for verb in (['members'], ['gaps'], ['consistency'], ['retire'],
+                     ['lookup', f'nts.mu2e.CeEndpointOnSpill.{AU}.root'],
+                     ['publish', '--out', os.path.join(_tmpdir(), 'c.json')]):
+            rc, out, err = _run(verb + ['--quiet'], self.src, self.d, tty=True)
+            self.assertEqual(rc, 0, verb)
+            self.assertNotIn('epochs: built', err, verb)
 
     def test_malformed_epoch_file_is_exit_2(self):
         with open(os.path.join(self.d, 'MDC2025au.json'), 'w') as f:
