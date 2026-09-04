@@ -21,8 +21,7 @@ from utils.epochs.epoch_files import (EpochFileError, load_epoch_files, propose_
 from utils.epochs.generation import build_cnf_index, generations
 from utils.epochs.graph import build_catalog
 from utils.epochs.publish import catalog_document, write_catalog
-from utils.epochs.reports import (consistency, count_warnings, gaps, input_retirement_refusal,
-                                  lookup, purge_lines, retire)
+from utils.epochs.reports import consistency, count_warnings, gaps, lookup, purge_lines, retire
 from utils.epochs.status import assign_status
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -77,7 +76,7 @@ def _catalog(args, source):
     if not epochs:
         raise EpochFileError(f"no epoch files in {args.epochs_dir}; "
                              f"run 'epochs propose --family F' first")
-    cat = build_catalog(epochs, source, families=None, input_depth=args.input_depth)
+    cat = build_catalog(epochs, source, families=None)
     return assign_status(cat)
 
 
@@ -93,21 +92,10 @@ def _keep(args, family, epoch):
 
 
 def _retire_keep(args, cat, entry):
-    """Retire entries: a member entry is filtered by the member's own
-    family/epoch (looked up in cat.members); an input entry has no epoch
-    of its own, so under --epoch it is kept only when its family matches
-    the NAMED epoch's family."""
-    if entry['kind'] == 'member':
-        m = cat.members[entry['dataset']]
-        return _keep(args, m.key.family, m.epoch)
-    fam = parse_dsconf(entry['dataset'].split('.')[3]).family
-    if args.family and fam not in args.family:
-        return False
-    if args.epoch is not None:
-        ep = cat.epochs.get(args.epoch)
-        if ep is None or fam != ep.family:
-            return False
-    return True
+    """Retire entries are members only (input retirement removed, ADR
+    0005): filtered by the member's own family/epoch."""
+    m = cat.members[entry['dataset']]
+    return _keep(args, m.key.family, m.epoch)
 
 
 def _emit(rows, as_json: bool, text_fn):
@@ -124,13 +112,6 @@ def _report_noise(cat, source):
     for fam, digs in cat.unclaimed_digs.items():
         for d in digs:
             print(f'unclaimed dig (no epoch root matches): {d}', file=sys.stderr)
-    refusal = input_retirement_refusal(cat)
-    if refusal:
-        # NOT "these N were withheld": the counts name places the graph is
-        # unread, and which inputs that makes unsafe cannot be read off
-        # them. The whole input section is refused, and the message says
-        # so, along with the remedy for each cause present.
-        print(refusal, file=sys.stderr)
     for line in cat.pin_problems:
         print(f'pin problem: {line}', file=sys.stderr)
     for line in cat.epoch_conflicts:
@@ -255,11 +236,6 @@ def cmd_publish(args, source, now_fn):
         retire_part = f"retire: refused, catalog incomplete ({len(doc['incomplete'])} reasons)"
     else:
         retire_part = f"{len(doc['retire'])} retire candidates"
-        if doc['input_retirement_refused']:
-            # `publish` prints no stderr noise, so the one place an
-            # operator sees that the list is members-only is here
-            retire_part += ' (members only: the input section is refused, see ' \
-                           "'input_retirement_refused')"
     print(f'{args.out}: {len(doc["epochs"])} epochs, '
           f'{sum(len(e["datasets"]) for e in doc["epochs"])} members, '
           f'{len(doc["gaps"])} gaps, {retire_part}')
@@ -269,13 +245,6 @@ def cmd_publish(args, source, now_fn):
 def build_parser():
     p = argparse.ArgumentParser(prog='epochs', description=__doc__)
     p.add_argument('--epochs-dir', default=DEFAULT_EPOCHS_DIR)
-    p.add_argument('--input-depth', type=int, default=None,
-                   help='cap the upward input walk at N levels above each dig '
-                        '(default: no cap, walk to closure). A capped build '
-                        'refuses the ENTIRE input section of `retire`; so does '
-                        'any other unread region (an unparseable dsconf, a '
-                        'non-mu2e owner in the lineage). There is no flag to '
-                        'bypass that refusal.')
     sub = p.add_subparsers(dest='verb', required=True)
 
     def common(sp, epoch=True):

@@ -18,12 +18,6 @@ DROP_TIERS = frozenset({'log', 'cnf', 'etc'})
 # a member, never an input and never a retire candidate — it is recorded
 # on `Member.cnf_parents` and read only by `generation.cnf_for`.
 PARENT_KEEP_TIERS = frozenset({'cnf'})
-# The DROP_TIERS members that are known to carry no physics lineage, so
-# dropping them from either walk direction hides no parentage edge. Read
-# by `graph.build_catalog`, which records an input-graph incompleteness
-# for any dropped tier NOT listed here: whether a drop is safe is a
-# property of the tier list, and the list is editable.
-PROVENANCE_ONLY_TIERS = frozenset({'log', 'cnf', 'etc'})
 OWNER = 'mu2e'
 
 
@@ -160,9 +154,6 @@ class SamSource:
                              keep_tiers=PARENT_KEEP_TIERS)
 
     # -- files -----------------------------------------------------------
-    def nfiles(self, dataset: str) -> int:
-        return self._count(f'dh.dataset {dataset}')
-
     def local_path(self, filename: str) -> str:
         """/pnfs path of a SAM file for direct reading on a gpvm; '' if
         SAM does not know the file. Only used for cnf tarballs.

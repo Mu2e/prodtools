@@ -11,30 +11,25 @@ at a deletion list. `catalog_document` must never crash on that: it calls
 a `None` `'retire'` is the reported state; nothing here fills the gap
 with a guess.
 
-Two caveats a consumer of the served JSON has to read (V5):
+One caveat a consumer of the served JSON has to read (V5): when
+`'incomplete'` is non-empty, `'retire'` is `null` AND the
+`epochs[].datasets` / `epochs[].members` grouping may be WRONG for a
+contested subtree: a dig whose own root claim disagreed with the epoch
+it was walked in under has its own epoch corrected, but every member
+below it still carries the epoch `_walk_down` inherited. That is the
+reason `'retire'` is `null`, and `'incomplete'` names the dig. Do not
+read the grouping as authoritative while `'incomplete'` is non-empty.
 
-- When `'incomplete'` is non-empty, `'retire'` is `null` AND the
-  `epochs[].datasets` / `epochs[].members` grouping may be WRONG for a
-  contested subtree: a dig whose own root claim disagreed with the epoch
-  it was walked in under has its own epoch corrected, but every member
-  below it still carries the epoch `_walk_down` inherited. That is the
-  reason `'retire'` is `null`, and `'incomplete'` names the dig. Do not
-  read the grouping as authoritative while `'incomplete'` is non-empty.
-- `'input_retirement_refused'` is a non-empty string whenever the input
-  graph is known-incomplete — a `--input-depth` cap, an unparseable
-  dsconf above or below a member, a dataset not owned by `mu2e` in the
-  lineage. `'retire'` then holds member candidates ONLY, and the absence
-  of an input from it means nothing. `'input_graph_incomplete'` lists the
-  reasons and `'input_depth'` names the cap (null = walked to closure).
-  Expect this to be non-empty on production data until the legacy dsconf
-  names parse: it is the tool declining to guess, not a fault.
+`'retire'` carries member candidates only: input retirement (proposing
+deletion of upstream datasets) is not modeled in this version. See
+CONTEXT.md, "Input", and
+`docs/adr/0005-input-retirement-proves-deadness-positively.md`.
 """
 import json
 from typing import Dict
 
 from utils.epochs.graph import Catalog
-from utils.epochs.reports import (count_warnings, gaps, incomplete_reasons,
-                                  input_retirement_refusal, lookup, retire)
+from utils.epochs.reports import count_warnings, gaps, incomplete_reasons, lookup, retire
 
 
 def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
@@ -57,11 +52,6 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
     return {
         'generated_at': generated_at,
         'epochs': epochs,
-        'inputs': {k: {'nfiles': v['nfiles'], 'hold': v.get('hold', ''),
-                       'excluded': v.get('excluded', ''),
-                       'truncated': bool(v.get('truncated')),
-                       'descendants': sorted(v['descendants'])}
-                   for k, v in sorted(cat.inputs.items())},
         'unparseable': [list(x) for x in cat.unparseable],
         # a member with two declared cnf parents: its generation above is
         # reported from the first in sort order alone (NEW-2). `publish`
@@ -73,16 +63,6 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         'missing_families': list(cat.missing_families),
         'gaps': gaps(cat),
         'incomplete': reasons,
-        # non-empty => 'retire' carries members only; a capped upward walk
-        # left the input graph incomplete and no input is proposed at all
-        'input_retirement_refused': input_retirement_refusal(cat),
-        # the machine-readable form of the line above: one entry per
-        # distinct place the upward/downward walk stopped early or dropped
-        # an edge. Empty <=> the input graph is complete.
-        'input_graph_incomplete': list(cat.input_graph_incomplete),
-        # null = the upward walk ran to natural closure; an int is the
-        # operator-set cap that was in force
-        'input_depth': cat.input_depth,
         'retire': retire(cat) if not reasons else None,
         'count_warnings': count_warnings(cat),
     }
