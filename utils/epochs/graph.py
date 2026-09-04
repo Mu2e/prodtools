@@ -175,7 +175,24 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
     while frontier:
         child, level = frontier.pop()
         if level >= depth:
+            # I6: the cap is per-walk. Stopping here means this dataset's
+            # own parents were never asked for, so our picture of the graph
+            # around it is partial -- and a partial picture is exactly how
+            # an input recorded shallowly from a superseded dig ends up on
+            # the retire list while a deeper live branch reaches it unseen.
+            # Mark the frontier; retire() refuses to list a truncated
+            # input, and raising --input-depth until the count is zero is
+            # what makes the boundary a visible decision instead of a
+            # silent one. A later walk that DOES expand this node clears
+            # the mark (and an earlier one that did keeps it clear).
+            rec = cat.inputs.get(child)
+            if rec is not None and not rec['explored']:
+                rec['truncated'] = True
             continue
+        rec = cat.inputs.get(child)
+        if rec is not None:
+            rec['explored'] = True
+            rec['truncated'] = False
         for p, n in source.parents(child).items():
             if p in cat.members:
                 # a member above a dig (a dig-of-dig): a parent edge, never
@@ -197,7 +214,8 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
                 # must be the DATASET's count; one memoized count_files per
                 # distinct input buys that.
                 rec = cat.inputs[p] = {'nfiles': source.nfiles(p), 'parents': set(),
-                                       'descendants': set(), 'hold': '', 'excluded': ''}
+                                       'descendants': set(), 'hold': '', 'excluded': '',
+                                       'truncated': False, 'explored': False}
             rec['descendants'].add(dig.name)
             if child in cat.inputs:
                 cat.inputs[child]['parents'].add(p)

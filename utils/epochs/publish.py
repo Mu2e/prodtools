@@ -40,6 +40,7 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         'epochs': epochs,
         'inputs': {k: {'nfiles': v['nfiles'], 'hold': v.get('hold', ''),
                        'excluded': v.get('excluded', ''),
+                       'truncated': bool(v.get('truncated')),
                        'descendants': sorted(v['descendants'])}
                    for k, v in sorted(cat.inputs.items())},
         'unparseable': [list(x) for x in cat.unparseable],

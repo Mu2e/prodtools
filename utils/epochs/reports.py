@@ -150,6 +150,9 @@ def retire(cat: Catalog) -> List[Dict]:
             continue
         if rec.get('hold') or rec.get('excluded'):
             continue          # held inputs are protected, exactly as held members are
+        if rec.get('truncated'):
+            continue          # I6: upward walk hit --input-depth here; we do not know
+                              # what else reaches this dataset, so we do not propose it
         key = parse_dsconf(name.split('.')[3]).sort_key()
         newest = _newest_epoch_key(cat, parse_dsconf(name.split('.')[3]).family)
         if newest is not None and key[0] > newest[0]:
@@ -182,6 +185,7 @@ def lookup(cat: Catalog, dataset: str) -> Dict:
     if rec is not None:
         return {'kind': 'input', 'dataset': dataset, 'nfiles': rec['nfiles'],
                 'hold': rec.get('hold', ''), 'excluded': rec.get('excluded', ''),
+                'truncated': bool(rec.get('truncated')),
                 'parents': sorted(rec['parents']), 'descendants': sorted(rec['descendants'])}
     return {'kind': 'unknown', 'dataset': dataset}
 

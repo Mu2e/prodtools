@@ -734,6 +734,42 @@ class TestRetire(unittest.TestCase):
         self.assertTrue(any('feeds no dig of that epoch' in line for line in cat.pin_problems),
                         cat.pin_problems)
 
+    def test_input_at_the_depth_frontier_is_not_proposed(self):
+        # I6: --input-depth is a per-walk cap and was invisible. An input
+        # whose own parents were never queried sits at the edge of what we
+        # explored -- precisely the one that a deeper walk from a live dig
+        # could also reach -- so it is held back. The input one hop below
+        # it, whose parents WERE queried, is still listed: the guard is a
+        # frontier marker, not a blanket refusal.
+        g = _small_graph()
+        g['dts.mu2e.Deep1.MDC2025af.art'] = {
+            'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        g['sim.mu2e.Deep2.MDC2025af.art'] = {
+            'n': 10, 'children': ['dts.mu2e.Deep1.MDC2025af.art']}
+        g['sim.mu2e.Deep3.MDC2025af.art'] = {
+            'n': 10, 'children': ['sim.mu2e.Deep2.MDC2025af.art']}
+        cat = _cat(g)          # default input_depth = 3
+        self.assertTrue(cat.inputs['sim.mu2e.Deep3.MDC2025af.art']['truncated'])
+        self.assertFalse(cat.inputs['sim.mu2e.Deep2.MDC2025af.art']['truncated'])
+        listed = {x['dataset'] for x in retire(cat)}
+        self.assertNotIn('sim.mu2e.Deep3.MDC2025af.art', listed)
+        self.assertIn('sim.mu2e.Deep2.MDC2025af.art', listed)
+
+    def test_raising_input_depth_clears_the_frontier(self):
+        # the boundary is a decision the operator can take, and taking it
+        # is what puts the dataset back on the list.
+        g = _small_graph()
+        g['dts.mu2e.Deep1.MDC2025af.art'] = {
+            'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        g['sim.mu2e.Deep2.MDC2025af.art'] = {
+            'n': 10, 'children': ['dts.mu2e.Deep1.MDC2025af.art']}
+        g['sim.mu2e.Deep3.MDC2025af.art'] = {
+            'n': 10, 'children': ['sim.mu2e.Deep2.MDC2025af.art']}
+        epochs = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+        cat = assign_status(build_catalog(epochs, FakeSource(g), ['MDC2025'], input_depth=4))
+        self.assertFalse(cat.inputs['sim.mu2e.Deep3.MDC2025af.art']['truncated'])
+        self.assertIn('sim.mu2e.Deep3.MDC2025af.art', {x['dataset'] for x in retire(cat)})
+
     def test_retire_refuses_incomplete_catalog(self):
         # Run1B digs are fed by MDC2025 stop catalogues; a Run1B-only
         # catalog cannot tell a still-needed MDC2025 input from a
