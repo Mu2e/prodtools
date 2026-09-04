@@ -10,12 +10,27 @@ at a deletion list. `catalog_document` must never crash on that: it calls
 `retire(cat)` for the `'retire'` key. A non-empty `'incomplete'` next to
 a `None` `'retire'` is the reported state; nothing here fills the gap
 with a guess.
+
+Two caveats a consumer of the served JSON has to read (V5):
+
+- When `'incomplete'` is non-empty, `'retire'` is `null` AND the
+  `epochs[].datasets` / `epochs[].members` grouping may be WRONG for a
+  contested subtree: a dig whose own root claim disagreed with the epoch
+  it was walked in under has its own epoch corrected, but every member
+  below it still carries the epoch `_walk_down` inherited. That is the
+  reason `'retire'` is `null`, and `'incomplete'` names the dig. Do not
+  read the grouping as authoritative while `'incomplete'` is non-empty.
+- `'input_retirement_refused'` is a non-empty string when the catalog
+  was built with `--input-depth` and something was truncated: `'retire'`
+  then holds member candidates ONLY, and the absence of an input from it
+  means nothing.
 """
 import json
 from typing import Dict
 
 from utils.epochs.graph import Catalog
-from utils.epochs.reports import count_warnings, gaps, incomplete_reasons, lookup, retire
+from utils.epochs.reports import (count_warnings, gaps, incomplete_reasons,
+                                  input_retirement_refusal, lookup, retire)
 
 
 def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
@@ -54,6 +69,9 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         'missing_families': list(cat.missing_families),
         'gaps': gaps(cat),
         'incomplete': reasons,
+        # non-empty => 'retire' carries members only; a capped upward walk
+        # left the input graph incomplete and no input is proposed at all
+        'input_retirement_refused': input_retirement_refusal(cat),
         'retire': retire(cat) if not reasons else None,
         'count_warnings': count_warnings(cat),
     }

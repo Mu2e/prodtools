@@ -385,6 +385,38 @@ def _small_graph():
     }
 
 
+def _deep_graph():
+    """_small_graph plus a 3-level chain above the superseded an dig:
+       dig CE@an <- dts Deep1 <- sim Deep2 <- sim Deep3"""
+    g = _small_graph()
+    g['dts.mu2e.Deep1.MDC2025af.art'] = {
+        'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+    g['sim.mu2e.Deep2.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.Deep1.MDC2025af.art']}
+    g['sim.mu2e.Deep3.MDC2025af.art'] = {'n': 10, 'children': ['sim.mu2e.Deep2.MDC2025af.art']}
+    return g
+
+
+def _v1_probe_graph():
+    """verify-findings-2.md's V1 probe, verbatim:
+
+       dig Chain@au (current)              <- P1 <- P2 <- MM <- NN
+       dig CeEndpointOnSpill@an (superseded)      <- QQ <- NN
+
+    At a cap of 3, MM is the live dig's cut and no walk ever expands it,
+    so it has no parent edges to propagate along; NN is 2 hops above the
+    superseded dig and looks fully explored."""
+    g = _small_graph()
+    g[f'dig.mu2e.Chain.{AU}.art'] = {'n': 10, 'children': []}
+    g['dts.mu2e.P1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.Chain.{AU}.art']}
+    g['dts.mu2e.P2.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.P1.MDC2025af.art']}
+    g['dts.mu2e.MM.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.P2.MDC2025af.art']}
+    g['dts.mu2e.QQ.MDC2025af.art'] = {
+        'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+    g['sim.mu2e.NN.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.MM.MDC2025af.art',
+                                                            'dts.mu2e.QQ.MDC2025af.art']}
+    return g
+
+
 class TestRootMatches(unittest.TestCase):
     def test_percent_is_glob(self):
         self.assertTrue(root_matches('dig.mu2e.%.MDC2025au_%.art', f'dig.mu2e.CeEndpointOnSpill.{AU}.art'))
@@ -601,10 +633,12 @@ class TestBuildCatalog(unittest.TestCase):
                          {f'dig.mu2e.CeEndpointOnSpill.{AU}.art', f'dig.mu2e.CeEndpointOnSpill.{AN}.art'})
 
 
-def _cat(graph=None, epochs=None):
+def _cat(graph=None, epochs=None, input_depth=None):
+    """`input_depth=None` is build_catalog's own default: walk upward to
+    closure. A test that wants a cut passes an int explicitly."""
     src = FakeSource(graph or _small_graph())
     eps = epochs or {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
-    return assign_status(build_catalog(eps, src, ['MDC2025']))
+    return assign_status(build_catalog(eps, src, ['MDC2025'], input_depth=input_depth))
 
 
 class TestStatus(unittest.TestCase):
@@ -796,7 +830,8 @@ class TestStatus(unittest.TestCase):
         self.assertIn(('MDC2025', 'nts', 'CeEndpointOnSpill', 'best'), groups(cat))
 
 
-from utils.epochs.reports import gaps, retire, purge_lines, lookup, EXPECTED_TIERS
+from utils.epochs.reports import (gaps, retire, purge_lines, lookup, EXPECTED_TIERS,
+                                  input_retirement_refusal, truncated_inputs)
 
 
 class TestGaps(unittest.TestCase):
@@ -1049,40 +1084,48 @@ class TestRetire(unittest.TestCase):
         self.assertEqual(live.inputs['dts.mu2e.Frozen.MDC2025af.art']['hold'], '')
         self.assertIn('dts.mu2e.Frozen.MDC2025af.art', {x['dataset'] for x in retire(live)})
 
-    def test_input_at_the_depth_frontier_is_not_proposed(self):
-        # I6: --input-depth is a per-walk cap and was invisible. An input
-        # whose own parents were never queried sits at the edge of what we
-        # explored -- precisely the one that a deeper walk from a live dig
-        # could also reach -- so it is held back. The input one hop below
-        # it, whose parents WERE queried, is still listed: the guard is a
-        # frontier marker, not a blanket refusal.
-        g = _small_graph()
-        g['dts.mu2e.Deep1.MDC2025af.art'] = {
-            'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
-        g['sim.mu2e.Deep2.MDC2025af.art'] = {
-            'n': 10, 'children': ['dts.mu2e.Deep1.MDC2025af.art']}
-        g['sim.mu2e.Deep3.MDC2025af.art'] = {
-            'n': 10, 'children': ['sim.mu2e.Deep2.MDC2025af.art']}
-        cat = _cat(g)          # default input_depth = 3
+    def test_walking_to_closure_is_the_default_and_truncates_nothing(self):
+        # 2026-09-04 structural change: the upward walk runs to the top of
+        # the real DAG unless an operator caps it. With no cut there is no
+        # truncation to detect, which is the point -- V1, NEW-1 and C1 were
+        # three different shapes of "which parts of a knowingly incomplete
+        # input graph are safe to delete", a question that now is not asked.
+        epochs = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+        # build_catalog's OWN default, passed nothing: no cap
+        cat = assign_status(build_catalog(epochs, FakeSource(_deep_graph()), ['MDC2025']))
+        self.assertEqual(cat.input_depth, None)
+        self.assertEqual(truncated_inputs(cat), [])
+        self.assertEqual(input_retirement_refusal(cat), '')
+        listed = {x['dataset'] for x in retire(cat)}
+        for n in ('dts.mu2e.Deep1.MDC2025af.art', 'sim.mu2e.Deep2.MDC2025af.art',
+                  'sim.mu2e.Deep3.MDC2025af.art'):
+            self.assertIn(n, listed)
+
+    def test_a_cap_that_truncates_anything_refuses_the_entire_input_section(self):
+        # The rule that replaces three rounds of per-input detectors: a
+        # partial input graph yields NO input retirement proposals at all.
+        # Deep2 was explored and would have been listed under the old
+        # per-input rule -- but the walk that stopped at Deep3 never asked
+        # what else reaches the region above it, and which OTHER inputs
+        # that makes unsafe cannot be read off the marks (V1). Members are
+        # unaffected: they come from the downward closure, which the cap
+        # never touches.
+        cat = _cat(_deep_graph(), input_depth=3)
         self.assertTrue(cat.inputs['sim.mu2e.Deep3.MDC2025af.art']['truncated'])
         self.assertFalse(cat.inputs['sim.mu2e.Deep2.MDC2025af.art']['truncated'])
-        listed = {x['dataset'] for x in retire(cat)}
-        self.assertNotIn('sim.mu2e.Deep3.MDC2025af.art', listed)
-        self.assertIn('sim.mu2e.Deep2.MDC2025af.art', listed)
+        rows = retire(cat)
+        self.assertEqual([r for r in rows if r['kind'] == 'input'], [])
+        self.assertTrue([r for r in rows if r['kind'] == 'member'])
+        msg = input_retirement_refusal(cat)
+        self.assertIn('--input-depth 3', msg)
+        self.assertIn('NO input is proposed', msg)
 
     def test_raising_input_depth_clears_the_frontier(self):
         # the boundary is a decision the operator can take, and taking it
-        # is what puts the dataset back on the list.
-        g = _small_graph()
-        g['dts.mu2e.Deep1.MDC2025af.art'] = {
-            'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
-        g['sim.mu2e.Deep2.MDC2025af.art'] = {
-            'n': 10, 'children': ['dts.mu2e.Deep1.MDC2025af.art']}
-        g['sim.mu2e.Deep3.MDC2025af.art'] = {
-            'n': 10, 'children': ['sim.mu2e.Deep2.MDC2025af.art']}
-        epochs = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
-        cat = assign_status(build_catalog(epochs, FakeSource(g), ['MDC2025'], input_depth=4))
+        # is what puts the input section back.
+        cat = _cat(_deep_graph(), input_depth=4)
         self.assertFalse(cat.inputs['sim.mu2e.Deep3.MDC2025af.art']['truncated'])
+        self.assertEqual(input_retirement_refusal(cat), '')
         self.assertIn('sim.mu2e.Deep3.MDC2025af.art', {x['dataset'] for x in retire(cat)})
 
     def test_input_above_a_node_another_dig_already_expanded_is_held_back(self):
@@ -1090,17 +1133,17 @@ class TestRetire(unittest.TestCase):
         # `explored` used to live on the shared input record, so a node cut
         # off for THIS dig but already expanded by an earlier dig's walk was
         # not marked -- and neither was anything above it, whose
-        # `descendants` therefore name only the superseded dig. retire()
-        # then proposed deleting an input a `current` dig transitively
-        # consumes, with a --input-depth frontier count of zero, and the
-        # outcome depended on the alphabetical order digs are processed in.
+        # `descendants` therefore name only the superseded dig.
         #
         #   dig Chain@au (current)     <- P1 <- P2 <- MM <- NN
         #   dig Chain@an (superseded)  <- MM <- NN
         #
         # The an walk (processed first, alphabetically) expands MM and NN;
         # the au walk is cut at MM, 3 hops up. NN is 4 hops above the live
-        # dig and is never reached from it.
+        # dig and is never reached from it. Rewritten 2026-09-04: the cap is
+        # now explicit (the default walks to closure), and the assertion is
+        # the class-wide rule -- no input at all -- rather than "NN in
+        # particular is missing from the list".
         g = _small_graph()
         g[f'dig.mu2e.Chain.{AU}.art'] = {'n': 10, 'children': []}
         g[f'dig.mu2e.Chain.{AN}.art'] = {'n': 10, 'children': []}
@@ -1109,15 +1152,78 @@ class TestRetire(unittest.TestCase):
         g['dts.mu2e.MM.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.P2.MDC2025af.art',
                                                                 f'dig.mu2e.Chain.{AN}.art']}
         g['sim.mu2e.NN.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.MM.MDC2025af.art']}
-        cat = _cat(g)
+        cat = _cat(g, input_depth=3)
         self.assertEqual(cat.members[f'dig.mu2e.Chain.{AU}.art'].status, 'current')
         self.assertEqual(cat.members[f'dig.mu2e.Chain.{AN}.art'].status, 'superseded')
         # MM is where the live dig's walk stopped; NN sits above the cut and
-        # is held back by the upward propagation, not by the cut itself.
+        # is marked by the upward propagation, not by the cut itself.
         self.assertTrue(cat.inputs['dts.mu2e.MM.MDC2025af.art']['truncated'])
         self.assertTrue(cat.inputs['sim.mu2e.NN.MDC2025af.art']['truncated'])
-        listed = {x['dataset'] for x in retire(cat)}
-        self.assertNotIn('sim.mu2e.NN.MDC2025af.art', listed)
+        self.assertEqual([r for r in retire(cat) if r['kind'] == 'input'], [])
+        # ... and with the default walk NN is reached from the live dig, so
+        # it is correctly kept off the list for the real reason.
+        closed = _cat(g)
+        self.assertEqual(truncated_inputs(closed), [])
+        self.assertNotIn('sim.mu2e.NN.MDC2025af.art', {x['dataset'] for x in retire(closed)})
+
+    def test_v1_probe_a_live_digs_input_reached_only_above_a_cut_is_never_listed(self):
+        # The V1 probe verbatim (verify-findings-2.md): MM is 3 hops above
+        # the live dig and reached by no other walk, so its `parents` set is
+        # empty and the fixpoint stopped there; NN, its parent, was recorded
+        # 2 hops above the SUPERSEDED dig and looked fully explored. Under
+        # the per-input rule NN was proposed for DELETE while a current dig
+        # transitively consumed it. Both the default closure walk and the
+        # whole-section refusal kill it.
+        g = _v1_probe_graph()
+        for depth in (None, 3):
+            cat = _cat(g, input_depth=depth)
+            listed = {x['dataset'] for x in retire(cat)}
+            self.assertNotIn('sim.mu2e.NN.MDC2025af.art', listed)
+
+    def test_no_input_is_ever_listed_from_a_capped_catalog_that_truncated_anything(self):
+        # The invariant itself, not one more scenario. Three previous fixes
+        # each passed their own scenario test and the next reviewer found a
+        # live scenario they did not cover, so this asserts the class:
+        # for ANY catalog built with a cap, `truncated` non-empty =>
+        # `retire()` returns zero input rows.
+        import random
+        rnd = random.Random(20260904)
+        epochs = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+        saw_truncation = saw_inputs_listed = 0
+        for trial in range(40):
+            g = _small_graph()
+            made = []
+            for c in range(3):
+                # chain 0 hangs off the SUPERSEDED dig, so its nodes are
+                # genuinely retirable and a per-input rule would list the
+                # shallow ones while the deep ones are cut
+                anchor = (f'dig.mu2e.CeEndpointOnSpill.{AN}.art' if c == 0
+                          else rnd.choice([f'dig.mu2e.CeEndpointOnSpill.{AU}.art',
+                                           f'dig.mu2e.CeEndpointOnSpill.{AN}.art']))
+                prev = anchor
+                for lvl in range(rnd.randint(1, 5)):
+                    name = f'dts.mu2e.T{trial}C{c}L{lvl}.MDC2025af.art'
+                    kids = [prev]
+                    if made and rnd.random() < 0.3:
+                        kids.append(rnd.choice(made))   # diamond: a shared ancestor
+                    g[name] = {'n': 10, 'children': kids}
+                    made.append(name)
+                    prev = name
+            for depth in (1, 2, 3, 4, None):
+                cat = assign_status(build_catalog(epochs, FakeSource(g), ['MDC2025'],
+                                                  input_depth=depth))
+                rows = retire(cat)
+                inputs = [r for r in rows if r['kind'] == 'input']
+                if truncated_inputs(cat):
+                    self.assertNotEqual(depth, None)
+                    self.assertEqual(inputs, [], f'trial {trial} depth {depth}')
+                    saw_truncation += 1
+                else:
+                    saw_inputs_listed += len(inputs)
+        # non-vacuity in both directions: cuts really happened, and an
+        # uncut catalog really does list inputs
+        self.assertGreater(saw_truncation, 0)
+        self.assertGreater(saw_inputs_listed, 0)
 
     def test_cnf_parent_is_never_an_input_or_a_retire_candidate(self):
         # I4: the declared cnf parent route is real now, and a cnf tarball
@@ -1555,6 +1661,27 @@ class TestCli(unittest.TestCase):
     def test_retire_prints_purge_lines(self):
         rc, out, _ = _run(['retire'], self.src, self.d)
         self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith('DELETE - - '))
+
+    def test_input_depth_defaults_to_no_cap_and_a_cap_refuses_the_input_section(self):
+        # end-to-end through main(): the flag's default is "walk to
+        # closure", and passing a cap that truncates anything drops every
+        # input DELETE line and says so on stderr. The 126-test suite of
+        # the previous round passed while every verb crashed, so the CLI
+        # itself is exercised, not only the reports.
+        self.assertIsNone(epochs_cli.build_parser().parse_args(['retire']).input_depth)
+        src = FakeSource(_deep_graph())
+        rc, out, err = _run(['retire'], src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn('sim.mu2e.Deep3.MDC2025af.art', out)
+        self.assertNotIn('input retirement refused', err)
+        rc, out, err = _run(['--input-depth', '3', 'retire'], src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertNotIn('sim.mu2e.Deep2.MDC2025af.art', out)
+        self.assertNotIn('sim.mu2e.Deep3.MDC2025af.art', out)
+        self.assertIn('input retirement refused', err)
+        self.assertIn('NO input is proposed', err)
+        # members are unaffected by the cap
         self.assertTrue(out.startswith('DELETE - - '))
 
     def test_lookup_unknown_is_nonzero(self):

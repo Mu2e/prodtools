@@ -1,9 +1,19 @@
 """Members and inputs of every epoch, from SAM parentage.
 
 Members = closure of the roots walking children (decision 2, rule 1).
-Inputs = everything reached walking parents from a dig root, up to
-`input_depth` levels (decision 13). A dataset belongs to exactly one
-epoch: the one whose root its dig matched.
+Inputs = everything reached walking parents from a dig root -- by
+default all the way to the top of the real DAG, `input_depth=None`
+(decision 2026-09-04). A dataset belongs to exactly one epoch: the one
+whose root its dig matched.
+
+`input_depth` survives as an explicit opt-in cap for a cheap partial
+run. It is no longer the default because a capped walk yields a
+knowingly incomplete input graph, and three rounds of trying to DETECT
+which parts of an incomplete graph are safe to act on produced three
+separate false-DELETE Criticals (C1, NEW-1, V1). Walking to closure
+removes the cut, so there is nothing to detect; when a cap IS given,
+`retire()` refuses the input section whole rather than judging it
+per input.
 """
 import re
 from dataclasses import dataclass, field
@@ -50,6 +60,12 @@ class Member:
 @dataclass
 class Catalog:
     epochs: Dict[str, EpochFile]
+    # The `input_depth` this catalog was built with: None = the upward
+    # walk ran to natural closure, so no input is truncated and the
+    # input graph is complete. An int is an operator-set cap, and
+    # `reports.retire()` then refuses the ENTIRE input section as soon
+    # as anything was truncated.
+    input_depth: Optional[int] = None
     members: Dict[str, Member] = field(default_factory=dict)
     inputs: Dict[str, Dict] = field(default_factory=dict)
     unparseable: List[Tuple[str, str]] = field(default_factory=list)
@@ -181,9 +197,10 @@ def _walk_down(root_member: Member, source, cat: Catalog):
             m.parents.add(parent.name)
 
 
-def _walk_up(dig: Member, source, cat: Catalog, depth: int):
-    """Depth-first (frontier.pop() is LIFO) over parents, up to `depth`
-    levels above the dig.
+def _walk_up(dig: Member, source, cat: Catalog, depth: Optional[int]):
+    """Depth-first (frontier.pop() is LIFO) over parents. `depth=None`
+    (the default) walks to natural closure -- the top of the real DAG;
+    an int caps the walk that many levels above the dig.
 
     A parent whose dsconf does not parse (controller ruling, task 4) is
     reported in `cat.unparseable` and dropped from this walk entirely: it
@@ -200,24 +217,32 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
     (now cached) result, so `descendants` and `inputs`/`parents`
     bookkeeping is recorded for every dig exactly as before dedup.
 
-    Truncation is a property of THIS WALK's cut, never of the node
-    (NEW-1). `explored` used to live on the shared input record, so a
-    node cut off for this dig but already expanded by an earlier dig's
-    walk was left unmarked -- and nothing above it was marked either,
-    although its `descendants` then name only the digs that did reach it.
-    `retire()` listed such an input while a `current` dig transitively
-    consumed it, and the frontier count meant to make the boundary
-    visible read zero; which digs got cut where depended on the
-    alphabetical order digs are processed in. Both sets below are local
-    to one walk: a mark another walk set is never cleared here, and
-    `build_catalog` propagates the marks up the parent edges afterwards.
+    With no cap there is no cut and nothing is ever truncated, which is
+    the point: a capped walk leaves a knowingly incomplete input graph,
+    and every attempt to decide per input which parts of an incomplete
+    graph are safe to delete has produced a false DELETE (C1, NEW-1,
+    V1). When a cap IS given, truncation is a property of THIS WALK's
+    cut, never of the node (NEW-1): `explored` used to live on the
+    shared input record, so a node cut off for this dig but already
+    expanded by an earlier dig's walk was left unmarked. Both sets below
+    are local to one walk: a mark another walk set is never cleared
+    here, `build_catalog` propagates the marks up the parent edges
+    afterwards, and `retire()` refuses its whole input section while any
+    mark stands.
+
+    `explored` doubles as the per-walk visited set. Without a cap the
+    old unconditional re-push would revisit a diamond's shared ancestors
+    once per path (and never terminate on a parentage cycle); expanding
+    each node at most once per walk costs no bookkeeping, since the
+    `descendants` / `parents` edges a second visit would record were
+    already recorded by the first.
     """
     explored = set()   # nodes THIS walk asked the parents of
     cut = set()        # nodes THIS walk stopped at
     frontier = [(dig.name, 0)]
     while frontier:
         child, level = frontier.pop()
-        if level >= depth:
+        if depth is not None and level >= depth:
             # I6: the cap is per-walk. Stopping here means this dataset's
             # own parents were never asked for on this walk, so our picture
             # of the graph around it is partial -- and a partial picture is
@@ -228,6 +253,8 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
             # zero is what makes the boundary a visible decision instead of
             # a silent one.
             cut.add(child)
+            continue
+        if child in explored:
             continue
         explored.add(child)
         for p, n in source.parents(child).items():
@@ -299,8 +326,18 @@ def _propagate_truncation(cat: Catalog):
 
 
 def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[str]] = None,
-                  input_depth: int = 3) -> Catalog:
-    """`families=None` discovers every family with a dig in SAM
+                  input_depth: Optional[int] = None) -> Catalog:
+    """`input_depth=None` (the default since 2026-09-04) walks upward to
+    natural closure: no cut, so no input is truncated and the input
+    graph the retire report reasons over is the real one. Real Mu2e
+    parentage chains are short (dig <- dts <- sim <- ..., about 5-6
+    levels), every lineage query is memoized per build, and each node is
+    expanded once per walk, so the extra cost is one `parents()` (plus
+    one `nfiles()`) per distinct ancestor above the old depth-3
+    frontier. That is the price of removing a class of false-deletion
+    bug and is not to be traded back for speed.
+
+    `families=None` discovers every family with a dig in SAM
     (`source.dig_families()`) instead of trusting the caller's list —
     the catalog must be complete before deletions are proposed. A
     family with digs but no loaded epoch still gets its digs walked
@@ -314,7 +351,7 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
     msource = _Memo(source)
     if families is None:
         families = sorted(msource.dig_families())
-    cat = Catalog(epochs=dict(epochs))
+    cat = Catalog(epochs=dict(epochs), input_depth=input_depth)
     loaded_families = {e.family for e in epochs.values()}
     cat.missing_families = [f for f in families if f not in loaded_families]
     for family in families:

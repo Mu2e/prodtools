@@ -21,7 +21,8 @@ from utils.epochs.epoch_files import (EpochFileError, load_epoch_files, propose_
 from utils.epochs.generation import build_cnf_index, generations
 from utils.epochs.graph import build_catalog
 from utils.epochs.publish import catalog_document, write_catalog
-from utils.epochs.reports import consistency, count_warnings, gaps, lookup, purge_lines, retire
+from utils.epochs.reports import (consistency, count_warnings, gaps, input_retirement_refusal,
+                                  lookup, purge_lines, retire)
 from utils.epochs.status import assign_status
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -123,12 +124,13 @@ def _report_noise(cat, source):
     for fam, digs in cat.unclaimed_digs.items():
         for d in digs:
             print(f'unclaimed dig (no epoch root matches): {d}', file=sys.stderr)
-    truncated = [n for n, rec in cat.inputs.items() if rec.get('truncated')]
-    if truncated:
-        print(f'{len(truncated)} inputs sit at or above the --input-depth frontier (some '
-              f"dig's upward walk stopped there, so what else reaches them is unknown) and "
-              f'are held back from the retire list; raise --input-depth to resolve them',
-              file=sys.stderr)
+    refusal = input_retirement_refusal(cat)
+    if refusal:
+        # NOT "these N were withheld": a non-zero frontier count means the
+        # upward picture is incomplete, and which OTHER inputs that makes
+        # unsafe cannot be read off the count. The whole input section is
+        # refused, and the message has to say so.
+        print(refusal, file=sys.stderr)
     for line in cat.pin_problems:
         print(f'pin problem: {line}', file=sys.stderr)
     for line in cat.epoch_conflicts:
@@ -262,7 +264,10 @@ def cmd_publish(args, source, now_fn):
 def build_parser():
     p = argparse.ArgumentParser(prog='epochs', description=__doc__)
     p.add_argument('--epochs-dir', default=DEFAULT_EPOCHS_DIR)
-    p.add_argument('--input-depth', type=int, default=3)
+    p.add_argument('--input-depth', type=int, default=None,
+                   help='cap the upward input walk at N levels above each dig '
+                        '(default: no cap, walk to closure). A capped build '
+                        'refuses the ENTIRE input section of `retire`.')
     sub = p.add_subparsers(dest='verb', required=True)
 
     def common(sp, epoch=True):

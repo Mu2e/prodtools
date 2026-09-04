@@ -113,6 +113,40 @@ def incomplete_reasons(cat: Catalog) -> List[str]:
     return reasons
 
 
+def truncated_inputs(cat: Catalog) -> List[str]:
+    """Every input the upward walk was cut at, or that sits above such a
+    node. Empty whenever the catalog was built to closure
+    (`--input-depth` unset, the default)."""
+    return sorted(n for n, rec in cat.inputs.items() if rec.get('truncated'))
+
+
+def input_retirement_refusal(cat: Catalog) -> str:
+    """One line saying why NO input is proposed for deletion, or `''`.
+
+    A capped upward walk leaves an input graph that is knowingly
+    incomplete above the cut. Three rounds of trying to decide, per
+    input, which parts of an incomplete graph are safe to delete
+    produced three separate false-DELETE Criticals (C1, NEW-1, V1):
+    each detector was correct for the shape it was given and the next
+    review found another shape. So the judgement is not made per input
+    at all — a partial input graph yields no input retirement proposals
+    whatsoever, exactly as an incomplete catalog, an unapplied pin or an
+    epoch conflict refuses `retire()` as a whole.
+
+    The member section is unaffected: members come from the downward
+    closure, which `--input-depth` never caps."""
+    cut = truncated_inputs(cat)
+    if not cut:
+        return ''
+    how = (f'--input-depth {cat.input_depth}' if cat.input_depth is not None
+           else 'a capped upward walk')
+    return (f'input retirement refused: {len(cut)} inputs sit at or above the frontier of '
+            f'{how}, so what else reaches them — and what reaches anything above them — was '
+            f'never asked. NO input is proposed for deletion; the member section is '
+            f'unaffected. Re-run without --input-depth (the default walks to closure) to get '
+            f'input retirement proposals.')
+
+
 def _live_reaching(cat: Catalog) -> set:
     """Every member that is itself `current`/`stale`/`excluded`, or has
     such a member anywhere in its downward closure.
@@ -152,6 +186,20 @@ def _live_reaching(cat: Catalog) -> set:
 
 
 def retire(cat: Catalog) -> List[Dict]:
+    """Delete candidates, members first and then inputs.
+
+    Two fail-closed refusals, neither of them per row. `retire()` raises
+    on any `incomplete_reasons()` line — a family with no epoch file, an
+    unclaimed dig, an unapplied pin, an epoch conflict — because a
+    partial catalog cannot tell a still-needed input from a retirable
+    one. And when the upward walk was capped and anything was
+    truncated, **a partial input graph yields no input retirement
+    proposals at all**: the whole input section is dropped (see
+    `input_retirement_refusal`), members are still reported. The
+    per-input `truncated` marks remain the signal for that message and
+    for `publish`; they are no longer what decides whether an individual
+    input is listed, because judging an incomplete graph one input at a
+    time is precisely the reasoning that produced C1, NEW-1 and V1."""
     reasons = incomplete_reasons(cat)
     if reasons:
         raise ValueError('retire refused: catalog is incomplete — ' + '; '.join(reasons) +
@@ -177,6 +225,8 @@ def retire(cat: Catalog) -> List[Dict]:
             continue
         out.append({'dataset': m.name, 'nfiles': m.nfiles, 'kind': 'member',
                     'reason': reason, 'children': _member_children(cat, m.name)})
+    if input_retirement_refusal(cat):
+        return out
     live = _live_reaching(cat)
     for name, rec in sorted(cat.inputs.items()):
         # transitive: a dig that is itself superseded but still carries a
@@ -185,9 +235,6 @@ def retire(cat: Catalog) -> List[Dict]:
             continue
         if rec.get('hold') or rec.get('excluded'):
             continue          # held inputs are protected, exactly as held members are
-        if rec.get('truncated'):
-            continue          # I6: upward walk hit --input-depth here; we do not know
-                              # what else reaches this dataset, so we do not propose it
         key = parse_dsconf(name.split('.')[3]).sort_key()
         newest = _newest_epoch_key(cat, parse_dsconf(name.split('.')[3]).family)
         if newest is not None and key[0] > newest[0]:
