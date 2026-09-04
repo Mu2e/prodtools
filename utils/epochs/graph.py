@@ -397,8 +397,20 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
     # alphabetical, not dependency order); the retire report (a later
     # task) walks cat.inputs keys, so a stale one would misreport a live
     # member as retirable.
+    # V2: carry a deleted record's truncation mark onto its parents
+    # BEFORE the propagation runs. The record about to be dropped may be
+    # exactly where a walk was cut (a dig-of-dig inside one epoch: the
+    # lower dig records the upper one as an input and is cut at it),
+    # and deleting it took its `truncated` flag and its whole `parents`
+    # edge set with it, so the region above inherited nothing.
     for name in set(cat.inputs) & set(cat.members):
-        del cat.inputs[name]
+        rec = cat.inputs.pop(name)
+        if not rec['truncated']:
+            continue
+        for p in rec['parents']:
+            up = cat.inputs.get(p)
+            if up is not None:
+                up['truncated'] = True
     _propagate_truncation(cat)
     _apply_pins(cat)
     return cat

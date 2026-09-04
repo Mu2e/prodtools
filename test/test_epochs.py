@@ -1180,6 +1180,30 @@ class TestRetire(unittest.TestCase):
             listed = {x['dataset'] for x in retire(cat)}
             self.assertNotIn('sim.mu2e.NN.MDC2025af.art', listed)
 
+    def test_a_truncated_input_that_becomes_a_member_still_marks_its_parents(self):
+        # V2: a name recorded in cat.inputs by one dig's upward walk can be
+        # turned into a member by another dig's downward walk (or by being a
+        # dig itself). The record was deleted -- taking its `truncated` flag
+        # and its whole `parents` edge set -- BEFORE the propagation ran, so
+        # a cut AT such a node marked nothing above it. A dig-of-dig inside
+        # one epoch reaches this without tripping the epoch-conflict refusal.
+        #
+        #   dig AAA@au <- P1 <- P2 <- dig ZZZ@au <- TOP     (cap 3)
+        #
+        # AAA sorts first, is cut exactly at ZZZ, and ZZZ is only later
+        # walked as a dig of its own; TOP is recorded by ZZZ's walk.
+        g = _small_graph()
+        g[f'dig.mu2e.AAA.{AU}.art'] = {'n': 10, 'children': []}
+        g['dts.mu2e.P1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.AAA.{AU}.art']}
+        g['dts.mu2e.P2.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.P1.MDC2025af.art']}
+        g[f'dig.mu2e.ZZZ.{AU}.art'] = {'n': 10, 'children': ['dts.mu2e.P2.MDC2025af.art']}
+        g['sim.mu2e.TOP.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.ZZZ.{AU}.art']}
+        cat = _cat(g, input_depth=3)
+        self.assertEqual(cat.epoch_conflicts, [])
+        self.assertNotIn(f'dig.mu2e.ZZZ.{AU}.art', cat.inputs)   # became a member
+        self.assertTrue(cat.inputs['sim.mu2e.TOP.MDC2025af.art']['truncated'])
+        self.assertEqual([r for r in retire(cat) if r['kind'] == 'input'], [])
+
     def test_no_input_is_ever_listed_from_a_capped_catalog_that_truncated_anything(self):
         # The invariant itself, not one more scenario. Three previous fixes
         # each passed their own scenario test and the next reviewer found a
