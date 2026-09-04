@@ -823,6 +823,27 @@ class TestStatus(unittest.TestCase):
         self.assertTrue(any('already pinned' in line for line in cat.pin_problems),
                         cat.pin_problems)
 
+    def test_group_keys_of_sorts_none_purposes_without_raising(self):
+        # V3: this sort is over RAW GroupKeys, whose fourth field is
+        # Optional[str]. It is safe today only because of an invariant of
+        # groups() that nothing states or enforces (a base triple gets a
+        # purpose=None key only when it has no lettered member), and the
+        # same shape one line away took down every verb on 2026-09-04 with
+        # `TypeError: '<' not supported between 'str' and 'NoneType'`.
+        # retire() reads this function, so the sort has to be total on its
+        # own terms whatever the caller hands it -- hence the check pins
+        # the function's contract rather than the current invariant.
+        from unittest.mock import patch
+        from utils.epochs import status as status_mod
+        base = ('MDC2025', 'nts', 'CeEndpointOnSpill')
+        cat = _cat()
+        m = cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root']
+        grouped = {base + ('best',): [], base + (None,): [], base + ('perfect',): []}
+        with patch.object(status_mod, 'group_key', lambda mm: base + ('not-a-group',)), \
+                patch.object(m.key.__class__, 'purpose', None):
+            keys = status_mod.group_keys_of(grouped, m)
+        self.assertEqual(keys, [base + (None,), base + ('best',), base + ('perfect',)])
+
     def test_group_key_shape(self):
         cat = _cat()
         m = cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']

@@ -66,15 +66,29 @@ def groups(cat: Catalog) -> Dict[GroupKey, List[Member]]:
     return out
 
 
+def _key_order(gk: GroupKey) -> tuple:
+    """A total order on `GroupKey`s. The fourth field is `Optional[str]`,
+    and comparing `None` with a `str` raises `TypeError` — the crash
+    this package has now hit once (`status.py:128`, self-caught on
+    2026-09-04), taking down every verb, not just the one being run. Any
+    sort of raw group keys goes through here rather than resting on an
+    unstated invariant of `groups()` about which purposes can coexist."""
+    return tuple('' if x is None else x for x in gk)
+
+
 def group_keys_of(grouped: Dict[GroupKey, List[Member]], m: Member) -> List[GroupKey]:
     """Every group `m` competes in. A lettered member competes in exactly
     one; an own-series member competes in every purpose group of its
     `(family, tier, desc)`, so a caller looking for "what beat me" has to
-    ask about all of them."""
+    ask about all of them.
+
+    The sort is total on its own terms (`_key_order`): `retire()` reads
+    this function, and a `TypeError` here is an outage of the whole CLI
+    (V3)."""
     k = group_key(m)
     if m.key.purpose is not None or k in grouped:
         return [k] if k in grouped else []
-    return sorted(gk for gk in grouped if gk[:3] == k[:3])
+    return sorted((gk for gk in grouped if gk[:3] == k[:3]), key=_key_order)
 
 
 def _order_pins(cat: Catalog) -> Dict[GroupKey, Dict[str, str]]:
@@ -125,9 +139,9 @@ def _winners(cat: Catalog) -> Dict[str, bool]:
     correction an operator placed deliberately must not evaporate."""
     pins = _order_pins(cat)
     grouped = groups(cat)
-    # a group key's purpose is None for an own-series pin, so sort on a
+    # a group key's purpose is None for an own-series pin, so sort on the
     # None-free projection: `sorted` would raise comparing None with a str
-    for key in sorted(pins, key=lambda k: tuple('' if x is None else x for x in k)):
+    for key in sorted(pins, key=_key_order):
         if key not in grouped:
             _problem(cat, f"order pin in epoch {pins[key]['epoch']} names group {key}, "
                           f"which no member competes in: not applied")
