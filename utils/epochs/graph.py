@@ -30,6 +30,10 @@ class Member:
     nfiles: int
     parents: Set[str] = field(default_factory=set)
     inputs: Set[str] = field(default_factory=set)
+    # Declared cnf tarball parents (ADR 0003). Kept OUT of `inputs` and out
+    # of `cat.inputs` on purpose: a cnf is provenance, not data, and must
+    # never become a retire candidate. Read only by generation.cnf_for.
+    cnf_parents: Set[str] = field(default_factory=set)
     status: str = ''
     hold: str = ''
     excluded: str = ''
@@ -143,11 +147,16 @@ def _walk_down(root_member: Member, source, cat: Catalog):
                 if m is None:
                     continue
                 frontier.append(m)
-                # Non-member parents of a downstream member (today: none,
-                # since log/cnf/etc are dropped; after ADR 0003's code plan:
-                # the cnf). One isparentof query per member below dig.
+                # Non-member parents of a downstream member. The cnf
+                # tarball (ADR 0003's declared parent, kept by
+                # SamSource.parents' PARENT_KEEP_TIERS) is recorded
+                # separately and never becomes an input; anything else is
+                # a physics parent this walk did not claim. One isparentof
+                # query per member below dig.
                 for p in source.parents(child):
-                    if p not in cat.members and p != parent.name:
+                    if p.startswith('cnf.'):
+                        m.cnf_parents.add(p)
+                    elif p not in cat.members and p != parent.name:
                         m.inputs.add(p)
             m.parents.add(parent.name)
 
@@ -194,6 +203,12 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
             rec['explored'] = True
             rec['truncated'] = False
         for p, n in source.parents(child).items():
+            if p.startswith('cnf.'):
+                # provenance, not lineage: recorded on the member, never an
+                # input, never walked above (a cnf has no physics parents)
+                if child in cat.members:
+                    cat.members[child].cnf_parents.add(p)
+                continue
             if p in cat.members:
                 # a member above a dig (a dig-of-dig): a parent edge, never
                 # an input

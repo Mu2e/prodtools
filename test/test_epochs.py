@@ -160,7 +160,8 @@ class TestEpochFiles(unittest.TestCase):
         self.assertEqual(load_epoch_files(os.path.join(_tmpdir(), 'nope')), {})
 
 
-from utils.epochs.source import group_files_to_datasets, SamSource, DROP_TIERS
+from utils.epochs.source import (group_files_to_datasets, SamSource, DROP_TIERS,
+                                 PARENT_KEEP_TIERS)
 
 
 class FakeSource:
@@ -194,9 +195,15 @@ class FakeSource:
         # SamSource.parents counts the PARENT FILES this child consumed,
         # which is not the parent dataset's file count; a node may carry
         # 'used' to model that gap (4907 files of a 5000-file pileup set).
+        # It also applies EXACTLY SamSource.parents' tier policy: log/etc
+        # dropped, cnf kept (PARENT_KEEP_TIERS). Diverging from it here is
+        # what let two generation tests assert a route the real source
+        # could not produce.
         self.calls['parents'].append(dataset)
         return {p: self.graph[p].get('used', self.graph[p]['n'])
-                for p in self._parents.get(dataset, [])}
+                for p in self._parents.get(dataset, [])
+                if p.split('.')[0] in PARENT_KEEP_TIERS
+                or p.split('.')[0] not in DROP_TIERS}
 
     def nfiles(self, dataset):
         self.calls.setdefault('nfiles', []).append(dataset)
@@ -255,6 +262,24 @@ class TestSamSourceQueries(unittest.TestCase):
         out = src.parents('mcs.mu2e.A.MDC2025au_best_v1_5.art')
         self.assertEqual(calls, ['isparentof: (dh.dataset mcs.mu2e.A.MDC2025au_best_v1_5.art)'])
         self.assertEqual(out, {'dts.mu2e.A.MDC2025ap.art': 2})
+
+    def test_parents_keeps_the_cnf_tarball_by_file_name(self):
+        # ADR 0003: the cnf is a declared parent and is the authoritative
+        # generation record, so the parents path keeps it -- under its
+        # 6-field FILE name, which is what local_path/jobquery read. log
+        # and etc stay dropped.
+        def fake_list_files(q):
+            return ['dts.mu2e.A.MDC2025ap.001430_00000000.art',
+                    'cnf.mu2e.A.MDC2025au_best_v1_5.0.tar',
+                    'log.mu2e.A.MDC2025au_best_v1_5.001430_00000000-1.log',
+                    'etc.mu2e.A.MDC2025au_best_v1_5.0.txt']
+        src = SamSource(list_files_fn=fake_list_files)
+        self.assertEqual(src.parents('mcs.mu2e.A.MDC2025au_best_v1_5.art'),
+                         {'dts.mu2e.A.MDC2025ap.art': 1,
+                          'cnf.mu2e.A.MDC2025au_best_v1_5.0.tar': 1})
+        # children keeps the default policy: no cnf
+        self.assertEqual(src.children('dig.mu2e.A.MDC2025au_best_v1_5.art'),
+                         {'dts.mu2e.A.MDC2025ap.art': 1})
 
     def test_dig_datasets_filters_five_field_art_and_counts(self):
         calls = []
@@ -769,6 +794,22 @@ class TestRetire(unittest.TestCase):
         cat = assign_status(build_catalog(epochs, FakeSource(g), ['MDC2025'], input_depth=4))
         self.assertFalse(cat.inputs['sim.mu2e.Deep3.MDC2025af.art']['truncated'])
         self.assertIn('sim.mu2e.Deep3.MDC2025af.art', {x['dataset'] for x in retire(cat)})
+
+    def test_cnf_parent_is_never_an_input_or_a_retire_candidate(self):
+        # I4: the declared cnf parent route is real now, and a cnf tarball
+        # must not become deletable data under any circumstance.
+        g = _small_graph()
+        cnf = 'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar'
+        g[cnf] = {'n': 1, 'children': [f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root',
+                                       f'dig.mu2e.CeEndpointOnSpill.{AU}.art']}
+        cat = _cat(g)
+        self.assertNotIn(cnf, cat.inputs)
+        self.assertNotIn(cnf, cat.members)
+        nts = cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']
+        self.assertEqual(nts.cnf_parents, {cnf})
+        self.assertNotIn(cnf, nts.inputs)
+        self.assertEqual(cat.members[f'dig.mu2e.CeEndpointOnSpill.{AU}.art'].cnf_parents, {cnf})
+        self.assertNotIn(cnf, {x['dataset'] for x in retire(cat)})
 
     def test_retire_refuses_incomplete_catalog(self):
         # Run1B digs are fed by MDC2025 stop catalogues; a Run1B-only

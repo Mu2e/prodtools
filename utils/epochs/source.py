@@ -12,19 +12,38 @@ from utils.epochs.dsconf import DsconfParseError, parse_dsconf
 from utils.job_common import Mu2eName
 
 DROP_TIERS = frozenset({'log', 'cnf', 'etc'})
+# The one tier the PARENTS path keeps despite DROP_TIERS: ADR 0003 makes
+# the cnf a declared SAM parent of every output, and that declaration is
+# the authoritative answer to "what code made this dataset". It is never
+# a member, never an input and never a retire candidate — it is recorded
+# on `Member.cnf_parents` and read only by `generation.cnf_for`.
+PARENT_KEEP_TIERS = frozenset({'cnf'})
 OWNER = 'mu2e'
 
 
-def group_files_to_datasets(filenames) -> Tuple[Dict[str, int], Set[str]]:
+def group_files_to_datasets(filenames, keep_tiers=frozenset()) -> Tuple[Dict[str, int], Set[str]]:
     """6-field file names -> {5-field dataset: count}. Tiers in DROP_TIERS
     are not members (they are not physics). Non-mu2e owners are returned
     separately so a caller can report them; they never become members.
     An unparseable name raises: SAM handed back something that is not a
-    Mu2e name and we will not guess."""
+    Mu2e name and we will not guess.
+
+    `keep_tiers` names DROP_TIERS entries to retain anyway, keyed by the
+    6-FIELD FILE name rather than the 5-field dataset. That is deliberate
+    for the only current user, `cnf`: a cnf is identified by its tarball
+    (`cnf.mu2e.<desc>.<dsconf>.<index>.tar`), which is what `local_path`
+    and `jobquery` read; the 5-field dataset name would be useless to
+    both."""
     groups: Dict[str, int] = {}
     foreign: Set[str] = set()
     for fn in filenames:
         n = Mu2eName.parse(fn)          # raises ValueError on a bad name
+        if n.tier in keep_tiers:
+            if n.owner != OWNER:
+                foreign.add(str(n.dataset))
+                continue
+            groups[fn] = groups.get(fn, 0) + 1
+            continue
         if n.tier in DROP_TIERS:
             continue
         ds = str(n.dataset)
@@ -118,8 +137,8 @@ class SamSource:
         return sorted(set(out))
 
     # -- lineage ---------------------------------------------------------
-    def _grouped(self, query: str) -> Dict[str, int]:
-        groups, foreign = group_files_to_datasets(self._list(query))
+    def _grouped(self, query: str, keep_tiers=frozenset()) -> Dict[str, int]:
+        groups, foreign = group_files_to_datasets(self._list(query), keep_tiers=keep_tiers)
         self.foreign |= foreign
         return groups
 
@@ -127,7 +146,12 @@ class SamSource:
         return self._grouped(f'ischildof: (dh.dataset {dataset})')
 
     def parents(self, dataset: str) -> Dict[str, int]:
-        return self._grouped(f'isparentof: (dh.dataset {dataset})')
+        """Parents keep the cnf tarball (PARENT_KEEP_TIERS) so ADR 0003's
+        declared-parent route to a dataset's generation is reachable; the
+        cnf comes back under its 6-field FILE name, everything else under
+        its 5-field dataset name."""
+        return self._grouped(f'isparentof: (dh.dataset {dataset})',
+                             keep_tiers=PARENT_KEEP_TIERS)
 
     # -- files -----------------------------------------------------------
     def nfiles(self, dataset: str) -> int:

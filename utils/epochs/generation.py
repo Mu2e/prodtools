@@ -144,9 +144,13 @@ def build_cnf_index(source, existing: Dict) -> Dict:
 
 
 def cnf_for(m: Member, cat: Catalog, index: Dict) -> Optional[Tuple[str, str]]:
-    for p in sorted(m.inputs):
-        if p.startswith('cnf.'):
-            return p, 'parent'
+    """The declared SAM parent wins over the index (ADR 0003). Today no
+    cnf parentage is declared in production, so this route is correctly
+    empty and every generation resolves through the index; it lights up
+    for new outputs once ADR 0003's `push_data` change lands, without a
+    cnf ever becoming a member, an input or a retire candidate."""
+    for p in sorted(m.cnf_parents):
+        return p, 'parent'
     if m.name in index:
         return index[m.name], 'index'
     generic = index.get('__generic__', {}).get(f'{m.tier}.{m.dsconf}')
