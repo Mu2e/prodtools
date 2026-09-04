@@ -48,6 +48,11 @@ class Catalog:
     # this is non-empty — a partial catalog cannot tell a live input
     # from a retirable one).
     missing_families: List[str] = field(default_factory=list)
+    # One line per pin that could not be applied: it names nothing in the
+    # catalog, or it names something owned by a different epoch. retire()
+    # refuses to run while this is non-empty — a dropped `hold` is a
+    # protection the human believes they placed and does not have.
+    pin_problems: List[str] = field(default_factory=list)
 
 
 class _Memo:
@@ -171,7 +176,10 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
             except DsconfParseError as exc:
                 cat.unparseable.append((p, str(exc)))
                 continue
-            rec = cat.inputs.setdefault(p, {'nfiles': n, 'parents': set(), 'descendants': set()})
+            rec = cat.inputs.get(p)
+            if rec is None:
+                rec = cat.inputs[p] = {'nfiles': n, 'parents': set(), 'descendants': set(),
+                                       'hold': '', 'excluded': ''}
             rec['descendants'].add(dig.name)
             if child in cat.inputs:
                 cat.inputs[child]['parents'].add(p)
@@ -226,16 +234,49 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
     return cat
 
 
+def _input_of_epoch(cat: Catalog, rec: Dict, epoch: str) -> bool:
+    """An input has no epoch of its own; it belongs to the epoch whose
+    file pins it when at least one dig it feeds is a member of that
+    epoch. Anything else is one epoch's file reaching into another
+    epoch's lineage, which M7 says to report rather than apply."""
+    return any(cat.members[d].epoch == epoch for d in rec['descendants'] if d in cat.members)
+
+
 def _apply_pins(cat: Catalog):
-    for e in cat.epochs.values():
-        for pin in e.pins['exclude']:
-            m = cat.members.get(pin['dataset'])
-            if m is not None:
-                m.excluded = pin['reason']
-        for pin in e.pins['hold']:
-            m = cat.members.get(pin['dataset'])
-            if m is not None:
-                m.hold = pin['reason']
+    """Stamp `exclude`/`hold` on the member OR INPUT each pin names.
+
+    Before 2026-09-04 a pin was resolved with `cat.members.get()` alone
+    and a miss did nothing at all, so (a) an input could not be held —
+    there was no expressible way to keep a 20 000-file dts off the
+    retire list — and (b) a typo'd dataset name in a `hold` read as "no
+    protection requested" and was reported nowhere. Both now land in
+    `cat.pin_problems`, which `retire()` refuses to run past.
+    """
+    for e in sorted(cat.epochs.values(), key=lambda e: e.name):
+        for kind, attr in (('exclude', 'excluded'), ('hold', 'hold')):
+            for pin in e.pins[kind]:
+                ds = pin['dataset']
+                m = cat.members.get(ds)
+                if m is not None:
+                    if m.epoch != e.name:
+                        cat.pin_problems.append(
+                            f'{kind} pin in epoch {e.name} names {ds}, a member of epoch '
+                            f'{m.epoch}: not applied')
+                        continue
+                    setattr(m, attr, pin['reason'])
+                    continue
+                rec = cat.inputs.get(ds)
+                if rec is not None:
+                    if not _input_of_epoch(cat, rec, e.name):
+                        cat.pin_problems.append(
+                            f'{kind} pin in epoch {e.name} names input {ds}, which feeds no '
+                            f'dig of that epoch: not applied')
+                        continue
+                    rec[attr] = pin['reason']
+                    continue
+                cat.pin_problems.append(
+                    f'{kind} pin in epoch {e.name} names {ds}, which is neither a member nor '
+                    f'an input of the catalog')
         if e.status == 'frozen':
             for m in cat.members.values():
                 if m.epoch == e.name and not m.hold:

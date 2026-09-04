@@ -69,12 +69,16 @@ def _newest_epoch_key(cat: Catalog, family: str):
 
 
 def incomplete_reasons(cat: Catalog) -> List[str]:
-    """One human-readable line per way the catalog is known-incomplete: a
-    family with digs but no loaded epoch file, or a dig matching no
-    epoch root. Empty when the catalog is complete. `retire()` refuses
-    to run while this is non-empty (a partial catalog cannot tell a
-    still-needed input from a retirable one); `catalog_document`
-    (task 8) publishes these lines instead of a retire list."""
+    """One human-readable line per way the catalog is known-unsafe to
+    propose deletions from: a family with digs but no loaded epoch file,
+    a dig matching no epoch root, or a pin that could not be applied
+    (a `hold` naming a dataset the catalog does not have is a
+    protection the human believes they placed and does not have).
+    Empty when the catalog is complete and every pin landed.
+
+    `retire()` refuses to run while this is non-empty (a partial catalog
+    cannot tell a still-needed input from a retirable one);
+    `catalog_document` publishes these lines instead of a retire list."""
     reasons = []
     for family in sorted(cat.missing_families):
         reasons.append(f"family {family} has digs but no epoch file; "
@@ -82,6 +86,7 @@ def incomplete_reasons(cat: Catalog) -> List[str]:
     for digs in cat.unclaimed_digs.values():
         for dig in sorted(digs):
             reasons.append(f'dig {dig} matches no epoch root')
+    reasons.extend(cat.pin_problems)
     return reasons
 
 
@@ -143,6 +148,8 @@ def retire(cat: Catalog) -> List[Dict]:
         # current or stale member below it keeps its inputs off the list
         if any(d in live for d in rec['descendants']):
             continue
+        if rec.get('hold') or rec.get('excluded'):
+            continue          # held inputs are protected, exactly as held members are
         key = parse_dsconf(name.split('.')[3]).sort_key()
         newest = _newest_epoch_key(cat, parse_dsconf(name.split('.')[3]).family)
         if newest is not None and key[0] > newest[0]:
@@ -174,6 +181,7 @@ def lookup(cat: Catalog, dataset: str) -> Dict:
     rec = cat.inputs.get(dataset)
     if rec is not None:
         return {'kind': 'input', 'dataset': dataset, 'nfiles': rec['nfiles'],
+                'hold': rec.get('hold', ''), 'excluded': rec.get('excluded', ''),
                 'parents': sorted(rec['parents']), 'descendants': sorted(rec['descendants'])}
     return {'kind': 'unknown', 'dataset': dataset}
 

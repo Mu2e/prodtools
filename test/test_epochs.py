@@ -678,6 +678,57 @@ class TestRetire(unittest.TestCase):
         self.assertNotIn('dts.mu2e.Solo.MDC2025af.art', listed)
         self.assertIn('dts.mu2e.CeEndpoint.MDC2025af.art', listed)
 
+    def test_hold_pin_on_an_input_keeps_it_off_the_list(self):
+        # CRITICAL 2: an input could not be held at all before 2026-09-04 —
+        # _apply_pins resolved every pin through cat.members only, so a
+        # hold naming a dts was accepted, applied to nothing, and reported
+        # nowhere. CONTEXT.md: an input is retirable when nothing current
+        # or stale descends from it AND IT IS NOT HELD.
+        g = _small_graph()
+        g['dts.mu2e.CeEndpoint.MDC2025af.art'] = {
+            'n': 500, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        e = _epoch('MDC2025an', pins={'hold': [
+            {'dataset': 'dts.mu2e.CeEndpoint.MDC2025af.art', 'reason': 'needed for the -KL remake'}]})
+        cat = _cat(g, {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e})
+        self.assertEqual(cat.pin_problems, [])
+        self.assertEqual(cat.inputs['dts.mu2e.CeEndpoint.MDC2025af.art']['hold'],
+                         'needed for the -KL remake')
+        self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025af.art', {x['dataset'] for x in retire(cat)})
+
+    def test_pin_matching_nothing_makes_retire_refuse(self):
+        # a typo'd dataset name in a hold must never read as "no protection
+        # requested": fail closed, exactly as on an incomplete catalog.
+        e = _epoch('MDC2025au', pins={'hold': [
+            {'dataset': f'nts.mu2e.Typo.{AU}.root', 'reason': 'paper 2026'}]})
+        cat = _cat(epochs={'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertTrue(any('Typo' in line for line in cat.pin_problems), cat.pin_problems)
+        with self.assertRaises(ValueError) as ctx:
+            retire(cat)
+        self.assertIn('Typo', str(ctx.exception))
+
+    def test_cross_epoch_pin_is_reported_not_applied(self):
+        # M7: one epoch's file must not silently exclude another epoch's
+        # member. Report it; do not apply it.
+        e = _epoch('MDC2025an', pins={'exclude': [
+            {'dataset': f'nts.mu2e.CeEndpointOnSpill.{AU}.root', 'reason': 'wrong epoch'}]})
+        cat = _cat(epochs={'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e})
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'].excluded, '')
+        self.assertTrue(any('a member of epoch MDC2025au' in line for line in cat.pin_problems),
+                        cat.pin_problems)
+
+    def test_input_pin_from_an_unrelated_epoch_is_reported(self):
+        # the same ownership check for an input: it belongs to the epoch
+        # whose digs it feeds, and nothing else may pin it.
+        g = _small_graph()
+        g['dts.mu2e.CeEndpoint.MDC2025af.art'] = {
+            'n': 500, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        e = _epoch('MDC2025au', pins={'hold': [
+            {'dataset': 'dts.mu2e.CeEndpoint.MDC2025af.art', 'reason': 'mine, honest'}]})
+        cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertEqual(cat.inputs['dts.mu2e.CeEndpoint.MDC2025af.art']['hold'], '')
+        self.assertTrue(any('feeds no dig of that epoch' in line for line in cat.pin_problems),
+                        cat.pin_problems)
+
     def test_retire_refuses_incomplete_catalog(self):
         # Run1B digs are fed by MDC2025 stop catalogues; a Run1B-only
         # catalog cannot tell a still-needed MDC2025 input from a

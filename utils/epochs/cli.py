@@ -102,6 +102,8 @@ def _report_noise(cat, source):
     for fam, digs in cat.unclaimed_digs.items():
         for d in digs:
             print(f'unclaimed dig (no epoch root matches): {d}', file=sys.stderr)
+    for line in cat.pin_problems:
+        print(f'pin problem: {line}', file=sys.stderr)
     for fam in sorted(cat.missing_families):
         print(f"missing epoch file for family {fam} (digs exist); "
               f"run 'epochs propose --family {fam}'", file=sys.stderr)
