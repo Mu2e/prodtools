@@ -3,7 +3,9 @@
   "purpose": "SimJob/MDC2020ai, Offline v10_33_00",
   "status": "frozen",
   "roots": [
-    "dig.mu2e.%.MDC2020ai_%.art"
+    "dig.mu2e.%.MDC2020ai.art",
+    "dig.mu2e.%.MDC2020ai_%.art",
+    "dig.mu2e.%.MDC2020ai-%.art"
   ],
   "pins": {
     "exclude": [],

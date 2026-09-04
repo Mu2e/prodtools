@@ -3,7 +3,9 @@
   "purpose": "",
   "status": "frozen",
   "roots": [
-    "dig.mu2e.%.Run1Bab2_%.art"
+    "dig.mu2e.%.Run1Bab2.art",
+    "dig.mu2e.%.Run1Bab2_%.art",
+    "dig.mu2e.%.Run1Bab2-%.art"
   ],
   "pins": {
     "exclude": [],

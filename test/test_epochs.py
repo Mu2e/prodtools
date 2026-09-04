@@ -139,7 +139,9 @@ class TestEpochFiles(unittest.TestCase):
     def test_propose_from_sample_dsconf(self):
         data = propose_epoch('MDC2025au_best_v1_5')
         self.assertEqual(data['name'], 'MDC2025au')
-        self.assertEqual(data['roots'], ['dig.mu2e.%.MDC2025au_%.art'])
+        self.assertEqual(data['roots'], ['dig.mu2e.%.MDC2025au.art',
+                                         'dig.mu2e.%.MDC2025au_%.art',
+                                         'dig.mu2e.%.MDC2025au-%.art'])
         self.assertEqual(data['status'], 'current')
         self.assertEqual(data['purpose'], '')
         d = _tmpdir()
@@ -302,13 +304,13 @@ class TestSamSourceQueries(unittest.TestCase):
 
     def test_cnf_names_keeps_six_field_tar_only(self):
         calls = []
-        def fake_defs(defname=None, user=None):
-            calls.append(defname)
-            return ['cnf.mu2e.A.B.0.tar', 'cnf.mu2e.A.B.0.tar',
-                    'cnf.mu2e.A.B.tar', 'cnf.mu2e.A.B.0.txt']
-        src = SamSource(definitions_fn=fake_defs)
+        def fake_list_files(q):
+            calls.append(q)
+            return ['cnf.mu2e.A.B.0.tar', 'cnf.mu2e.A.B.0.tar', 'cnf.mu2e.A.B.tar',
+                    'cnf.mu2e.A.B.0.txt', 'cnf.mu2e.A.B.0.fcl']
+        src = SamSource(list_files_fn=fake_list_files)
         self.assertEqual(src.cnf_names(), ['cnf.mu2e.A.B.0.tar'])
-        self.assertEqual(calls, ['cnf.mu2e.%'])
+        self.assertEqual(calls, ["dh.dataset like 'cnf.mu2e.%.tar'"])
 
     def test_local_path_strips_dcache_prefix_and_appends_name(self):
         src = SamSource(locate_fn=lambda f: {'full_path': 'dcache:/pnfs/mu2e/persistent/x/y',
@@ -361,6 +363,11 @@ class TestRootMatches(unittest.TestCase):
         self.assertTrue(root_matches('dig.mu2e.%.MDC2025au_%.art', f'dig.mu2e.CeEndpointOnSpill.{AU}.art'))
         self.assertFalse(root_matches('dig.mu2e.%.MDC2025au_%.art', f'dig.mu2e.CeEndpointOnSpill.{AN}.art'))
         self.assertFalse(root_matches('dig.mu2e.%.MDC2025au_%.art', f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'))
+
+    def test_bare_dsconf_root_claims_bare_dig_only(self):
+        self.assertTrue(root_matches('dig.mu2e.%.MDC2020aq.art', 'dig.mu2e.X.MDC2020aq.art'))
+        self.assertFalse(root_matches('dig.mu2e.%.MDC2020aq.art', 'dig.mu2e.X.MDC2020aq2_best_v1_3.art'))
+        self.assertFalse(root_matches('dig.mu2e.%.MDC2020aq.art', 'dig.mu2e.X.MDC2020aq_best_v1_3.art'))
 
 
 class TestBuildCatalog(unittest.TestCase):

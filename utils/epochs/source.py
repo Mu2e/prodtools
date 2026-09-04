@@ -102,8 +102,16 @@ class SamSource:
         return out
 
     def cnf_names(self) -> List[str]:
+        """6-field cnf tarball FILE names (`cnf.mu2e.<desc>.<dsconf>.<index>.tar`).
+
+        SAM cnf DEFINITIONS are 5-field dataset names
+        (`cnf.mu2e.<desc>.<dsconf>.tar`) and would never match a
+        6-field filter -- `definitions_matching` is the wrong query
+        here. The tarball files are what the index reads, so we list
+        them directly; the `%.tar` tail excludes the per-job `.fcl`
+        files that also live under the cnf tier."""
         out = []
-        for name in self._defs(defname=f'cnf.{OWNER}.%'):
+        for name in self._list(f"dh.dataset like 'cnf.{OWNER}.%.tar'"):
             parts = name.split('.')
             if len(parts) == 6 and parts[5] == 'tar':
                 out.append(name)

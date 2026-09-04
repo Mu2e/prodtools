@@ -3,7 +3,9 @@
   "purpose": "SimJob/Run1Bab, Offline v13_00_09",
   "status": "frozen",
   "roots": [
-    "dig.mu2e.%.Run1Bab_%.art"
+    "dig.mu2e.%.Run1Bab.art",
+    "dig.mu2e.%.Run1Bab_%.art",
+    "dig.mu2e.%.Run1Bab-%.art"
   ],
   "pins": {
     "exclude": [],

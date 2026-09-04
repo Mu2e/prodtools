@@ -3,7 +3,9 @@
   "purpose": "SimJob/MDC2025ap, Offline v13_14_00",
   "status": "current",
   "roots": [
-    "dig.mu2e.%.MDC2025ap_%.art"
+    "dig.mu2e.%.MDC2025ap.art",
+    "dig.mu2e.%.MDC2025ap_%.art",
+    "dig.mu2e.%.MDC2025ap-%.art"
   ],
   "pins": {
     "exclude": [],

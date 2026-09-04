@@ -3,7 +3,9 @@
   "purpose": "SimJob/MDC2025an, Offline v13_11_00",
   "status": "current",
   "roots": [
-    "dig.mu2e.%.MDC2025an_%.art"
+    "dig.mu2e.%.MDC2025an.art",
+    "dig.mu2e.%.MDC2025an_%.art",
+    "dig.mu2e.%.MDC2025an-%.art"
   ],
   "pins": {
     "exclude": [],

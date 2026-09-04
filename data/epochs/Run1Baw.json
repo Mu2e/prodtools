@@ -3,7 +3,9 @@
   "purpose": "SimJob/MDC2025aw (Run1Baw digs), Offline v13_36_00",
   "status": "frozen",
   "roots": [
-    "dig.mu2e.%.Run1Baw_%.art"
+    "dig.mu2e.%.Run1Baw.art",
+    "dig.mu2e.%.Run1Baw_%.art",
+    "dig.mu2e.%.Run1Baw-%.art"
   ],
   "pins": {
     "exclude": [],

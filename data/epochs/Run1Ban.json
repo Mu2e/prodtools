@@ -3,7 +3,9 @@
   "purpose": "SimJob/Run1Ban, Offline v13_17_10",
   "status": "frozen",
   "roots": [
-    "dig.mu2e.%.Run1Ban_%.art"
+    "dig.mu2e.%.Run1Ban.art",
+    "dig.mu2e.%.Run1Ban_%.art",
+    "dig.mu2e.%.Run1Ban-%.art"
   ],
   "pins": {
     "exclude": [],

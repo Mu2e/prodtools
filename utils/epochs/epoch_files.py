@@ -101,7 +101,16 @@ def load_epoch_files(dirpath: str) -> Dict[str, EpochFile]:
 
 
 def propose_epoch(sample_dsconf: str) -> dict:
-    """The file a new letter family gets before a person touches it."""
+    """The file a new letter family gets before a person touches it.
+
+    Three roots, not one: a `_%` tail alone misses a bare-dsconf dig
+    (`dig.mu2e.<desc>.MDC2020aq.art` — no `_purpose_vN_M` tail, a live
+    SAM finding), so we add a bare root for it. A single `%` in place
+    of the tail would also swallow the next revision's digs
+    (`MDC2020aq2_best_v1_3` starts with `MDC2020aq`), which must stay
+    its own epoch, so bare and tail stay two separate patterns rather
+    than one loosened glob. The `-%` root claims a collision-suffixed
+    bare dsconf (`MDC2020aq-001`) the same way."""
     key = parse_dsconf(sample_dsconf)
     if not key.letters:
         raise EpochFileError(f'cannot propose an epoch from {sample_dsconf!r}: no letters')
@@ -110,7 +119,9 @@ def propose_epoch(sample_dsconf: str) -> dict:
         'name': name,
         'purpose': '',
         'status': 'current',
-        'roots': [f'dig.mu2e.%.{name}_%.art'],
+        'roots': [f'dig.mu2e.%.{name}.art',
+                  f'dig.mu2e.%.{name}_%.art',
+                  f'dig.mu2e.%.{name}-%.art'],
         'pins': {k: [] for k in PIN_KINDS},
     }
 
