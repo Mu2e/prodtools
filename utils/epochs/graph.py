@@ -187,29 +187,37 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
     every one of those walks still runs its own full pass over the
     (now cached) result, so `descendants` and `inputs`/`parents`
     bookkeeping is recorded for every dig exactly as before dedup.
+
+    Truncation is a property of THIS WALK's cut, never of the node
+    (NEW-1). `explored` used to live on the shared input record, so a
+    node cut off for this dig but already expanded by an earlier dig's
+    walk was left unmarked -- and nothing above it was marked either,
+    although its `descendants` then name only the digs that did reach it.
+    `retire()` listed such an input while a `current` dig transitively
+    consumed it, and the frontier count meant to make the boundary
+    visible read zero; which digs got cut where depended on the
+    alphabetical order digs are processed in. Both sets below are local
+    to one walk: a mark another walk set is never cleared here, and
+    `build_catalog` propagates the marks up the parent edges afterwards.
     """
+    explored = set()   # nodes THIS walk asked the parents of
+    cut = set()        # nodes THIS walk stopped at
     frontier = [(dig.name, 0)]
     while frontier:
         child, level = frontier.pop()
         if level >= depth:
             # I6: the cap is per-walk. Stopping here means this dataset's
-            # own parents were never asked for, so our picture of the graph
-            # around it is partial -- and a partial picture is exactly how
-            # an input recorded shallowly from a superseded dig ends up on
-            # the retire list while a deeper live branch reaches it unseen.
-            # Mark the frontier; retire() refuses to list a truncated
-            # input, and raising --input-depth until the count is zero is
-            # what makes the boundary a visible decision instead of a
-            # silent one. A later walk that DOES expand this node clears
-            # the mark (and an earlier one that did keeps it clear).
-            rec = cat.inputs.get(child)
-            if rec is not None and not rec['explored']:
-                rec['truncated'] = True
+            # own parents were never asked for on this walk, so our picture
+            # of the graph around it is partial -- and a partial picture is
+            # exactly how an input recorded shallowly from a superseded dig
+            # ends up on the retire list while a deeper live branch reaches
+            # it unseen. Mark the frontier; retire() refuses to list a
+            # truncated input, and raising --input-depth until the count is
+            # zero is what makes the boundary a visible decision instead of
+            # a silent one.
+            cut.add(child)
             continue
-        rec = cat.inputs.get(child)
-        if rec is not None:
-            rec['explored'] = True
-            rec['truncated'] = False
+        explored.add(child)
         for p, n in source.parents(child).items():
             if p.startswith('cnf.'):
                 # provenance, not lineage: recorded on the member, never an
@@ -238,13 +246,44 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
                 # distinct input buys that.
                 rec = cat.inputs[p] = {'nfiles': source.nfiles(p), 'parents': set(),
                                        'descendants': set(), 'hold': '', 'excluded': '',
-                                       'truncated': False, 'explored': False}
+                                       'truncated': False}
             rec['descendants'].add(dig.name)
             if child in cat.inputs:
                 cat.inputs[child]['parents'].add(p)
             else:
                 cat.members[child].inputs.add(p)
             frontier.append((p, level + 1))
+    # a node this walk stopped at AND never expanded by a shorter path of
+    # its own is a real cut for this dig
+    for name in cut - explored:
+        rec = cat.inputs.get(name)
+        if rec is not None:
+            rec['truncated'] = True
+
+
+def _propagate_truncation(cat: Catalog):
+    """Push `truncated` UP the `cat.inputs[x]['parents']` edges to a
+    fixpoint (NEW-1, second half).
+
+    A walk cut off at `M` never asked what is above `M`, so every input
+    the catalog knows above `M` -- recorded there by some OTHER dig's
+    walk, which is why it is in `cat.inputs` at all -- may be reachable
+    by the cut dig too. Its `descendants` set is therefore incomplete and
+    its "no live descendant" reading unsafe. Over-marking is the correct
+    direction: a truncated input is held back from the retire list, and
+    the stderr count then genuinely means "raise --input-depth".
+
+    Pure bookkeeping over data already in the Catalog; no SAM query."""
+    frontier = [n for n, rec in cat.inputs.items() if rec['truncated']]
+    while frontier:
+        rec = cat.inputs.get(frontier.pop())
+        if rec is None:
+            continue
+        for p in rec['parents']:
+            up = cat.inputs.get(p)
+            if up is not None and not up['truncated']:
+                up['truncated'] = True
+                frontier.append(p)
 
 
 def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[str]] = None,
@@ -297,6 +336,7 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
     # member as retirable.
     for name in set(cat.inputs) & set(cat.members):
         del cat.inputs[name]
+    _propagate_truncation(cat)
     _apply_pins(cat)
     return cat
 

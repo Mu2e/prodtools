@@ -920,6 +920,40 @@ class TestRetire(unittest.TestCase):
         self.assertFalse(cat.inputs['sim.mu2e.Deep3.MDC2025af.art']['truncated'])
         self.assertIn('sim.mu2e.Deep3.MDC2025af.art', {x['dataset'] for x in retire(cat)})
 
+    def test_input_above_a_node_another_dig_already_expanded_is_held_back(self):
+        # NEW-1: truncation is a property of the CUT, not of the node.
+        # `explored` used to live on the shared input record, so a node cut
+        # off for THIS dig but already expanded by an earlier dig's walk was
+        # not marked -- and neither was anything above it, whose
+        # `descendants` therefore name only the superseded dig. retire()
+        # then proposed deleting an input a `current` dig transitively
+        # consumes, with a --input-depth frontier count of zero, and the
+        # outcome depended on the alphabetical order digs are processed in.
+        #
+        #   dig Chain@au (current)     <- P1 <- P2 <- MM <- NN
+        #   dig Chain@an (superseded)  <- MM <- NN
+        #
+        # The an walk (processed first, alphabetically) expands MM and NN;
+        # the au walk is cut at MM, 3 hops up. NN is 4 hops above the live
+        # dig and is never reached from it.
+        g = _small_graph()
+        g[f'dig.mu2e.Chain.{AU}.art'] = {'n': 10, 'children': []}
+        g[f'dig.mu2e.Chain.{AN}.art'] = {'n': 10, 'children': []}
+        g['dts.mu2e.P1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.Chain.{AU}.art']}
+        g['dts.mu2e.P2.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.P1.MDC2025af.art']}
+        g['dts.mu2e.MM.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.P2.MDC2025af.art',
+                                                                f'dig.mu2e.Chain.{AN}.art']}
+        g['sim.mu2e.NN.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.MM.MDC2025af.art']}
+        cat = _cat(g)
+        self.assertEqual(cat.members[f'dig.mu2e.Chain.{AU}.art'].status, 'current')
+        self.assertEqual(cat.members[f'dig.mu2e.Chain.{AN}.art'].status, 'superseded')
+        # MM is where the live dig's walk stopped; NN sits above the cut and
+        # is held back by the upward propagation, not by the cut itself.
+        self.assertTrue(cat.inputs['dts.mu2e.MM.MDC2025af.art']['truncated'])
+        self.assertTrue(cat.inputs['sim.mu2e.NN.MDC2025af.art']['truncated'])
+        listed = {x['dataset'] for x in retire(cat)}
+        self.assertNotIn('sim.mu2e.NN.MDC2025af.art', listed)
+
     def test_cnf_parent_is_never_an_input_or_a_retire_candidate(self):
         # I4: the declared cnf parent route is real now, and a cnf tarball
         # must not become deletable data under any circumstance.
