@@ -1375,6 +1375,28 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn('propose --family Run1B', err)
 
+    def test_sam_client_error_is_exit_3(self):
+        # M11: samweb_wrapper raises samweb_client.Error, which derives
+        # from neither ValueError nor OSError, so a SAM outage produced a
+        # traceback where the schema promises exit 3.
+        import samweb_client
+
+        class _FakeSamError(Exception):
+            pass
+
+        previous = samweb_client.Error
+        samweb_client.Error = _FakeSamError
+        try:
+            src = FakeSource(_small_graph())
+            def boom():
+                raise _FakeSamError('SAM is down')
+            src.dig_families = boom
+            rc, out, err = _run(['members'], src, self.d)
+        finally:
+            samweb_client.Error = previous
+        self.assertEqual(rc, 3)
+        self.assertIn('SAM is down', err)
+
     def test_count_warning_goes_to_stderr(self):
         g = _small_graph()
         g[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']['n'] = 10     # winner, thin

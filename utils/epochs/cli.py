@@ -38,6 +38,27 @@ def _source():
     return SamSource()
 
 
+def _sam_error_class():
+    """`samweb_client.Error`, the base every `utils.samweb_wrapper` method
+    raises on an outage, an expired token or a malformed query (see its
+    error-mode policy). It derives from neither ValueError nor OSError,
+    so `except (ValueError, OSError)` let a SAM outage out as a traceback
+    where `docs/EXAMPLES_schema.md` promises exit 3 (M11).
+
+    Resolved lazily and narrowly: the import is optional so the CLI still
+    runs without the Mu2e environment, and anything that is not an
+    exception class degrades to an empty tuple, which catches NOTHING.
+    A programming error keeps its traceback either way — this never
+    blanket-catches Exception."""
+    try:
+        from samweb_client import Error
+    except Exception:
+        return ()
+    if isinstance(Error, type) and issubclass(Error, BaseException):
+        return Error
+    return ()
+
+
 def _load_index(epochs_dir) -> Dict:
     p = os.path.join(epochs_dir, INDEX_NAME)
     if not os.path.exists(p):
@@ -265,6 +286,7 @@ def main(argv: Optional[List[str]] = None, source=None, now_fn=None) -> int:
         args.family = []
     source = source or _source()
     now_fn = now_fn or _now
+    sam_error = _sam_error_class()
     try:
         if args.verb == 'propose':
             return cmd_propose(args, source)
@@ -285,6 +307,9 @@ def main(argv: Optional[List[str]] = None, source=None, now_fn=None) -> int:
     except EpochFileError as exc:
         print(f'epochs: {exc}', file=sys.stderr)
         return 2
+    except sam_error as exc:
+        print(f'epochs: SAM error: {exc}', file=sys.stderr)
+        return 3
     except (ValueError, OSError) as exc:
         print(f'epochs: {exc}', file=sys.stderr)
         return 3
