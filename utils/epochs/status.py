@@ -125,7 +125,9 @@ def _winners(cat: Catalog) -> Dict[str, bool]:
     correction an operator placed deliberately must not evaporate."""
     pins = _order_pins(cat)
     grouped = groups(cat)
-    for key in sorted(pins):
+    # a group key's purpose is None for an own-series pin, so sort on a
+    # None-free projection: `sorted` would raise comparing None with a str
+    for key in sorted(pins, key=lambda k: tuple('' if x is None else x for x in k)):
         if key not in grouped:
             _problem(cat, f"order pin in epoch {pins[key]['epoch']} names group {key}, "
                           f"which no member competes in: not applied")

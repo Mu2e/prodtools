@@ -755,6 +755,27 @@ class TestStatus(unittest.TestCase):
             retire(cat)
         self.assertIn('order pin', str(ctx.exception))
 
+    def test_order_pins_with_and_without_a_purpose_can_coexist(self):
+        # the group key carries purpose=None for an own-series pin, so the
+        # pin bookkeeping must never compare None with a str: two pins on
+        # one (family, tier, desc) differing only in purpose sort against
+        # each other.
+        g = _small_graph()
+        own = 'nts.mu2e.CeEndpointOnSpill.MDC2025-001.root'
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(own)
+        g[own] = {'n': 100, 'children': []}
+        e = _epoch('MDC2025au', pins={'order': [
+            {'tier': 'nts', 'desc': 'CeEndpointOnSpill', 'purpose': None,
+             'winner': 'MDC2025-001', 'reason': 'legacy series'},
+            {'tier': 'nts', 'desc': 'CeEndpointOnSpill', 'purpose': 'best',
+             'winner': AU, 'reason': 'the -001 reco is not the one'}]})
+        cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        # the purpose=None pin lands nowhere (lettered siblings exist) and
+        # says so; the purpose=best pin applies
+        self.assertTrue(any('no member competes in' in line for line in cat.pin_problems),
+                        cat.pin_problems)
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'].status, 'current')
+
     def test_two_epochs_pinning_one_group_is_reported(self):
         # the same class: the second pin lands nowhere because the first
         # already owns the group.
