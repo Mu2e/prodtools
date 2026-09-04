@@ -50,6 +50,44 @@ class Catalog:
     missing_families: List[str] = field(default_factory=list)
 
 
+class _Memo:
+    """Per-build cache for the two lineage query methods only.
+
+    A stops catalogue shared by hundreds of dts datasets, or a stage-1
+    sim dataset shared by many descendants, would otherwise be asked
+    via `children()`/`parents()` once per referencing walk — that
+    multiplicity, not any single query's latency (every SAM query is
+    sub-second on its own), is what kept a live `bin/epochs members`
+    run from finishing in 10 minutes. Caching by name bounds each of
+    the two methods to one real call per distinct dataset for the life
+    of one `build_catalog` call, no matter how many members' or digs'
+    walks reach it.
+
+    Every other source method (`dig_datasets`, `dig_families`,
+    `foreign`, `unparseable_defs`, `cnf_names`, `local_path`, `nfiles`,
+    `first_file`, ...) is forwarded untouched via `__getattr__` — those
+    are already called at most once (or a small, fixed number of
+    times) per build and do not need caching.
+    """
+    def __init__(self, source):
+        self._source = source
+        self._children_cache = {}  # type: Dict[str, Dict[str, int]]
+        self._parents_cache = {}  # type: Dict[str, Dict[str, int]]
+
+    def children(self, name):
+        if name not in self._children_cache:
+            self._children_cache[name] = self._source.children(name)
+        return self._children_cache[name]
+
+    def parents(self, name):
+        if name not in self._parents_cache:
+            self._parents_cache[name] = self._source.parents(name)
+        return self._parents_cache[name]
+
+    def __getattr__(self, attr):
+        return getattr(self._source, attr)
+
+
 def _claim(epochs: Dict[str, EpochFile], dig: str):
     hits = [e.name for e in epochs.values() if any(root_matches(r, dig) for r in e.roots)]
     if len(hits) > 1:
@@ -71,9 +109,13 @@ def _make_member(name: str, nfiles: int, epoch: str, cat: Catalog):
 
 
 def _walk_down(root_member: Member, source, cat: Catalog):
-    """Breadth-first over children. A child already claimed by another
-    walk keeps its first epoch (it cannot happen for a well-formed SAM
-    graph: a dig has one dsconf) but is still linked as a parent edge."""
+    """Depth-first (frontier.pop() is LIFO) over children. A child
+    already claimed by another walk keeps its first epoch (it cannot
+    happen for a well-formed SAM graph: a dig has one dsconf) but is
+    still linked as a parent edge. A child already in `cat.members` is
+    not re-walked — that, plus `source` being the per-build `_Memo`
+    wrapper `build_catalog` passes in, is what keeps a downstream
+    member shared by two different dig walks from being queried twice."""
     frontier = [root_member]
     while frontier:
         parent = frontier.pop()
@@ -94,7 +136,8 @@ def _walk_down(root_member: Member, source, cat: Catalog):
 
 
 def _walk_up(dig: Member, source, cat: Catalog, depth: int):
-    """Breadth-first over parents, up to `depth` levels above the dig.
+    """Depth-first (frontier.pop() is LIFO) over parents, up to `depth`
+    levels above the dig.
 
     A parent whose dsconf does not parse (controller ruling, task 4) is
     reported in `cat.unparseable` and dropped from this walk entirely: it
@@ -102,6 +145,14 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
     edge, and never walked further above. `Mu2eName.parse` itself is left
     to raise on a name that is not 5/6 dot-fields — that failure is not
     ours to swallow.
+
+    `source` is the per-build `_Memo` wrapper `build_catalog` passes in
+    (task 9b), so a parent shared by many digs' walks — a stops
+    catalogue, a stage-1 sim dataset — is fetched from the real source
+    at most once per build regardless of how many digs' walks reach it;
+    every one of those walks still runs its own full pass over the
+    (now cached) result, so `descendants` and `inputs`/`parents`
+    bookkeeping is recorded for every dig exactly as before dedup.
     """
     frontier = [(dig.name, 0)]
     while frontier:
@@ -136,14 +187,20 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
     the catalog must be complete before deletions are proposed. A
     family with digs but no loaded epoch still gets its digs walked
     into `cat.unclaimed_digs` (that is what makes the gap visible) and
-    is recorded in `cat.missing_families`."""
+    is recorded in `cat.missing_families`.
+
+    `source` is wrapped once, here, in `_Memo`: every dig's
+    `_walk_down`/`_walk_up` shares the same cache, so a dataset entered
+    from many different digs (task 9b: a stops catalogue shared by
+    hundreds of dts datasets) is asked at most once per build."""
+    msource = _Memo(source)
     if families is None:
-        families = sorted(source.dig_families())
+        families = sorted(msource.dig_families())
     cat = Catalog(epochs=dict(epochs))
     loaded_families = {e.family for e in epochs.values()}
     cat.missing_families = [f for f in families if f not in loaded_families]
     for family in families:
-        for dig, n in sorted(source.dig_datasets(family).items()):
+        for dig, n in sorted(msource.dig_datasets(family).items()):
             epoch = _claim(epochs, dig)
             if epoch is None:
                 cat.unclaimed_digs.setdefault(family, []).append(dig)
@@ -151,9 +208,9 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
             m = _make_member(dig, n, epoch, cat)
             if m is None:
                 continue
-            _walk_down(m, source, cat)
-            _walk_up(m, source, cat, input_depth)
-    cat.foreign |= getattr(source, 'foreign', set())
+            _walk_down(m, msource, cat)
+            _walk_up(m, msource, cat, input_depth)
+    cat.foreign |= getattr(msource, 'foreign', set())
     # a parent recorded as an input before its own walk made it a member
     for m in cat.members.values():
         m.inputs -= set(cat.members)

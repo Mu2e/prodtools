@@ -174,6 +174,7 @@ class FakeSource:
         for p, rec in graph.items():
             for c in rec.get('children', []):
                 self._parents.setdefault(c, []).append(p)
+        self.calls = {'children': [], 'parents': []}
 
     def dig_families(self):
         return {parse_dsconf(d.split('.')[3]).family for d in self.graph if d.startswith('dig.mu2e.')}
@@ -183,10 +184,12 @@ class FakeSource:
                 if d.startswith('dig.mu2e.') and f'.{family}' in d}
 
     def children(self, dataset):
+        self.calls['children'].append(dataset)
         return {c: self.graph[c]['n'] for c in self.graph.get(dataset, {}).get('children', [])
                 if c.split('.')[0] not in DROP_TIERS}
 
     def parents(self, dataset):
+        self.calls['parents'].append(dataset)
         return {p: self.graph[p]['n'] for p in self._parents.get(dataset, [])}
 
     def nfiles(self, dataset):
@@ -465,6 +468,32 @@ class TestBuildCatalog(unittest.TestCase):
         e = _epoch('MDC2025an', status='frozen')
         cat = build_catalog({'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e}, self.src, ['MDC2025'])
         self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AR}.root'].hold, 'epoch MDC2025an is frozen')
+
+    def test_lineage_queries_are_memoized_per_build(self):
+        # a stops Cat shared by two dts, each feeding a claimed dig: the Cat's
+        # parents() must be asked ONCE, not once per dts
+        g = _small_graph()
+        g['dts.mu2e.DIO.MDC2025ap.art'] = {'n': 10, 'children': [f'dig.mu2e.DIOtail.{AU}.art']}
+        g[f'dig.mu2e.DIOtail.{AU}.art'] = {'n': 10, 'children': []}
+        g['sim.mu2e.MuminusStopsCat.MDC2025ac.art']['children'].append('dts.mu2e.DIO.MDC2025ap.art')
+        src = FakeSource(g)
+        cat = build_catalog({'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}, src, ['MDC2025'])
+        self.assertEqual(src.calls['parents'].count('sim.mu2e.MuminusStopsCat.MDC2025ac.art'), 1)
+        self.assertEqual(src.calls['parents'].count('dts.mu2e.CeEndpoint.MDC2025ap.art'), 1)
+        for name in set(src.calls['children']):
+            self.assertEqual(src.calls['children'].count(name), 1, name)
+        # results unchanged
+        self.assertIn('sim.mu2e.MuminusStopsCat.MDC2025ac.art', cat.inputs)
+        self.assertEqual(cat.inputs['sim.mu2e.MuminusStopsCat.MDC2025ac.art']['descendants'],
+                         {f'dig.mu2e.CeEndpointOnSpill.{AU}.art', f'dig.mu2e.DIOtail.{AU}.art'})
+
+    def test_visited_input_still_records_every_descendant(self):
+        # dedup must not lose the descendants bookkeeping for the second dig
+        g = _small_graph()
+        g['dts.mu2e.CeEndpoint.MDC2025ap.art']['children'].append(f'dig.mu2e.CeEndpointOnSpill.{AN}.art')
+        cat = build_catalog({'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}, FakeSource(g), ['MDC2025'])
+        self.assertEqual(cat.inputs['dts.mu2e.CeEndpoint.MDC2025ap.art']['descendants'],
+                         {f'dig.mu2e.CeEndpointOnSpill.{AU}.art', f'dig.mu2e.CeEndpointOnSpill.{AN}.art'})
 
 
 def _cat(graph=None, epochs=None):
