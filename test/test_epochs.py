@@ -1754,6 +1754,17 @@ class TestCli(unittest.TestCase):
         with open(p) as f:
             self.assertEqual(json.load(f)['generated_at'], '2026-09-03T00:00:00Z')
 
+    def test_publish_summary_says_when_the_input_section_was_refused(self):
+        # publish prints no stderr noise, so its one summary line is the
+        # only place an operator learns the list is members-only.
+        p = os.path.join(_tmpdir(), 'sim_catalog.json')
+        src = FakeSource(_deep_graph())
+        rc, out, _ = _run(['--input-depth', '3', 'publish', '--out', p], src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn('members only', out)
+        rc, out, _ = _run(['publish', '--out', p], src, self.d)
+        self.assertNotIn('members only', out)
+
     def test_malformed_epoch_file_is_exit_2(self):
         with open(os.path.join(self.d, 'MDC2025au.json'), 'w') as f:
             f.write('{"name": "MDC2025au"}')

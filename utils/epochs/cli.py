@@ -255,6 +255,11 @@ def cmd_publish(args, source, now_fn):
         retire_part = f"retire: refused, catalog incomplete ({len(doc['incomplete'])} reasons)"
     else:
         retire_part = f"{len(doc['retire'])} retire candidates"
+        if doc['input_retirement_refused']:
+            # `publish` prints no stderr noise, so the one place an
+            # operator sees that the list is members-only is here
+            retire_part += ' (members only: the input section is refused, see ' \
+                           "'input_retirement_refused')"
     print(f'{args.out}: {len(doc["epochs"])} epochs, '
           f'{sum(len(e["datasets"]) for e in doc["epochs"])} members, '
           f'{len(doc["gaps"])} gaps, {retire_part}')
