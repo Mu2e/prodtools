@@ -11529,7 +11529,8 @@ class TestPushCnfTool(unittest.TestCase):
                           'outputs': [{'dataset': d} for d in datasets]}}
 
     def _push(self, before, after, *, json_path=None, desc='D', dsconf='C',
-              slice_size=500, run_as='self', confirm=False, cli=None):
+              slice_size=500, run_as='self', confirm=False, cli=None,
+              prodtools_dir=None):
         """push_cnf with the ledger faked.
 
         `before`/`after` are what _all_campaigns returns either side of
@@ -11546,7 +11547,8 @@ class TestPushCnfTool(unittest.TestCase):
                    side_effect=[before, after]):
             out = self.tools.push_cnf(
                 json=json_path or self.json_path, desc=desc, dsconf=dsconf,
-                slice_size=slice_size, run_as=run_as, confirm=confirm)
+                slice_size=slice_size, run_as=run_as, confirm=confirm,
+                prodtools_dir=prodtools_dir)
         self.last_run = run
         return out
 
@@ -11853,6 +11855,28 @@ class TestPushCnfTool(unittest.TestCase):
         self.assertEqual(
             out['datasets'],
             ['rec.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art'])
+
+    # — prodtools_dir: dev-tarball opt-in ------------------------------
+
+    def test_prodtools_dir_forwarded_for_self(self):
+        before, after = [], [self._camp(1)]
+        self._push(before, after, prodtools_dir='/exp/mu2e/app/users/u/prodtools')
+        argv = self.last_run.call_args[0][0]
+        i = argv.index('--prodtools-dir')
+        self.assertEqual(argv[i + 1], '/exp/mu2e/app/users/u/prodtools')
+
+    def test_prodtools_dir_absent_by_default(self):
+        before, after = [], [self._camp(1)]
+        self._push(before, after)
+        self.assertNotIn('--prodtools-dir', self.last_run.call_args[0][0])
+
+    def test_prodtools_dir_refused_for_mu2epro(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError):
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C', slice_size=500,
+                                    run_as='mu2epro', confirm=True,
+                                    prodtools_dir='/exp/mu2e/app/users/u/prodtools')
+        run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

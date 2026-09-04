@@ -31,6 +31,12 @@ it RAISES rather than returning a pre-existing campaign — handing back
 the wrong id would point `run_submissions` at an unrelated production
 campaign.
 
+`push_cnf(..., prodtools_dir=...)` forwards `--prodtools-dir` so a
+checkout can be run before its release lands on cvmfs; it is refused
+for `run_as="mu2epro"` — stricter than json2jobdef's own rule, since
+this write surface is the wrong place to accept a production prodtools
+override at all.
+
 Every tool takes a required `run_as`:
 
 - `run_as="self"` needs no privilege and writes only your own scratch,
