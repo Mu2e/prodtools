@@ -679,12 +679,17 @@ def _make_cnf(d, name, setup, outputs, fcl='services.DbService.version: "v1_5"\n
     """A minimal cnf tarball: jobpars.json (setup + tbs.outfiles) and mu2e.fcl.
     `outputs` are tbs.outfiles TEMPLATES exactly as mu2ejobdef writes them:
     'mcs.mu2e.X.MDC2025au_best_v1_5.sequencer.art' or, generic,
-    'nts.mu2e.{desc}.MDC2025au_best_v1_5-001.sequencer.root'."""
+    'nts.mu2e.{desc}.MDC2025au_best_v1_5-001.sequencer.root'.
+    `fcl=None` omits the mu2e.fcl member entirely (the g4bl / code-tarball
+    cnf shape, which carries no embedded fcl)."""
     path = os.path.join(d, name)
     jobpars = {'setup': setup, 'tbs': {'outfiles': {f'out{i}': t for i, t in enumerate(outputs)}},
                'jobname': name, 'code': ''}
+    members = [('jobpars.json', json.dumps(jobpars))]
+    if fcl is not None:
+        members.append(('mu2e.fcl', fcl))
     with tarfile.open(path, 'w') as tar:
-        for member, payload in (('jobpars.json', json.dumps(jobpars)), ('mu2e.fcl', fcl)):
+        for member, payload in members:
             p = os.path.join(d, member)
             with open(p, 'w') as f:
                 f.write(payload)
@@ -781,6 +786,78 @@ class TestGeneration(unittest.TestCase):
         # nts members are pinned to a known generation by the assertions above,
         # so 'unknown' cannot appear among nts rows in this fixture.
         self.assertIn('unknown', {r['generation'] for r in all_rows})
+
+    def test_index_isolates_unreadable_cnf(self):
+        # build_cnf_index reads every cnf SAM knows (~850 in production);
+        # one corrupt tarball or one tarball with no jobpars.json must not
+        # abort the whole build (that is exactly what Task 11 runs).
+        d = _tmpdir()
+        good = _make_cnf(d, 'cnf.mu2e.Good.MDC2025au_best_v1_5.0.tar', SETUP_A,
+                         ['nts.mu2e.{desc}.MDC2025au_best_v1_5.sequencer.root'])
+        garbage_name = 'cnf.mu2e.Bad.MDC2025au_best_v1_5.0.tar'
+        garbage_path = os.path.join(d, garbage_name)
+        with open(garbage_path, 'wb') as f:
+            f.write(b'this is not a tar file at all')
+        no_jobpars_name = 'cnf.mu2e.NoJobpars.MDC2025au_best_v1_5.0.tar'
+        no_jobpars_path = os.path.join(d, no_jobpars_name)
+        with tarfile.open(no_jobpars_path, 'w') as tar:
+            p = os.path.join(d, 'mu2e.fcl')
+            with open(p, 'w') as f:
+                f.write('# a tar with mu2e.fcl but no jobpars.json\n')
+            tar.add(p, arcname='mu2e.fcl')
+        src = FakeSource(_small_graph(), cnfs={
+            'cnf.mu2e.Good.MDC2025au_best_v1_5.0.tar': good,
+            garbage_name: garbage_path,
+            no_jobpars_name: no_jobpars_path})
+        idx = build_cnf_index(src, existing={})
+        self.assertIn(garbage_name, idx['__unreadable__'])
+        self.assertTrue(idx['__unreadable__'][garbage_name])
+        self.assertIn(no_jobpars_name, idx['__unreadable__'])
+        self.assertTrue(idx['__unreadable__'][no_jobpars_name])
+        self.assertNotIn(garbage_name, idx['__indexed__'])
+        self.assertNotIn(no_jobpars_name, idx['__indexed__'])
+        self.assertIn('cnf.mu2e.Good.MDC2025au_best_v1_5.0.tar', idx['__indexed__'])
+        self.assertEqual(idx['__generic__']['nts.MDC2025au_best_v1_5'],
+                         'cnf.mu2e.Good.MDC2025au_best_v1_5.0.tar')
+
+    def test_read_generation_without_fcl(self):
+        # g4bl and code-tarball cnfs carry no mu2e.fcl at all — a documented
+        # shape, not a corrupt-tarball error.
+        d = _tmpdir()
+        p = _make_cnf(d, 'cnf.mu2e.G4bl.MDC2025au_best_v1_5.0.tar', SETUP_B, [], fcl=None)
+        g = read_generation(p, 'cnf.mu2e.G4bl.MDC2025au_best_v1_5.0.tar', 'index')
+        self.assertEqual((g.musing, g.version), ('AnalysisMDC2025', 'v02_01_00'))
+        self.assertEqual(g.fcl_sha256, '')
+        self.assertEqual(g.dbservice, '')
+        self.assertEqual(g.geometry, '')
+        self.assertEqual(g.bfield, '')
+
+    def test_generations_source_is_per_member(self):
+        # a cnf read once (cached by name) is reached by two different
+        # members via two different routes; each member's Generation.source
+        # must reflect ITS OWN route, not whichever member populated the
+        # cache first.
+        d = _tmpdir()
+        cnf_path = _make_cnf(d, 'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar', SETUP_A,
+                             ['nts.mu2e.{desc}.MDC2025au_best_v1_5-001.sequencer.root'])
+        g = _small_graph()
+        # nts-001 reaches the cnf via a declared SAM parent edge (route: parent)
+        g['cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar'] = {
+            'n': 1, 'children': [f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']}
+        # a second, same-dsconf nts dataset with no cnf parent edge reaches
+        # the SAME cnf only through the generic index entry (route: index)
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(f'nts.mu2e.Second.{AU}-001.root')
+        g[f'nts.mu2e.Second.{AU}-001.root'] = {'n': 100, 'children': []}
+        src = FakeSource(g, cnfs={'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar': cnf_path})
+        cat = assign_status(build_catalog({'MDC2025au': _epoch('MDC2025au'),
+                                           'MDC2025an': _epoch('MDC2025an')}, src, ['MDC2025']))
+        idx = build_cnf_index(src, existing={})
+        gens = generations(cat, src, idx)
+        via_parent = gens[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']
+        via_index = gens[f'nts.mu2e.Second.{AU}-001.root']
+        self.assertEqual(via_parent.cnf, via_index.cnf)
+        self.assertEqual(via_parent.source, 'parent')
+        self.assertEqual(via_index.source, 'index')
 
 
 if __name__ == '__main__':
