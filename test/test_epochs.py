@@ -908,5 +908,88 @@ class TestPublish(unittest.TestCase):
         self.assertEqual({e['name'] for e in doc['epochs']}, {'MDC2025au', 'MDC2025an'})
 
 
+import io
+import contextlib
+from utils.epochs import cli as epochs_cli
+
+
+def _run(argv, source, epochs_dir):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = epochs_cli.main(['--epochs-dir', epochs_dir] + argv, source=source,
+                             now_fn=lambda: '2026-09-03T00:00:00Z')
+    return rc, out.getvalue(), err.getvalue()
+
+
+class TestCli(unittest.TestCase):
+    def setUp(self):
+        self.d = _tmpdir()
+        self.src = FakeSource(_small_graph())
+        for name in ('MDC2025au', 'MDC2025an'):
+            write_epoch_file(self.d, propose_epoch(name + '_best_v1_0'))
+
+    def test_propose_writes_missing_family_files(self):
+        d = _tmpdir()
+        rc, out, _ = _run(['propose', '--family', 'MDC2025'], self.src, d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(os.listdir(d)), ['MDC2025an.json', 'MDC2025au.json'])
+        rc, out, _ = _run(['propose', '--family', 'MDC2025'], self.src, d)
+        self.assertIn('nothing to propose', out)
+
+    def test_propose_without_family_is_usage_error(self):
+        rc, _, err = _run(['propose'], self.src, self.d)
+        self.assertEqual(rc, 2)
+
+    def test_members_text_and_json(self):
+        rc, out, _ = _run(['members', '--tier', 'nts', '--status', 'current'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', out)
+        self.assertNotIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root current', out)
+        rc, out, _ = _run(['members', '--json'], self.src, self.d)
+        rows = json.loads(out)
+        self.assertEqual({r['status'] for r in rows} <= {'current', 'stale', 'superseded', 'excluded'}, True)
+
+    def test_retire_prints_purge_lines(self):
+        rc, out, _ = _run(['retire'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith('DELETE - - '))
+
+    def test_lookup_unknown_is_nonzero(self):
+        rc, out, _ = _run(['lookup', 'nope.mu2e.a.b.art'], self.src, self.d)
+        self.assertEqual(rc, 1)
+
+    def test_publish_writes_file(self):
+        p = os.path.join(_tmpdir(), 'sim_catalog.json')
+        rc, out, _ = _run(['publish', '--out', p], self.src, self.d)
+        self.assertEqual(rc, 0)
+        with open(p) as f:
+            self.assertEqual(json.load(f)['generated_at'], '2026-09-03T00:00:00Z')
+
+    def test_malformed_epoch_file_is_exit_2(self):
+        with open(os.path.join(self.d, 'MDC2025au.json'), 'w') as f:
+            f.write('{"name": "MDC2025au"}')
+        rc, _, err = _run(['members'], self.src, self.d)
+        self.assertEqual(rc, 2)
+        self.assertIn('MDC2025au.json', err)
+
+    def test_family_filter_applies_to_output_only(self):
+        # --family/--epoch filter printed rows only; the catalog underneath
+        # is always the complete one (ruling of 2026-09-03).
+        rc, out, _ = _run(['members', '--family', 'Run1B'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, '')
+        rc, out, _ = _run(['members', '--family', 'MDC2025'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', out)
+
+    def test_retire_refuses_incomplete_catalog_exit_3(self):
+        g = _small_graph()
+        g['dig.mu2e.X.Run1Ban_best_v1_4.art'] = {'n': 3, 'children': []}
+        src = FakeSource(g)
+        rc, out, err = _run(['retire'], src, self.d)
+        self.assertEqual(rc, 3)
+        self.assertIn('propose --family Run1B', err)
+
+
 if __name__ == '__main__':
     unittest.main()
