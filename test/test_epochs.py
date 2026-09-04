@@ -860,5 +860,53 @@ class TestGeneration(unittest.TestCase):
         self.assertEqual(via_index.source, 'index')
 
 
+from utils.epochs.publish import catalog_document, write_catalog
+
+
+class TestPublish(unittest.TestCase):
+    def test_ray_shape_and_our_fields(self):
+        cat = _cat()
+        doc = catalog_document(cat, gens={}, generated_at='2026-09-03T00:00:00Z')
+        self.assertEqual(doc['generated_at'], '2026-09-03T00:00:00Z')
+        names = {e['name']: e for e in doc['epochs']}
+        self.assertEqual(set(names), {'MDC2025au', 'MDC2025an'})
+        au = names['MDC2025au']
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', au['datasets'])
+        member = [m for m in au['members'] if m['name'] == f'nts.mu2e.CeEndpointOnSpill.{AU}.root'][0]
+        self.assertEqual(member['status'], 'superseded')
+        self.assertEqual(member['superseded_by'], f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root')
+        self.assertEqual(member['generation'], '')
+        self.assertIn('dts.mu2e.CeEndpoint.MDC2025ap.art', doc['inputs'])
+        self.assertIsInstance(doc['gaps'], list)
+        self.assertIsInstance(doc['retire'], list)
+
+    def test_write_is_valid_json_and_deterministic(self):
+        cat = _cat()
+        doc = catalog_document(cat, gens={}, generated_at='x')
+        d = _tmpdir()
+        p = os.path.join(d, 'sim_catalog.json')
+        write_catalog(doc, p)
+        with open(p) as f:
+            back = json.load(f)
+        self.assertEqual(back['epochs'][0]['name'], 'MDC2025an')   # sorted by name
+
+    def test_incomplete_catalog_publishes_without_retire(self):
+        # A family with digs but no loaded epoch file (Run1B here) makes
+        # the catalog incomplete: retire() would raise, so catalog_document
+        # must report the reason instead of proposing (or crashing on) a
+        # deletion list. The complete part of the catalog (the two loaded
+        # MDC2025 epochs) still publishes normally.
+        g = _small_graph()
+        g['dig.mu2e.X.Run1Ban_best_v1_4.art'] = {'n': 1, 'children': []}
+        epochs = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+        cat = assign_status(build_catalog(epochs, FakeSource(g), families=None))
+        doc = catalog_document(cat, gens={}, generated_at='x')
+        self.assertIsNone(doc['retire'])
+        self.assertTrue(doc['incomplete'])
+        self.assertTrue(any('Run1B' in line for line in doc['incomplete']))
+        self.assertEqual(doc['missing_families'], ['Run1B'])
+        self.assertEqual({e['name'] for e in doc['epochs']}, {'MDC2025au', 'MDC2025an'})
+
+
 if __name__ == '__main__':
     unittest.main()

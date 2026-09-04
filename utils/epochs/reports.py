@@ -68,16 +68,27 @@ def _newest_epoch_key(cat: Catalog, family: str):
     return max((k.sort_key() for k in keys), default=None)
 
 
+def incomplete_reasons(cat: Catalog) -> List[str]:
+    """One human-readable line per way the catalog is known-incomplete: a
+    family with digs but no loaded epoch file, or a dig matching no
+    epoch root. Empty when the catalog is complete. `retire()` refuses
+    to run while this is non-empty (a partial catalog cannot tell a
+    still-needed input from a retirable one); `catalog_document`
+    (task 8) publishes these lines instead of a retire list."""
+    reasons = []
+    for family in sorted(cat.missing_families):
+        reasons.append(f"family {family} has digs but no epoch file; "
+                       f"run 'epochs propose --family {family}'")
+    for digs in cat.unclaimed_digs.values():
+        for dig in sorted(digs):
+            reasons.append(f'dig {dig} matches no epoch root')
+    return reasons
+
+
 def retire(cat: Catalog) -> List[Dict]:
-    if cat.missing_families or cat.unclaimed_digs:
-        bits = []
-        if cat.missing_families:
-            bits.append('families with digs but no epoch file: ' +
-                        ', '.join(sorted(cat.missing_families)))
-        if cat.unclaimed_digs:
-            digs = sorted(d for lst in cat.unclaimed_digs.values() for d in lst)
-            bits.append('digs matching no epoch root: ' + ', '.join(digs))
-        raise ValueError('retire refused: catalog is incomplete — ' + '; '.join(bits) +
+    reasons = incomplete_reasons(cat)
+    if reasons:
+        raise ValueError('retire refused: catalog is incomplete — ' + '; '.join(reasons) +
                          "; run 'epochs propose --family <F>' and edit the file, then retry")
     out = []
     for m in sorted(cat.members.values(), key=lambda m: m.name):
