@@ -13675,6 +13675,93 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         self.assertEqual(camp['origin'], 'data/x.json#IntegDesc@IntegConf')
 
 
+class TestEraAgreement(unittest.TestCase):
+    """validate_era_agreement compares the era letters of a dsconf with
+    those of the Musing that processes it. It must compare only when
+    BOTH tokens are readable as Mu2e era tags; the docstring promise is
+    "tokens with no era letters are skipped, not guessed at". It guessed:
+    any trailing lowercase run counted as an era ('MCPTest001' -> 'est',
+    'Offline' -> 'ffline'), and the Musing tag was whatever directory
+    held setup.sh ('/cvmfs/s.sh' -> 'cvmfs'). Eight unrelated tests died
+    on a fixture path with no Musing in it."""
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.j = json2jobdef
+
+    MUSING = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{}/setup.sh'
+
+    def _cfg(self, dsconf, setup, **over):
+        cfg = {'fcl': 'a.fcl', 'dsconf': dsconf, 'outloc': {'dts': 'tape'},
+               'simjob_setup': setup}
+        cfg.update(over)
+        return cfg
+
+    def test_era_suffix_reads_only_mu2e_era_tags(self):
+        cases = {'Run1Baw': 'aw', 'MDC2025aw': 'aw', 'Run1Bab2': 'ab',
+                 'MDC2020ak': 'ak', 'MDC2030aa': 'aa',
+                 'Run1B': None, 'MDC2025': None, 'v02_01_00': None,
+                 'MCPTest001': None, 'G4blSmoke': None, 'e470313': None,
+                 'x': None, 'cvmfs': None, 'Offline': None}
+        for token, era in cases.items():
+            with self.subTest(token=token):
+                self.assertEqual(self.j._era_suffix(token), era)
+
+    def test_musing_tag_reads_only_the_musings_layout(self):
+        self.assertEqual(self.j._musing_tag(self.MUSING.format('Run1Baq')),
+                         'Run1Baq')
+        self.assertEqual(self.j._musing_tag(
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/'
+            'v02_00_00/setup.sh'), 'v02_00_00')
+        for not_a_musing in ('/cvmfs/mu2e.opensciencegrid.org/x/setup.sh',
+                             '/cvmfs/s.sh',
+                             '/exp/mu2e/app/users/u/Offline/setup.sh',
+                             '/cvmfs/mu2e.opensciencegrid.org/Musings/'
+                             'SimJob/Run1Baq/other.sh'):
+            with self.subTest(path=not_a_musing):
+                self.assertIsNone(self.j._musing_tag(not_a_musing))
+
+    def test_mismatch_is_refused_naming_both_eras(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.j.validate_era_agreement(
+                self._cfg('Run1Baw_best_v1_5', self.MUSING.format('Run1Baq')))
+        msg = str(cm.exception)
+        self.assertIn("'aw'", msg)
+        self.assertIn("'aq'", msg)
+        self.assertIn('era_mismatch_ok', msg)
+
+    def test_matching_eras_pass_across_families(self):
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw_best_v1_5', self.MUSING.format('Run1Baw')))
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw', self.MUSING.format('MDC2025aw')))
+
+    def test_stated_reason_permits_a_cross_era_pin(self):
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw_best_v1_5', self.MUSING.format('Run1Baq'),
+                      era_mismatch_ok='Baq-era digs; aw throws on VD 136'))
+
+    def test_setup_outside_the_musings_layout_is_not_compared(self):
+        """A dev checkout's setup.sh has no Musing tag. Before: refused
+        as "pins 'Offline' (era 'ffline')"."""
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw', '/exp/mu2e/app/users/u/Offline/setup.sh'))
+        self.j.validate_era_agreement(self._cfg('Run1Bap', '/cvmfs/s.sh'))
+
+    def test_dsconf_without_era_letters_is_not_compared(self):
+        """A personal dsconf under a real Musing. Before: 'MCPTest001'
+        read as era 'est' and was refused against 'ap'."""
+        self.j.validate_era_agreement(
+            self._cfg('MCPTest001', self.MUSING.format('Run1Bap')))
+        self.j.validate_era_agreement(
+            self._cfg('v02_01_00', self.MUSING.format('Run1Bap')))
+
+    def test_code_tarball_entry_has_nothing_to_compare(self):
+        self.j.validate_era_agreement(
+            {'fcl': 'a.fcl', 'dsconf': 'Run1Baw', 'outloc': {'dts': 'tape'},
+             'code': '/exp/Code.tar.bz2'})
+
+
 class TestJson2JobdefEntryValueValidation(unittest.TestCase):
     """The entry values a build config supplies are validated where the
     config is READ, not only by `submissions set-entry`.
