@@ -484,9 +484,9 @@ class TestBuildCatalog(unittest.TestCase):
         lower = f'dig.mu2e.CeEndpointOnSpill.{AU}.art'
         g[upper] = {'n': 7, 'children': [lower]}
         real, made = graph_mod._make_member, []
-        def spy(name, nfiles, epoch, cat):
+        def spy(name, nfiles, epoch, cat, where=''):
             made.append(name)
-            return real(name, nfiles, epoch, cat)
+            return real(name, nfiles, epoch, cat, where)
         with patch.object(graph_mod, '_make_member', spy):
             cat = build_catalog(self.epochs, FakeSource(g), ['MDC2025'])
         self.assertEqual(made.count(lower), 1)

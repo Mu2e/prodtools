@@ -126,10 +126,10 @@ def _report_noise(cat, source):
             print(f'unclaimed dig (no epoch root matches): {d}', file=sys.stderr)
     refusal = input_retirement_refusal(cat)
     if refusal:
-        # NOT "these N were withheld": a non-zero frontier count means the
-        # upward picture is incomplete, and which OTHER inputs that makes
-        # unsafe cannot be read off the count. The whole input section is
-        # refused, and the message has to say so.
+        # NOT "these N were withheld": the counts name places the graph is
+        # unread, and which inputs that makes unsafe cannot be read off
+        # them. The whole input section is refused, and the message says
+        # so, along with the remedy for each cause present.
         print(refusal, file=sys.stderr)
     for line in cat.pin_problems:
         print(f'pin problem: {line}', file=sys.stderr)
@@ -272,7 +272,10 @@ def build_parser():
     p.add_argument('--input-depth', type=int, default=None,
                    help='cap the upward input walk at N levels above each dig '
                         '(default: no cap, walk to closure). A capped build '
-                        'refuses the ENTIRE input section of `retire`.')
+                        'refuses the ENTIRE input section of `retire`; so does '
+                        'any other unread region (an unparseable dsconf, a '
+                        'non-mu2e owner in the lineage). There is no flag to '
+                        'bypass that refusal.')
     sub = p.add_subparsers(dest='verb', required=True)
 
     def common(sp, epoch=True):

@@ -20,10 +20,14 @@ Two caveats a consumer of the served JSON has to read (V5):
   below it still carries the epoch `_walk_down` inherited. That is the
   reason `'retire'` is `null`, and `'incomplete'` names the dig. Do not
   read the grouping as authoritative while `'incomplete'` is non-empty.
-- `'input_retirement_refused'` is a non-empty string when the catalog
-  was built with `--input-depth` and something was truncated: `'retire'`
-  then holds member candidates ONLY, and the absence of an input from it
-  means nothing.
+- `'input_retirement_refused'` is a non-empty string whenever the input
+  graph is known-incomplete — a `--input-depth` cap, an unparseable
+  dsconf above or below a member, a dataset not owned by `mu2e` in the
+  lineage. `'retire'` then holds member candidates ONLY, and the absence
+  of an input from it means nothing. `'input_graph_incomplete'` lists the
+  reasons and `'input_depth'` names the cap (null = walked to closure).
+  Expect this to be non-empty on production data until the legacy dsconf
+  names parse: it is the tool declining to guess, not a fault.
 """
 import json
 from typing import Dict
@@ -72,6 +76,13 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         # non-empty => 'retire' carries members only; a capped upward walk
         # left the input graph incomplete and no input is proposed at all
         'input_retirement_refused': input_retirement_refusal(cat),
+        # the machine-readable form of the line above: one entry per
+        # distinct place the upward/downward walk stopped early or dropped
+        # an edge. Empty <=> the input graph is complete.
+        'input_graph_incomplete': list(cat.input_graph_incomplete),
+        # null = the upward walk ran to natural closure; an int is the
+        # operator-set cap that was in force
+        'input_depth': cat.input_depth,
         'retire': retire(cat) if not reasons else None,
         'count_warnings': count_warnings(cat),
     }

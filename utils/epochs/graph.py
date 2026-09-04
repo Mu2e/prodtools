@@ -8,12 +8,24 @@ whose root its dig matched.
 
 `input_depth` survives as an explicit opt-in cap for a cheap partial
 run. It is no longer the default because a capped walk yields a
-knowingly incomplete input graph, and three rounds of trying to DETECT
-which parts of an incomplete graph are safe to act on produced three
-separate false-DELETE Criticals (C1, NEW-1, V1). Walking to closure
-removes the cut, so there is nothing to detect; when a cap IS given,
-`retire()` refuses the input section whole rather than judging it
-per input.
+knowingly incomplete input graph, and four rounds of trying to DETECT
+which parts of an incomplete graph are safe to act on produced four
+separate false-DELETE Criticals (C1, NEW-1, V1, new-C1).
+
+Removing the CAP is not the same as removing incompleteness, which is
+what round 4 corrects. Five things sever a walk — the cap, an
+unparseable dsconf upward, an unparseable dsconf downward, a
+foreign-owner dataset the source never returns, a dropped tier that
+might carry lineage — and every one of them leaves a region unread.
+They all now append to `Catalog.input_graph_incomplete`, and
+`reports.retire()` refuses its ENTIRE input section while that register
+is non-empty. Expect it to be non-empty on production data (30 legacy
+names did not parse on 2026-09-03); that is the tool declining to
+guess.
+
+Symmetrically, the catalog records the same DAG in several edge
+collections and liveness used to read one of them. `upward_edges` is
+their union and `reports.live_datasets` is its only consumer.
 """
 import re
 from dataclasses import dataclass, field
@@ -21,7 +33,19 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from utils.epochs.dsconf import DsconfKey, DsconfParseError, parse_dsconf
 from utils.epochs.epoch_files import EpochFile
+from utils.epochs.source import DROP_TIERS, OWNER, PROVENANCE_ONLY_TIERS
 from utils.job_common import Mu2eName
+
+# The four ways the upward/downward walk can stop early or drop an edge.
+# Every one of them leaves a region of the graph unread, and an unread
+# region is why `retire()` refuses its whole input section: we cannot
+# prove an input is unused while part of the lineage is unreadable.
+# These strings are the GROUPING KEY of the refusal message, so they are
+# constants rather than prose.
+INCOMPLETE_CAP = 'input walk capped'
+INCOMPLETE_UNPARSEABLE = 'unparseable dsconf'
+INCOMPLETE_FOREIGN = 'foreign-owner dataset'
+INCOMPLETE_DROPPED_TIER = 'dropped physics tier'
 
 
 def root_matches(root: str, dataset: str) -> bool:
@@ -61,10 +85,10 @@ class Member:
 class Catalog:
     epochs: Dict[str, EpochFile]
     # The `input_depth` this catalog was built with: None = the upward
-    # walk ran to natural closure, so no input is truncated and the
-    # input graph is complete. An int is an operator-set cap, and
-    # `reports.retire()` then refuses the ENTIRE input section as soon
-    # as anything was truncated.
+    # walk ran to natural closure, so no CAP cut it. That is not the same
+    # as a complete input graph -- an unparseable name, a foreign owner or
+    # a dropped tier severs a walk with no cap in sight -- so what
+    # `retire()` reads is `input_graph_incomplete` below, never this.
     input_depth: Optional[int] = None
     members: Dict[str, Member] = field(default_factory=dict)
     inputs: Dict[str, Dict] = field(default_factory=dict)
@@ -93,6 +117,80 @@ class Catalog:
     # surface. Does not block retire() — a generation is provenance, not
     # a deletion input.
     generation_conflicts: List[str] = field(default_factory=list)
+    # THE register of "the input graph is known-incomplete", one line per
+    # distinct place either walk stopped early or dropped an edge: a cap,
+    # an unparseable dsconf up or down, a foreign owner, a dropped tier
+    # that could carry physics. `reports.input_retirement_refusal` fires
+    # on this list and on nothing else.
+    #
+    # Round 4's root cause B: incompleteness used to be tracked for ONE
+    # cause (the `--input-depth` cap, via the per-record `truncated`
+    # flag) out of the five that sever the graph identically, so an
+    # unparseable ancestor or a user-owned one shortened the walk in
+    # silence and `retire()` judged the region above it on whatever some
+    # OTHER dig's walk happened to record — the C1/NEW-1/V1 shape with a
+    # different trigger. One register, appended at EVERY early exit, is
+    # what makes that unreachable rather than undetected.
+    input_graph_incomplete: List[str] = field(default_factory=list)
+    _incomplete_seen: Set[str] = field(default_factory=set, repr=False, compare=False)
+    # Every (child -> parent) edge either walk learned, INCLUDING ones the
+    # display collections later drop (`Member.inputs` loses a parent that
+    # turns out to be a member; `cat.inputs` loses a whole record when the
+    # name becomes a member). `reports.live_datasets` unions this with
+    # `Member.parents`, `Member.inputs`, `cat.inputs[x]['parents']` and the
+    # dig `descendants` sets, because round 4's root cause A was liveness
+    # reading ONE of those edge sets and every other edge keeping its own
+    # route to the same false DELETE.
+    upward: Dict[str, Set[str]] = field(default_factory=dict)
+
+    def mark_incomplete(self, kind: str, detail: str) -> None:
+        """Record one distinct way the input graph is unread. Deduplicated
+        by text: a legacy-named ancestor is re-encountered by every dig
+        walk that reaches it, and 30 real unparseable names would
+        otherwise become thousands of identical lines."""
+        line = f'{kind}: {detail}'
+        if line not in self._incomplete_seen:
+            self._incomplete_seen.add(line)
+            self.input_graph_incomplete.append(line)
+
+    def record_edge(self, child: str, parent: str) -> None:
+        """`parent` is a parent of `child`. Recorded for EVERY parentage
+        edge a walk sees (cnf tarballs excepted — ADR 0003 provenance is
+        not lineage), whatever the walk then does with it."""
+        self.upward.setdefault(child, set()).add(parent)
+
+
+def upward_edges(cat: Catalog) -> Dict[str, Set[str]]:
+    """child -> every dataset the catalog records as a parent of it, over
+    EVERY edge collection the catalog holds.
+
+    The catalog records the same DAG four and a half ways — `cat.upward`
+    (the raw record), `Member.parents`, `Member.inputs`,
+    `cat.inputs[x]['parents']`, and `cat.inputs[x]['descendants']` read
+    backwards — and each of them loses different edges to a later
+    reconciliation pass. Reading any one of them is how `retire()`
+    proposed deleting an input that a `current` member consumes (C1, and
+    again as new-C2 in a second code path). There is one union, it is
+    computed here, and `reports.live_datasets` is its only consumer."""
+    up: Dict[str, Set[str]] = {}
+
+    def add(child: str, parent: str):
+        up.setdefault(child, set()).add(parent)
+
+    for child, parents in cat.upward.items():
+        for p in parents:
+            add(child, p)
+    for m in cat.members.values():
+        for p in m.parents:
+            add(m.name, p)
+        for p in m.inputs:
+            add(m.name, p)
+    for name, rec in cat.inputs.items():
+        for p in rec['parents']:
+            add(name, p)
+        for d in rec['descendants']:
+            add(d, name)
+    return up
 
 
 class _Memo:
@@ -152,12 +250,19 @@ def _claim(epochs: Dict[str, EpochFile], dig: str):
     return hits[0] if hits else None
 
 
-def _make_member(name: str, nfiles: int, epoch: str, cat: Catalog):
+def _make_member(name: str, nfiles: int, epoch: str, cat: Catalog, where: str = ''):
+    """None when the dsconf does not parse. That drops the dataset AND
+    everything below it from the member closure, so it is an unread region
+    of the graph and goes in `cat.input_graph_incomplete`: a live member
+    hidden under a bad name reads as "nothing live descends from this dig",
+    which is a false DELETE of the dig's inputs (verify-3 C1, downward)."""
     n = Mu2eName.parse(name)
     try:
         key = parse_dsconf(n.dsconf)
     except DsconfParseError as exc:
         cat.unparseable.append((name, str(exc)))
+        cat.mark_incomplete(INCOMPLETE_UNPARSEABLE,
+                            f'{name} ({exc}){where}; everything below it is unread')
         return None
     m = Member(name=name, tier=n.tier, desc=n.description, dsconf=n.dsconf,
                key=key, epoch=epoch, nfiles=nfiles)
@@ -177,9 +282,11 @@ def _walk_down(root_member: Member, source, cat: Catalog):
     while frontier:
         parent = frontier.pop()
         for child, n in source.children(parent.name).items():
+            cat.record_edge(child, parent.name)
             m = cat.members.get(child)
             if m is None:
-                m = _make_member(child, n, parent.epoch, cat)
+                m = _make_member(child, n, parent.epoch, cat,
+                                 where=f', a child of {parent.name}')
                 if m is None:
                     continue
                 frontier.append(m)
@@ -192,7 +299,13 @@ def _walk_down(root_member: Member, source, cat: Catalog):
                 for p in source.parents(child):
                     if p.startswith('cnf.'):
                         m.cnf_parents.add(p)
-                    elif p not in cat.members and p != parent.name:
+                        continue
+                    # recorded on the catalog whatever happens to it below:
+                    # `m.inputs` drops a parent that later becomes a member,
+                    # and that dropped edge was one of new-C2's routes to a
+                    # live member the liveness test could not see
+                    cat.record_edge(child, p)
+                    if p not in cat.members and p != parent.name:
                         m.inputs.add(p)
             m.parents.add(parent.name)
 
@@ -217,18 +330,19 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: Optional[int]):
     (now cached) result, so `descendants` and `inputs`/`parents`
     bookkeeping is recorded for every dig exactly as before dedup.
 
-    With no cap there is no cut and nothing is ever truncated, which is
-    the point: a capped walk leaves a knowingly incomplete input graph,
-    and every attempt to decide per input which parts of an incomplete
-    graph are safe to delete has produced a false DELETE (C1, NEW-1,
-    V1). When a cap IS given, truncation is a property of THIS WALK's
-    cut, never of the node (NEW-1): `explored` used to live on the
-    shared input record, so a node cut off for this dig but already
-    expanded by an earlier dig's walk was left unmarked. Both sets below
-    are local to one walk: a mark another walk set is never cleared
-    here, `build_catalog` propagates the marks up the parent edges
-    afterwards, and `retire()` refuses its whole input section while any
-    mark stands.
+    Every early exit -- the cap, an unparseable parent -- appends to
+    `cat.input_graph_incomplete`, which is what `retire()` reads. The
+    per-walk `truncated` marks below are a per-node DIAGNOSTIC for
+    `lookup` and `publish` and decide nothing: keying the refusal on them
+    left the other severing causes unmarked, and a mark could be
+    destroyed by the input->member reconciliation (I1).
+
+    Truncation is a property of THIS WALK's cut, never of the node
+    (NEW-1): `explored` used to live on the shared input record, so a
+    node cut off for this dig but already expanded by an earlier dig's
+    walk was left unmarked. Both sets below are local to one walk: a mark
+    another walk set is never cleared here, and `build_catalog`
+    propagates the marks up every parent edge afterwards.
 
     `explored` doubles as the per-walk visited set. Without a cap the
     old unconditional re-push would revisit a diamond's shared ancestors
@@ -253,6 +367,10 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: Optional[int]):
             # zero is what makes the boundary a visible decision instead of
             # a silent one.
             cut.add(child)
+            cat.mark_incomplete(
+                INCOMPLETE_CAP,
+                f'{child} was reached at level {level} of {dig.name} and its own parents were '
+                f'never asked for')
             continue
         if child in explored:
             continue
@@ -264,9 +382,15 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: Optional[int]):
                 if child in cat.members:
                     cat.members[child].cnf_parents.add(p)
                 continue
+            cat.record_edge(child, p)
             if p in cat.members:
                 # a member above a dig (a dig-of-dig): a parent edge, never
-                # an input
+                # an input. This walk stops here -- the member's own walk
+                # covers the region above -- so nothing is unread and no
+                # incompleteness is recorded. What WAS wrong until round 4
+                # is that the edge went nowhere when `child` was an input
+                # rather than a member; `cat.record_edge` above now keeps it
+                # for `upward_edges`.
                 if child in cat.members:
                     cat.members[child].parents.add(p)
                 continue
@@ -274,6 +398,13 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: Optional[int]):
                 parse_dsconf(Mu2eName.parse(p).dsconf)
             except DsconfParseError as exc:
                 cat.unparseable.append((p, str(exc)))
+                # the walk stops dead here: p is not recorded as an input and
+                # is never pushed, so everything ABOVE p is unread and any
+                # `descendants` set up there names only the digs that reached
+                # it by some other route (verify-3 C1, upward)
+                cat.mark_incomplete(
+                    INCOMPLETE_UNPARSEABLE,
+                    f'{p} ({exc}), a parent of {child}; everything above it is unread')
                 continue
             rec = cat.inputs.get(p)
             if rec is None:
@@ -312,24 +443,36 @@ def _propagate_truncation(cat: Catalog):
     direction: a truncated input is held back from the retire list, and
     the stderr count then genuinely means "raise --input-depth".
 
+    Propagated over `upward_edges` -- every parent edge the catalog holds,
+    not just `cat.inputs[x]['parents']` (I1). A node that was ONLY ever cut
+    was never expanded, so its own `parents` set is empty and the old
+    single-collection walk carried its mark nowhere; the same node's
+    parents may be recorded on a Member instead. Running before the
+    input->member reconciliation (see `build_catalog`) also removes the
+    order-dependent drop the V2 carry loop had, so that loop is gone.
+
     Pure bookkeeping over data already in the Catalog; no SAM query."""
+    up_edges = upward_edges(cat)
     frontier = [n for n, rec in cat.inputs.items() if rec['truncated']]
+    seen = set(frontier)
     while frontier:
-        rec = cat.inputs.get(frontier.pop())
-        if rec is None:
-            continue
-        for p in rec['parents']:
-            up = cat.inputs.get(p)
-            if up is not None and not up['truncated']:
-                up['truncated'] = True
+        name = frontier.pop()
+        for p in up_edges.get(name, ()):
+            rec = cat.inputs.get(p)
+            if rec is not None:
+                rec['truncated'] = True
+            if p not in seen:
+                seen.add(p)
                 frontier.append(p)
 
 
 def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[str]] = None,
                   input_depth: Optional[int] = None) -> Catalog:
     """`input_depth=None` (the default since 2026-09-04) walks upward to
-    natural closure: no cut, so no input is truncated and the input
-    graph the retire report reasons over is the real one. Real Mu2e
+    natural closure: no CAP cuts the walk. Whether the resulting input
+    graph is COMPLETE is a separate question, answered by
+    `cat.input_graph_incomplete` -- an unparseable name, a foreign owner
+    or a dropped tier severs a walk with no cap in sight. Real Mu2e
     parentage chains are short (dig <- dts <- sim <- ..., about 5-6
     levels), every lineage query is memoized per build, and each node is
     expanded once per walk, so the extra cost is one `parents()` (plus
@@ -368,7 +511,7 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
             # avoids by looking the child up first.
             m = cat.members.get(dig)
             if m is None:
-                m = _make_member(dig, n, epoch, cat)
+                m = _make_member(dig, n, epoch, cat, where=', a dig root')
             elif m.epoch != epoch:
                 # NEW-3: M8's guard (keep the object, keep its accumulated
                 # parents/inputs) also changed WHICH epoch wins — a dig
@@ -388,6 +531,23 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
             _walk_down(m, msource, cat)
             _walk_up(m, msource, cat, input_depth)
     cat.foreign |= getattr(msource, 'foreign', set())
+    # A non-`mu2e` owner never comes back from `SamSource.parents`/`children`
+    # at all, so a user-produced dataset promoted into a production chain
+    # severs the walk exactly as an unparseable name does and the region
+    # beyond it is judged on whatever another walk recorded (verify-3 I2).
+    for name in sorted(cat.foreign):
+        cat.mark_incomplete(INCOMPLETE_FOREIGN,
+                            f'{name} is not owned by {OWNER}, so the source never returned it '
+                            f'and the region beyond it is unread')
+    # DROP_TIERS is dropped from both lineage directions. `log`, `cnf` and
+    # `etc` carry no physics lineage, so dropping them hides no edge -- but
+    # that is a property of WHICH tiers are dropped, not a standing truth,
+    # and a physics tier added to DROP_TIERS later would silently sever the
+    # graph. Enforced rather than commented.
+    for tier in sorted(DROP_TIERS - PROVENANCE_ONLY_TIERS):
+        cat.mark_incomplete(INCOMPLETE_DROPPED_TIER,
+                            f'tier {tier!r} is dropped by the source but is not known to be '
+                            f'provenance-only, so a physics edge may be hidden')
     # a parent recorded as an input before its own walk made it a member
     for m in cat.members.values():
         m.inputs -= set(cat.members)
@@ -397,21 +557,15 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
     # alphabetical, not dependency order); the retire report (a later
     # task) walks cat.inputs keys, so a stale one would misreport a live
     # member as retirable.
-    # V2: carry a deleted record's truncation mark onto its parents
-    # BEFORE the propagation runs. The record about to be dropped may be
-    # exactly where a walk was cut (a dig-of-dig inside one epoch: the
-    # lower dig records the upper one as an input and is cut at it),
-    # and deleting it took its `truncated` flag and its whole `parents`
-    # edge set with it, so the region above inherited nothing.
-    for name in set(cat.inputs) & set(cat.members):
-        rec = cat.inputs.pop(name)
-        if not rec['truncated']:
-            continue
-        for p in rec['parents']:
-            up = cat.inputs.get(p)
-            if up is not None:
-                up['truncated'] = True
+    # I1: propagate BEFORE any record is dropped, over every edge the
+    # catalog holds. V2's carry loop ran after the deletion and read one
+    # edge collection, so a cut node that was never expanded (empty
+    # `parents`) carried its mark nowhere, and a record whose parent had
+    # already been popped dropped it -- order-dependent, therefore
+    # intermittent. Neither is possible now, and the carry loop is gone.
     _propagate_truncation(cat)
+    for name in set(cat.inputs) & set(cat.members):
+        cat.inputs.pop(name)
     _apply_pins(cat)
     return cat
 
