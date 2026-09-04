@@ -11574,6 +11574,49 @@ class TestPushCnfTool(unittest.TestCase):
 # run_submissions tool
 # ---------------------------------------------------------------------------
 
+class TestPython39Compat(unittest.TestCase):
+    """prodtools runs under the Python 3.9 that the Mu2e environment and
+    the gpvm nodes ship. A PEP 604 union in an annotation (`int | None`)
+    is evaluated at function-definition time and raises TypeError on
+    import there -- but imports cleanly on 3.10+, so a developer on a
+    newer interpreter never sees it. One such annotation took every
+    test that imports prodtools_mcp_write.tools down with it (46 tests)
+    and the breakage sat on main unnoticed. Scan the source instead of
+    trusting the interpreter the suite happens to run on."""
+
+    ROOTS = ('utils', os.path.join('mcp', 'src'))
+
+    def test_no_pep604_unions_in_annotations(self):
+        import ast
+        repo = Path(__file__).resolve().parent.parent
+        offenders = []
+        for root in self.ROOTS:
+            for path in sorted((repo / root).rglob('*.py')):
+                tree = ast.parse(path.read_text(), filename=str(path))
+                for node in ast.walk(tree):
+                    anns = []
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        args = node.args
+                        anns = [a.annotation for a in
+                                args.posonlyargs + args.args + args.kwonlyargs
+                                if a.annotation is not None]
+                        for extra in (args.vararg, args.kwarg):
+                            if extra is not None and extra.annotation is not None:
+                                anns.append(extra.annotation)
+                        if node.returns is not None:
+                            anns.append(node.returns)
+                    elif isinstance(node, ast.AnnAssign):
+                        anns = [node.annotation]
+                    for ann in anns:
+                        for sub in ast.walk(ann):
+                            if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.BitOr):
+                                offenders.append(
+                                    f"{path.relative_to(repo)}:{sub.lineno}")
+        self.assertEqual(offenders, [],
+                         'PEP 604 unions break import under Python 3.9; '
+                         'use typing.Optional / typing.Union')
+
+
 class TestRunSubmissionsTool(unittest.TestCase):
     """run_submissions and the ledger-identity helpers it (and push_cnf)
     share. The map-based enqueue_campaign tool was retired with
