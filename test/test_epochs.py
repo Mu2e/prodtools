@@ -1594,6 +1594,28 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn('SAM is down', err)
 
+    def test_sam_error_class_is_empty_when_there_is_no_usable_error(self):
+        # NEW-8: the M11 test above substitutes its own exception class, so
+        # what it pins is the wiring. This pins the property the docstring
+        # claims: when samweb_client exposes nothing usable, the resolver
+        # catches NOTHING rather than degrading to Exception -- a blanket
+        # catch would turn a programming error in the catalog code into a
+        # tidy exit 3 instead of a traceback.
+        import samweb_client
+        from utils.epochs.cli import _sam_error_class
+
+        previous = samweb_client.Error
+        try:
+            samweb_client.Error = 'not a class at all'
+            self.assertEqual(_sam_error_class(), ())
+            samweb_client.Error = ValueError            # a class, and usable
+            self.assertIs(_sam_error_class(), ValueError)
+        finally:
+            samweb_client.Error = previous
+        # the whole suite runs with samweb_client stubbed by a MagicMock,
+        # whose .Error is not a class either: nothing is caught there
+        self.assertEqual(_sam_error_class(), ())
+
     def test_count_warning_goes_to_stderr(self):
         g = _small_graph()
         g[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']['n'] = 10     # winner, thin

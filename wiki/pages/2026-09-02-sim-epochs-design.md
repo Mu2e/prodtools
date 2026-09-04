@@ -123,7 +123,13 @@ re-reco'd; no `ar` digs exist), so the epoch name is not the reco tag.
 - `pins` are the escape hatch for the rare case the rule gets wrong:
   exclude a dataset, hold one dataset or generation as a reference,
   override a dsconf ordering inversion. Every pin carries a free-text
-  `reason` that reports print verbatim.
+  `reason` that reports print verbatim. **A pin of any kind that matches
+  nothing is a refusal, not a no-op** (2026-09-04): an `exclude`/`hold`
+  naming an unknown dataset, an `order` pin whose group no member
+  competes in, a `not_expected` pin naming a desc no dig of the epoch
+  has — each is reported and makes `retire` refuse, because a protection
+  the human believes they placed and does not have is how a live dataset
+  reaches a delete list.
 - **Renames are manual (Yuri, 2026-09-03).** There is no `supersedes`
   relation across desc names and no inference: `RMCExternalOnSpill@ar`
   replaced by `RMCPhaseSpace*@au` stays current until a person writes
@@ -137,8 +143,8 @@ Members are computed, never listed by hand.
 1. **Members = parentage closure of the roots**, walking children in
    metacat. dts (and anything above the roots) are recorded as `inputs`,
    not members.
-2. **Group key = (family, tier, desc, purpose)**, where family is the
-   leading dsconf token (`MDC2025`, `Run1B`). Status crosses epochs
+2. **Group key = (family, tier, desc, purpose)** for a lettered member,
+   where family is the leading dsconf token (`MDC2025`, `Run1B`). Status crosses epochs
    (grill, 2026-09-03): `CeEndpointOnSpill@ar` and `@au` are in
    different epochs and must still compete, or Sophie gets two current
    answers. `CosmicCalibOnSpill@ar`, with no `au` sibling, stays current
@@ -152,7 +158,17 @@ Members are computed, never listed by hand.
    re-digitized under the same letters must supersede the old dig, and
    an nts re-made from `mcs@au_best_v1_5` must supersede the one from
    `mcs@au_best_v1_1`. With the parent in the key both would stay
-   current. Parent is used only for status propagation (rule 4).
+   current. Parent is used only for status propagation (rule 4). A
+   `purpose=None` member — the dead own-series `MDC20xx-NNN` convention,
+   rule 3 — has no purpose to key on, so it is NOT a plain 4-tuple key:
+   it competes in EVERY purpose group of its `(family, tier, desc)` and
+   ranks lowest in each (implemented 2026-09-04, `status.groups`), and
+   with no lettered sibling at all it keeps a group of its own and stays
+   current. Keying it strictly on the 4-tuple gave it a group nothing
+   could ever supersede it in, and the 2026-09-03 run published two
+   simultaneously current answers on 15 `(family, tier, desc)` lines.
+   Because it competes in several groups, winning ANY of them makes it
+   current — which is what an `order` pin naming it is placed to do.
 3. **Within a group, newest dsconf is `current`, older siblings are
    `superseded`.** "Newest" is PARSED dsconf order, never a clock:
    grammar `<family><letters><rev?>_<purpose>_v<N>_<M>[-NNN]`, compared
@@ -460,7 +476,7 @@ The part I expect you to push on: roots = dig rather than geometry+conditions. W
 |---|---|---|
 | 1 | Primary output | Per-dataset status, derived. Epoch is a grouping on top. |
 | 2 | Epoch identity | Dig root patterns, purpose and version wildcarded. |
-| 3 | Group key | `(family, tier, desc, purpose)`; parent NOT in the key. |
+| 3 | Group key | `(family, tier, desc, purpose)` for a lettered member; parent NOT in the key. A `purpose=None` (own-series) member competes in every purpose group of its base triple and ranks lowest in each. |
 | 4 | "Newest" | Parsed dsconf order. No timestamps anywhere. File count is the one warning. |
 | 5 | Status set | current / stale / superseded. Stale = newest but parent moved on; never retired. |
 | 6 | Generation source | cnf declared as SAM parent (ADR 0003); everything else via the cnf index built from `tbs.outfiles`. Logs are NOT read. |
