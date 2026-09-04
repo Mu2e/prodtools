@@ -228,6 +228,29 @@ class FakeSource:
         return self.cnfs.get(filename) or self.files.get(filename, '')
 
 
+class OwnerPolicyFakeSource(FakeSource):
+    """FakeSource plus `SamSource`'s OWNER policy: a dataset whose owner is
+    not `mu2e` goes into `.foreign` and is never returned from `children`
+    or `parents`.
+
+    That is how a user-produced dataset promoted into a production chain
+    severs both walks in reality (verify-3 I2): the walk cannot see it, so
+    it cannot walk above it, and the region beyond it is judged on
+    whatever some other walk recorded. Plain `FakeSource` hands foreign
+    parents back happily, which is why the suite never reproduced it."""
+    def _keep(self, name):
+        if name.split('.')[1] != 'mu2e':
+            self.foreign.add(name)
+            return False
+        return True
+
+    def children(self, dataset):
+        return {c: n for c, n in super().children(dataset).items() if self._keep(c)}
+
+    def parents(self, dataset):
+        return {p: n for p, n in super().parents(dataset).items() if self._keep(p)}
+
+
 class TestGroupFiles(unittest.TestCase):
     def test_groups_by_dataset_and_drops_log_cnf_etc(self):
         names = ['mcs.mu2e.A.MDC2025au_best_v1_5.001430_00000000.art',
@@ -851,8 +874,10 @@ class TestStatus(unittest.TestCase):
         self.assertIn(('MDC2025', 'nts', 'CeEndpointOnSpill', 'best'), groups(cat))
 
 
+from utils.epochs import reports as reports_mod
 from utils.epochs.reports import (gaps, retire, purge_lines, lookup, EXPECTED_TIERS,
-                                  input_retirement_refusal, truncated_inputs)
+                                  incomplete_reasons, input_retirement_refusal, live_datasets,
+                                  truncated_inputs)
 
 
 class TestGaps(unittest.TestCase):
@@ -1324,6 +1349,348 @@ class TestRetire(unittest.TestCase):
         self.assertIn(' NONE ', purge_lines([leaf])[0])
 
 
+# --- round 4: the two root causes behind six Criticals ------------------
+#
+# A. liveness read ONE of the several edge sets the catalog holds.
+# B. incompleteness was tracked for ONE of the several causes that sever
+#    a walk.
+#
+# The helpers below reimplement, in the test, the catalog's own edges and
+# the OLD rule, so the property test asserts the safety class against data
+# rather than against the code that produced it.
+
+
+def _catalog_down_edges(cat):
+    """Every (parent -> child) edge the catalog holds, rebuilt HERE from
+    the four collections the catalog exposes: `Member.parents`,
+    `Member.inputs`, `cat.inputs[x]['parents']` and the dig `descendants`
+    sets. It deliberately does NOT call `graph.upward_edges` -- the
+    property has to be checked against the catalog's data, not against
+    the map the code under test builds from it."""
+    down = {}
+    for m in cat.members.values():
+        for p in m.parents:
+            down.setdefault(p, set()).add(m.name)
+        for p in m.inputs:
+            down.setdefault(p, set()).add(m.name)
+    for name, rec in cat.inputs.items():
+        for p in rec['parents']:
+            down.setdefault(p, set()).add(name)
+        for d in rec['descendants']:
+            down.setdefault(name, set()).add(d)
+    return down
+
+
+def _graph_down_edges(g):
+    """Ground truth: the (parent -> child) edges of the FakeSource graph
+    itself, which is what SAM would say. Stronger than the catalog's own
+    edges, because a catalog that dropped an edge cannot hide from it."""
+    return {n: set(rec.get('children', [])) for n, rec in g.items()}
+
+
+def _reachable(down, start):
+    seen, frontier = set(), [start]
+    while frontier:
+        for c in down.get(frontier.pop(), ()):
+            if c not in seen:
+                seen.add(c)
+                frontier.append(c)
+    return seen
+
+
+def _live_member_names(cat):
+    return {m.name for m in cat.members.values()
+            if m.status in ('current', 'stale', 'excluded')}
+
+
+def _descendants_only_live_inputs(cat):
+    """The rule `retire()` used before round 4, verbatim: propagate
+    liveness up MEMBER-PARENT edges only, then keep an input whose
+    `descendants` set (the digs its upward walk started from) meets it.
+    Kept so the property test can PROVE its generator reproduces the bug
+    class instead of asserting a property nothing violates."""
+    live, frontier = set(), [m for m in cat.members.values()
+                             if m.status in ('current', 'stale', 'excluded')]
+    while frontier:
+        m = frontier.pop()
+        if m.name in live:
+            continue
+        live.add(m.name)
+        for p in m.parents:
+            pm = cat.members.get(p)
+            if pm is not None:
+                frontier.append(pm)
+    return {n for n, rec in cat.inputs.items()
+            if any(d in live for d in rec['descendants'])}
+
+
+class TestInputRetirementSafety(unittest.TestCase):
+    """`retire()` must never name an input that something live consumes.
+
+    Six Criticals on this branch had that one outcome. The tests here are
+    the reported instances; the property test at the end is the class.
+    """
+    AU_DIG = f'dig.mu2e.CeEndpointOnSpill.{AU}.art'
+    AN_DIG = f'dig.mu2e.CeEndpointOnSpill.{AN}.art'
+    MCS_AU = f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'
+
+    def test_input_of_a_current_member_below_a_superseded_dig_is_never_listed(self):
+        # verify-3 C2, root cause A. `_walk_down` records a downstream
+        # member's non-member parents on `Member.inputs` -- the catalog
+        # KNOWS the consumer -- and `retire()` tested `rec['descendants']`,
+        # which only ever holds the dig each UPWARD walk started from.
+        # Nothing walks upward from a non-dig member, so closure and the
+        # cap are both irrelevant: PIL feeds the current mcs and was
+        # proposed for DELETE because the only walk that reached it
+        # started at the superseded dig.
+        g = _small_graph()
+        g['dts.mu2e.QQ.MDC2025af.art'] = {'n': 10, 'children': [self.AN_DIG]}
+        g['sim.mu2e.PIL.MDC2025af.art'] = {'n': 10, 'children': [self.MCS_AU,
+                                                                 'dts.mu2e.QQ.MDC2025af.art']}
+        cat = _cat(g)
+        self.assertEqual(incomplete_reasons(cat), [])
+        self.assertEqual(input_retirement_refusal(cat), '')   # nothing is withheld
+        self.assertEqual(cat.members[self.MCS_AU].status, 'current')
+        self.assertEqual(sorted(cat.members[self.MCS_AU].inputs), ['sim.mu2e.PIL.MDC2025af.art'])
+        self.assertEqual(sorted(cat.inputs['sim.mu2e.PIL.MDC2025af.art']['descendants']),
+                         [self.AN_DIG])          # the old test's only view
+        self.assertIn('sim.mu2e.PIL.MDC2025af.art', live_datasets(cat))
+        listed = {x['dataset'] for x in retire(cat)}
+        self.assertNotIn('sim.mu2e.PIL.MDC2025af.art', listed)
+        # and the section is NOT suppressed: QQ, which really is an orphan
+        # of the superseded dig, is still proposed
+        self.assertIn('dts.mu2e.QQ.MDC2025af.art', listed)
+
+    def test_input_of_a_current_member_reached_only_past_a_dig_of_dig_is_never_listed(self):
+        # The same defect via `_walk_up`'s already-a-member exit:
+        #   dig BBB@au -> I2 -> I1 -> dig LLL@au   and   PIL -> I2, PIL -> QQ -> dig@an
+        # BBB sorts first, so its downward walk makes I1/I2 members before
+        # LLL's upward walk runs; LLL's walk then stops at the member I1
+        # and never learns about PIL, whose only `descendants` entry is the
+        # superseded dig.
+        g = _small_graph()
+        g[f'dig.mu2e.BBB.{AU}.art'] = {'n': 10, 'children': ['dts.mu2e.I2.MDC2025af.art']}
+        g['dts.mu2e.I2.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.I1.MDC2025af.art']}
+        g['dts.mu2e.I1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.LLL.{AU}.art']}
+        g[f'dig.mu2e.LLL.{AU}.art'] = {'n': 10, 'children': []}
+        g['dts.mu2e.QQ.MDC2025af.art'] = {'n': 10, 'children': [self.AN_DIG]}
+        g['sim.mu2e.PIL.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.I2.MDC2025af.art',
+                                                                 'dts.mu2e.QQ.MDC2025af.art']}
+        cat = _cat(g)
+        self.assertEqual(cat.epoch_conflicts, [])
+        self.assertEqual(cat.members['dts.mu2e.I2.MDC2025af.art'].status, 'current')
+        self.assertNotIn('sim.mu2e.PIL.MDC2025af.art', {x['dataset'] for x in retire(cat)})
+
+    def test_an_unparseable_ancestor_refuses_the_whole_input_section(self):
+        # verify-3 C1 upward, root cause B. `parse_dsconf` fails, the
+        # parent is never pushed, and everything above it keeps a
+        # `descendants` set naming only the digs that reached it some other
+        # way. That is C1/NEW-1/V1 with an unparseable name where the cap
+        # used to be, at the DEFAULT with no --input-depth anywhere.
+        g = _small_graph()
+        g[f'dig.mu2e.Chain.{AU}.art'] = {'n': 10, 'children': []}
+        g['dts.mu2e.P1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.Chain.{AU}.art']}
+        g['sim.mu2e.Legacy.1502.art'] = {'n': 10, 'children': ['dts.mu2e.P1.MDC2025af.art']}
+        g['dts.mu2e.QQ.MDC2025af.art'] = {'n': 10, 'children': [self.AN_DIG]}
+        g['sim.mu2e.NN.MDC2025af.art'] = {'n': 10, 'children': ['sim.mu2e.Legacy.1502.art',
+                                                                'dts.mu2e.QQ.MDC2025af.art']}
+        cat = _cat(g)
+        self.assertIsNone(cat.input_depth)
+        self.assertEqual(truncated_inputs(cat), [])       # no cap, no mark
+        self.assertTrue(cat.input_graph_incomplete)       # but not complete either
+        msg = input_retirement_refusal(cat)
+        self.assertIn('unparseable dsconf', msg)
+        self.assertIn('NO input is proposed', msg)
+        self.assertIn('No flag bypasses this', msg)
+        rows = retire(cat)
+        self.assertEqual([r for r in rows if r['kind'] == 'input'], [])
+        self.assertTrue([r for r in rows if r['kind'] == 'member'])   # members unaffected
+
+    def test_an_unparseable_child_refuses_the_whole_input_section(self):
+        # The same, downward: `_make_member` returns None, the whole
+        # subtree below the bad child vanishes, a live nts under a
+        # superseded dig becomes invisible and the dig's input reads as an
+        # orphan.
+        g = _small_graph()
+        g[self.AN_DIG]['children'] = ['mcs.mu2e.CeEndpointOnSpill.1502.art']
+        g['mcs.mu2e.CeEndpointOnSpill.1502.art'] = {
+            'n': 50, 'children': [f'nts.mu2e.OtherLine.{AU}.root']}
+        g[f'nts.mu2e.OtherLine.{AU}.root'] = {'n': 50, 'children': []}
+        g['dts.mu2e.QQ.MDC2025af.art'] = {'n': 10, 'children': [self.AN_DIG]}
+        cat = _cat(g)
+        self.assertNotIn(f'nts.mu2e.OtherLine.{AU}.root', cat.members)
+        self.assertTrue(cat.input_graph_incomplete)
+        self.assertNotIn('dts.mu2e.QQ.MDC2025af.art', {x['dataset'] for x in retire(cat)})
+
+    def test_a_foreign_owner_ancestor_refuses_the_whole_input_section(self):
+        # verify-3 I2. `SamSource.parents` never returns a non-mu2e parent,
+        # so the walk cannot see it and cannot walk above it -- C1's
+        # mechanism with a different trigger. Needs a source that applies
+        # the real owner policy.
+        g = _small_graph()
+        g[f'dig.mu2e.Chain.{AU}.art'] = {'n': 10, 'children': []}
+        g['dts.mu2e.P1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.Chain.{AU}.art']}
+        g['sim.oksuzian.Private.MDC2025af.art'] = {'n': 10,
+                                                   'children': ['dts.mu2e.P1.MDC2025af.art']}
+        g['dts.mu2e.QQ.MDC2025af.art'] = {'n': 10, 'children': [self.AN_DIG]}
+        g['sim.mu2e.NN.MDC2025af.art'] = {'n': 10,
+                                          'children': ['sim.oksuzian.Private.MDC2025af.art',
+                                                       'dts.mu2e.QQ.MDC2025af.art']}
+        eps = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+        cat = assign_status(build_catalog(eps, OwnerPolicyFakeSource(g), ['MDC2025']))
+        self.assertEqual(sorted(cat.foreign), ['sim.oksuzian.Private.MDC2025af.art'])
+        self.assertEqual(truncated_inputs(cat), [])
+        self.assertIn('foreign-owner dataset', input_retirement_refusal(cat))
+        self.assertEqual([r for r in retire(cat) if r['kind'] == 'input'], [])
+
+    def test_a_cut_that_leaves_no_truncation_mark_still_refuses(self):
+        # verify-3 I1. The cut node was never expanded, so it had no
+        # `parents` edges to carry its mark, and the input->member
+        # reconciliation then popped the record and the mark with it:
+        # `truncated_inputs()` came back EMPTY from a genuinely cut walk.
+        # The register records the cut where it happens, so it survives.
+        g = _small_graph()
+        g[f'dig.mu2e.ZZZ.{AU}.art'] = {'n': 10, 'children': ['dts.mu2e.X.MDC2025af.art']}
+        g['dts.mu2e.X.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.I2.MDC2025af.art']}
+        g['dts.mu2e.I2.MDC2025af.art'] = {'n': 10, 'children': ['dts.mu2e.I1.MDC2025af.art']}
+        g['dts.mu2e.I1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.AAA.{AU}.art']}
+        g[f'dig.mu2e.AAA.{AU}.art'] = {'n': 10, 'children': []}
+        cat = _cat(g, input_depth=3)
+        self.assertEqual(truncated_inputs(cat), [])        # the mark really is gone
+        self.assertTrue(cat.input_graph_incomplete)        # the register is not
+        self.assertIn('--input-depth 3', input_retirement_refusal(cat))
+        self.assertEqual([r for r in retire(cat) if r['kind'] == 'input'], [])
+
+    def test_input_depth_zero_refuses_instead_of_an_empty_input_picture(self):
+        # verify-3 M1: at depth 0 the dig itself is cut at level 0, nothing
+        # is ever recorded in cat.inputs, and there was no record to carry
+        # a flag -- so the refusal was VACUOUSLY satisfied and a consumer
+        # read "this catalog has no inputs". The register is set at the cut,
+        # not on a record, so it fires.
+        for depth in (0, -1):
+            cat = _cat(_deep_graph(), input_depth=depth)
+            self.assertEqual(cat.inputs, {})
+            self.assertTrue(cat.input_graph_incomplete, depth)
+            self.assertIn('NO input is proposed', input_retirement_refusal(cat))
+
+    def test_liveness_has_exactly_one_implementation(self):
+        # Root cause A restated as a structural check: `retire()` must have
+        # no second way to decide liveness. Every fix so far patched the
+        # `descendants` path while another edge collection kept its own
+        # route to the same wrong answer.
+        import inspect
+        body = inspect.getsource(reports_mod.retire).split('"""')[-1]
+        code = [ln.split('#', 1)[0].strip() for ln in body.splitlines()]
+        self.assertIn('live = live_datasets(cat)', code)
+        self.assertIn('if name in live:', code)
+        # `descendants` may still be REPORTED (the `children` column of the
+        # purge line); it may never be read to decide anything
+        for line in code:
+            if 'descendants' in line:
+                self.assertTrue(line.startswith("'children'"), line)
+        self.assertNotIn('_live_reaching', dir(reports_mod))
+
+    # -- the property ----------------------------------------------------
+
+    def _random_graph(self, rnd, trial):
+        """A small production-shaped graph with the shapes that produced
+        Criticals: varying depth, shared ancestors, dig-of-dig, unparseable
+        names, foreign owners, input-level cycles, downstream members with
+        an extra non-member parent, and mixed statuses (the `an` dig and
+        its reco chain are superseded by the `au` one)."""
+        g = _small_graph()
+        anchors = [self.AU_DIG, self.AN_DIG]
+        if rnd.random() < 0.4:
+            extra = f'dig.mu2e.X{trial}.{AU}.art'
+            g[extra] = {'n': 10, 'children': []}
+            anchors.append(extra)
+        made = []
+        for c in range(rnd.randint(1, 3)):
+            prev = rnd.choice(anchors)
+            for lvl in range(rnd.randint(1, 4)):
+                name = f'dts.mu2e.T{trial}C{c}L{lvl}.MDC2025af.art'
+                kids = [prev]
+                if made and rnd.random() < 0.3:
+                    kids.append(rnd.choice(made))        # diamond
+                if rnd.random() < 0.25:
+                    kids.append(self.MCS_AU)             # C2: a live member
+                    #                                      gains a non-member parent
+                g[name] = {'n': 10, 'children': kids}
+                made.append(name)
+                prev = name
+            if rnd.random() < 0.3:                       # dig-of-dig above the chain
+                g[f'dig.mu2e.D{trial}C{c}.{AU}.art'] = {'n': 10, 'children': [prev]}
+        if made and rnd.random() < 0.3:                  # legacy name, parses nowhere
+            g[f'sim.mu2e.U{trial}.1502.art'] = {'n': 10, 'children': [rnd.choice(made)]}
+        if made and rnd.random() < 0.25:                 # a user-owned ancestor
+            g[f'sim.oksuzian.F{trial}.MDC2025af.art'] = {'n': 10, 'children': [rnd.choice(made)]}
+        if len(made) > 1 and rnd.random() < 0.2:         # a parentage cycle
+            a, b = rnd.sample(made, 2)
+            g[a]['children'].append(b)
+            g[b]['children'].append(a)
+        return g
+
+    def test_property_no_listed_input_can_reach_a_live_member(self):
+        """THE safety property, asserted against data rather than against
+        the `if` that implements it.
+
+        For every catalog built, at every cap: no dataset appears in
+        `retire()`'s input lines if any `current`, `stale` or `excluded`
+        member is reachable from it -- over the catalog's own edges, and
+        over the source graph itself.
+
+        The predecessor of this test asserted "`truncated` non-empty =>
+        no input rows", which restates `reports.py`'s one refusal `if` over
+        one topology; it was green while two Criticals were live.
+        """
+        import random
+        rnd = random.Random(20260904)
+        eps = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
+        rows_seen = refusals_seen = old_rule_false_deletes = skipped = 0
+        for trial in range(60):
+            g = self._random_graph(rnd, trial)
+            gdown = _graph_down_edges(g)
+            for depth in (None, 2, 3, 5):
+                try:
+                    cat = assign_status(build_catalog(eps, OwnerPolicyFakeSource(g),
+                                                      ['MDC2025'], input_depth=depth))
+                    rows = retire(cat)
+                except ValueError:
+                    # a member-level parentage cycle, or a catalog
+                    # `retire()` refuses whole: both are safe outcomes
+                    skipped += 1
+                    continue
+                where = f'trial {trial} depth {depth}'
+                down = _catalog_down_edges(cat)
+                live = _live_member_names(cat)
+                if input_retirement_refusal(cat):
+                    refusals_seen += 1
+                    self.assertEqual([r for r in rows if r['kind'] == 'input'], [], where)
+                for r in rows:
+                    if r['kind'] != 'input':
+                        continue
+                    rows_seen += 1
+                    self.assertEqual(_reachable(down, r['dataset']) & live, set(),
+                                     f'{where}: listed {r["dataset"]}, which reaches a live '
+                                     f'member over the catalog own edges')
+                    self.assertEqual(_reachable(gdown, r['dataset']) & live, set(),
+                                     f'{where}: listed {r["dataset"]}, which reaches a live '
+                                     f'member in the source graph')
+                # non-vacuity for the CLASS: how often the pre-round-4 rule
+                # (member-parent edges + `descendants` only) would have
+                # named an input that something live actually consumes
+                old_kept = _descendants_only_live_inputs(cat)
+                for name in cat.inputs:
+                    if name not in old_kept and (_reachable(down, name) & live):
+                        old_rule_false_deletes += 1
+        self.assertGreater(rows_seen, 0, 'generator never produced an input row')
+        self.assertGreater(refusals_seen, 0, 'generator never produced an incomplete graph')
+        self.assertGreater(old_rule_false_deletes, 0,
+                           'generator never reproduced the bug class: the old '
+                           'descendants-only rule would not have mis-listed anything')
+        self.assertGreater(skipped, -1)
+
+
 class TestLookup(unittest.TestCase):
     def test_member_and_input_and_unknown(self):
         cat = _cat()
@@ -1742,6 +2109,70 @@ class TestCli(unittest.TestCase):
         self.assertIn('NO input is proposed', err)
         # members are unaffected by the cap
         self.assertTrue(out.startswith('DELETE - - '))
+
+    def test_a_known_incomplete_input_graph_is_refused_through_every_verb(self):
+        # CLI reachability is the gate that has actually caught things on
+        # this branch: the suite was green three times while a Critical was
+        # live. `retire`, `members`, `lookup` and `publish` are all driven
+        # end to end here against the unparseable-ancestor graph, which
+        # produced a false DELETE at the DEFAULT settings (verify-3 C1).
+        g = _small_graph()
+        g[f'dig.mu2e.Chain.{AU}.art'] = {'n': 10, 'children': []}
+        g['dts.mu2e.P1.MDC2025af.art'] = {'n': 10, 'children': [f'dig.mu2e.Chain.{AU}.art']}
+        g['sim.mu2e.Legacy.1502.art'] = {'n': 10, 'children': ['dts.mu2e.P1.MDC2025af.art']}
+        g['dts.mu2e.QQ.MDC2025af.art'] = {
+            'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        g['sim.mu2e.NN.MDC2025af.art'] = {'n': 10, 'children': ['sim.mu2e.Legacy.1502.art',
+                                                                'dts.mu2e.QQ.MDC2025af.art']}
+        rc, out, err = _run(['retire'], FakeSource(g), self.d)
+        self.assertEqual(rc, 0)
+        self.assertNotIn('sim.mu2e.NN.MDC2025af.art', out)
+        self.assertNotIn('dts.mu2e.QQ.MDC2025af.art', out)
+        self.assertTrue(out.startswith('DELETE - - '))          # members survive
+        self.assertIn('input retirement refused', err)
+        self.assertIn('unparseable dsconf', err)
+        self.assertIn('No flag bypasses this', err)
+
+        rc, out, err = _run(['members'], FakeSource(g), self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn(f'dig.mu2e.Chain.{AU}.art', out)
+        self.assertIn('input retirement refused', err)
+
+        rc, out, _ = _run(['lookup', 'sim.mu2e.NN.MDC2025af.art'], FakeSource(g), self.d)
+        self.assertEqual(rc, 0)
+        info = json.loads(out)
+        self.assertEqual(info['kind'], 'input')
+        self.assertIn('NO input is proposed', info['input_retirement_refused'])
+
+        out_path = os.path.join(_tmpdir(), 'doc.json')
+        rc, out, _ = _run(['publish', '--out', out_path], FakeSource(g), self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn('members only', out)
+        doc = json.load(open(out_path))
+        self.assertTrue(doc['input_graph_incomplete'])
+        self.assertIsNone(doc['input_depth'])
+        self.assertIn('NO input is proposed', doc['input_retirement_refused'])
+        self.assertEqual([r for r in doc['retire'] if r['kind'] == 'input'], [])
+
+    def test_an_input_of_a_current_member_survives_retire_through_the_cli(self):
+        # verify-3 C2 end to end: PIL feeds the current mcs (the catalog
+        # records it on `Member.inputs`) and is also an ancestor of the
+        # superseded dig. The input section is NOT refused here -- the
+        # graph is complete -- so this checks the liveness relation itself,
+        # not the guard.
+        g = _small_graph()
+        g['dts.mu2e.QQ.MDC2025af.art'] = {
+            'n': 10, 'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        g['sim.mu2e.PIL.MDC2025af.art'] = {
+            'n': 10, 'children': [f'mcs.mu2e.CeEndpointOnSpill.{AU}.art',
+                                  'dts.mu2e.QQ.MDC2025af.art']}
+        rc, out, err = _run(['retire'], FakeSource(g), self.d)
+        self.assertEqual(rc, 0)
+        self.assertNotIn('input retirement refused', err)
+        self.assertNotIn('sim.mu2e.PIL.MDC2025af.art', out)
+        self.assertIn('dts.mu2e.QQ.MDC2025af.art', out)
+        rc, out, _ = _run(['lookup', 'sim.mu2e.PIL.MDC2025af.art'], FakeSource(g), self.d)
+        self.assertTrue(json.loads(out)['live'])
 
     def test_lookup_unknown_is_nonzero(self):
         rc, out, _ = _run(['lookup', 'nope.mu2e.a.b.art'], self.src, self.d)
