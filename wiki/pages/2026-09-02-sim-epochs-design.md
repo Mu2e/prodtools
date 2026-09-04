@@ -215,17 +215,37 @@ Members are computed, never listed by hand.
    retirable when no `current` or `stale` member descends from it, and
    it is not held. An `excluded` member counts as a live descendant
    (2026-09-04): the tool refuses to delete it, so it must not propose
-   deleting what made it. The upward walk runs to natural closure by
-   default (2026-09-04), so the input graph this rule is applied to is
-   the real one; `--input-depth N` survives only as an explicit opt-in
-   cap for a cheap partial run, and when a capped walk truncates
-   anything the retire report proposes NO input at all — a partial
-   input graph yields no input retirement proposals, the same
-   fail-closed refusal the report already makes on an incomplete
-   catalog. That replaced three rounds of per-input truncation
-   detectors: each was correct for the shape it was shown, and the next
-   review found another shape of incompleteness reaching the same false
-   DELETE. Guard, letters only, no clock: an input whose
+   deleting what made it.
+
+   "No `current` or `stale` member descends from it" is decided by ONE
+   relation over EVERY parentage edge the catalog holds (2026-09-04,
+   round 4). The catalog records the same DAG several ways —
+   `Member.parents`, `Member.inputs` (the parents of a downstream member
+   that no walk claimed), `cat.inputs[x]['parents']`, the dig
+   `descendants` sets — and reading the `descendants` set alone, which
+   names only the dig each upward walk started from, proposed deleting
+   an input that a `current` mcs below a superseded dig consumes. Every
+   fix before round 4 patched that one path while the other edges kept
+   their own route to the same false DELETE.
+
+   The upward walk runs to natural closure by default (2026-09-04), so
+   no CAP cuts it; `--input-depth N` survives only as an explicit opt-in
+   cap for a cheap partial run. No cap is not a complete graph: the cap,
+   an unparseable dsconf above or below a member, a non-`mu2e` owner in
+   the lineage and a dropped tier all sever a walk identically. All of
+   them go in one register, and while it is non-empty the retire report
+   proposes NO input at all — the same fail-closed refusal it already
+   makes on an incomplete catalog. That replaced four rounds of
+   per-input truncation detectors: each was correct for the shape it was
+   shown, and the next review found another shape of incompleteness
+   reaching the same false DELETE.
+
+   **Expect the input section to be refused on real data.** 30 legacy
+   dsconfs did not parse in the 2026-09-03 pre-flight, so a production
+   `epochs retire` will very likely report members only. That is the
+   correct outcome, not a bug to design around, and there is
+   deliberately no flag to bypass it; the remedy is to make the names
+   parseable (a dsconf grammar extension is tracked separately). Guard, letters only, no clock: an input whose
    dsconf letters outrank the family's newest epoch (a fresh `dts@av`
    awaiting its mix while `au` is newest) is never listed.
 

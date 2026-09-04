@@ -248,7 +248,9 @@ When regenerating, read in this order:
       under keeps its own corrected epoch, but the members below it
       still carry the inherited one — which is the reason `retire` is
       `null`), and while `input_retirement_refused` is a non-empty
-      string `retire` carries member candidates only). `--family` and
+      string `retire` carries member candidates only, with
+      `input_graph_incomplete` listing the reasons and `input_depth`
+      naming the cap that was in force, `null` for a closure walk). `--family` and
       `--epoch` filter which rows a verb PRINTS — every verb still
       judges the complete catalog discovered from SAM, so a filtered
       `retire` cannot omit a cross-family dependency. Say exactly which
@@ -260,10 +262,12 @@ When regenerating, read in this order:
       neither; `publish` takes only `--out`. `--input-depth N`
       is a top-level flag, before the verb, and caps how far above a dig
       the input walk goes; by DEFAULT it is unset and the walk runs to
-      natural closure — the top of the real parentage DAG — so the input
-      graph `retire` reasons over is complete. Setting it is an explicit
-      opt-in to a cheap partial run, and it costs the whole input
-      section of `retire` (below). `status` is
+      natural closure — the top of the real parentage DAG — so no cap
+      cuts it. Setting it is an explicit opt-in to a cheap partial run,
+      and it costs the whole input section of `retire` (below). No cap
+      is NOT the same as a complete input graph: an unparseable dsconf,
+      a non-`mu2e` owner in the lineage or a dropped tier severs a walk
+      with no cap in sight, and costs the input section just the same. `status` is
       `current | stale | superseded`, always recomputed from SAM,
       never stored in the epoch file; `frozen` is an epoch standing (a
       hold against deletion), never a dataset status. No timestamps
@@ -284,19 +288,33 @@ When regenerating, read in this order:
       not be applied (it names nothing in the catalog, or something
       owned by another epoch) — and names the remedy
       (`propose --family F`) in the refusal; a dropped protection pin is
-      a refusal, never a silent no-op. When `--input-depth` was given and
-      anything was truncated — the node a walk stopped at, or anything
-      above one — `retire` proposes NO input at all, not "every input
-      except the marked ones": a partial input graph yields no input
-      retirement proposals, the same fail-closed refusal as an
-      incomplete catalog, and the reason is printed on stderr
-      (`input retirement refused: ...`) and carried in the published
-      document's `input_retirement_refused` key. The member section is
-      unaffected. Re-running without `--input-depth` walks to closure
-      and restores the input section. Say this rather than "N inputs
-      were held back": a non-zero frontier count means the upward
-      picture is incomplete, and which OTHER inputs that makes unsafe
-      cannot be read off the count. A pin of ANY kind that matches
+      a refusal, never a silent no-op. Whenever the input
+      graph is KNOWN-INCOMPLETE — the `--input-depth` cap cut a walk, a
+      dsconf above or below a member failed to parse, a dataset in the
+      lineage is not owned by `mu2e`, or a dropped tier might carry
+      lineage — `retire` proposes NO input at all, not "every input
+      except the marked ones": a known-incomplete input graph yields no
+      input retirement proposals, the same fail-closed refusal as an
+      incomplete catalog. The reason is printed on stderr
+      (`input retirement refused: ...`, with the count of places by
+      kind and the remedy for each kind present), carried in the
+      published document's `input_retirement_refused` key with the
+      machine-readable `input_graph_incomplete` list beside it, and
+      included in `lookup`'s payload for an input. The member section is
+      unaffected — a member is judged by its own status, never by what
+      reaches it. Document that this is EXPECTED to fire on production
+      data (30 dsconfs did not parse in the 2026-09-03 pre-flight) and
+      that there is deliberately NO flag to bypass it: an input cannot
+      be shown unused while part of the lineage is unreadable. The
+      remedy depends on the cause — re-run without `--input-depth` for a
+      cap, make the names parseable for the rest. Say this rather than
+      "N inputs were held back": the counts name places the graph is
+      unread, and which inputs that makes unsafe cannot be read off
+      them. Liveness itself is one relation over every parentage edge
+      the catalog holds — a dataset is kept whenever any current, stale
+      or excluded member is reachable from it, including through a
+      downstream member's own recorded parents, not only through the dig
+      an upward walk started from. A pin of ANY kind that matches
       nothing — a `hold`/`exclude` naming an unknown dataset, an `order`
       pin whose group no member competes in, a `not_expected` pin naming
       a desc no dig of the epoch has — is a refusal, not a no-op; a
