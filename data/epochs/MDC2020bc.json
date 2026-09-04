@@ -1,0 +1,15 @@
+{
+  "name": "MDC2020bc",
+  "purpose": "SimJob/MDC2020bc, Offline v10_48_00",
+  "status": "frozen",
+  "roots": [
+    "dig.mu2e.%.MDC2020bc_%.art"
+  ],
+  "pins": {
+    "exclude": [],
+    "hold": [],
+    "not_expected": [],
+    "order": [],
+    "notes": []
+  }
+}

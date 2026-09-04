@@ -1,0 +1,15 @@
+{
+  "name": "Run1Bab2",
+  "purpose": "",
+  "status": "frozen",
+  "roots": [
+    "dig.mu2e.%.Run1Bab2_%.art"
+  ],
+  "pins": {
+    "exclude": [],
+    "hold": [],
+    "not_expected": [],
+    "order": [],
+    "notes": []
+  }
+}

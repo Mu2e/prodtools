@@ -1,0 +1,15 @@
+{
+  "name": "MDC2025an",
+  "purpose": "SimJob/MDC2025an, Offline v13_11_00",
+  "status": "current",
+  "roots": [
+    "dig.mu2e.%.MDC2025an_%.art"
+  ],
+  "pins": {
+    "exclude": [],
+    "hold": [],
+    "not_expected": [],
+    "order": [],
+    "notes": []
+  }
+}
