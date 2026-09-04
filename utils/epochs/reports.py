@@ -5,6 +5,7 @@ Decisions 11, 12, 13. Nothing here reads a clock.
 from typing import Dict, List, Optional
 
 from utils.epochs.dsconf import parse_dsconf
+from utils.epochs.generation import Generation  # noqa: F401  (type only)
 from utils.epochs.graph import Catalog, Member
 from utils.epochs.status import group_key, groups
 
@@ -132,3 +133,23 @@ def lookup(cat: Catalog, dataset: str) -> Dict:
         return {'kind': 'input', 'dataset': dataset, 'nfiles': rec['nfiles'],
                 'parents': sorted(rec['parents']), 'descendants': sorted(rec['descendants'])}
     return {'kind': 'unknown', 'dataset': dataset}
+
+
+def consistency(cat: Catalog, gens: Dict[str, Optional['Generation']]) -> List[Dict]:
+    """Per (family, tier): how many current members sit on each generation,
+    which descs are on the minority ones. 'unknown' = no cnf found."""
+    table: Dict[tuple, Dict[str, List[str]]] = {}
+    for m in cat.members.values():
+        if m.status != 'current':
+            continue
+        g = gens.get(m.name)
+        label = g.label() if g is not None else 'unknown'
+        table.setdefault((m.key.family, m.tier), {}).setdefault(label, []).append(m.desc)
+    out = []
+    for (family, tier), by_gen in sorted(table.items()):
+        biggest = max(len(v) for v in by_gen.values())
+        for label, descs in sorted(by_gen.items()):
+            out.append({'family': family, 'tier': tier, 'generation': label,
+                        'count': len(descs), 'descs': sorted(descs),
+                        'minority': len(descs) < biggest})
+    return out

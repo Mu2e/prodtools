@@ -666,5 +666,122 @@ class TestLookup(unittest.TestCase):
         self.assertEqual(lookup(cat, 'nope.mu2e.x.y.art')['kind'], 'unknown')
 
 
+import hashlib
+import tarfile
+from utils.epochs.generation import (Generation, read_generation, build_cnf_index, cnf_for,
+                                     generations)
+from utils.epochs.reports import consistency
+
+
+def _make_cnf(d, name, setup, outputs, fcl='services.DbService.version: "v1_5"\n'
+              'services.GeometryService.inputFile: "Offline/Mu2eG4/geom/geom_run1_a.txt"\n'
+              'services.GeometryService.bfgeomFile: "Offline/Mu2eG4/geom/bfgeom_v01.txt"\n'):
+    """A minimal cnf tarball: jobpars.json (setup + tbs.outfiles) and mu2e.fcl.
+    `outputs` are tbs.outfiles TEMPLATES exactly as mu2ejobdef writes them:
+    'mcs.mu2e.X.MDC2025au_best_v1_5.sequencer.art' or, generic,
+    'nts.mu2e.{desc}.MDC2025au_best_v1_5-001.sequencer.root'."""
+    path = os.path.join(d, name)
+    jobpars = {'setup': setup, 'tbs': {'outfiles': {f'out{i}': t for i, t in enumerate(outputs)}},
+               'jobname': name, 'code': ''}
+    with tarfile.open(path, 'w') as tar:
+        for member, payload in (('jobpars.json', json.dumps(jobpars)), ('mu2e.fcl', fcl)):
+            p = os.path.join(d, member)
+            with open(p, 'w') as f:
+                f.write(payload)
+            tar.add(p, arcname=member)
+    return path
+
+
+SETUP_A = '/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_00_00/setup.sh'
+SETUP_B = '/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_01_00/setup.sh'
+
+
+class TestGeneration(unittest.TestCase):
+    def test_read_generation_fields(self):
+        d = _tmpdir()
+        p = _make_cnf(d, 'cnf.mu2e.X.MDC2025au_best_v1_5.0.tar', SETUP_B, [])
+        g = read_generation(p, 'cnf.mu2e.X.MDC2025au_best_v1_5.0.tar', 'index')
+        self.assertEqual((g.musing, g.version), ('AnalysisMDC2025', 'v02_01_00'))
+        self.assertEqual(g.dbservice, 'v1_5')
+        self.assertTrue(g.geometry.endswith('geom_run1_a.txt'))
+        self.assertTrue(g.bfield.endswith('bfgeom_v01.txt'))
+        self.assertEqual(len(g.fcl_sha256), 64)
+        self.assertEqual((g.source, g.cnf), ('index', 'cnf.mu2e.X.MDC2025au_best_v1_5.0.tar'))
+
+    def test_unrecognized_setup_path_raises(self):
+        d = _tmpdir()
+        p = _make_cnf(d, 'cnf.mu2e.X.MDC2025au_best_v1_5.0.tar', '/some/where/setup.sh', [])
+        with self.assertRaises(ValueError):
+            read_generation(p, 'cnf.mu2e.X.MDC2025au_best_v1_5.0.tar', 'index')
+
+    def test_index_from_declared_outputs_and_generic_dsconf(self):
+        d = _tmpdir()
+        explicit = _make_cnf(d, 'cnf.mu2e.CeEndpointOnSpill-reco.MDC2025au_best_v1_5.0.tar', SETUP_A,
+                             [f'mcs.mu2e.CeEndpointOnSpill.{AU}.sequencer.art',
+                              f'log.mu2e.CeEndpointOnSpill-reco.{AU}.sequencer.log'])
+        generic = _make_cnf(d, 'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar', SETUP_B,
+                            ['nts.mu2e.{desc}.MDC2025au_best_v1_5-001.sequencer.root'])
+        src = FakeSource(_small_graph(), cnfs={
+            'cnf.mu2e.CeEndpointOnSpill-reco.MDC2025au_best_v1_5.0.tar': explicit,
+            'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar': generic,
+            'cnf.mu2e.Lost.MDC2025au_best_v1_5.0.tar': ''})
+        idx = build_cnf_index(src, existing={})
+        self.assertEqual(idx[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'],
+                         'cnf.mu2e.CeEndpointOnSpill-reco.MDC2025au_best_v1_5.0.tar')
+        self.assertNotIn(f'log.mu2e.CeEndpointOnSpill-reco.{AU}.log', idx)   # log tier never indexed
+        self.assertEqual(idx['__generic__']['nts.MDC2025au_best_v1_5-001'],
+                         'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar')
+        self.assertEqual(idx['__unlocatable__'], ['cnf.mu2e.Lost.MDC2025au_best_v1_5.0.tar'])
+        self.assertEqual(sorted(idx['__indexed__']), [k for k, v in sorted(src.cnfs.items()) if v])
+
+    def test_index_skips_already_indexed_cnfs(self):
+        src = FakeSource(_small_graph(), cnfs={'cnf.mu2e.A.MDC2025au_best_v1_5.0.tar': ''})
+        idx = build_cnf_index(src, existing={'__indexed__': ['cnf.mu2e.A.MDC2025au_best_v1_5.0.tar'],
+                                             '__generic__': {}, '__unlocatable__': []})
+        self.assertEqual(idx['__unlocatable__'], [])
+
+    def test_cnf_for_prefers_parent_then_index(self):
+        g = _small_graph()
+        g['cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar'] = {'n': 1, 'children': [f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']}
+        cat = _cat(g)
+        idx = {'__generic__': {f'nts.{AU}': 'cnf.mu2e.evnt.MDC2025au_best_v1_5.0.tar'}, '__indexed__': [], '__unlocatable__': [],
+               f'mcs.mu2e.CeEndpointOnSpill.{AU}.art': 'cnf.mu2e.CeEndpointOnSpill-reco.MDC2025au_best_v1_5.0.tar'}
+        self.assertEqual(cnf_for(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'], cat, idx),
+                         ('cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar', 'parent'))
+        self.assertEqual(cnf_for(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'], cat, idx),
+                         ('cnf.mu2e.CeEndpointOnSpill-reco.MDC2025au_best_v1_5.0.tar', 'index'))
+        self.assertEqual(cnf_for(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'], cat, idx),
+                         ('cnf.mu2e.evnt.MDC2025au_best_v1_5.0.tar', 'index'))
+        self.assertIsNone(cnf_for(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AR}.art'], cat, idx))
+
+    def test_consistency_names_minority_descs(self):
+        d = _tmpdir()
+        a = _make_cnf(d, 'cnf.mu2e.evnt.MDC2025au_best_v1_5.0.tar', SETUP_A,
+                      ['nts.mu2e.{desc}.MDC2025au_best_v1_5.sequencer.root'])
+        b = _make_cnf(d, 'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar', SETUP_B,
+                      ['nts.mu2e.{desc}.MDC2025au_best_v1_5-001.sequencer.root'])
+        g = _small_graph()
+        g[f'mcs.mu2e.DIO.{AU}.art'] = {'n': 10, 'children': [f'nts.mu2e.DIO.{AU}.root']}
+        g[f'dig.mu2e.DIO.{AU}.art'] = {'n': 10, 'children': [f'mcs.mu2e.DIO.{AU}.art']}
+        g[f'nts.mu2e.DIO.{AU}.root'] = {'n': 10, 'children': []}
+        src = FakeSource(g, cnfs={'cnf.mu2e.evnt.MDC2025au_best_v1_5.0.tar': a,
+                                  'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar': b})
+        cat = assign_status(build_catalog({'MDC2025au': _epoch('MDC2025au'),
+                                           'MDC2025an': _epoch('MDC2025an')}, src, ['MDC2025']))
+        idx = build_cnf_index(src, existing={})
+        gens = generations(cat, src, idx)
+        all_rows = consistency(cat, gens)
+        rows = [r for r in all_rows if r['tier'] == 'nts']
+        by_gen = {r['generation']: r for r in rows}
+        self.assertEqual(by_gen['AnalysisMDC2025/v02_01_00']['descs'], ['CeEndpointOnSpill'])
+        self.assertEqual(by_gen['AnalysisMDC2025/v02_00_00']['descs'], ['DIO'])
+        # the mcs/dig members have no cnf in this fixture (only the nts-producing
+        # evnt cnfs were registered) -> reported as 'unknown', never guessed.
+        # Checked against the full report, not the nts-only `rows`: both current
+        # nts members are pinned to a known generation by the assertions above,
+        # so 'unknown' cannot appear among nts rows in this fixture.
+        self.assertIn('unknown', {r['generation'] for r in all_rows})
+
+
 if __name__ == '__main__':
     unittest.main()
