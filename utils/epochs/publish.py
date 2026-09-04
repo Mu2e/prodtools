@@ -44,6 +44,11 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
                        'descendants': sorted(v['descendants'])}
                    for k, v in sorted(cat.inputs.items())},
         'unparseable': [list(x) for x in cat.unparseable],
+        # a member with two declared cnf parents: its generation above is
+        # reported from the first in sort order alone (NEW-2). `publish`
+        # prints no stderr noise, so this is the only place the served
+        # document carries the anomaly.
+        'generation_conflicts': list(cat.generation_conflicts),
         'foreign': sorted(cat.foreign),
         'unclaimed_digs': {k: sorted(v) for k, v in cat.unclaimed_digs.items()},
         'missing_families': list(cat.missing_families),

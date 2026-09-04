@@ -125,9 +125,10 @@ def _report_noise(cat, source):
             print(f'unclaimed dig (no epoch root matches): {d}', file=sys.stderr)
     truncated = [n for n, rec in cat.inputs.items() if rec.get('truncated')]
     if truncated:
-        print(f'{len(truncated)} inputs sit at the --input-depth frontier (their own parents '
-              f'were never queried) and are held back from the retire list; raise '
-              f'--input-depth to resolve them', file=sys.stderr)
+        print(f'{len(truncated)} inputs sit at or above the --input-depth frontier (some '
+              f"dig's upward walk stopped there, so what else reaches them is unknown) and "
+              f'are held back from the retire list; raise --input-depth to resolve them',
+              file=sys.stderr)
     for line in cat.pin_problems:
         print(f'pin problem: {line}', file=sys.stderr)
     for line in cat.epoch_conflicts:
