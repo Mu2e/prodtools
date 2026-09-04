@@ -15,8 +15,11 @@ of the job log's text. We add the cnf name to `parents_list.txt` in
 parent alongside its input files. Provenance ("what code made this")
 then costs one parents lookup, the same as lineage, and the sim-epochs
 catalog derives a dataset's generation from the cnf via `jobquery`
-without a side table. Legacy datasets are backfilled once by reading
-the cnf name from one log per dataset and feeding the same code path.
+without a side table. Legacy datasets are backfilled once from the cnf
+catalog itself: every cnf in SAM declares its outputs in
+`tbs.outfiles`, and a generic `evnt` cnf claims the datasets carrying
+its tier and dsconf (`bin/epochs index-cnfs`,
+`data/epochs/cnf_index.json`). Logs are not read.
 
 ## Considered Options
 
@@ -24,7 +27,8 @@ Log text as the provenance record: every log, direct-backend and
 POMS-era alike, names its cnf. Rejected as the permanent path because a
 generic entry names the log dataset after its input, so two output
 generations share one log dataset and are told apart only by opening
-each file. Kept as the one-time backfill.
+each file. Not needed even for the backfill: the cnf's own output list
+is a better record than the log text.
 
 The submission ledger: private to mu2epro, direct backend only, blind to
 everything before 2026-08. Rejected.

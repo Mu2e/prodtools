@@ -214,7 +214,8 @@ When regenerating, read in this order:
     user-facing CLI: `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `jobquery`,
-    `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`, `jobwait`.
+    `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`, `jobwait`,
+    `epochs`.
     Ops scripts
     (`install_prodtools.sh`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
@@ -222,6 +223,48 @@ When regenerating, read in this order:
     script found there, remove any that no longer exist. (`runjob.sh` is
     a worker bootstrap, not user-facing — omit.)
 
+    - `epochs` — name, one-line role ("sim-epochs catalog — derives
+      dataset generations, status and retirement candidates from SAM
+      parentage instead of a hand-maintained list"), the verb table
+      (`propose --family F` writes `data/epochs/<letters>.json` for
+      every dig letter family that has no epoch file yet, and refuses
+      to run without `--family`; `members [--tier T] [--status S]`
+      lists members, optionally filtered; `gaps` lists an expected tier
+      with no member, plus every stale member; `consistency` reports
+      the generation spread per tier, e.g. how many descs a musing or
+      Offline version reaches, the report Ray asked for; `retire` emits
+      the delete candidates in Ray's `purge_proposal` line format
+      (`DELETE - - <YES|NO> <n> <dataset> <children|NONE> # <reason>`);
+      `lookup DATASET` reports one dataset's epoch, status and
+      generation; `index-cnfs` walks SAM's cnf tarballs and writes
+      `data/epochs/cnf_index.json`, mapping each dataset back to the
+      cnf that produced it; `publish --out FILE` writes the
+      `{"epochs":[{"name","datasets"}]}` file the sim-epochs MCP server
+      reads, with the richer fields carried alongside). `--family` and
+      `--epoch` filter which rows a verb PRINTS — every verb still
+      judges the complete catalog discovered from SAM, so a filtered
+      `retire` cannot omit a cross-family dependency. `status` is
+      `current | stale | superseded`, always recomputed from SAM,
+      never stored in the epoch file; `frozen` is an epoch standing (a
+      hold against deletion), never a dataset status. No timestamps
+      appear anywhere in the catalog; file count is the one warning
+      the tool prints, on stderr as `count warning:` when a winning
+      dataset has far fewer files than a sibling. `-NNN` on a dsconf is
+      a bare collision counter, not a version — a rename across desc
+      (old name superseded by a new one) needs a manual `exclude` pin
+      with a reason, never inferred. `retire` refuses to run against an
+      incomplete catalog — a dig letter family with no epoch file, or a
+      dig dataset matching none of the loaded roots — and names the
+      remedy (`propose --family F`) in the refusal. Exit codes: `2` for
+      a malformed epoch file, `3` for a SAM error, a dsconf that fails
+      to parse, or another catalog-completeness refusal, and `1` for
+      `lookup` of a dataset the catalog does not know. A full catalog
+      build over the three families (MDC2025, Run1B, MDC2020) takes
+      about 7 minutes; `index-cnfs` takes about 3.5 minutes. Needs the
+      Mu2e ops environment (`source .../setupmu2e-art.sh` then `muse
+      setup ops`) for `samweb_client`. Design:
+      `wiki/pages/2026-09-02-sim-epochs-design.md`, glossary
+      `CONTEXT.md`, ADRs 0003 and 0004.
     - `submissions` — name, one-line role ("direct-submission subsystem
       CLI — status/run/pause/resume/cancel/complete/reconcile/resubmit"),
       the verb table

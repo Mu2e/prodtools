@@ -383,9 +383,12 @@ membership re-derives itself; no list to update.
 
 ## 13. Phases
 
-1. Schema, `bin/epochs` with the closure + group rule + status
-   propagation, rendered markdown. Seed one epoch from today's
-   `latest_datasets.md` roots. A few days.
+1. DONE 2026-09-03 (branch sim-epochs, commits a8dadb7..7bd03a8):
+   `bin/epochs` with parser, closure, status, gaps, consistency, count
+   warnings, retire, publish; `data/epochs` seeded for MDC2025 (5),
+   Run1B (10) and MDC2020 (11) letter families (MDC2020r has a
+   definition but no files); cnf index built (1343 cnfs, 1668 explicit
+   claims, 13 generic).
 2. MCP tools; `retire` in purge format; `gaps`; `consistency`.
 3. `input_epoch` in `json2jobdef`; compatibility notes on provenance;
    `diff`.
@@ -461,4 +464,50 @@ The part I expect you to push on: roots = dig rather than geometry+conditions. W
 Follow-ups outside this design: the log dataset for generic entries is
 named after the INPUT (`log…MDC2025au_best_v1_5.log` for the `-001`
 ntuples), mixing two generations' logs; `famtree.get_parents` needs a
-`cnf.*.tar` filter once ADR 0003 lands; `push_data` one-line change.
+`cnf.*.tar` filter once ADR 0003 lands; `push_data` one-line change;
+the dsconf grammar could accept a legacy `_vNN_NN_NN` Offline tail
+BEFORE the purpose so the MDC2020an nts/bck names parse; a `members`
+row for MDC2020 has no generation until the POMS-era cnf claim
+question is answered.
+
+## 18. First live run, 2026-09-03
+
+- The full catalog builds to 26 epochs, 396 dig datasets and 1013
+  members: 770 current, 14 stale, 229 superseded.
+- The retire list runs 49 lines: 26 superseded members and 23 inputs
+  (dts of Run1Baa, Run1Bag and Run1Bai, whose digs are all
+  superseded), and 0 lines from a retired epoch.
+- The MDC2025 nts tier sits on three generations at once
+  (AnalysisMDC2025 v01_01_01 on 4 `-KL` descs, v02_00_00 on 27,
+  v02_01_00 on 26) — this is the consistency report Ray asked for.
+- Five count warnings, all in-flight remakes:
+  `dig.mu2e.NoPrimaryMix1BB.Run1Bav_best_v1_5-003.art` at 2000 of
+  20000 files, `NoPrimaryMix1BB-KL.Run1Baw_best_v1_5-002` at 1998 of
+  20000 at both the mcs and the nts tier,
+  `nts.mu2e.CosmicSignalMix1BB.MDC2025au_best_v1_1-001.root` at 100 of
+  500, and
+  `nts.mu2e.RPCExternalOnSpillTriggered.MDC2020az_perfect_v1_3_v06_06_00.root`
+  at 200 of 2000.
+- The 14 stale members are all legacy `-KL` reco/ntuple lines under
+  Run1Bab2 and Run1Bah, plus the Run1Baw NoPrimaryMix1BB `-002` pair
+  whose parent has moved on.
+- 17 dig definitions do not parse: the `MDC2024_perfect_v1_3`
+  hyphenated ensemble names, and one `pipenu` name.
+- 27 distinct member or input names do not parse: the MDC2020an
+  nts/bck names carry the Offline version before the purpose
+  (`MDC2020an_v06_01_01_perfect_v1_3`), and two ancient inputs
+  (`sim…010622`, `dts…v5hi1`) predate the current grammar entirely.
+- 24 cnf tarballs are unreadable from a gpvm — 22 permission denied,
+  2 missing on scratch — and are listed by name in `cnf_index.json`
+  under `__unreadable__`.
+- MDC2020 members come back mostly `generation: unknown` (dig 141 of
+  243, mcs 79 of 98, bck 44 of 44, nts 23 of 49). That is consistent
+  with decision 14 (MDC2020 is status-only), but it is worth checking
+  separately whether POMS-era cnfs even carry `tbs.outfiles`.
+- Four digs carry a bare dsconf with no letters-and-purpose split
+  (`MDC2020aq` twice, `MDC2020aw`, `MDC2025ad`), which is why proposed
+  roots now come in three distinct patterns instead of one.
+- Timings: a full catalog build takes about 7 minutes, `index-cnfs`
+  about 3.5 minutes, and every individual SAM query is sub-second. The
+  earlier 10-minute stall traced to un-memoized ancestor walking, not
+  to SAM itself.
