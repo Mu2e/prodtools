@@ -248,15 +248,31 @@ When regenerating, read in this order:
       under keeps its own corrected epoch, but the members below it
       still carry the inherited one — which is the reason `retire` is
       `null`). `--family` and
-      `--epoch` filter which rows a verb PRINTS — every verb still
-      judges the complete catalog discovered from SAM, so a filtered
-      `retire` cannot omit a cross-family dependency. Say exactly which
-      verbs honour them, because not all of them do: `members`, `gaps`
+      `--epoch` filter which rows a verb PRINTS, and `--family` ALSO
+      restricts what gets built for the four verbs where that is safe —
+      `members`, `gaps`, `lookup`, `consistency` — because a member's
+      status is decided only against siblings of its own family. Say
+      that a scoped build announces itself on stderr (`scoped build:
+      this catalog covers ... only`), that the notice survives `--quiet`
+      because it is a caveat on the rows rather than progress, and that
+      an unknown `--family` is exit 2, not an empty result. Say plainly
+      that `retire` and `publish` NEVER scope: `retire`'s
+      incompleteness refusal rests on families a scoped build never
+      looked at, and `publish`'s document is the whole catalog by
+      definition — so a filtered `retire` still cannot omit a
+      cross-family dependency. `--epoch` never scopes the build to
+      itself (an epoch competes with the other epochs of its family);
+      for `members` and `gaps` it may scope to that epoch's FAMILY, and
+      nothing narrower. Say exactly which verbs honour the flags as
+      output filters, because not all of them do: `members`, `gaps`
       and `retire` apply both; `consistency` applies `--family` only and
       accepts `--epoch` without using it; `lookup` accepts `--family`,
-      `--epoch` and `--json` and uses none of them (it always prints
-      JSON); `index-cnfs` accepts `--family` (no `--epoch`) and uses
-      neither; `publish` takes only `--out`. `status` is
+      `--epoch` and `--json` and filters on none of them (it always
+      prints JSON) — though `--family` does now scope its build, so a
+      dataset outside the named family reads as `unknown`;
+      `index-cnfs` accepts `--family` (no `--epoch`) and uses
+      neither; `publish` takes only `--out`. Every verb also takes
+      `--quiet`, which suppresses the stderr build-progress lines. `status` is
       `current | stale | superseded`, always recomputed from SAM,
       never stored in the epoch file; `frozen` is an epoch standing (a
       hold against deletion), never a dataset status. No timestamps
@@ -283,14 +299,21 @@ When regenerating, read in this order:
       a desc no dig of the epoch has — is a refusal, not a no-op; a
       `not_expected` pin naming a tier outside `mcs`/`nts` is refused
       when the epoch file loads (exit 2). Exit codes: `2` for
-      a malformed epoch file, `3` for a SAM error, a dsconf that fails
-      to parse, or another catalog-completeness refusal, and `1` for
+      a malformed epoch file or an unknown `--family`, `3` for a SAM
+      error, a dsconf that fails to parse, or another
+      catalog-completeness refusal, and `1` for
       `lookup` of a dataset the catalog does not know. `index-cnfs`
-      takes about 3.5 minutes (measured 2026-09-03); a full catalog
-      build's timing has not been remeasured since 2026-09-04 removed
-      the upward input walk (the earlier ~7-minute figure included that
-      walk, capped at 3 levels, and is no longer representative — do
-      not quote it for this version). Setup,
+      takes about 3.5 minutes (measured 2026-09-03). Quote these
+      catalog-build timings, measured against production 2026-09-04 on
+      the current version (no upward input walk — the older ~7-minute
+      figure included it and is not representative): an UNSCOPED build
+      is 2429 SAM queries and about 197 s, which is what `retire` and
+      `publish` always pay; `members --epoch MDC2025au --tier nts` is
+      428 queries and about 20 s scoped; the same command scoped to
+      MDC2020, the largest family, is 1227 queries and about 113 s. Say
+      that the build issues its queries serially and prints one
+      progress line per family to a TTY stderr, so a run that looks
+      stopped is a run that is working. Setup,
       verified against the imports on 2026-09-04: the only external
       dependency is `samweb_client`, reached lazily through
       `utils.samweb_wrapper` (`list_files`, `count_files`,

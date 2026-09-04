@@ -1,12 +1,30 @@
 """bin/epochs — the sim-epochs catalog command. See EXAMPLES.md.
 
-Every verb except `propose` loads EVERY epoch file and lets `build_catalog`
-discover dig families from SAM (`families=None`), so status and retire are
-always judged on the complete catalog. `--family` (repeatable) and
-`--epoch` are OUTPUT filters applied to already-computed rows only — they
-never change what is loaded or built (ruling of 2026-09-03: a partial
-catalog proposed deleting MDC2025 stop catalogues that only unloaded
-MDC2025 digs used).
+Every verb except `propose` loads EVERY epoch file. What it BUILDS is
+one of two things:
+
+- `retire` and `publish` always build the COMPLETE catalog, families
+  discovered from SAM (`families=None`). Non-negotiable: `retire`'s
+  refusal rests on `missing_families` and `unclaimed_digs`, which a
+  scoped build cannot populate for the families it skipped, and
+  `publish`'s document is the whole catalog by definition (ruling of
+  2026-09-03: a partial catalog proposed deleting MDC2025 stop
+  catalogues that only unloaded MDC2025 digs used).
+- `members`, `gaps`, `lookup` and `consistency` (`SCOPABLE_VERBS`) build
+  only the families `--family` names. A member's status is decided
+  against the siblings sharing its `group_key`, whose first field is the
+  family, so no family's answer can depend on another being built. The
+  saving is the point of the exercise: a MDC2025-scoped `members` asks
+  SAM 429 questions instead of 2429 (measured 2026-09-04).
+
+`--epoch` NEVER scopes the build to itself — an epoch's members compete
+against the other epochs of its family, and building one epoch would
+publish wrong statuses. It scopes at most to that epoch's own FAMILY,
+and only for the verbs where `--epoch` is already an output filter.
+
+Both flags remain OUTPUT filters on top of whatever was built; a scoped
+build is announced on stderr, because "this catalog covers MDC2025 only"
+is a caveat on the rows, not progress noise.
 """
 import argparse
 import json
@@ -68,6 +86,69 @@ def _load_index(epochs_dir) -> Dict:
         return json.load(f)
 
 
+SCOPABLE_VERBS = frozenset({'members', 'gaps', 'lookup', 'consistency'})
+# The verbs whose answer for one family cannot depend on another family
+# being in the catalog. `retire` and `publish` are deliberately absent
+# and must stay absent: see the module docstring.
+EPOCH_SCOPABLE_VERBS = frozenset({'members', 'gaps'})
+# ...and of those, the ones where `--epoch` is ALREADY an output filter
+# (`_keep`), so inferring its family changes no printed row. `lookup` and
+# `consistency` accept `--epoch` and ignore it; inferring a scope from a
+# flag a verb ignores would silently change that verb's output.
+
+
+class ScopeError(ValueError):
+    """`--family` named a family that has neither a dig in SAM nor a
+    loaded epoch file. Almost always a typo, and the old behavior — build
+    everything for three minutes, then print nothing — read exactly like
+    "there is nothing there". Exit 2, like any other usage error."""
+
+
+def _scope_notice(families, verb, stream=None) -> None:
+    """One line, on stderr, whenever the catalog underneath the rows is
+    not the whole catalog.
+
+    Deliberately NOT routed through `Progress`: this is a caveat about
+    what the output covers, so it survives both a redirected stderr and
+    `--quiet`, which suppress progress noise only."""
+    print(f"scoped build: this catalog covers {', '.join(families)} only, so "
+          f"{verb} judges each member against its own family's siblings alone "
+          f"(retire and publish always build every family)",
+          file=stream if stream is not None else sys.stderr)
+
+
+def _build_families(args, epochs, source):
+    """The `families=` argument for `build_catalog`: None to discover
+    every family from SAM, or the explicit list a scopable verb may
+    restrict itself to.
+
+    An unknown family raises rather than returning an empty result. The
+    check consults the loaded epoch files FIRST and only asks SAM
+    (`dig_families()`, one query) when a name is not among them, so the
+    common case adds no query at all."""
+    if args.verb not in SCOPABLE_VERBS:
+        return None
+    families = list(dict.fromkeys(args.family or []))
+    if not families and args.verb in EPOCH_SCOPABLE_VERBS:
+        epoch = epochs.get(getattr(args, 'epoch', None) or '')
+        if epoch is not None:
+            families = [epoch.family]
+    if not families:
+        return None
+    known = {e.family for e in epochs.values()}
+    unknown = [f for f in families if f not in known]
+    if unknown:
+        known |= set(source.dig_families())
+        unknown = [f for f in families if f not in known]
+    if unknown:
+        raise ScopeError(f"unknown family {', '.join(sorted(unknown))}: no dig dataset in SAM "
+                         f"and no epoch file in {args.epochs_dir}; known families are "
+                         f"{', '.join(sorted(known))}")
+    families = sorted(families)
+    _scope_notice(families, args.verb)
+    return families
+
+
 def _progress(args):
     """Build progress for this invocation. `--quiet` turns it off
     outright; otherwise `Progress` decides from the stream, which means
@@ -79,15 +160,18 @@ def _progress(args):
 
 
 def _catalog(args, source):
-    """Load every epoch file in `args.epochs_dir` and build the COMPLETE
-    catalog — families are discovered from SAM (`families=None`), never
-    limited to `args.family`. Callers filter the rows they print, not
-    what gets built (see module docstring)."""
+    """Load every epoch file in `args.epochs_dir` and build the catalog.
+
+    `_build_families` decides the scope and returns None — the complete,
+    SAM-discovered catalog — for every verb outside `SCOPABLE_VERBS`.
+    That is the single place `retire` and `publish` are kept whole; do
+    not add a second one."""
     epochs = load_epoch_files(args.epochs_dir)
     if not epochs:
         raise EpochFileError(f"no epoch files in {args.epochs_dir}; "
                              f"run 'epochs propose --family F' first")
-    cat = build_catalog(epochs, source, families=None, progress=_progress(args))
+    families = _build_families(args, epochs, source)
+    cat = build_catalog(epochs, source, families=families, progress=_progress(args))
     return assign_status(cat)
 
 
@@ -313,6 +397,9 @@ def main(argv: Optional[List[str]] = None, source=None, now_fn=None) -> int:
             return cmd_index_cnfs(args, source)
         if args.verb == 'publish':
             return cmd_publish(args, source, now_fn)
+    except ScopeError as exc:
+        print(f'epochs: {exc}', file=sys.stderr)
+        return 2
     except EpochFileError as exc:
         print(f'epochs: {exc}', file=sys.stderr)
         return 2

@@ -205,6 +205,14 @@ def build_catalog(epochs: Dict[str, EpochFile], source,
     `cat.unclaimed_digs` (that is what makes the gap visible) and is
     recorded in `cat.missing_families`.
 
+    A caller MAY pass an explicit `families` list, and `cli` does for the
+    verbs where one family's answer cannot depend on another's: a member
+    is judged only against the siblings sharing its `group_key`, whose
+    first field is the family. What a scoped catalog loses is
+    `missing_families` — and therefore part of `incomplete_reasons()` —
+    for every family outside the list, which is exactly why `retire` and
+    `publish` never scope (`cli.SCOPABLE_VERBS`).
+
     `source` is wrapped once, here, in `_Memo`: every dig's
     `_walk_down` shares the same cache, so a dataset entered from many
     different digs (a stops catalogue shared by hundreds of dts

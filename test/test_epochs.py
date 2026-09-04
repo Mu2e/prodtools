@@ -1472,12 +1472,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn('MDC2025au.json', err)
 
-    def test_family_filter_applies_to_output_only(self):
-        # --family/--epoch filter printed rows only; the catalog underneath
-        # is always the complete one (ruling of 2026-09-03).
-        rc, out, _ = _run(['members', '--family', 'Run1B'], self.src, self.d)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, '')
+    def test_family_filter_still_filters_the_printed_rows(self):
         rc, out, _ = _run(['members', '--family', 'MDC2025'], self.src, self.d)
         self.assertEqual(rc, 0)
         self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', out)
@@ -1589,6 +1584,191 @@ class TestCli(unittest.TestCase):
         rc, out, _ = _run(['retire', '--epoch', 'MDC2025an'], self.src, self.d)
         self.assertEqual(rc, 0)
         self.assertNotIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root', out)
+
+
+class CountingSource(FakeSource):
+    """FakeSource with every SAM-shaped entry point recorded, not just
+    children/parents. This is the harness the scoping numbers came from:
+    counting an injected source is how the cost of a build is measured
+    without running production queries in a loop."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.calls['dig_families'] = []
+        self.calls['dig_datasets'] = []
+
+    def dig_families(self):
+        self.calls['dig_families'].append('*')
+        return super().dig_families()
+
+    def dig_datasets(self, family):
+        self.calls['dig_datasets'].append(family)
+        return super().dig_datasets(family)
+
+    def lineage_calls(self):
+        return len(self.calls['children']) + len(self.calls['parents'])
+
+
+BAN = 'Run1Ban_best_v1_4'
+
+
+def _two_family_graph():
+    """`_small_graph` plus a whole second family, so a test can watch one
+    family's queries not happen."""
+    g = _small_graph()
+    g[f'dig.mu2e.CosmicCRYSignal.{BAN}.art'] = {
+        'n': 20, 'children': [f'mcs.mu2e.CosmicCRYSignal.{BAN}.art']}
+    g[f'mcs.mu2e.CosmicCRYSignal.{BAN}.art'] = {
+        'n': 20, 'children': [f'nts.mu2e.CosmicCRYSignal.{BAN}.root']}
+    g[f'nts.mu2e.CosmicCRYSignal.{BAN}.root'] = {'n': 20, 'children': []}
+    # one dig per family with no mcs/nts below it, so `gaps` has a row in
+    # each family and a scoped run has something to be equal to
+    g[f'dig.mu2e.Lonely.{AU}.art'] = {'n': 1, 'children': []}
+    g[f'dig.mu2e.LonelyB.{BAN}.art'] = {'n': 1, 'children': []}
+    return g
+
+
+class TestCliScope(unittest.TestCase):
+    """--family restricts the BUILD for members/gaps/lookup/consistency,
+    and must not for retire/publish."""
+
+    def setUp(self):
+        self.d = _tmpdir()
+        for name in (f'{AU}', f'{AN}', f'{BAN}'):
+            write_epoch_file(self.d, propose_epoch(name))
+        self.src = CountingSource(_two_family_graph())
+
+    def _fresh(self):
+        return CountingSource(_two_family_graph())
+
+    # -- the saving ------------------------------------------------------
+    def test_family_scopes_the_build_and_never_touches_the_other_family(self):
+        rc, out, err = _run(['members', '--family', 'MDC2025'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.src.calls['dig_datasets'], ['MDC2025'])
+        # the loaded epoch files already know MDC2025 is a real family, so
+        # not even the discovery query is issued
+        self.assertEqual(self.src.calls['dig_families'], [])
+        asked = self.src.calls['children'] + self.src.calls['parents']
+        self.assertFalse([n for n in asked if 'Run1B' in n], asked)
+
+    def test_the_unscoped_build_does_ask_about_both_families(self):
+        full = self._fresh()
+        rc, out, _ = _run(['members'], full, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(full.calls['dig_datasets']), ['MDC2025', 'Run1B'])
+        self.assertTrue([n for n in full.calls['children'] if 'Run1B' in n])
+        scoped = self._fresh()
+        _run(['members', '--family', 'MDC2025'], scoped, self.d)
+        self.assertLess(scoped.lineage_calls(), full.lineage_calls())
+
+    def test_scoped_rows_equal_the_full_builds_rows_for_that_family(self):
+        # The whole safety claim in one assertion: scoping changes which
+        # datasets are looked at, never what is decided about them.
+        _, full, _ = _run(['members', '--json'], self._fresh(), self.d)
+        _, scoped, _ = _run(['members', '--family', 'MDC2025', '--json'], self._fresh(), self.d)
+        want = [r for r in json.loads(full) if parse_dsconf(r['epoch']).family == 'MDC2025']
+        self.assertTrue(want)
+        self.assertEqual(json.loads(scoped), want)
+
+    def test_scoped_gaps_equal_the_full_builds_gaps_for_that_family(self):
+        _, full, _ = _run(['gaps', '--json'], self._fresh(), self.d)
+        _, scoped, _ = _run(['gaps', '--family', 'MDC2025', '--json'], self._fresh(), self.d)
+        want = [r for r in json.loads(full) if parse_dsconf(r['epoch']).family == 'MDC2025']
+        self.assertTrue(want)
+        self.assertEqual(json.loads(scoped), want)
+
+    # -- --epoch scopes to a FAMILY, never to itself ---------------------
+    def test_epoch_scopes_to_its_family_and_no_narrower(self):
+        rc, out, _ = _run(['members', '--epoch', 'MDC2025au'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.src.calls['dig_datasets'], ['MDC2025'])
+        # MDC2025an is a DIFFERENT epoch of the same family and is still
+        # built: an epoch's members compete against the other epochs of
+        # its family, so scoping to one epoch would publish wrong statuses
+        walked = ' '.join(self.src.calls['children'])
+        self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AN}.art', walked)
+
+    def test_epoch_alone_does_not_scope_a_verb_that_ignores_epoch(self):
+        # `consistency` accepts --epoch and never filters on it, so
+        # inferring a scope from it would silently drop rows the verb is
+        # documented to print.
+        rc, out, _ = _run(['consistency', '--epoch', 'MDC2025au'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(self.src.calls['dig_datasets']), ['MDC2025', 'Run1B'])
+
+    # -- what must never be scoped ---------------------------------------
+    def test_retire_and_publish_are_not_in_the_scopable_set(self):
+        self.assertEqual(epochs_cli.SCOPABLE_VERBS,
+                         frozenset({'members', 'gaps', 'lookup', 'consistency'}))
+
+    def test_retire_with_family_still_builds_every_family(self):
+        # retire's refusal rests on missing_families/unclaimed_digs, which
+        # a scoped build cannot populate for families it never looked at.
+        rc, out, err = _run(['retire', '--family', 'MDC2025'], self.src, self.d)
+        self.assertEqual(sorted(self.src.calls['dig_datasets']), ['MDC2025', 'Run1B'])
+        self.assertTrue([n for n in self.src.calls['children'] if 'Run1B' in n])
+        self.assertNotIn('scoped build:', err)
+
+    def test_publish_builds_every_family_and_stamps_no_scope(self):
+        p = os.path.join(_tmpdir(), 'c.json')
+        rc, out, err = _run(['publish', '--out', p], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(self.src.calls['dig_datasets']), ['MDC2025', 'Run1B'])
+        self.assertNotIn('scoped build:', err)
+        with open(p) as f:
+            doc = json.load(f)
+        # no scope stamp is needed because a scoped catalog cannot reach
+        # here: publish has no --family flag at all, and is not scopable
+        self.assertNotIn('scope', doc)
+        self.assertEqual(doc['incomplete'], [])
+
+    # -- errors and visibility -------------------------------------------
+    def test_unknown_family_is_exit_2_not_an_empty_result(self):
+        rc, out, err = _run(['members', '--family', 'MDC2019'], self.src, self.d)
+        self.assertEqual(rc, 2)
+        self.assertEqual(out, '')
+        self.assertIn('MDC2019', err)
+        self.assertIn('unknown family', err)
+        # it consulted SAM once before saying so
+        self.assertEqual(self.src.calls['dig_families'], ['*'])
+
+    def test_a_family_with_digs_but_no_epoch_file_is_known(self):
+        d = _tmpdir()
+        write_epoch_file(d, propose_epoch(AU))
+        write_epoch_file(d, propose_epoch(AN))
+        rc, out, err = _run(['members', '--family', 'Run1B'], self.src, d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.src.calls['dig_families'], ['*'])
+        self.assertIn('missing epoch file for family Run1B', err)
+
+    def test_the_scope_notice_survives_quiet_and_a_redirected_stderr(self):
+        # A caveat on the rows, not progress: --quiet and a non-TTY
+        # stderr silence the progress lines and not this.
+        rc, out, err = _run(['members', '--family', 'MDC2025', '--quiet'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn('scoped build: this catalog covers MDC2025 only', err)
+        self.assertNotIn('epochs: built', err)
+        self.assertNotIn('scoped build:', out)
+
+    def test_no_notice_when_nothing_was_scoped(self):
+        rc, out, err = _run(['members'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertNotIn('scoped build:', err)
+
+    def test_lookup_scopes_and_says_so(self):
+        rc, out, err = _run(['lookup', '--family', 'MDC2025',
+                             f'nts.mu2e.CeEndpointOnSpill.{AU}.root'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.src.calls['dig_datasets'], ['MDC2025'])
+        self.assertEqual(json.loads(out)['kind'], 'member')
+        # and a dataset outside the scope reads as unknown, with the
+        # notice on stderr saying why
+        src = self._fresh()
+        rc, out, err = _run(['lookup', '--family', 'MDC2025',
+                             f'nts.mu2e.CosmicCRYSignal.{BAN}.root'], src, self.d)
+        self.assertEqual(rc, 1)
+        self.assertEqual(json.loads(out)['kind'], 'unknown')
+        self.assertIn('scoped build:', err)
 
 
 if __name__ == '__main__':
