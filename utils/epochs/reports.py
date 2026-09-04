@@ -12,7 +12,9 @@ from typing import Dict, List, Optional
 from utils.epochs.epoch_files import GAP_TIERS
 from utils.epochs.generation import Generation  # noqa: F401  (type only)
 from utils.epochs.graph import Catalog, Member
-from utils.epochs.status import group_keys_of, groups
+from utils.epochs.status import GroupKey, group_keys_of, groups
+
+Grouped = Dict[GroupKey, List[Member]]
 
 EXPECTED_TIERS = GAP_TIERS
 # The desc at mcs/nts is the dig desc (reco keeps the desc). A reco that
@@ -21,12 +23,26 @@ EXPECTED_TIERS = GAP_TIERS
 # tier gaps never asks about is refused when the file loads (NEW-4).
 
 
-def _winner_of(cat: Catalog, m: Member) -> Optional[Member]:
+def _winner_of(cat: Catalog, m: Member, grouped: Grouped) -> Optional[Member]:
     """The current-or-stale sibling that beats `m`, else None. An
     own-series member competes in several groups at once, so ask about
     all of them (`group_keys_of`) rather than its own 4-tuple, which is
-    not a key when a lettered sibling exists."""
-    grouped = groups(cat)
+    not a key when a lettered sibling exists.
+
+    `grouped` is passed in, never recomputed here: this is called once
+    per member by `retire` and once per member by `publish`, and
+    `groups(cat)` walks and sorts the entire catalog, so computing it
+    here made a ~1000-member run regroup ~1000 times (1513 regroups in
+    `catalog_document`, 756 in `retire`, measured 2026-09-04). It is a
+    required argument rather than an optional one so a new call site
+    cannot quietly reintroduce the loop.
+
+    `groups(cat)` is a pure function of the member set and the
+    `excluded` flags, both settled by the time `build_catalog` returns,
+    so one value is good for every member of one catalog. It does NOT
+    depend on `status`, which `assign_status` fills in afterwards — and
+    the Member objects inside `grouped` are the live ones, so the
+    `cand.status` read below always sees the current status."""
     for key in group_keys_of(grouped, m):
         for cand in grouped[key]:
             if cand.status in ('current', 'stale'):
@@ -123,6 +139,7 @@ def retire(cat: Catalog) -> List[Dict]:
     if reasons:
         raise ValueError('retire refused: catalog is incomplete — ' + '; '.join(reasons) +
                          "; run 'epochs propose --family <F>' and edit the file, then retry")
+    grouped = groups(cat)
     out = []
     for m in sorted(cat.members.values(), key=lambda m: m.name):
         if m.hold or m.status == 'excluded':
@@ -138,7 +155,7 @@ def retire(cat: Catalog) -> List[Dict]:
                 # proposal has to be told they are deleting a live answer
                 reason += f' (but this is still the {m.status} member of its group)'
         elif m.status == 'superseded':
-            by = _winner_of(cat, m)
+            by = _winner_of(cat, m, grouped)
             reason = f'superseded by {by.name}' if by else 'superseded'
         else:
             continue
@@ -156,14 +173,20 @@ def purge_lines(entries: List[Dict]) -> List[str]:
     return lines
 
 
-def lookup(cat: Catalog, dataset: str) -> Dict:
+def lookup(cat: Catalog, dataset: str, grouped: Optional[Grouped] = None) -> Dict:
     """`'unknown'` covers both a dataset the catalog never heard of and
     one it saw only as an upstream, non-member parent — input retirement
     is not modeled in this version (CONTEXT.md, "Input"), so no separate
-    record exists for the latter."""
+    record exists for the latter.
+
+    `grouped` is optional here because `cli.cmd_lookup` asks about ONE
+    dataset and a single grouping is the whole cost; `catalog_document`,
+    which calls this once per member, passes its own."""
     m = cat.members.get(dataset)
     if m is not None:
-        by = _winner_of(cat, m) if m.status == 'superseded' else None
+        if grouped is None:
+            grouped = groups(cat)
+        by = _winner_of(cat, m, grouped) if m.status == 'superseded' else None
         return {'kind': 'member', 'dataset': m.name, 'epoch': m.epoch, 'tier': m.tier,
                 'desc': m.desc, 'status': m.status, 'hold': m.hold, 'excluded': m.excluded,
                 'nfiles': m.nfiles, 'parents': sorted(m.parents),
@@ -172,14 +195,15 @@ def lookup(cat: Catalog, dataset: str) -> Dict:
     return {'kind': 'unknown', 'dataset': dataset}
 
 
-def count_warnings(cat: Catalog, ratio: float = 0.5) -> List[Dict]:
+def count_warnings(cat: Catalog, ratio: float = 0.5,
+                   grouped: Optional[Grouped] = None) -> List[Dict]:
     """Decision 4: file count is the one diagnostic. For every group, if the
     winner (the current or stale member) has far fewer files than its
     largest superseded sibling, warn — the signature of a top-up
     masquerading as a version. A warning is never a status: nothing here
     touches `m.status`, and this reads no clock."""
     out = []
-    for members in groups(cat).values():
+    for members in (groups(cat) if grouped is None else grouped).values():
         winner = next((m for m in members if m.status in ('current', 'stale')), None)
         if winner is None:
             continue

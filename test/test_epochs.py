@@ -1302,6 +1302,114 @@ class TestPublish(unittest.TestCase):
         self.assertEqual({e['name'] for e in doc['epochs']}, {'MDC2025au', 'MDC2025an'})
 
 
+def _wide_graph(ndescs):
+    """`_small_graph`'s shape widened to `ndescs` independent desc chains
+    inside one epoch, so a test can watch a cost that used to scale with
+    the member count."""
+    g = {}
+    for i in range(ndescs):
+        d = f'Desc{i:02d}'
+        dig, mcs = f'dig.mu2e.{d}.{AU}.art', f'mcs.mu2e.{d}.{AU}.art'
+        new, old = f'nts.mu2e.{d}.{AU}-001.root', f'nts.mu2e.{d}.{AU}.root'
+        g[dig] = {'n': 10, 'children': [mcs]}
+        g[mcs] = {'n': 10, 'children': [new, old]}
+        g[new] = {'n': 10, 'children': []}
+        g[old] = {'n': 10, 'children': []}
+    return g
+
+
+class TestGroupingIsComputedOnce(unittest.TestCase):
+    """`groups(cat)` walks and sorts the entire catalog. It used to be
+    called once per member by `_winner_of` (so once per member by both
+    `retire` and `catalog_document`): 1513 regroups to write one document
+    for a 1008-member catalog, 756 to build one retire list. Nothing
+    about the ANSWER changes here, so the tests pin both halves — the
+    count, and that the answer is the same either way."""
+
+    def _count(self, fn):
+        import utils.epochs.publish as publish_mod
+        import utils.epochs.reports as reports_mod
+        import utils.epochs.status as status_mod
+        mods = (publish_mod, reports_mod, status_mod)
+        calls = []
+        real = status_mod.groups
+
+        def counting(cat):
+            calls.append(cat)
+            return real(cat)
+
+        saved = [(m, getattr(m, 'groups', None)) for m in mods]
+        for m in mods:
+            if hasattr(m, 'groups'):
+                m.groups = counting
+        try:
+            out = fn()
+        finally:
+            for m, orig in saved:
+                if orig is not None:
+                    m.groups = orig
+        return out, len(calls)
+
+    def test_catalog_document_groups_the_catalog_twice_not_once_per_member(self):
+        # two: one for the document's own per-member loop, one inside the
+        # retire() it calls. A constant, not a function of member count.
+        cat = _cat()
+        doc, n = self._count(lambda: catalog_document(cat, {}, 'x'))
+        self.assertEqual(n, 2)
+        self.assertTrue(doc['epochs'])
+
+    def test_the_grouping_cost_does_not_scale_with_the_member_count(self):
+        small, big = _cat(_wide_graph(2)), _cat(_wide_graph(40))
+        self.assertLess(len(small.members), len(big.members))
+        _, n_small = self._count(lambda: catalog_document(small, {}, 'x'))
+        _, n_big = self._count(lambda: catalog_document(big, {}, 'x'))
+        self.assertEqual((n_small, n_big), (2, 2))
+        _, r_small = self._count(lambda: retire(small))
+        _, r_big = self._count(lambda: retire(big))
+        self.assertEqual((r_small, r_big), (1, 1))
+
+    def test_retire_groups_the_catalog_once(self):
+        cat = _cat()
+        rows, n = self._count(lambda: retire(cat))
+        self.assertEqual(n, 1)
+        self.assertTrue(rows)
+
+    def test_lookup_with_and_without_a_shared_grouping_agree(self):
+        cat = _cat()
+        grouped = groups(cat)
+        self.assertTrue(cat.members)
+        for name in cat.members:
+            self.assertEqual(lookup(cat, name), lookup(cat, name, grouped))
+
+    def test_count_warnings_with_and_without_a_shared_grouping_agree(self):
+        g = _small_graph()
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']['n'] = 10
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}.root']['n'] = 100
+        cat = _cat(g)
+        grouped = groups(cat)
+        self.assertTrue(count_warnings(cat))
+        self.assertEqual(count_warnings(cat), count_warnings(cat, grouped=grouped))
+
+    def test_one_grouping_serves_every_member_because_groups_is_pure(self):
+        # This is WHY the hoist is legal, stated as a property rather
+        # than trusted: groups() reads the member set and the `excluded`
+        # flags, both settled by the time build_catalog returns, and it
+        # does NOT read `status` -- which is what makes a grouping taken
+        # before a status-reading loop still correct inside it.
+        cat = _cat()
+        a, b = groups(cat), groups(cat)
+        self.assertEqual(list(a), list(b))
+        for k in a:
+            self.assertTrue(all(x is y for x, y in zip(a[k], b[k])))
+            self.assertEqual(len(a[k]), len(b[k]))
+        for m in cat.members.values():
+            m.status = 'superseded'
+        after = groups(cat)
+        self.assertEqual(list(after), list(a))
+        for k in a:
+            self.assertEqual([m.name for m in after[k]], [m.name for m in a[k]])
+
+
 import io
 import contextlib
 from utils.epochs import cli as epochs_cli
@@ -1464,6 +1572,34 @@ class TestCli(unittest.TestCase):
             rc, out, err = _run(verb + ['--quiet'], self.src, self.d, tty=True)
             self.assertEqual(rc, 0, verb)
             self.assertNotIn('epochs: built', err, verb)
+
+    def test_every_verb_runs_end_to_end_against_a_fake_source(self):
+        # The suite has been green three separate times on this branch's
+        # parent while a Critical was live, so every verb gets walked,
+        # not just the ones a given change is about.
+        d = _tmpdir()
+        for name in ('MDC2025au', 'MDC2025an'):
+            write_epoch_file(d, propose_epoch(name + '_best_v1_0'))
+        verbs = [
+            (['propose', '--family', 'MDC2025'], 0),
+            (['members'], 0),
+            (['members', '--family', 'MDC2025', '--tier', 'nts'], 0),
+            (['gaps'], 0),
+            (['gaps', '--epoch', 'MDC2025au'], 0),
+            (['consistency'], 0),
+            (['consistency', '--family', 'MDC2025'], 0),
+            (['retire'], 0),
+            (['retire', '--family', 'MDC2025'], 0),
+            (['lookup', f'nts.mu2e.CeEndpointOnSpill.{AU}.root'], 0),
+            (['lookup', 'nope.mu2e.a.b.art'], 1),
+            (['index-cnfs'], 0),
+            (['publish', '--out', os.path.join(_tmpdir(), 'c.json')], 0),
+        ]
+        for argv, want in verbs:
+            rc, out, err = _run(argv, FakeSource(_small_graph()), d)
+            self.assertEqual(rc, want, f'{argv}: rc={rc} err={err}')
+            rc, out, err = _run(argv + ['--quiet'], FakeSource(_small_graph()), d)
+            self.assertEqual(rc, want, f'{argv} --quiet: rc={rc} err={err}')
 
     def test_malformed_epoch_file_is_exit_2(self):
         with open(os.path.join(self.d, 'MDC2025au.json'), 'w') as f:

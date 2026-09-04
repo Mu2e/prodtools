@@ -30,9 +30,16 @@ from typing import Dict
 
 from utils.epochs.graph import Catalog
 from utils.epochs.reports import count_warnings, gaps, incomplete_reasons, lookup, retire
+from utils.epochs.status import groups
 
 
 def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
+    # ONE grouping for the whole document. `lookup` (per member, below)
+    # and `count_warnings` each used to compute their own, so a
+    # ~1000-member catalog walked and sorted itself 1513 times to write
+    # one file. `groups(cat)` is a pure function of the member set and
+    # the `excluded` flags, neither of which anything here changes.
+    grouped = groups(cat)
     epochs = []
     for e in sorted(cat.epochs.values(), key=lambda e: e.name):
         members = [m for m in cat.members.values() if m.epoch == e.name]
@@ -40,7 +47,7 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         rows = []
         for m in members:
             g = gens.get(m.name)
-            info = lookup(cat, m.name)
+            info = lookup(cat, m.name, grouped)
             rows.append({'name': m.name, 'tier': m.tier, 'desc': m.desc, 'status': m.status,
                          'hold': m.hold, 'excluded': m.excluded,
                          'generation': g.label() if g else '', 'cnf': g.cnf if g else '',
@@ -64,7 +71,7 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         'gaps': gaps(cat),
         'incomplete': reasons,
         'retire': retire(cat) if not reasons else None,
-        'count_warnings': count_warnings(cat),
+        'count_warnings': count_warnings(cat, grouped=grouped),
     }
 
 
