@@ -11629,11 +11629,43 @@ class TestRunSubmissionsTool(unittest.TestCase):
         self.sl = sl
         self.db = os.path.join(_mkdtemp(), 'submissions.db')
 
-    def test_campaign_id_is_required(self):
-        import inspect
-        sig = inspect.signature(self.tools.run_submissions)
-        self.assertIs(sig.parameters['campaign_id'].default,
-                      inspect.Parameter.empty)
+    def test_bare_tick_has_no_campaign_filter(self):
+        """campaign_id=None is the bare `submissions run` -- the tick the
+        (nonexistent) cron would fire. It is the only way to close open
+        recovery rows once every campaign has left 'active': a fully
+        submitted campaign is 'complete' while its rows still verify,
+        and the scoped form refuses it as 'not active'. a02eafe added
+        this form but left behind the guard that pinned campaign_id as
+        required; these pins replace that guard."""
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.tools._all_campaigns') as ledger:
+                with patch('prodtools_mcp_write.runner.run_cli',
+                           return_value={'rc': 0, 'stdout': 'ok',
+                                         'stderr': ''}) as run:
+                    out = self.tools.run_submissions(run_as='self')
+        self.assertEqual(run.call_args[0][0], ['bin/submissions', 'run'])
+        # No id to validate: an empty top-up is a real answer here
+        # ("nothing active"), not a masked typo.
+        ledger.assert_not_called()
+        self.assertIsNone(out['campaign_id'])
+        self.assertFalse(out['needs_attention'])
+
+    def test_bare_tick_still_needs_confirm_for_mu2epro(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(PermissionError):
+                self.tools.run_submissions(run_as='mu2epro')
+        run.assert_not_called()
+
+    def test_bare_tick_other_rc_raises(self):
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli',
+                       return_value={'rc': 1, 'stdout': '',
+                                     'stderr': 'boom'}):
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.tools.run_submissions(run_as='self')
+        self.assertIn('boom', str(ctx.exception))
 
     def _active_campaign(self, tarball='cnf.mu2e.X.Y.0.tar', njobs=10):
         return self.sl.create_campaign(
