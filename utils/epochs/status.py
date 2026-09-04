@@ -4,7 +4,9 @@
   An own-series name (purpose None) competes in every purpose group of
   its (family, tier, desc) and ranks lowest in each (see `groups`).
 - Within a group the highest DsconfKey.sort_key() is the winner, unless
-  an `order` pin names one.
+  an `order` pin names one. Winning ANY group it competes in is enough
+  (see `_winners`); an `order` pin that matches no group at all is
+  reported in `cat.pin_problems`, never dropped.
 - Winner is `current` if every member parent is current, else `stale`.
 - Non-winners are `superseded`.
 - Excluded members get status `excluded` and never compete.
@@ -75,27 +77,69 @@ def group_keys_of(grouped: Dict[GroupKey, List[Member]], m: Member) -> List[Grou
     return sorted(gk for gk in grouped if gk[:3] == k[:3])
 
 
-def _order_pins(cat: Catalog) -> Dict[GroupKey, str]:
-    pins = {}
-    for e in cat.epochs.values():
+def _order_pins(cat: Catalog) -> Dict[GroupKey, Dict[str, str]]:
+    """Group key -> {winner dsconf, the epoch file that asked for it}.
+
+    Two epoch files of one family pinning the same group is itself a pin
+    that lands nowhere (one silently overrides the other), so it is
+    reported rather than resolved."""
+    pins: Dict[GroupKey, Dict[str, str]] = {}
+    for e in sorted(cat.epochs.values(), key=lambda e: e.name):
         for p in e.pins['order']:
-            pins[(e.family, p['tier'], p['desc'], p['purpose'])] = p['winner']
+            key = (e.family, p['tier'], p['desc'], p['purpose'])
+            if key in pins and pins[key]['winner'] != p['winner']:
+                _problem(cat, f"order pin in epoch {e.name} for group {key} names "
+                              f"{p['winner']!r}, but epoch {pins[key]['epoch']} already pinned "
+                              f"{pins[key]['winner']!r} for that group: not applied")
+                continue
+            pins[key] = {'winner': p['winner'], 'epoch': e.name}
     return pins
 
 
+def _problem(cat: Catalog, line: str):
+    """One line in `cat.pin_problems`, which `retire()` refuses to run
+    past. Deduplicated: `assign_status` may be run twice on one catalog,
+    and a doubled refusal message helps nobody."""
+    if line not in cat.pin_problems:
+        cat.pin_problems.append(line)
+
+
 def _winners(cat: Catalog) -> Dict[str, bool]:
+    """dataset -> did it win ANY group it competes in (NEW-5).
+
+    A lettered member competes in exactly one group, so for it this is
+    the plain "is it the chosen one". An own-series (`purpose=None`)
+    member competes in every purpose group of its `(family, tier, desc)`,
+    and `win` used to be OVERWRITTEN once per group, last write wins —
+    so an `order` pin naming it in one purpose group made the outcome
+    depend on the insertion order of the groups dict. Winning ANY group
+    now makes it current: that is what an `order` pin is placed to do
+    (protect a dataset), and keeping the dataset is the fail-closed
+    direction for a tool whose output is a delete list.
+
+    An `order` pin whose group key matches no group at all is a broken
+    instruction, not "no pin" (NEW-4): it goes to `cat.pin_problems` and
+    `retire()` refuses. I5 made this reachable for a LEGITIMATE pin — an
+    `order` pin written against an own-series group no longer matches
+    any group once a lettered sibling exists — so the ordering
+    correction an operator placed deliberately must not evaporate."""
     pins = _order_pins(cat)
+    grouped = groups(cat)
+    for key in sorted(pins):
+        if key not in grouped:
+            _problem(cat, f"order pin in epoch {pins[key]['epoch']} names group {key}, "
+                          f"which no member competes in: not applied")
     win: Dict[str, bool] = {}
-    for key, members in groups(cat).items():
+    for key, members in grouped.items():
         chosen = members[0]
         if key in pins:
-            named = [m for m in members if m.dsconf == pins[key]]
+            named = [m for m in members if m.dsconf == pins[key]['winner']]
             if not named:
-                raise ValueError(f'order pin for {key} names {pins[key]!r}, '
+                raise ValueError(f"order pin for {key} names {pins[key]['winner']!r}, "
                                  f'which is not among {[m.dsconf for m in members]}')
             chosen = named[0]
         for m in members:
-            win[m.name] = (m is chosen)
+            win[m.name] = win.get(m.name, False) or (m is chosen)
     return win
 
 

@@ -350,7 +350,8 @@ def _input_of_epoch(cat: Catalog, rec: Dict, epoch: str) -> bool:
 
 
 def _apply_pins(cat: Catalog):
-    """Stamp `exclude`/`hold` on the member OR INPUT each pin names.
+    """Stamp `exclude`/`hold` on the member OR INPUT each pin names, and
+    report every pin of any kind that lands nowhere.
 
     Before 2026-09-04 a pin was resolved with `cat.members.get()` alone
     and a miss did nothing at all, so (a) an input could not be held —
@@ -358,6 +359,13 @@ def _apply_pins(cat: Catalog):
     retire list — and (b) a typo'd dataset name in a `hold` read as "no
     protection requested" and was reported nowhere. Both now land in
     `cat.pin_problems`, which `retire()` refuses to run past.
+
+    A `not_expected` pin naming a desc no dig of the epoch has is the
+    same failure with a quieter symptom (NEW-4): it suppresses no gap
+    row, and the gap it was written to explain comes back unexplained.
+    It is reported here; the `order` pins are checked in
+    `status._winners`, which is where the groups exist. A pin that
+    matches nothing is never "no pin"; it is a broken instruction.
     """
     for e in sorted(cat.epochs.values(), key=lambda e: e.name):
         for kind, attr in (('exclude', 'excluded'), ('hold', 'hold')):
@@ -384,6 +392,12 @@ def _apply_pins(cat: Catalog):
                 cat.pin_problems.append(
                     f'{kind} pin in epoch {e.name} names {ds}, which is neither a member nor '
                     f'an input of the catalog')
+        for pin in e.pins['not_expected']:
+            if not any(m.epoch == e.name and m.tier == 'dig' and m.desc == pin['desc']
+                       for m in cat.members.values()):
+                cat.pin_problems.append(
+                    f"not_expected pin in epoch {e.name} names desc {pin['desc']!r}, which no "
+                    f'dig of that epoch has: not applied')
         if e.status == 'frozen':
             for m in cat.members.values():
                 if m.epoch == e.name and not m.hold:

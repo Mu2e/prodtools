@@ -13,6 +13,12 @@ from typing import Dict, List, NamedTuple
 from utils.epochs.dsconf import DsconfParseError, parse_dsconf
 
 EPOCH_STATUSES = ('current', 'frozen', 'retired')
+# The tiers `reports.gaps` expects under every dig, and therefore the only
+# tiers a `not_expected` pin can suppress a gap row at. It lives here, next
+# to the pin schema, so a pin naming a tier gaps never asks about is
+# refused when the file loads instead of evaporating at report time
+# (NEW-4); `reports.EXPECTED_TIERS` is this same tuple.
+GAP_TIERS = ('mcs', 'nts')
 PIN_KINDS = {
     'exclude': ('dataset', 'reason'),
     'hold': ('dataset', 'reason'),
@@ -56,6 +62,15 @@ def _check_pins(path, pins):
             missing = [f for f in PIN_KINDS[kind] if f not in e]
             if missing:
                 raise EpochFileError(f'{path}: pins.{kind} entry missing {missing}: {e}')
+            if kind == 'not_expected':
+                tiers = e['tiers']
+                if not isinstance(tiers, list) or not tiers:
+                    raise EpochFileError(f'{path}: pins.not_expected tiers must be a '
+                                         f'non-empty list: {e}')
+                bad = [t for t in tiers if t not in GAP_TIERS]
+                if bad:
+                    raise EpochFileError(f'{path}: pins.not_expected names tier(s) {bad}, '
+                                         f'which gaps never reports; expected {GAP_TIERS}')
             out[kind].append(e)
     return out
 

@@ -687,6 +687,65 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(keys, {('MDC2025', 'mcs', 'CeEndpointOnSpill', 'best'),
                                 ('MDC2025', 'mcs', 'CeEndpointOnSpill', 'perfect')})
 
+    def test_order_pin_on_an_own_series_name_wins_every_group_it_competes_in(self):
+        # NEW-5: an own-series member competes in EVERY purpose group of
+        # its (family, tier, desc), and `win` was overwritten once per
+        # group -- last write wins -- so an order pin naming it in one
+        # purpose group made the answer depend on the insertion order of
+        # the groups dict. Winning any group makes it current: that is
+        # what the pin was placed to do, and keeping the dataset is the
+        # fail-closed direction for a tool that emits a delete list.
+        g = _small_graph()
+        perfect = 'mcs.mu2e.CeEndpointOnSpill.MDC2025au_perfect_v1_5.art'
+        own = 'mcs.mu2e.CeEndpointOnSpill.MDC2025-002.art'
+        g[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']['children'] += [perfect, own]
+        g[perfect] = {'n': 100, 'children': []}
+        g[own] = {'n': 100, 'children': []}
+        e = _epoch('MDC2025au', pins={'order': [
+            {'tier': 'mcs', 'desc': 'CeEndpointOnSpill', 'purpose': 'best',
+             'winner': 'MDC2025-002', 'reason': 'the paper ran on the legacy series'}]})
+        cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertEqual(cat.pin_problems, [])
+        # it loses the perfect group and wins the pinned best group
+        self.assertEqual(cat.members[own].status, 'current')
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'].status, 'superseded')
+        self.assertEqual(cat.members[perfect].status, 'current')
+        self.assertNotIn(own, {x['dataset'] for x in retire(cat)})
+
+    def test_order_pin_matching_no_group_makes_retire_refuse(self):
+        # NEW-4: C2 made an unmatched hold/exclude refuse; an order pin
+        # still evaporated. I5 made that reachable for a LEGITIMATE pin --
+        # a (..., purpose: null) group stops existing the moment a
+        # lettered sibling appears -- so the inversion an operator
+        # corrected on purpose silently returns and the dataset it
+        # protected is proposed for deletion.
+        g = _small_graph()
+        own = 'nts.mu2e.CeEndpointOnSpill.MDC2025-001.root'
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(own)
+        g[own] = {'n': 100, 'children': []}
+        e = _epoch('MDC2025au', pins={'order': [
+            {'tier': 'nts', 'desc': 'CeEndpointOnSpill', 'purpose': None,
+             'winner': 'MDC2025-001', 'reason': 'paper 2026'}]})
+        cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertTrue(any('no member competes in' in line for line in cat.pin_problems),
+                        cat.pin_problems)
+        with self.assertRaises(ValueError) as ctx:
+            retire(cat)
+        self.assertIn('order pin', str(ctx.exception))
+
+    def test_two_epochs_pinning_one_group_is_reported(self):
+        # the same class: the second pin lands nowhere because the first
+        # already owns the group.
+        a = _epoch('MDC2025au', pins={'order': [
+            {'tier': 'nts', 'desc': 'CeEndpointOnSpill', 'purpose': 'best',
+             'winner': AU, 'reason': 'a'}]})
+        b = _epoch('MDC2025an', pins={'order': [
+            {'tier': 'nts', 'desc': 'CeEndpointOnSpill', 'purpose': 'best',
+             'winner': f'{AU}-001', 'reason': 'b'}]})
+        cat = _cat(epochs={'MDC2025au': a, 'MDC2025an': b})
+        self.assertTrue(any('already pinned' in line for line in cat.pin_problems),
+                        cat.pin_problems)
+
     def test_group_key_shape(self):
         cat = _cat()
         m = cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']
@@ -717,6 +776,31 @@ class TestGaps(unittest.TestCase):
             {'desc': 'ensembleMDS3b', 'tiers': ['mcs', 'nts'], 'reason': 'kept at dig'}]})
         cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
         self.assertFalse([x for x in gaps(cat) if x['desc'] == 'ensembleMDS3b'])
+
+    def test_not_expected_pin_naming_an_absent_desc_makes_retire_refuse(self):
+        # NEW-4: a typo'd desc suppressed nothing and was reported
+        # nowhere, so the gap it was written to explain came back
+        # unexplained and the pin read as "no pin".
+        g = _small_graph()
+        g[f'dig.mu2e.ensembleMDS3b.{AU}.art'] = {'n': 10, 'children': []}
+        e = _epoch('MDC2025au', pins={'not_expected': [
+            {'desc': 'ensembleMDS3bb', 'tiers': ['mcs', 'nts'], 'reason': 'typo'}]})
+        cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertTrue(any('ensembleMDS3bb' in line for line in cat.pin_problems),
+                        cat.pin_problems)
+        with self.assertRaises(ValueError):
+            retire(cat)
+
+    def test_not_expected_pin_naming_an_unreported_tier_is_refused_at_load(self):
+        d = _tmpdir()
+        with open(os.path.join(d, 'MDC2025au.json'), 'w') as f:
+            json.dump({'name': 'MDC2025au', 'purpose': '', 'status': 'current',
+                       'roots': ['dig.mu2e.%.MDC2025au_%.art'],
+                       'pins': {'not_expected': [
+                           {'desc': 'X', 'tiers': ['nst'], 'reason': 'typo'}]}}, f)
+        with self.assertRaises(EpochFileError) as ctx:
+            load_epoch_files(d)
+        self.assertIn('nst', str(ctx.exception))
 
     def test_frozen_epoch_reports_no_missing(self):
         g = _small_graph()

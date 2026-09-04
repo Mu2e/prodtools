@@ -5,13 +5,16 @@ Decisions 11, 12, 13. Nothing here reads a clock.
 from typing import Dict, List, Optional
 
 from utils.epochs.dsconf import parse_dsconf
+from utils.epochs.epoch_files import GAP_TIERS
 from utils.epochs.generation import Generation  # noqa: F401  (type only)
 from utils.epochs.graph import Catalog, Member
 from utils.epochs.status import group_keys_of, groups
 
-EXPECTED_TIERS = ('mcs', 'nts')
+EXPECTED_TIERS = GAP_TIERS
 # The desc at mcs/nts is the dig desc (reco keeps the desc). A reco that
 # changes desc (-KK, -CH) is a different physics line by convention.
+# The tuple itself lives in epoch_files so a `not_expected` pin naming a
+# tier gaps never asks about is refused when the file loads (NEW-4).
 
 
 def _winner_of(cat: Catalog, m: Member) -> Optional[Member]:
