@@ -240,17 +240,14 @@ When regenerating, read in this order:
       `data/epochs/cnf_index.json`, mapping each dataset back to the
       cnf that produced it; `publish --out FILE` writes the
       `{"epochs":[{"name","datasets"}]}` file the sim-epochs MCP server
-      reads, with the richer fields carried alongside — and note the two
-      states in which the document is not to be read at face value:
+      reads, with the richer fields carried alongside — and note the
+      one state in which the document is not to be read at face value:
       while `incomplete` is non-empty, `retire` is `null` AND the
       `epochs[].datasets` grouping may be wrong for a contested subtree
       (a dig whose root claim disagreed with the epoch it was walked in
       under keeps its own corrected epoch, but the members below it
       still carry the inherited one — which is the reason `retire` is
-      `null`), and while `input_retirement_refused` is a non-empty
-      string `retire` carries member candidates only, with
-      `input_graph_incomplete` listing the reasons and `input_depth`
-      naming the cap that was in force, `null` for a closure walk). `--family` and
+      `null`). `--family` and
       `--epoch` filter which rows a verb PRINTS — every verb still
       judges the complete catalog discovered from SAM, so a filtered
       `retire` cannot omit a cross-family dependency. Say exactly which
@@ -259,15 +256,7 @@ When regenerating, read in this order:
       accepts `--epoch` without using it; `lookup` accepts `--family`,
       `--epoch` and `--json` and uses none of them (it always prints
       JSON); `index-cnfs` accepts `--family` (no `--epoch`) and uses
-      neither; `publish` takes only `--out`. `--input-depth N`
-      is a top-level flag, before the verb, and caps how far above a dig
-      the input walk goes; by DEFAULT it is unset and the walk runs to
-      natural closure — the top of the real parentage DAG — so no cap
-      cuts it. Setting it is an explicit opt-in to a cheap partial run,
-      and it costs the whole input section of `retire` (below). No cap
-      is NOT the same as a complete input graph: an unparseable dsconf,
-      a non-`mu2e` owner in the lineage or a dropped tier severs a walk
-      with no cap in sight, and costs the input section just the same. `status` is
+      neither; `publish` takes only `--out`. `status` is
       `current | stale | superseded`, always recomputed from SAM,
       never stored in the epoch file; `frozen` is an epoch standing (a
       hold against deletion), never a dataset status. No timestamps
@@ -276,45 +265,19 @@ When regenerating, read in this order:
       dataset has far fewer files than a sibling. `-NNN` on a dsconf is
       a bare collision counter, not a version — a rename across desc
       (old name superseded by a new one) needs a manual `exclude` pin
-      with a reason, never inferred. A `hold`/`exclude` pin may name an
-      INPUT as well as a member, and a held input is kept off the retire
-      list exactly as a held member is; freezing an epoch holds its
-      inputs too (an input every one of whose digs belongs to a frozen or
-      retired epoch, at least one of them frozen), and an excluded member
-      keeps its own inputs off the list, since the tool refuses to delete
-      the member itself. `retire` refuses to run against
+      with a reason, never inferred. A `hold`/`exclude` pin names a
+      member only — input retirement (deleting upstream datasets: stops
+      catalogues, pileup, `dts` primaries) is not modeled in this
+      version, removed 2026-09-04 after repeated false-DELETE bugs; see
+      CONTEXT.md, "Input", and
+      `docs/adr/0005-input-retirement-proves-deadness-positively.md`
+      for what is deferred and why. `retire` refuses to run against
       an incomplete catalog — a dig letter family with no epoch file, a
       dig dataset matching none of the loaded roots, or a pin that could
       not be applied (it names nothing in the catalog, or something
       owned by another epoch) — and names the remedy
       (`propose --family F`) in the refusal; a dropped protection pin is
-      a refusal, never a silent no-op. Whenever the input
-      graph is KNOWN-INCOMPLETE — the `--input-depth` cap cut a walk, a
-      dsconf above or below a member failed to parse, a dataset in the
-      lineage is not owned by `mu2e`, or a dropped tier might carry
-      lineage — `retire` proposes NO input at all, not "every input
-      except the marked ones": a known-incomplete input graph yields no
-      input retirement proposals, the same fail-closed refusal as an
-      incomplete catalog. The reason is printed on stderr
-      (`input retirement refused: ...`, with the count of places by
-      kind and the remedy for each kind present), carried in the
-      published document's `input_retirement_refused` key with the
-      machine-readable `input_graph_incomplete` list beside it, and
-      included in `lookup`'s payload for an input. The member section is
-      unaffected — a member is judged by its own status, never by what
-      reaches it. Document that this is EXPECTED to fire on production
-      data (30 dsconfs did not parse in the 2026-09-03 pre-flight) and
-      that there is deliberately NO flag to bypass it: an input cannot
-      be shown unused while part of the lineage is unreadable. The
-      remedy depends on the cause — re-run without `--input-depth` for a
-      cap, make the names parseable for the rest. Say this rather than
-      "N inputs were held back": the counts name places the graph is
-      unread, and which inputs that makes unsafe cannot be read off
-      them. Liveness itself is one relation over every parentage edge
-      the catalog holds — a dataset is kept whenever any current, stale
-      or excluded member is reachable from it, including through a
-      downstream member's own recorded parents, not only through the dig
-      an upward walk started from. A pin of ANY kind that matches
+      a refusal, never a silent no-op. A pin of ANY kind that matches
       nothing — a `hold`/`exclude` naming an unknown dataset, an `order`
       pin whose group no member competes in, a `not_expected` pin naming
       a desc no dig of the epoch has — is a refusal, not a no-op; a
@@ -322,14 +285,12 @@ When regenerating, read in this order:
       when the epoch file loads (exit 2). Exit codes: `2` for
       a malformed epoch file, `3` for a SAM error, a dsconf that fails
       to parse, or another catalog-completeness refusal, and `1` for
-      `lookup` of a dataset the catalog does not know. A full catalog
-      build over the three families (MDC2025, Run1B, MDC2020) took about
-      7 minutes when the upward walk was capped at 3 levels (measured
-      2026-09-03); walking to closure, now the default, adds one
-      memoized `parents` and `count_files` query per distinct ancestor
-      above that old frontier and takes somewhat longer — do not quote a
-      new figure until one is measured. `index-cnfs` takes about 3.5
-      minutes. Setup,
+      `lookup` of a dataset the catalog does not know. `index-cnfs`
+      takes about 3.5 minutes (measured 2026-09-03); a full catalog
+      build's timing has not been remeasured since 2026-09-04 removed
+      the upward input walk (the earlier ~7-minute figure included that
+      walk, capped at 3 levels, and is no longer representative — do
+      not quote it for this version). Setup,
       verified against the imports on 2026-09-04: the only external
       dependency is `samweb_client`, reached lazily through
       `utils.samweb_wrapper` (`list_files`, `count_files`,
@@ -340,7 +301,7 @@ When regenerating, read in this order:
       which is where `samweb` comes from — is exactly what `epochs`
       needs; no Musing and no `muse setup SimJob`. Design:
       `wiki/pages/2026-09-02-sim-epochs-design.md`, glossary
-      `CONTEXT.md`, ADRs 0003 and 0004.
+      `CONTEXT.md`, ADRs 0003, 0004 and 0005.
     - `submissions` — name, one-line role ("direct-submission subsystem
       CLI — status/run/pause/resume/cancel/complete/reconcile/resubmit"),
       the verb table

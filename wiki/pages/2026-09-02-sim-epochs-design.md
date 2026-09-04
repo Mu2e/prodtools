@@ -113,7 +113,11 @@ re-reco'd; no `ar` digs exist), so the epoch name is not the reco tag.
 - `status` ∈ {current, frozen, retired}: current = being worked on;
   frozen = a hold on every member, nothing expected to change, no gap
   report; retired = every member is a delete candidate. **A freeze also
-  holds the epoch's inputs** (decided 2026-09-04): an input is held when
+  holds the epoch's inputs** (decided 2026-09-04, **deferred**: input
+  retirement itself was removed from the branch before this could be
+  verified safe on production data — §17 row 20, ADR 0005 — so no input
+  hold is implemented today; the rest of this bullet records the design
+  intent for the rebuild, not current behavior): an input is held when
   every dig it feeds is a member of a frozen or retired epoch and at
   least one of them is frozen. Freezing Run1Bah means "nothing here gets
   deleted", and its digs are normally superseded — a newer letter is why
@@ -141,8 +145,12 @@ Members are computed, never listed by hand.
 ## 5. Membership rule
 
 1. **Members = parentage closure of the roots**, walking children in
-   metacat. dts (and anything above the roots) are recorded as `inputs`,
-   not members.
+   metacat. dts (and anything above the roots) are conceptually
+   `inputs`, not members — **not tracked by the code in this version**
+   (input retirement removed 2026-09-04, §17 row 20; ADR 0005): the
+   catalog no longer records a separate collection for them, and a
+   lookup on one reads as `unknown`, the same as a name the catalog
+   never saw at all.
 2. **Group key = (family, tier, desc, purpose)** for a lettered member,
    where family is the leading dsconf token (`MDC2025`, `Run1B`). Status crosses epochs
    (grill, 2026-09-03): `CeEndpointOnSpill@ar` and `@au` are in
@@ -210,7 +218,12 @@ Members are computed, never listed by hand.
    conditions or code, which in practice is when the campaign letters
    change. This is the same judgment already made when choosing to bump
    the letter versus the conditions version.
-6. **Input retire rule (derived, generalized 2026-09-03):** any input
+6. **Deferred (removed 2026-09-04, §17 row 20; ADR 0005): input
+   retirement is not implemented in this version.** `retire()` reports
+   member candidates only. The rule below is the ORIGINAL design intent,
+   kept as the record of what a rebuild in a separate branch targets —
+   read it as history, not current behavior. **Input retire rule
+   (derived, generalized 2026-09-03):** any input
    above the roots (dts, stop and pileup catalogues, at any depth) is
    retirable when no `current` or `stale` member descends from it, and
    it is not held. An `excluded` member counts as a live descendant
@@ -528,6 +541,24 @@ The part I expect you to push on: roots = dig rather than geometry+conditions. W
 | 17 | Diff | Mechanical cnf fields + optional human `notes` pin. |
 | 18 | Consistency | Report only, never a status. |
 | 19 | `-NNN` suffix | Bare collision counter; meaning lives in the catalog. |
+| 20 | Input retirement | Removed 2026-09-04; rebuilt in its own branch as positive proof over the downward closure. |
+
+**Row 20, one paragraph.** Rule 13's input retirement (row 13 above) was
+a negative search: walk upward from each root, propose deleting
+whatever no live member's reachability was found to reach. Across five
+review rounds that produced eight false-DELETE Criticals and three
+"this is now structural" claims each broken by the next round, because
+a negative search over a best-effort traversal always has an unwalked
+frontier somewhere — hardening the detector for one shape of
+incompleteness (a depth cap, an unparseable dsconf, a foreign owner)
+kept leaving another shape (a downward-walk edge never expanded
+upward, a dropped dig definition) for the next reviewer to find. It is
+removed rather than hardened a sixth time (ADR 0005) and will be
+rebuilt in its own branch on the inverted design: prove an input dead
+by enumerating its full downward closure and requiring every node in
+it to be a known member that is superseded or in a retired epoch —
+any unknown, unparseable, foreign, held or live node blocks the
+proposal. `retire()` reports member candidates only until then.
 
 Follow-ups outside this design: the log dataset for generic entries is
 named after the INPUT (`log…MDC2025au_best_v1_5.log` for the `-001`
@@ -579,3 +610,10 @@ question is answered.
   about 3.5 minutes, and every individual SAM query is sub-second. The
   earlier 10-minute stall traced to un-memoized ancestor walking, not
   to SAM itself.
+- **2026-09-04, for the record:** the "23 inputs" line above (this
+  run's retire list) and the "27 distinct member or input names do not
+  parse" line both describe input retirement, which was removed the
+  same day (§17 row 20; ADR 0005). Numbers on this page are left
+  exactly as measured — nothing here is corrected or re-run — but a
+  retire list built with today's code reports 26 superseded members and
+  no input lines at all, from this same catalog.

@@ -137,57 +137,31 @@ it by parentage. Roots are the only curated part of an Epoch.
 ## Input (of an Epoch)
 
 A dataset upstream of a Root — `dts`, stop and pileup catalogues. Inputs
-are recorded for provenance and shared across Epochs; they are not
-members and do not take an Epoch's standing. An Input is retirable when
-nothing current or stale descends from it and it is not held.
+are shared across Epochs; they are not members and do not take an
+Epoch's standing.
 
-Three rules make that "nothing descends from it" fail closed rather than
-open:
+**Not modeled in this version (removed 2026-09-04).** Five review
+rounds tried to retire Inputs by negative search — walk upward from
+each Root, and propose deleting whatever no live Member was found to
+reach — and that design produced eight false-DELETE Criticals: every
+fix closed the one shape of incompleteness a reviewer had found, and
+the next round found another shape the walk had silently left unread
+(a depth cap, an unparseable dsconf, a foreign owner, a frontier node
+neither expanded nor registered). The negative search always has an
+unwalked frontier somewhere; hardening the detector kept finding a new
+one. It was removed rather than hardened a sixth time, and will be
+rebuilt in its own branch on an inverted design: prove an Input dead by
+enumerating its full downward closure and requiring every node in that
+closure to be a known Member that is superseded or in a retired Epoch —
+any unknown, unparseable, foreign, held or live node blocks the
+proposal (positive proof, not negative search). See
+`docs/adr/0005-input-retirement-proves-deadness-positively.md`.
 
-- An **excluded** member confers liveness exactly as a current or stale
-  one does. `retire` refuses to list an excluded member, so proposing to
-  delete its sole upstream Input in the same run would be incoherent: we
-  are keeping the dataset, so we keep what made it.
-- A **frozen** Epoch holds its Inputs as well as its members. An Input
-  is held when every dig it feeds is a member of a frozen or retired
-  Epoch and at least one of those Epochs is frozen. An Input that also
-  feeds a current Epoch's dig is judged by that line's status as before,
-  and one feeding only retired Epochs stays retirable.
-- **Liveness is one relation over every edge the catalog holds**
-  (2026-09-04). The catalog records the same DAG several ways —
-  `Member.parents`, `Member.inputs` (a downstream member's parents that
-  no walk claimed), `cat.inputs[x]['parents']`, and the dig
-  `descendants` sets — and "nothing descends from it" used to be read
-  off the `descendants` set alone, which names only the dig each upward
-  walk started from. An Input feeding a *current* member below a
-  superseded dig was therefore proposed for deletion while the catalog
-  itself recorded the consumer. There is now exactly one function that
-  answers "is this dataset live", over the union of every edge, and
-  `retire` has no other way to decide.
-- The upward walk runs to **natural closure** by default (2026-09-04):
-  it stops at the top of the real DAG, not at a fixed depth, so no *cap*
-  cuts it. That is not the same as a complete Input graph.
-- **The Input graph is known-incomplete** whenever a walk stopped early
-  or dropped an edge: the `--input-depth` cap, a dsconf that does not
-  parse (above a dig or below one), a dataset in the lineage not owned
-  by `mu2e` (the source never returns it), a dropped tier that might
-  carry lineage. Each severs the graph identically. All of them are
-  recorded in one register, and while it is non-empty `retire` proposes
-  **no Input at all**, not "every Input except the marked ones". The
-  member section is unaffected — a member is judged by its own status,
-  never by what reaches it. This is the same fail-closed stance `retire`
-  takes on an incomplete catalog, an unapplied pin and an Epoch
-  conflict, and it replaces four rounds of per-Input detectors: each was
-  correct for the shape it was given, and the next review found another
-  shape of incompleteness reaching the same false DELETE. Deciding per
-  Input on a graph known to be incomplete is the reasoning that produced
-  them.
-- **Expect the Input section to be refused on production data**, and do
-  not treat that as a fault to design around: 30 legacy dsconfs did not
-  parse in the 2026-09-03 pre-flight, and an Input cannot be shown
-  unused while part of the lineage is unreadable. The remedy is to make
-  the names parseable, not to pass a flag — there is deliberately no
-  flag that bypasses the refusal.
+The term stays in this glossary because the rebuild needs it; only the
+retirement rule is gone from the code. A held Epoch's freeze protecting
+its Inputs, an excluded Member conferring liveness upstream, and every
+other design intent noted in the wiki page's §4/§5 are the target for
+that rebuild, not current behavior.
 
 ## Family
 
