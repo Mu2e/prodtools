@@ -695,6 +695,37 @@ class TestLookup(unittest.TestCase):
         self.assertEqual(lookup(cat, 'nope.mu2e.x.y.art')['kind'], 'unknown')
 
 
+from utils.epochs.reports import count_warnings
+
+
+class TestCountWarnings(unittest.TestCase):
+    def test_thin_winner_is_warned(self):
+        g = _small_graph()
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']['n'] = 10     # winner, thin
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}.root']['n'] = 100        # superseded, full
+        cat = _cat(g)
+        w = count_warnings(cat)
+        self.assertEqual([x['dataset'] for x in w], [f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'])
+        self.assertEqual((w[0]['nfiles'], w[0]['sibling'], w[0]['sibling_nfiles']),
+                         (10, f'nts.mu2e.CeEndpointOnSpill.{AU}.root', 100))
+
+    def test_no_warning_when_winner_is_full(self):
+        cat = _cat()   # both nts at 100 files
+        self.assertEqual([x for x in count_warnings(cat)
+                          if x['dataset'].startswith('nts.mu2e.CeEndpointOnSpill')], [])
+
+    def test_ratio_boundary_and_excluded_ignored(self):
+        g = _small_graph()
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']['n'] = 50
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}.root']['n'] = 100
+        self.assertEqual(count_warnings(_cat(g), ratio=0.5), [])        # 50 is not < 50
+        self.assertEqual(len(count_warnings(_cat(g), ratio=0.6)), 1)
+        e = _epoch('MDC2025au', pins={'exclude': [
+            {'dataset': f'nts.mu2e.CeEndpointOnSpill.{AU}.root', 'reason': 'bad'}]})
+        cat = _cat(g, {'MDC2025au': e, 'MDC2025an': _epoch('MDC2025an')})
+        self.assertEqual(count_warnings(cat, ratio=0.6), [])            # excluded sibling ignored
+
+
 import hashlib
 import tarfile
 from utils.epochs.generation import (Generation, read_generation, build_cnf_index, cnf_for,
@@ -909,6 +940,11 @@ class TestPublish(unittest.TestCase):
         self.assertIsInstance(doc['gaps'], list)
         self.assertIsInstance(doc['retire'], list)
 
+    def test_count_warnings_key_is_a_list(self):
+        cat = _cat()
+        doc = catalog_document(cat, gens={}, generated_at='x')
+        self.assertIsInstance(doc['count_warnings'], list)
+
     def test_write_is_valid_json_and_deterministic(self):
         cat = _cat()
         doc = catalog_document(cat, gens={}, generated_at='x')
@@ -1018,6 +1054,16 @@ class TestCli(unittest.TestCase):
         rc, out, err = _run(['retire'], src, self.d)
         self.assertEqual(rc, 3)
         self.assertIn('propose --family Run1B', err)
+
+    def test_count_warning_goes_to_stderr(self):
+        g = _small_graph()
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root']['n'] = 10     # winner, thin
+        g[f'nts.mu2e.CeEndpointOnSpill.{AU}.root']['n'] = 100        # superseded, full
+        src = FakeSource(g)
+        rc, out, err = _run(['members'], src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn('count warning:', err)
+        self.assertNotIn('count warning:', out)
 
 
 if __name__ == '__main__':

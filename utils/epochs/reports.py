@@ -146,6 +146,31 @@ def lookup(cat: Catalog, dataset: str) -> Dict:
     return {'kind': 'unknown', 'dataset': dataset}
 
 
+def count_warnings(cat: Catalog, ratio: float = 0.5) -> List[Dict]:
+    """Decision 4: file count is the one diagnostic. For every group, if the
+    winner (the current or stale member) has far fewer files than its
+    largest superseded sibling, warn — the signature of a top-up
+    masquerading as a version. A warning is never a status: nothing here
+    touches `m.status`, and this reads no clock."""
+    out = []
+    for members in groups(cat).values():
+        winner = next((m for m in members if m.status in ('current', 'stale')), None)
+        if winner is None:
+            continue
+        superseded = [m for m in members if m.status == 'superseded']
+        if not superseded:
+            continue
+        sibling = max(superseded, key=lambda m: m.nfiles)
+        if winner.nfiles < ratio * sibling.nfiles:
+            out.append({'dataset': winner.name, 'nfiles': winner.nfiles,
+                        'sibling': sibling.name, 'sibling_nfiles': sibling.nfiles,
+                        'note': f'winner has {winner.nfiles} files, superseded sibling has '
+                                f'{sibling.nfiles}: top-up or in-flight remake? pin `order` '
+                                f'if the older one is the real current'})
+    out.sort(key=lambda x: x['dataset'])
+    return out
+
+
 def consistency(cat: Catalog, gens: Dict[str, Optional['Generation']]) -> List[Dict]:
     """Per (family, tier): how many current members sit on each generation,
     which descs are on the minority ones. 'unknown' = no cnf found."""

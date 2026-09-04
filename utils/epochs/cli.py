@@ -21,7 +21,7 @@ from utils.epochs.epoch_files import (EpochFileError, load_epoch_files, propose_
 from utils.epochs.generation import build_cnf_index, generations
 from utils.epochs.graph import build_catalog
 from utils.epochs.publish import catalog_document, write_catalog
-from utils.epochs.reports import consistency, gaps, lookup, purge_lines, retire
+from utils.epochs.reports import consistency, count_warnings, gaps, lookup, purge_lines, retire
 from utils.epochs.status import assign_status
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -107,6 +107,9 @@ def _report_noise(cat, source):
               f"run 'epochs propose --family {fam}'", file=sys.stderr)
     for name in getattr(source, 'unparseable_defs', None) or []:
         print(f'unparseable dig definition: {name}', file=sys.stderr)
+    for w in count_warnings(cat):
+        print(f"count warning: {w['dataset']} {w['nfiles']} files vs "
+              f"{w['sibling']} {w['sibling_nfiles']}", file=sys.stderr)
 
 
 def cmd_propose(args, source):

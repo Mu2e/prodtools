@@ -15,7 +15,7 @@ import json
 from typing import Dict
 
 from utils.epochs.graph import Catalog
-from utils.epochs.reports import gaps, incomplete_reasons, lookup, retire
+from utils.epochs.reports import count_warnings, gaps, incomplete_reasons, lookup, retire
 
 
 def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
@@ -47,6 +47,7 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         'gaps': gaps(cat),
         'incomplete': reasons,
         'retire': retire(cat) if not reasons else None,
+        'count_warnings': count_warnings(cat),
     }
 
 
