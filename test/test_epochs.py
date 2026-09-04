@@ -191,10 +191,15 @@ class FakeSource:
                 if c.split('.')[0] not in DROP_TIERS}
 
     def parents(self, dataset):
+        # SamSource.parents counts the PARENT FILES this child consumed,
+        # which is not the parent dataset's file count; a node may carry
+        # 'used' to model that gap (4907 files of a 5000-file pileup set).
         self.calls['parents'].append(dataset)
-        return {p: self.graph[p]['n'] for p in self._parents.get(dataset, [])}
+        return {p: self.graph[p].get('used', self.graph[p]['n'])
+                for p in self._parents.get(dataset, [])}
 
     def nfiles(self, dataset):
+        self.calls.setdefault('nfiles', []).append(dataset)
         return self.graph[dataset]['n']
 
     def cnf_names(self):
@@ -202,9 +207,6 @@ class FakeSource:
 
     def local_path(self, filename):
         return self.cnfs.get(filename) or self.files.get(filename, '')
-
-    def first_file(self, dataset):
-        return self.graph[dataset].get('first', '')
 
 
 class TestGroupFiles(unittest.TestCase):
@@ -281,7 +283,7 @@ class TestSamSourceQueries(unittest.TestCase):
         self.assertEqual(calls, ['dig.mu2e.%.art'])
         self.assertEqual(src.unparseable_defs, ['dig.mu2e.D.weird.art'])
 
-    def test_nfiles_and_first_file_queries(self):
+    def test_nfiles_query(self):
         count_calls = []
         def fake_count_files(q):
             count_calls.append(q)
@@ -289,18 +291,6 @@ class TestSamSourceQueries(unittest.TestCase):
         src = SamSource(count_files_fn=fake_count_files)
         self.assertEqual(src.nfiles('dts.mu2e.A.MDC2025ap.art'), 42)
         self.assertEqual(count_calls, ['dh.dataset dts.mu2e.A.MDC2025ap.art'])
-
-        list_calls = []
-        def fake_list_files(q):
-            list_calls.append(q)
-            return ['dts.mu2e.A.MDC2025ap.001430_00000000.art']
-        src = SamSource(list_files_fn=fake_list_files)
-        self.assertEqual(src.first_file('dts.mu2e.A.MDC2025ap.art'),
-                         'dts.mu2e.A.MDC2025ap.001430_00000000.art')
-        self.assertEqual(list_calls, ['dh.dataset dts.mu2e.A.MDC2025ap.art with limit 1'])
-
-        src = SamSource(list_files_fn=lambda q: [])
-        self.assertEqual(src.first_file('dts.mu2e.A.MDC2025ap.art'), '')
 
     def test_cnf_names_keeps_six_field_tar_only(self):
         calls = []
@@ -462,6 +452,21 @@ class TestBuildCatalog(unittest.TestCase):
         dig_au = cat.members[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']
         self.assertIn('dts.mu2e.CeEndpoint.MDC2025ap.art', dig_au.parents)
         self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025ap.art', dig_au.inputs)
+
+    def test_input_nfiles_is_the_dataset_count_not_the_edge_count(self):
+        # I3: the parentage query counts the parent FILES the child
+        # consumed (4907 of 5000 for a mixing pileup set), and the retire
+        # report's nfiles column is read as the size of the deletion. It
+        # must come from count_files on the dataset, and it must cost one
+        # query per distinct input however many digs reach it.
+        g = _small_graph()
+        g['dts.mu2e.CeEndpoint.MDC2025ap.art']['used'] = 907
+        g['dts.mu2e.CeEndpoint.MDC2025ap.art']['children'].append(
+            f'dig.mu2e.CeEndpointOnSpill.{AN}.art')
+        src = FakeSource(g)
+        cat = build_catalog(self.epochs, src, ['MDC2025'])
+        self.assertEqual(cat.inputs['dts.mu2e.CeEndpoint.MDC2025ap.art']['nfiles'], 1000)
+        self.assertEqual(src.calls['nfiles'].count('dts.mu2e.CeEndpoint.MDC2025ap.art'), 1)
 
     def test_pins_mark_excluded_and_held(self):
         e = _epoch('MDC2025au', pins={

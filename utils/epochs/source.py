@@ -133,10 +133,6 @@ class SamSource:
     def nfiles(self, dataset: str) -> int:
         return self._count(f'dh.dataset {dataset}')
 
-    def first_file(self, dataset: str) -> str:
-        files = self._list(f'dh.dataset {dataset} with limit 1')
-        return files[0] if files else ''
-
     def local_path(self, filename: str) -> str:
         """/pnfs path of a SAM file for direct reading on a gpvm; '' if
         SAM does not know the file. Only used for cnf tarballs.

@@ -68,16 +68,23 @@ class _Memo:
     of one `build_catalog` call, no matter how many members' or digs'
     walks reach it.
 
+    `nfiles` is cached the same way for the same reason: `_walk_up`
+    needs the file count of every input (task I3 — the parentage edge
+    count under-reports the size of a proposed deletion), and a stops
+    catalogue reached by hundreds of dig walks would otherwise cost one
+    `count_files` per walk instead of one per build.
+
     Every other source method (`dig_datasets`, `dig_families`,
-    `foreign`, `unparseable_defs`, `cnf_names`, `local_path`, `nfiles`,
-    `first_file`, ...) is forwarded untouched via `__getattr__` — those
-    are already called at most once (or a small, fixed number of
-    times) per build and do not need caching.
+    `foreign`, `unparseable_defs`, `cnf_names`, `local_path`, ...) is
+    forwarded untouched via `__getattr__` — those are already called at
+    most once (or a small, fixed number of times) per build and do not
+    need caching.
     """
     def __init__(self, source):
         self._source = source
         self._children_cache = {}  # type: Dict[str, Dict[str, int]]
         self._parents_cache = {}  # type: Dict[str, Dict[str, int]]
+        self._nfiles_cache = {}  # type: Dict[str, int]
 
     def children(self, name):
         if name not in self._children_cache:
@@ -88,6 +95,11 @@ class _Memo:
         if name not in self._parents_cache:
             self._parents_cache[name] = self._source.parents(name)
         return self._parents_cache[name]
+
+    def nfiles(self, name):
+        if name not in self._nfiles_cache:
+            self._nfiles_cache[name] = self._source.nfiles(name)
+        return self._nfiles_cache[name]
 
     def __getattr__(self, attr):
         return getattr(self._source, attr)
@@ -178,8 +190,14 @@ def _walk_up(dig: Member, source, cat: Catalog, depth: int):
                 continue
             rec = cat.inputs.get(p)
             if rec is None:
-                rec = cat.inputs[p] = {'nfiles': n, 'parents': set(), 'descendants': set(),
-                                       'hold': '', 'excluded': ''}
+                # `n` here is the parentage EDGE count -- how many files of
+                # p this child actually consumed (4907 of the 5000 in
+                # dts.mu2e.MuBeamFlash.Run1Bai-003.art). The retire report's
+                # nfiles column is read as the size of the deletion, so it
+                # must be the DATASET's count; one memoized count_files per
+                # distinct input buys that.
+                rec = cat.inputs[p] = {'nfiles': source.nfiles(p), 'parents': set(),
+                                       'descendants': set(), 'hold': '', 'excluded': ''}
             rec['descendants'].add(dig.name)
             if child in cat.inputs:
                 cat.inputs[child]['parents'].add(p)
