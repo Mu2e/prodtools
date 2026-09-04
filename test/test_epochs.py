@@ -542,6 +542,26 @@ class TestBuildCatalog(unittest.TestCase):
             retire(cat)
         self.assertIn('root claim', str(ctx.exception))
 
+    def test_foreign_child_is_reported_but_the_walk_stops_there(self):
+        # Important 2 (strip review, cf557b4): the Keep-list capability
+        # "foreign reporting from the downward walk" lost its only test
+        # when TestInputRetirementSafety was deleted. A user-owned dataset
+        # promoted into a production chain is the real case this models:
+        # SamSource never returns it from children()/parents(), so the
+        # walk cannot see it and everything below it is simply unreached
+        # -- plain FakeSource hands foreign nodes back happily, which is
+        # why OwnerPolicyFakeSource (defined above) exists.
+        from utils.epochs.publish import catalog_document
+        g = _small_graph()
+        foreign = f'nts.oksuzian.Private.{AU}.root'
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(foreign)
+        g[foreign] = {'n': 5, 'children': []}
+        cat = build_catalog(self.epochs, OwnerPolicyFakeSource(g), ['MDC2025'])
+        self.assertEqual(cat.foreign, {foreign})
+        self.assertNotIn(foreign, cat.members)
+        doc = catalog_document(cat, gens={}, generated_at='x')
+        self.assertEqual(doc['foreign'], [foreign])
+
 
 def _cat(graph=None, epochs=None):
     src = FakeSource(graph or _small_graph())
@@ -1417,6 +1437,52 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn('count warning:', err)
         self.assertNotIn('count warning:', out)
+
+    def test_foreign_owner_goes_to_stderr(self):
+        # Minor 1 (strip review, cf557b4): cat.foreign used to reach the
+        # operator folded into input_retirement_refusal's message; that
+        # function was deleted with the input subsystem and no
+        # replacement line was added, so foreign owners went silent on
+        # every CLI verb. _report_noise must carry it, same channel and
+        # style as unparseable/unclaimed_digs/missing_families.
+        g = _small_graph()
+        foreign = f'nts.oksuzian.Private.{AU}.root'
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(foreign)
+        g[foreign] = {'n': 5, 'children': []}
+        src = OwnerPolicyFakeSource(g)
+        rc, out, err = _run(['members'], src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn(f'foreign owner (walk stops here): {foreign}', err)
+        self.assertNotIn(foreign, out)
+
+    def test_members_status_filter(self):
+        # Minor 5 (strip review): pre-existing, not a regression -- but
+        # cheap. Mutating `members --status` (cli.py) to a no-op left the
+        # suite green on both cf557b4 and its parent.
+        rc, out, _ = _run(['members', '--status', 'superseded'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root', out)
+        self.assertNotIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', out)
+        rc, out, _ = _run(['members', '--status', 'current'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root', out)
+        self.assertNotIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root', out)
+
+    def test_retire_family_and_epoch_filter(self):
+        # Minor 5 (strip review): _retire_keep (cli.py) had no dedicated
+        # test -- mutating it to a no-op left the suite green on both
+        # cf557b4 and its parent. It filters retire rows by the MEMBER's
+        # own family/epoch (looked up via cat.members[entry['dataset']]),
+        # distinct from the plain _keep used by members/gaps/consistency.
+        rc, out, _ = _run(['retire', '--family', 'Run1B'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, '')
+        rc, out, _ = _run(['retire', '--epoch', 'MDC2025au'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root', out)
+        rc, out, _ = _run(['retire', '--epoch', 'MDC2025an'], self.src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertNotIn(f'nts.mu2e.CeEndpointOnSpill.{AU}.root', out)
 
 
 if __name__ == '__main__':

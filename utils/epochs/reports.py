@@ -9,7 +9,6 @@ and `docs/adr/0005-input-retirement-proves-deadness-positively.md`.
 """
 from typing import Dict, List, Optional
 
-from utils.epochs.dsconf import parse_dsconf
 from utils.epochs.epoch_files import GAP_TIERS
 from utils.epochs.generation import Generation  # noqa: F401  (type only)
 from utils.epochs.graph import Catalog, Member
@@ -81,17 +80,6 @@ def _member_children(cat: Catalog, name: str) -> List[str]:
     return sorted(c.name for c in cat.members.values() if name in c.parents)
 
 
-def _newest_epoch_key(cat: Catalog, family: str):
-    # A bare lettered epoch name (e.g. 'MDC2025au') parses directly; no
-    # need to fabricate a purpose/version tail. None is legitimate here:
-    # by the time retire() calls this, `family` is known to be loaded
-    # (retire() refuses to run otherwise, see below), so None means the
-    # family has an epoch file but that epoch happens to own no digs at
-    # all — the input is then judged by its descendants alone.
-    keys = [parse_dsconf(e.name) for e in cat.epochs.values() if e.family == family]
-    return max((k.sort_key() for k in keys), default=None)
-
-
 def incomplete_reasons(cat: Catalog) -> List[str]:
     """One human-readable line per way the catalog is known-unsafe to
     propose deletions from: a family with digs but no loaded epoch file,
@@ -104,7 +92,7 @@ def incomplete_reasons(cat: Catalog) -> List[str]:
     every pin landed and every dig's epoch agrees with its root.
 
     `retire()` refuses to run while this is non-empty (a partial catalog
-    cannot tell a still-needed input from a retirable one);
+    cannot judge a superseded member against an epoch nothing confirmed);
     `catalog_document` publishes these lines instead of a retire list."""
     reasons = []
     for family in sorted(cat.missing_families):

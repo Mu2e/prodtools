@@ -243,7 +243,8 @@ Members are computed, never listed by hand.
 
    The upward walk runs to natural closure by default (2026-09-04), so
    no CAP cuts it; `--input-depth N` survives only as an explicit opt-in
-   cap for a cheap partial run. No cap is not a complete graph: the cap,
+   cap for a cheap partial run *(the flag was removed with the rest; it
+   does not exist in this version)*. No cap is not a complete graph: the cap,
    an unparseable dsconf above or below a member, a non-`mu2e` owner in
    the lineage and a dropped tier all sever a walk identically. All of
    them go in one register, and while it is non-empty the retire report
@@ -611,9 +612,13 @@ question is answered.
   earlier 10-minute stall traced to un-memoized ancestor walking, not
   to SAM itself.
 - **2026-09-04, for the record:** the "23 inputs" line above (this
-  run's retire list) and the "27 distinct member or input names do not
-  parse" line both describe input retirement, which was removed the
-  same day (§17 row 20; ADR 0005). Numbers on this page are left
-  exactly as measured — nothing here is corrected or re-run — but a
-  retire list built with today's code reports 26 superseded members and
-  no input lines at all, from this same catalog.
+  run's retire list) describes input retirement entirely, and only the
+  input-side share of the "27 distinct member or input names do not
+  parse" line does too — both removed the same day (§17 row 20; ADR
+  0005). The member-side share of that 27 is current behavior:
+  `cat.unparseable` is still populated by the downward walk (`_make_member`)
+  and still reported under the `unparseable` key. This page does not
+  attempt to split the 27 into member-side and input-side counts —
+  numbers here are left exactly as measured, nothing is corrected or
+  re-run — but a retire list built with today's code reports 26
+  superseded members and no input lines at all, from this same catalog.

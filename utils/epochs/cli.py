@@ -112,6 +112,8 @@ def _report_noise(cat, source):
     for fam, digs in cat.unclaimed_digs.items():
         for d in digs:
             print(f'unclaimed dig (no epoch root matches): {d}', file=sys.stderr)
+    for name in sorted(cat.foreign):
+        print(f'foreign owner (walk stops here): {name}', file=sys.stderr)
     for line in cat.pin_problems:
         print(f'pin problem: {line}', file=sys.stderr)
     for line in cat.epoch_conflicts:
