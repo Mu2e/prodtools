@@ -339,7 +339,9 @@
         "dsconf": "Run1Baw",
         "fcl": "Production/JobConfig/primary/MuCap1809keVCalo.fcl",
         "fcl_overrides": {
-            "physics.filters.PrimaryFilter.StrawGasSteps" : []
+            "physics.filters.PrimaryFilter.StrawGasSteps" : [],
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt"
         },
         "resampler_name": "TargetStopResampler",
         "input_data": {"sim.mu2e.MuminusStopsCat.Run1Baa.art": 1},
