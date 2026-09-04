@@ -1044,6 +1044,35 @@ class TestGeneration(unittest.TestCase):
         self.assertEqual(idx['__unlocatable__'], ['cnf.mu2e.Lost.MDC2025au_best_v1_5.0.tar'])
         self.assertEqual(sorted(idx['__indexed__']), [k for k, v in sorted(src.cnfs.items()) if v])
 
+    def test_duplicate_claim_keeps_the_first_and_reports_the_conflict(self):
+        # M4: cnf_names() is sorted, so a plain assignment handed the
+        # dataset to the lexicographically LAST claimant. Two cnfs
+        # declaring one output is an anomaly to report, not to resolve by
+        # sort order.
+        d = _tmpdir()
+        first = _make_cnf(d, 'cnf.mu2e.A-reco.MDC2025au_best_v1_5.0.tar', SETUP_A,
+                          [f'mcs.mu2e.CeEndpointOnSpill.{AU}.sequencer.art'])
+        second = _make_cnf(d, 'cnf.mu2e.Z-reco.MDC2025au_best_v1_5.0.tar', SETUP_B,
+                           [f'mcs.mu2e.CeEndpointOnSpill.{AU}.sequencer.art',
+                            'nts.mu2e.{desc}.MDC2025au_best_v1_5.sequencer.root'])
+        third = _make_cnf(d, 'cnf.mu2e.Zz-evnt.MDC2025au_best_v1_5.0.tar', SETUP_B,
+                          ['nts.mu2e.{desc}.MDC2025au_best_v1_5.sequencer.root'])
+        src = FakeSource(_small_graph(), cnfs={
+            'cnf.mu2e.A-reco.MDC2025au_best_v1_5.0.tar': first,
+            'cnf.mu2e.Z-reco.MDC2025au_best_v1_5.0.tar': second,
+            'cnf.mu2e.Zz-evnt.MDC2025au_best_v1_5.0.tar': third})
+        idx = build_cnf_index(src, existing={})
+        self.assertEqual(idx[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'],
+                         'cnf.mu2e.A-reco.MDC2025au_best_v1_5.0.tar')
+        self.assertEqual(idx['__conflicts__'][f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'],
+                         ['cnf.mu2e.A-reco.MDC2025au_best_v1_5.0.tar',
+                          'cnf.mu2e.Z-reco.MDC2025au_best_v1_5.0.tar'])
+        self.assertEqual(idx['__generic__']['nts.MDC2025au_best_v1_5'],
+                         'cnf.mu2e.Z-reco.MDC2025au_best_v1_5.0.tar')
+        self.assertEqual(idx['__conflicts__']['__generic__:nts.MDC2025au_best_v1_5'],
+                         ['cnf.mu2e.Z-reco.MDC2025au_best_v1_5.0.tar',
+                          'cnf.mu2e.Zz-evnt.MDC2025au_best_v1_5.0.tar'])
+
     def test_index_skips_already_indexed_cnfs(self):
         src = FakeSource(_small_graph(), cnfs={'cnf.mu2e.A.MDC2025au_best_v1_5.0.tar': ''})
         idx = build_cnf_index(src, existing={'__indexed__': ['cnf.mu2e.A.MDC2025au_best_v1_5.0.tar'],

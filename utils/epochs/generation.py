@@ -76,7 +76,8 @@ def read_generation(cnf_path: str, cnf_name: str, source_kind: str) -> Generatio
 
 
 def _empty_index() -> Dict:
-    return {'__indexed__': [], '__generic__': {}, '__unlocatable__': [], '__unreadable__': {}}
+    return {'__indexed__': [], '__generic__': {}, '__unlocatable__': [], '__unreadable__': {},
+            '__conflicts__': {}}
 
 
 def output_claims(jobname: str, outfiles: Dict[str, str]):
@@ -110,14 +111,21 @@ def build_cnf_index(source, existing: Dict) -> Dict:
     is isolated per-cnf: it lands in '__unreadable__' as
     {cnf_name: error_text} and is NOT added to '__indexed__', so a later
     run retries it automatically. One bad tarball must never abort the
-    whole index build — nothing here is silently skipped; a later task's
-    CLI prints '__unreadable__' and '__unlocatable__'."""
+    whole index build — nothing here is silently skipped; the CLI prints
+    '__unreadable__' and '__unlocatable__'.
+
+    Two cnfs declaring the same output is a real anomaly, not something
+    to settle by sort order (M4): `cnf_names()` is sorted, so the plain
+    assignment used to hand the dataset to the lexicographically LAST
+    claimant and say nothing. The FIRST claim is kept and every later
+    one is recorded under '__conflicts__' for the CLI to print."""
     from utils.jobquery import Mu2eJobPars
     idx = _empty_index()
     idx.update(existing or {})
     done = set(idx['__indexed__'])
     unloc = set(idx['__unlocatable__'])
     unread = dict(idx['__unreadable__'])
+    conflicts = dict(idx.get('__conflicts__') or {})
     for cnf in source.cnf_names():
         if cnf in done:
             continue
@@ -132,14 +140,21 @@ def build_cnf_index(source, existing: Dict) -> Dict:
             unread[cnf] = str(exc)
             continue
         for ds in explicit:
+            if ds in idx and idx[ds] != cnf:
+                conflicts.setdefault(ds, [idx[ds]]).append(cnf)
+                continue           # first claim stands; the collision is reported
             idx[ds] = cnf
         for key in generic:
+            if key in idx['__generic__'] and idx['__generic__'][key] != cnf:
+                conflicts.setdefault(f'__generic__:{key}', [idx['__generic__'][key]]).append(cnf)
+                continue
             idx['__generic__'][key] = cnf
         done.add(cnf)
         unread.pop(cnf, None)
     idx['__indexed__'] = sorted(done)
     idx['__unlocatable__'] = sorted(unloc - done)
     idx['__unreadable__'] = unread
+    idx['__conflicts__'] = conflicts
     return idx
 
 

@@ -206,9 +206,13 @@ def cmd_index_cnfs(args, source):
         f.write('\n')
     print(f'{p}: {len(idx["__indexed__"])} cnfs indexed, '
           f'{len(idx["__unlocatable__"])} unlocatable, {len(idx["__generic__"])} generic, '
-          f'{len(idx["__unreadable__"])} unreadable')
+          f'{len(idx["__unreadable__"])} unreadable, '
+          f'{len(idx.get("__conflicts__") or {})} conflicting claims')
     for c in idx['__unlocatable__']:
         print(f'unlocatable cnf: {c}', file=sys.stderr)
+    for claim, cnfs in sorted((idx.get('__conflicts__') or {}).items()):
+        print(f'conflicting cnf claim on {claim}: kept {cnfs[0]}, also claimed by '
+              f'{", ".join(cnfs[1:])}', file=sys.stderr)
     for c, err in sorted(idx['__unreadable__'].items()):
         print(f'unreadable cnf: {c}: {err}', file=sys.stderr)
     return 0
