@@ -163,7 +163,21 @@ def cnf_for(m: Member, cat: Catalog, index: Dict) -> Optional[Tuple[str, str]]:
     cnf parentage is declared in production, so this route is correctly
     empty and every generation resolves through the index; it lights up
     for new outputs once ADR 0003's `push_data` change lands, without a
-    cnf ever becoming a member, an input or a retire candidate."""
+    cnf ever becoming a member, an input or a retire candidate.
+
+    Two declared cnf parents — a campaign cnf plus the recovery cnf built
+    on a newer Musing, the normal shape once ADR 0003 lands — is the
+    mixed-generation condition `consistency` exists to detect, so it is
+    NOT settled by sort order (NEW-2, the ruling M4 already made for
+    `build_cnf_index.__conflicts__`). The first claim in sort order
+    stands and the collision is recorded in `cat.generation_conflicts`,
+    which the CLI prints."""
+    if len(m.cnf_parents) > 1:
+        kept = sorted(m.cnf_parents)
+        line = (f'{m.name} declares {len(kept)} cnf parents: kept {kept[0]}, also claimed by '
+                f'{", ".join(kept[1:])} (its generation is reported from {kept[0]} alone)')
+        if line not in cat.generation_conflicts:
+            cat.generation_conflicts.append(line)
     for p in sorted(m.cnf_parents):
         return p, 'parent'
     if m.name in index:

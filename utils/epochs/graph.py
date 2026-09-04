@@ -65,6 +65,18 @@ class Catalog:
     # refuses to run while this is non-empty — a dropped `hold` is a
     # protection the human believes they placed and does not have.
     pin_problems: List[str] = field(default_factory=list)
+    # One line per dig whose own root claim disagreed with the epoch it
+    # inherited by being walked into as another dig's child (NEW-3). The
+    # root claim wins on the dig itself, but the members BELOW it keep the
+    # inherited epoch, and an epoch is what stamps a frozen hold — so
+    # retire() refuses here too rather than delete on a guessed standing.
+    epoch_conflicts: List[str] = field(default_factory=list)
+    # One line per member with more than one declared cnf parent (NEW-2).
+    # Reported, never resolved by sort order: two cnfs producing one
+    # dataset is the mixed-generation condition `consistency` exists to
+    # surface. Does not block retire() — a generation is provenance, not
+    # a deletion input.
+    generation_conflicts: List[str] = field(default_factory=list)
 
 
 class _Memo:
@@ -320,6 +332,20 @@ def build_catalog(epochs: Dict[str, EpochFile], source, families: Optional[List[
             m = cat.members.get(dig)
             if m is None:
                 m = _make_member(dig, n, epoch, cat)
+            elif m.epoch != epoch:
+                # NEW-3: M8's guard (keep the object, keep its accumulated
+                # parents/inputs) also changed WHICH epoch wins — a dig
+                # already reached as another dig's child kept the epoch
+                # _walk_down inherited from its parent. For a dig the root
+                # claim is the authoritative answer; that is what roots are
+                # for. Fix it and report: members below it still carry the
+                # inherited epoch, and losing a frozen epoch's hold is a
+                # false DELETE.
+                cat.epoch_conflicts.append(
+                    f'dig {dig} was walked in as a member of epoch {m.epoch} but its own root '
+                    f'claim is epoch {epoch}; the root claim wins, and datasets below it may '
+                    f'still carry {m.epoch}')
+                m.epoch = epoch
             if m is None:
                 continue
             _walk_down(m, msource, cat)

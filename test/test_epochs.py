@@ -570,6 +570,28 @@ class TestBuildCatalog(unittest.TestCase):
         self.assertEqual(cat.inputs['sim.mu2e.MuminusStopsCat.MDC2025ac.art']['descendants'],
                          {f'dig.mu2e.CeEndpointOnSpill.{AU}.art', f'dig.mu2e.DIOtail.{AU}.art'})
 
+    def test_a_digs_own_root_claim_beats_the_epoch_it_was_walked_in_under(self):
+        # NEW-3: M8's guard rightly stopped re-creating a dig that is
+        # already a member, but it also changed which epoch wins -- a dig
+        # reached as another dig's child kept the epoch _walk_down
+        # inherited, and the disagreement was reported nowhere. For a dig
+        # the root claim is the authoritative answer. A dig-of-dig across
+        # epochs where the upper dig sorts first is the shape; if the
+        # lower one were to keep the upper epoch it would lose a frozen
+        # epoch's hold and become eligible for the retire list.
+        g = _small_graph()
+        g[f'dig.mu2e.AAupper.{AU}.art'] = {'n': 10, 'children': [f'dig.mu2e.BBlower.{AN}.art']}
+        g[f'dig.mu2e.BBlower.{AN}.art'] = {'n': 10, 'children': []}
+        cat = _cat(g)
+        self.assertEqual(cat.members[f'dig.mu2e.BBlower.{AN}.art'].epoch, 'MDC2025an')
+        self.assertTrue(any('BBlower' in line for line in cat.epoch_conflicts),
+                        cat.epoch_conflicts)
+        # the members below it still carry the inherited epoch, so this is
+        # a catalog we refuse to propose deletions from
+        with self.assertRaises(ValueError) as ctx:
+            retire(cat)
+        self.assertIn('root claim', str(ctx.exception))
+
     def test_visited_input_still_records_every_descendant(self):
         # dedup must not lose the descendants bookkeeping for the second dig
         g = _small_graph()
@@ -1294,6 +1316,25 @@ class TestGeneration(unittest.TestCase):
         self.assertEqual(cnf_for(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root'], cat, idx),
                          ('cnf.mu2e.evnt.MDC2025au_best_v1_5.0.tar', 'index'))
         self.assertIsNone(cnf_for(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AR}.art'], cat, idx))
+
+    def test_two_declared_cnf_parents_are_reported_not_settled_by_sort_order(self):
+        # NEW-2: M4's ruling -- two cnfs claiming one output is a real
+        # anomaly worth reporting, not resolving by sort order -- applies
+        # to the declared-parent route I4 made reachable. After ADR 0003 a
+        # campaign cnf plus its recovery cnf on a newer Musing is the
+        # NORMAL shape, and reporting one generation with full confidence
+        # hides the mixed-generation condition `consistency` exists for.
+        g = _small_graph()
+        a = 'cnf.mu2e.evnt.MDC2025au_best_v1_5.0.tar'
+        b = 'cnf.mu2e.evnt.MDC2025au_best_v1_5-001.0.tar'
+        tgt = f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'
+        g[a] = {'n': 1, 'children': [tgt]}
+        g[b] = {'n': 1, 'children': [tgt]}
+        cat = _cat(g)
+        self.assertEqual(cat.members[tgt].cnf_parents, {a, b})
+        self.assertEqual(cnf_for(cat.members[tgt], cat, {}), (min(a, b), 'parent'))
+        self.assertTrue(any(tgt in line and 'declares 2 cnf parents' in line
+                            for line in cat.generation_conflicts), cat.generation_conflicts)
 
     def test_consistency_names_minority_descs(self):
         d = _tmpdir()

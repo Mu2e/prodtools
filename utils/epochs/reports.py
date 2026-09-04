@@ -90,10 +90,13 @@ def _newest_epoch_key(cat: Catalog, family: str):
 def incomplete_reasons(cat: Catalog) -> List[str]:
     """One human-readable line per way the catalog is known-unsafe to
     propose deletions from: a family with digs but no loaded epoch file,
-    a dig matching no epoch root, or a pin that could not be applied
-    (a `hold` naming a dataset the catalog does not have is a
-    protection the human believes they placed and does not have).
-    Empty when the catalog is complete and every pin landed.
+    a dig matching no epoch root, a pin that could not be applied (a
+    `hold` naming a dataset the catalog does not have is a protection
+    the human believes they placed and does not have), or a dig whose
+    root claim disagreed with the epoch it was walked in under (the
+    members below it then carry an epoch nothing confirmed, and an epoch
+    is what stamps a frozen hold). Empty when the catalog is complete,
+    every pin landed and every dig's epoch agrees with its root.
 
     `retire()` refuses to run while this is non-empty (a partial catalog
     cannot tell a still-needed input from a retirable one);
@@ -106,6 +109,7 @@ def incomplete_reasons(cat: Catalog) -> List[str]:
         for dig in sorted(digs):
             reasons.append(f'dig {dig} matches no epoch root')
     reasons.extend(cat.pin_problems)
+    reasons.extend(cat.epoch_conflicts)
     return reasons
 
 

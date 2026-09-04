@@ -130,6 +130,10 @@ def _report_noise(cat, source):
               f'--input-depth to resolve them', file=sys.stderr)
     for line in cat.pin_problems:
         print(f'pin problem: {line}', file=sys.stderr)
+    for line in cat.epoch_conflicts:
+        print(f'epoch conflict: {line}', file=sys.stderr)
+    for line in cat.generation_conflicts:
+        print(f'generation conflict: {line}', file=sys.stderr)
     for fam in sorted(cat.missing_families):
         print(f"missing epoch file for family {fam} (digs exist); "
               f"run 'epochs propose --family {fam}'", file=sys.stderr)
