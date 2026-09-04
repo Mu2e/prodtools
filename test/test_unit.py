@@ -13550,6 +13550,18 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
              '--prod'])
         self.assertIn('--prod requires --enqueue', msg)
 
+    def test_prodtools_dir_requires_enqueue(self):
+        """A prodtools release is recorded on the entry at enqueue; with
+        nothing enqueued the flag would be accepted and silently dropped.
+        Moved here from a subprocess test that died on ModuleNotFoundError
+        before argparse ran and passed its returncode check for the wrong
+        reason (see the class docstring)."""
+        msg = self._run_main(
+            ['--json', 'data/Run1B/resampler_beam.json',
+             '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
+             '--prodtools-dir', '/cvmfs/x'])
+        self.assertIn('--prodtools-dir requires --enqueue', msg)
+
     def test_jobdefs_flag_is_gone(self):
         """`--jobdefs` wrote a submission map for a human to hand-edit
         and feed to submit_map — the POMS-era two-step. It was the only
@@ -17027,15 +17039,6 @@ class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
         r = subprocess.run(['bash', script], env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
         self.assertIn('is not a prodtools release on this worker', r.stderr)
-
-    def test_json2jobdef_prodtools_dir_requires_enqueue(self):
-        import subprocess, sys
-        repo = os.path.join(os.path.dirname(__file__), '..')
-        r = subprocess.run([sys.executable, os.path.join(repo, 'utils', 'json2jobdef.py'),
-                            '--json', 'x.json', '--prodtools-dir', '/cvmfs/x'],
-                           capture_output=True, text=True, cwd=repo)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn('--prodtools-dir requires --enqueue', r.stderr + r.stdout)
 
 
 
