@@ -452,8 +452,10 @@ def _propagate_truncation(cat: Catalog):
     order-dependent drop the V2 carry loop had, so that loop is gone.
 
     Pure bookkeeping over data already in the Catalog; no SAM query."""
-    up_edges = upward_edges(cat)
     frontier = [n for n, rec in cat.inputs.items() if rec['truncated']]
+    if not frontier:
+        return
+    up_edges = upward_edges(cat)
     seen = set(frontier)
     while frontier:
         name = frontier.pop()

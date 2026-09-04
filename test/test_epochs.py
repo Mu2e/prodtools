@@ -1646,7 +1646,7 @@ class TestInputRetirementSafety(unittest.TestCase):
         import random
         rnd = random.Random(20260904)
         eps = {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an')}
-        rows_seen = refusals_seen = old_rule_false_deletes = skipped = 0
+        rows_seen = refusals_seen = old_rule_false_deletes = 0
         for trial in range(60):
             g = self._random_graph(rnd, trial)
             gdown = _graph_down_edges(g)
@@ -1658,7 +1658,6 @@ class TestInputRetirementSafety(unittest.TestCase):
                 except ValueError:
                     # a member-level parentage cycle, or a catalog
                     # `retire()` refuses whole: both are safe outcomes
-                    skipped += 1
                     continue
                 where = f'trial {trial} depth {depth}'
                 down = _catalog_down_edges(cat)
@@ -1688,7 +1687,6 @@ class TestInputRetirementSafety(unittest.TestCase):
         self.assertGreater(old_rule_false_deletes, 0,
                            'generator never reproduced the bug class: the old '
                            'descendants-only rule would not have mis-listed anything')
-        self.assertGreater(skipped, -1)
 
 
 class TestLookup(unittest.TestCase):
