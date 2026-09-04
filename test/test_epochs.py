@@ -679,6 +679,35 @@ class TestGaps(unittest.TestCase):
         cat = _cat(g, {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': e})
         self.assertFalse([x for x in gaps(cat) if x['desc'] == 'DIOtail'])
 
+    def test_frozen_epoch_reports_no_stale_rows(self):
+        # wiki 4: frozen = a hold on every member, no gap report. Only the
+        # missing branch was gated on epoch status.
+        g = _small_graph()
+        g[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(
+            f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art')
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art'] = {'n': 100, 'children': []}
+        live = _cat(g)
+        self.assertTrue([x for x in gaps(live) if x['kind'] == 'stale' and x['epoch'] == 'MDC2025au'])
+        frozen = _cat(g, {'MDC2025au': _epoch('MDC2025au', status='frozen'),
+                          'MDC2025an': _epoch('MDC2025an')})
+        self.assertFalse([x for x in gaps(frozen) if x['kind'] == 'stale' and x['epoch'] == 'MDC2025au'])
+
+    def test_retired_epoch_members_do_not_hide_a_gap(self):
+        # M1: a retired epoch's members are all delete candidates, so they
+        # must not read as "this tier is covered".
+        g = _small_graph()
+        g[f'dig.mu2e.Shared.{AU}.art'] = {'n': 10, 'children': []}
+        g[f'dig.mu2e.Shared.{AN}.art'] = {'n': 10, 'children': [f'mcs.mu2e.Shared.{AN}.art']}
+        g[f'mcs.mu2e.Shared.{AN}.art'] = {'n': 10, 'children': [f'nts.mu2e.Shared.{AN}.root']}
+        g[f'nts.mu2e.Shared.{AN}.root'] = {'n': 10, 'children': []}
+        live = _cat(g)
+        self.assertFalse([x for x in gaps(live) if x['kind'] == 'missing' and x['desc'] == 'Shared'])
+        retired = _cat(g, {'MDC2025au': _epoch('MDC2025au'),
+                           'MDC2025an': _epoch('MDC2025an', status='retired')})
+        kinds = {(x['kind'], x['desc'], x['tier']) for x in gaps(retired)}
+        self.assertIn(('missing', 'Shared', 'mcs'), kinds)
+        self.assertIn(('missing', 'Shared', 'nts'), kinds)
+
     def test_nts_expected_only_where_mcs_exists_in_family(self):
         # a superseded mcs still counts as "reached mcs"; nts missing is judged
         # against the CURRENT mcs desc, so a stale-free family reports nothing
@@ -708,6 +737,16 @@ class TestRetire(unittest.TestCase):
         names = {x['dataset']: x['reason'] for x in retire(cat)}
         self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AN}.art', names)
         self.assertIn('epoch MDC2025an is retired', names[f'dig.mu2e.CeEndpointOnSpill.{AN}.art'])
+
+    def test_retired_epoch_reason_flags_a_still_current_member(self):
+        # M1: the reason must say the member is still its group's answer,
+        # or a too-early `retired` flip reads as a routine cleanup line.
+        g = _small_graph()
+        g[f'dig.mu2e.Solo.{AN}.art'] = {'n': 10, 'children': []}
+        cat = _cat(g, {'MDC2025au': _epoch('MDC2025au'),
+                       'MDC2025an': _epoch('MDC2025an', status='retired')})
+        entry = [x for x in retire(cat) if x['dataset'] == f'dig.mu2e.Solo.{AN}.art'][0]
+        self.assertIn('still the current member', entry['reason'])
 
     def test_input_with_no_live_descendant_listed_with_letters_guard(self):
         g = _small_graph()

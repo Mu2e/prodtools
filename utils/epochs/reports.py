@@ -40,7 +40,11 @@ def gaps(cat: Catalog) -> List[Dict]:
     out = []
     present = {}   # (family, desc, tier) -> True if any current/stale member
     for m in cat.members.values():
-        if m.status in ('current', 'stale'):
+        # M1: a member of a RETIRED epoch is a delete candidate whatever its
+        # status, so it must not count as "this tier is covered" -- otherwise
+        # retiring an epoch one commit too early both proposes deleting the
+        # current dataset and removes the row that would have caught it.
+        if m.status in ('current', 'stale') and cat.epochs[m.epoch].status != 'retired':
             present[(m.key.family, m.desc, m.tier)] = True
     for m in sorted(cat.members.values(), key=lambda m: m.name):
         if m.tier == 'dig' and m.status in ('current', 'stale') \
@@ -53,7 +57,12 @@ def gaps(cat: Catalog) -> List[Dict]:
                 out.append({'kind': 'missing', 'epoch': m.epoch, 'desc': m.desc,
                             'tier': tier, 'dataset': '',
                             'note': f'{m.name} has no current {tier}'})
-        if m.status == 'stale':
+        # M2: wiki §4 -- a frozen epoch is "a hold on every member, nothing
+        # expected to change, NO GAP REPORT". The missing branch above was
+        # already gated on epoch status; the stale branch was not, and 14 of
+        # the 28 gap rows in the 2026-09-03 run were stale rows inside
+        # frozen epochs.
+        if m.status == 'stale' and cat.epochs[m.epoch].status == 'current':
             parents = ', '.join(sorted(m.parents))
             out.append({'kind': 'stale', 'epoch': m.epoch, 'desc': m.desc, 'tier': m.tier,
                         'dataset': m.name, 'note': f'parent moved on: {parents}'})
@@ -142,6 +151,10 @@ def retire(cat: Catalog) -> List[Dict]:
         # non-held member of a retired epoch is listed, unconditionally).
         if epoch_status == 'retired':
             reason = f'epoch {m.epoch} is retired'
+            if m.status in ('current', 'stale'):
+                # decision 12 still lists it, but the human reading the purge
+                # proposal has to be told they are deleting a live answer
+                reason += f' (but this is still the {m.status} member of its group)'
         elif m.status == 'superseded':
             by = _winner_of(cat, m)
             reason = f'superseded by {by.name}' if by else 'superseded'
