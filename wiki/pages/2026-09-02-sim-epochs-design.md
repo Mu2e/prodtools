@@ -169,6 +169,14 @@ Members are computed, never listed by hand.
    simultaneously current answers on 15 `(family, tier, desc)` lines.
    Because it competes in several groups, winning ANY of them makes it
    current — which is what an `order` pin naming it is placed to do.
+   Accepted consequence (2026-09-04): an `order` pin naming an
+   own-series member in ONE purpose group leaves it current in the other
+   purpose groups of that base triple as well, so those groups show two
+   current members — the pinned own-series one and their own lettered
+   winner. A hand-placed pin is a person saying "keep this"; keeping it
+   is the fail-closed direction for a tool whose output is a delete
+   list. The rule's alternative, last-write-wins over the groups dict,
+   was the NEW-5 bug.
 3. **Within a group, newest dsconf is `current`, older siblings are
    `superseded`.** "Newest" is PARSED dsconf order, never a clock:
    grammar `<family><letters><rev?>_<purpose>_v<N>_<M>[-NNN]`, compared
@@ -207,10 +215,17 @@ Members are computed, never listed by hand.
    retirable when no `current` or `stale` member descends from it, and
    it is not held. An `excluded` member counts as a live descendant
    (2026-09-04): the tool refuses to delete it, so it must not propose
-   deleting what made it. An input at the `--input-depth` frontier, or
-   anything above one, is never listed — truncation is a property of the
-   walk that was cut, not of the node, so a node another dig's walk
-   expanded is still truncated for the dig that stopped there. Guard, letters only, no clock: an input whose
+   deleting what made it. The upward walk runs to natural closure by
+   default (2026-09-04), so the input graph this rule is applied to is
+   the real one; `--input-depth N` survives only as an explicit opt-in
+   cap for a cheap partial run, and when a capped walk truncates
+   anything the retire report proposes NO input at all — a partial
+   input graph yields no input retirement proposals, the same
+   fail-closed refusal the report already makes on an incomplete
+   catalog. That replaced three rounds of per-input truncation
+   detectors: each was correct for the shape it was shown, and the next
+   review found another shape of incompleteness reaching the same false
+   DELETE. Guard, letters only, no clock: an input whose
    dsconf letters outrank the family's newest epoch (a fresh `dts@av`
    awaiting its mix while `au` is newest) is never listed.
 

@@ -44,7 +44,16 @@ def groups(cat: Catalog) -> Dict[GroupKey, List[Member]]:
     sort), which makes any lettered sibling supersede it; with no
     lettered sibling at all it keeps a group of its own and stays
     current. `best` and `perfect` are NOT collapsed into one group —
-    they are different products, decision 3."""
+    they are different products, decision 3.
+
+    One consequence to state plainly (V4): because such a member
+    competes in several groups and winning ANY of them makes it current
+    (`_winners`, NEW-5), an `order` pin naming it in one purpose group
+    leaves it current in the OTHER purpose groups too, next to their
+    lettered winners. Those groups then publish two current members.
+    That is the intended effect of a hand-placed pin — keeping a pinned
+    dataset is the fail-closed direction — not the ungrouped-own-series
+    bug this docstring's first paragraph describes."""
     out: Dict[GroupKey, List[Member]] = {}
     own: Dict[tuple, List[Member]] = {}
     for m in cat.members.values():

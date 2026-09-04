@@ -240,7 +240,15 @@ When regenerating, read in this order:
       `data/epochs/cnf_index.json`, mapping each dataset back to the
       cnf that produced it; `publish --out FILE` writes the
       `{"epochs":[{"name","datasets"}]}` file the sim-epochs MCP server
-      reads, with the richer fields carried alongside). `--family` and
+      reads, with the richer fields carried alongside — and note the two
+      states in which the document is not to be read at face value:
+      while `incomplete` is non-empty, `retire` is `null` AND the
+      `epochs[].datasets` grouping may be wrong for a contested subtree
+      (a dig whose root claim disagreed with the epoch it was walked in
+      under keeps its own corrected epoch, but the members below it
+      still carry the inherited one — which is the reason `retire` is
+      `null`), and while `input_retirement_refused` is a non-empty
+      string `retire` carries member candidates only). `--family` and
       `--epoch` filter which rows a verb PRINTS — every verb still
       judges the complete catalog discovered from SAM, so a filtered
       `retire` cannot omit a cross-family dependency. Say exactly which
@@ -250,8 +258,12 @@ When regenerating, read in this order:
       `--epoch` and `--json` and uses none of them (it always prints
       JSON); `index-cnfs` accepts `--family` (no `--epoch`) and uses
       neither; `publish` takes only `--out`. `--input-depth N`
-      (default 3) is a top-level flag, before the verb, and caps how far
-      above a dig the input walk goes. `status` is
+      is a top-level flag, before the verb, and caps how far above a dig
+      the input walk goes; by DEFAULT it is unset and the walk runs to
+      natural closure — the top of the real parentage DAG — so the input
+      graph `retire` reasons over is complete. Setting it is an explicit
+      opt-in to a cheap partial run, and it costs the whole input
+      section of `retire` (below). `status` is
       `current | stale | superseded`, always recomputed from SAM,
       never stored in the epoch file; `frozen` is an epoch standing (a
       hold against deletion), never a dataset status. No timestamps
@@ -272,12 +284,19 @@ When regenerating, read in this order:
       not be applied (it names nothing in the catalog, or something
       owned by another epoch) — and names the remedy
       (`propose --family F`) in the refusal; a dropped protection pin is
-      a refusal, never a silent no-op. An input whose own upward walk hit
-      `--input-depth` is reported on stderr and held back from the retire
-      list until the depth is raised, and so is every input above such a
-      node: truncation belongs to the walk that was cut, not to the
-      node, so a dataset another dig's walk explored is still truncated
-      for the dig that stopped there. A pin of ANY kind that matches
+      a refusal, never a silent no-op. When `--input-depth` was given and
+      anything was truncated — the node a walk stopped at, or anything
+      above one — `retire` proposes NO input at all, not "every input
+      except the marked ones": a partial input graph yields no input
+      retirement proposals, the same fail-closed refusal as an
+      incomplete catalog, and the reason is printed on stderr
+      (`input retirement refused: ...`) and carried in the published
+      document's `input_retirement_refused` key. The member section is
+      unaffected. Re-running without `--input-depth` walks to closure
+      and restores the input section. Say this rather than "N inputs
+      were held back": a non-zero frontier count means the upward
+      picture is incomplete, and which OTHER inputs that makes unsafe
+      cannot be read off the count. A pin of ANY kind that matches
       nothing — a `hold`/`exclude` naming an unknown dataset, an `order`
       pin whose group no member competes in, a `not_expected` pin naming
       a desc no dig of the epoch has — is a refusal, not a no-op; a
@@ -286,8 +305,13 @@ When regenerating, read in this order:
       a malformed epoch file, `3` for a SAM error, a dsconf that fails
       to parse, or another catalog-completeness refusal, and `1` for
       `lookup` of a dataset the catalog does not know. A full catalog
-      build over the three families (MDC2025, Run1B, MDC2020) takes
-      about 7 minutes; `index-cnfs` takes about 3.5 minutes. Setup,
+      build over the three families (MDC2025, Run1B, MDC2020) took about
+      7 minutes when the upward walk was capped at 3 levels (measured
+      2026-09-03); walking to closure, now the default, adds one
+      memoized `parents` and `count_files` query per distinct ancestor
+      above that old frontier and takes somewhat longer — do not quote a
+      new figure until one is measured. `index-cnfs` takes about 3.5
+      minutes. Setup,
       verified against the imports on 2026-09-04: the only external
       dependency is `samweb_client`, reached lazily through
       `utils.samweb_wrapper` (`list_files`, `count_files`,

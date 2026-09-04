@@ -153,12 +153,21 @@ open:
   Epoch and at least one of those Epochs is frozen. An Input that also
   feeds a current Epoch's dig is judged by that line's status as before,
   and one feeding only retired Epochs stays retirable.
-- An Input at the `--input-depth` frontier — one this walk stopped at,
-  or anything above such a node — is **truncated** and never listed.
-  Truncation is a property of the cut, not of the node: a node another
-  dig's walk expanded is still truncated for the dig that was cut off
-  there. Raising `--input-depth` until the reported count is zero is
-  what turns the boundary into a visible decision.
+- The upward walk runs to **natural closure** by default (2026-09-04):
+  it stops at the top of the real DAG, not at a fixed depth, so the
+  Input graph `retire` reasons over is complete and nothing is
+  truncated. `--input-depth N` remains as an explicit opt-in cap for a
+  cheap partial run.
+- When a cap IS given and anything was **truncated** — the node a walk
+  stopped at, or anything above one — `retire` proposes **no Input at
+  all**, not "every Input except the marked ones". A partial Input
+  graph yields no Input retirement proposals; the member section is
+  unaffected. This is the same fail-closed stance `retire` takes on an
+  incomplete catalog, an unapplied pin and an Epoch conflict, and it
+  replaces three rounds of per-Input detectors: each was correct for
+  the shape it was given, and the next review found another shape of
+  incompleteness reaching the same false DELETE. Deciding per Input on
+  a graph known to be incomplete is the reasoning that produced them.
 
 ## Family
 
@@ -174,6 +183,19 @@ purpose, differing only in dsconf. Siblings may sit in different
 Epochs. Among Siblings exactly one is **current** or **stale**; the
 rest are **superseded**. Datasets with different parents can still be
 Siblings: a remade parent is the usual reason a Sibling exists.
+
+One deliberate exception, and it is the consequence of a hand-placed
+pin (V4, 2026-09-04). A dead own-series name (`MDC2025-003`, no
+purpose) competes in EVERY purpose group of its `(family, tier, desc)`
+and ranks lowest in each. An `order` pin naming it in the `best` group
+makes it current there — and it stays current in the `perfect` group
+too, alongside that group's lettered winner, so the unpinned purpose
+groups of that base triple then show two current members. That is
+intended: winning any group it competes in is what an `order` pin is
+placed to do, and keeping a dataset a person pinned is the fail-closed
+direction for a tool whose output is a delete list. The alternative —
+letting the pin's group be overridden by the insertion order of the
+groups dict — was the NEW-5 bug.
 
 ## Gap
 

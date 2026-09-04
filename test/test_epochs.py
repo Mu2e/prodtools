@@ -1644,6 +1644,20 @@ class TestPublish(unittest.TestCase):
             back = json.load(f)
         self.assertEqual(back['epochs'][0]['name'], 'MDC2025an')   # sorted by name
 
+    def test_input_retirement_refusal_is_published_next_to_the_retire_list(self):
+        # 'retire' holding member candidates only is otherwise invisible to
+        # a consumer of the served JSON: the absence of an input from the
+        # list would read as "not a candidate" instead of "not asked".
+        cat = _cat(_deep_graph())
+        doc = catalog_document(cat, gens={}, generated_at='x')
+        self.assertEqual(doc['input_retirement_refused'], '')
+        self.assertTrue([r for r in doc['retire'] if r['kind'] == 'input'])
+        capped = _cat(_deep_graph(), input_depth=3)
+        doc = catalog_document(capped, gens={}, generated_at='x')
+        self.assertIn('NO input is proposed', doc['input_retirement_refused'])
+        self.assertEqual([r for r in doc['retire'] if r['kind'] == 'input'], [])
+        self.assertTrue(doc['inputs']['sim.mu2e.Deep3.MDC2025af.art']['truncated'])
+
     def test_incomplete_catalog_publishes_without_retire(self):
         # A family with digs but no loaded epoch file (Run1B here) makes
         # the catalog incomplete: retire() would raise, so catalog_document
