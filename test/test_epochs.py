@@ -601,6 +601,46 @@ class TestStatus(unittest.TestCase):
         m = cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}.root']
         self.assertEqual((m.status, m.hold), ('superseded', 'paper'))
 
+    def test_own_series_is_superseded_by_a_lettered_sibling(self):
+        # I5: an own-series MDC20xx-NNN name parses with purpose=None and
+        # used to land in its own group, so it never competed and the
+        # catalog published two current answers for one physics line.
+        # wiki 5.3: it "ranks below any lettered sibling".
+        g = _small_graph()
+        own = 'nts.mu2e.CeEndpointOnSpill.MDC2025-001.root'
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(own)
+        g[own] = {'n': 100, 'children': []}
+        cat = _cat(g)
+        self.assertEqual(cat.members[own].status, 'superseded')
+        self.assertEqual(cat.members[f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'].status, 'current')
+        self.assertEqual(lookup(cat, own)['superseded_by'],
+                         f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root')
+
+    def test_own_series_without_a_lettered_sibling_stays_current(self):
+        g = _small_graph()
+        own = 'nts.mu2e.Legacy.MDC2025-001.root'
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(own)
+        g[own] = {'n': 5, 'children': []}
+        cat = _cat(g)
+        self.assertEqual(cat.members[own].status, 'current')
+
+    def test_best_and_perfect_stay_two_groups_each_with_a_current(self):
+        # ranking the own-series name into every purpose group must NOT
+        # collapse best and perfect: they are different products.
+        g = _small_graph()
+        perfect = 'mcs.mu2e.CeEndpointOnSpill.MDC2025au_perfect_v1_5.art'
+        own = 'mcs.mu2e.CeEndpointOnSpill.MDC2025-002.art'
+        g[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']['children'] += [perfect, own]
+        g[perfect] = {'n': 100, 'children': []}
+        g[own] = {'n': 100, 'children': []}
+        cat = _cat(g)
+        self.assertEqual(cat.members[perfect].status, 'current')
+        self.assertEqual(cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'].status, 'current')
+        self.assertEqual(cat.members[own].status, 'superseded')   # loses in both groups
+        keys = {k for k in groups(cat) if k[1] == 'mcs' and k[2] == 'CeEndpointOnSpill'}
+        self.assertEqual(keys, {('MDC2025', 'mcs', 'CeEndpointOnSpill', 'best'),
+                                ('MDC2025', 'mcs', 'CeEndpointOnSpill', 'perfect')})
+
     def test_group_key_shape(self):
         cat = _cat()
         m = cat.members[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']

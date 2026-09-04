@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 from utils.epochs.dsconf import parse_dsconf
 from utils.epochs.generation import Generation  # noqa: F401  (type only)
 from utils.epochs.graph import Catalog, Member
-from utils.epochs.status import group_key, groups
+from utils.epochs.status import group_keys_of, groups
 
 EXPECTED_TIERS = ('mcs', 'nts')
 # The desc at mcs/nts is the dig desc (reco keeps the desc). A reco that
@@ -15,10 +15,17 @@ EXPECTED_TIERS = ('mcs', 'nts')
 
 
 def _winner_of(cat: Catalog, m: Member) -> Optional[Member]:
-    """The current-or-stale sibling that beats `m`, else None."""
-    for cand in groups(cat).get(group_key(m), []):
-        if cand.status in ('current', 'stale'):
-            return cand if cand.name != m.name else None
+    """The current-or-stale sibling that beats `m`, else None. An
+    own-series member competes in several groups at once, so ask about
+    all of them (`group_keys_of`) rather than its own 4-tuple, which is
+    not a key when a lettered sibling exists."""
+    grouped = groups(cat)
+    for key in group_keys_of(grouped, m):
+        for cand in grouped[key]:
+            if cand.status in ('current', 'stale'):
+                if cand.name != m.name:
+                    return cand
+                break
     return None
 
 
