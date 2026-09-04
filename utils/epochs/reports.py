@@ -85,6 +85,36 @@ def incomplete_reasons(cat: Catalog) -> List[str]:
     return reasons
 
 
+def _live_reaching(cat: Catalog) -> set:
+    """Every member that is itself `current`/`stale`, or has such a member
+    anywhere in its downward closure.
+
+    `cat.inputs[x]['descendants']` records only the DIG each upward walk
+    started from, never the mcs/nts below it. Testing those dig names
+    against "status is current or stale" therefore reads an input as an
+    orphan whenever its dig is superseded but a member below that dig is
+    still current or stale — which is the retire list proposing the
+    deletion of a live sample's only upstream input (CONTEXT.md, wiki
+    §5 rule 6: retirable when no current or stale MEMBER descends from
+    it). Liveness has to be transitive.
+
+    Computed by propagating UP the member-parent edges already in the
+    catalog — no SAM query. `assign_status` has already rejected a
+    parentage cycle, and the `in live` guard makes a re-entry cheap."""
+    live: set = set()
+    frontier = [m for m in cat.members.values() if m.status in ('current', 'stale')]
+    while frontier:
+        m = frontier.pop()
+        if m.name in live:
+            continue
+        live.add(m.name)
+        for p in m.parents:
+            pm = cat.members.get(p)
+            if pm is not None and pm.name not in live:
+                frontier.append(pm)
+    return live
+
+
 def retire(cat: Catalog) -> List[Dict]:
     reasons = incomplete_reasons(cat)
     if reasons:
@@ -107,8 +137,10 @@ def retire(cat: Catalog) -> List[Dict]:
             continue
         out.append({'dataset': m.name, 'nfiles': m.nfiles, 'kind': 'member',
                     'reason': reason, 'children': _member_children(cat, m.name)})
-    live = {m.name for m in cat.members.values() if m.status in ('current', 'stale')}
+    live = _live_reaching(cat)
     for name, rec in sorted(cat.inputs.items()):
+        # transitive: a dig that is itself superseded but still carries a
+        # current or stale member below it keeps its inputs off the list
         if any(d in live for d in rec['descendants']):
             continue
         key = parse_dsconf(name.split('.')[3]).sort_key()

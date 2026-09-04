@@ -652,6 +652,32 @@ class TestRetire(unittest.TestCase):
         self.assertNotIn('dts.mu2e.CeEndpoint.MDC2025ap.art', out)     # feeds a current dig
         self.assertNotIn('dts.mu2e.Fresh.MDC2025av.art', out)
 
+    def test_input_above_a_superseded_dig_with_a_stale_member_below_is_kept(self):
+        # CRITICAL 1: `descendants` holds only the DIG each upward walk
+        # started from. An input whose dig is superseded but whose mcs/nts
+        # below that dig are still stale must NOT be proposed for deletion
+        # (CONTEXT.md / wiki 5.6: retirable when no current or stale
+        # MEMBER descends from it). Liveness has to be transitive.
+        g = _small_graph()
+        # Solo@an: dig superseded by a newer Solo dig at au that has no mcs
+        # yet, so the mcs/nts under the an dig are the winners of their own
+        # groups with a superseded parent == stale.
+        g['dts.mu2e.Solo.MDC2025af.art'] = {'n': 500, 'children': [f'dig.mu2e.Solo.{AN}.art']}
+        g[f'dig.mu2e.Solo.{AN}.art'] = {'n': 10, 'children': [f'mcs.mu2e.Solo.{AN}.art']}
+        g[f'mcs.mu2e.Solo.{AN}.art'] = {'n': 10, 'children': [f'nts.mu2e.Solo.{AN}.root']}
+        g[f'nts.mu2e.Solo.{AN}.root'] = {'n': 10, 'children': []}
+        g[f'dig.mu2e.Solo.{AU}.art'] = {'n': 10, 'children': []}
+        # mirror case: an input whose whole downward closure is superseded
+        # IS still listed, so this test cannot pass by disabling the branch
+        g['dts.mu2e.CeEndpoint.MDC2025af.art'] = {'n': 500,
+                                                  'children': [f'dig.mu2e.CeEndpointOnSpill.{AN}.art']}
+        cat = _cat(g)
+        self.assertEqual(cat.members[f'dig.mu2e.Solo.{AN}.art'].status, 'superseded')
+        self.assertEqual(cat.members[f'nts.mu2e.Solo.{AN}.root'].status, 'stale')
+        listed = {x['dataset'] for x in retire(cat)}
+        self.assertNotIn('dts.mu2e.Solo.MDC2025af.art', listed)
+        self.assertIn('dts.mu2e.CeEndpoint.MDC2025af.art', listed)
+
     def test_retire_refuses_incomplete_catalog(self):
         # Run1B digs are fed by MDC2025 stop catalogues; a Run1B-only
         # catalog cannot tell a still-needed MDC2025 input from a
