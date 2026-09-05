@@ -232,7 +232,17 @@ When regenerating, read in this order:
       lists members, optionally filtered; `gaps` lists an expected tier
       with no member, plus every stale member; `consistency` reports
       the generation spread per tier, e.g. how many descs a musing or
-      Offline version reaches, the report Ray asked for; `retire` emits
+      Offline version reaches, the report Ray asked for — say that a
+      generation is read out of the cnf jobdef tarball and is therefore
+      evaluated for MDC2025 and Run1B only (`GENERATION_FAMILIES` in
+      `utils/epochs/generation.py`): MDC2020-era cnfs are per-job
+      `.fcl` files, so every MDC2020 row reads `not evaluated` and the
+      era is announced ONCE on stderr, while `unknown` is reserved for
+      an in-scope member whose cnf is missing, unlocatable or
+      unreadable, each reason its own stderr line and its own key in
+      the published document (`generation_out_of_scope`,
+      `generation_unresolved`, `generation_unlocatable`,
+      `generation_unreadable`); `retire` emits
       the delete candidates in Ray's `purge_proposal` line format
       (`DELETE - - <YES|NO> <n> <dataset> <children|NONE> # <reason>`);
       `lookup DATASET` reports one dataset's epoch, status and
@@ -265,11 +275,14 @@ When regenerating, read in this order:
       for `members` and `gaps` it may scope to that epoch's FAMILY, and
       nothing narrower. Say exactly which verbs honour the flags as
       output filters, because not all of them do: `members`, `gaps`
-      and `retire` apply both; `consistency` applies `--family` only and
-      accepts `--epoch` without using it; `lookup` accepts `--family`,
-      `--epoch` and `--json` and filters on none of them (it always
-      prints JSON) — though `--family` does now scope its build, so a
-      dataset outside the named family reads as `unknown`;
+      and `retire` apply both; `consistency` applies `--family` only;
+      `lookup` accepts `--family` and `--json` and filters on neither
+      (it always prints JSON) — though `--family` does scope its
+      build, so a dataset outside the named family reads as `unknown`.
+      `consistency` and `lookup` REFUSE `--epoch` (exit 2, before any
+      SAM call): on those verbs it neither restricts the build nor
+      filters the output, and a silently inert flag once cost a full
+      four-minute catalog walk that the user believed was scoped;
       `index-cnfs` accepts `--family` (no `--epoch`) and uses
       neither; `publish` takes only `--out`. Every verb also takes
       `--quiet`, which suppresses the stderr build-progress lines. `status` is
