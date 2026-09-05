@@ -1408,3 +1408,4 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 `beamkit` records the pass (`1ff5d29..848206f`, 221 tests): make_recoveries uses the bare tick on a `complete` campaign, a failed push's campaign is adopted, rc=2 is state `needs_attention`, inputs are refused before side effects, and the bridge has a contract test against real prodtools.
 - 2026-09-04 beamkit simplify pass: one error base, direct FastMCP registration, leaner record; see [[beamkit]].
 - 2026-09-05 `submissions cancel --close-rows` refused a `complete` campaign (complete -> cancelled is not a transition), so a one-slice campaign with doomed rows could not be abandoned; fixed on branch close-rows-on-complete, beamkit smoke campaign 6 row 12 closed. See [[beamkit]], [[g4bl-epsmax-deck-gap]].
+- 2026-09-05 beamkit second grid smoke on prodtools v3.3.2 (release path, no dev tarball): campaign 7, 3/3 exit 0, first beam file built. See [[beamkit]].
