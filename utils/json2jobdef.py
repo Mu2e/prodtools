@@ -342,14 +342,36 @@ def validate_required_fields(config):
     except ValueError as exc:
         sys.exit(f"json2jobdef: {exc}")
 
+# A Mu2e era tag: a campaign family (Run1B, MDC2025, MDC2030, ...) followed
+# by the era letters and an optional revision digit. Anything else -- a
+# personal dsconf like 'MCPTest001', a version like 'v02_01_00', a deck sha
+# -- carries no era and must not be read as one.
+_ERA_TAG = re.compile(r'(?:Run\d[A-Z]|MDC\d{4})([a-z]+)\d*')
+# The one layout that names a Musing: .../Musings/<Musing>/<TAG>/setup.sh.
+_MUSING_SETUP = re.compile(r'/Musings/[^/]+/([^/]+)/setup\.sh$')
+
+
 def _era_suffix(token):
-    """Trailing lowercase era letters of a dsconf head or Musing tag.
+    """Era letters of a dsconf head or Musing tag, or None.
 
     'Run1Baw' -> 'aw', 'MDC2025aw' -> 'aw', 'Run1Bab2' -> 'ab'.
-    Returns None when the token carries no era letters ('Run1B', 'MDC2025',
-    'v02_01_00'), which is the signal that the two are not comparable.
+    None when the token is not a Mu2e era tag ('Run1B', 'MDC2025',
+    'v02_01_00', 'MCPTest001'), which is the signal that the two are not
+    comparable. A bare trailing-lowercase match is not enough: it read
+    'MCPTest001' as era 'est' and 'Offline' as 'ffline'.
     """
-    m = re.search(r'([a-z]+)\d*$', token)
+    m = _ERA_TAG.fullmatch(token)
+    return m.group(1) if m else None
+
+
+def _musing_tag(setup):
+    """The <TAG> of a cvmfs Musing setup path, or None.
+
+    Only the Musings layout names a Musing. A dev checkout's setup.sh, or a
+    test fixture like '/cvmfs/s.sh', has no tag to read -- its parent
+    directory is not one.
+    """
+    m = _MUSING_SETUP.search(str(setup))
     return m.group(1) if m else None
 
 
@@ -365,7 +387,9 @@ def validate_era_agreement(config):
 
     Only the era letters are compared, so a dsconf may legitimately sit in a
     different family from its Musing (Run1Baw under MDC2025aw is fine -- both
-    are 'aw'). Tokens with no era letters are skipped, not guessed at.
+    are 'aw'). Tokens with no era letters are skipped, not guessed at, and so
+    is a simjob_setup outside the cvmfs Musings layout: there is no Musing
+    tag to read off a dev checkout's setup.sh.
 
     An entry that genuinely must cross eras states why:
 
@@ -380,7 +404,9 @@ def validate_era_agreement(config):
     reason = config.get('era_mismatch_ok')
     if reason:
         return
-    tag = Path(str(setup)).parent.name          # .../Musings/SimJob/<TAG>/setup.sh
+    tag = _musing_tag(setup)
+    if tag is None:
+        return                       # not a Musing: no era to compare against
     dsconf = str(config.get('dsconf') or '')
     head = dsconf.split('_')[0].split('-')[0]
     ds_era, mu_era = _era_suffix(head), _era_suffix(tag)

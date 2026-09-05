@@ -193,6 +193,8 @@
 			"fcl_overrides": {
 				"services.DbService.purpose": "Sim_best",
 				"services.DbService.version": "v1_5",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
 				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
 			},
 			"inloc": "tape",
@@ -209,6 +211,8 @@
 			"fcl_overrides": {
 				"services.DbService.purpose": "Sim_best",
 				"services.DbService.version": "v1_5",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
 				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
 			},
 			"inloc": "tape",
@@ -225,6 +229,8 @@
 			"fcl_overrides": {
 				"services.DbService.purpose": "Sim_best",
 				"services.DbService.version": "v1_5",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
 				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
 			},
 			"inloc": "tape",
@@ -241,6 +247,8 @@
 			"fcl_overrides": {
 				"services.DbService.purpose": "Sim_best",
 				"services.DbService.version": "v1_5",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
 				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
 			},
 			"inloc": "tape",

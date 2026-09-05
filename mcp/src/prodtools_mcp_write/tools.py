@@ -307,7 +307,7 @@ def _all_campaigns(db):
             f"as far as writing the ledger") from e
 
 
-def run_submissions(run_as: str, campaign_id: int | None = None,
+def run_submissions(run_as: str, campaign_id: Optional[int] = None,
                     confirm: bool = False):
     """Tick `submissions run`: all active campaigns, or one.
 
