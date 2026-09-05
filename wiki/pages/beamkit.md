@@ -135,4 +135,28 @@ Before it, smoke campaign 6 (row 12) was closed with `submissions cancel
 the flag refused a `complete` campaign because `complete -> cancelled` is
 not a ledger transition, and every one-slice campaign has that shape.
 
+## Sizing run (2026-09-05): 1000 events per job
+
+`G4blBeam.e470313`, campaign 8, row 14, cluster 93602412 on jobsub02:
+10 jobs x 1000 events, `epsMax=0.01`, release v3.3.2, run as self. All
+10 exit 0.
+
+| quantity | value |
+| --- | --- |
+| wall per job | 948-2454 s, mean 1735 s (spread is node speed, not events) |
+| per event, setup removed (~300 s from the 10-event smokes) | ~0.7-2.1 s, mean ~1.4 s |
+| memory | 1.07 GB per job, flat |
+| nts per job | 530-590 kB; 5.6 MB for 10 000 POT |
+| `bm` beam file | 53 073 rows in, 8119 out (0.81 rows/POT), 1.07 MB |
+| `ps` beam file | 12 453 rows out (1.25 rows/POT), 1.64 MB |
+
+`bm` drops: 23 131 `drop_pdg` (neutrons), 19 969 below the momentum
+floor, 1332 backward, 496 duplicate, 26 exotic. Scaling: a `bm` beam
+file is ~107 bytes per POT, so the 2013 2.6 GB stage-1 file corresponds
+to ~24 M POT, which at 1000 events per job is 24 000 jobs (three
+slices). Raising `events_per_job` to 5000-10000 (2.5-7 h per job, well
+inside the 24 h default lifetime) is the sensible production setting;
+1000 stays the default for smokes. This closes the spec's open question
+1 (per-event cost at the default).
+
 Related: [[g4bl-runner]], [[g4bl-epsmax-deck-gap]].
