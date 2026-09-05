@@ -229,7 +229,9 @@ When regenerating, read in this order:
       (`propose --family F` writes `data/epochs/<letters>.json` for
       every dig letter family that has no epoch file yet, and refuses
       to run without `--family`; `members [--tier T] [--status S]`
-      lists members, optionally filtered; `gaps` lists an expected tier
+      lists members, optionally filtered — tier-major in chain order
+      (dig, mcs, nts, ...), then desc, then epoch, and the text row
+      reads `status tier epoch nfiles dataset`; `gaps` lists an expected tier
       with no member, plus every stale member, and EXITS 1 when any
       printed row is `stale` (ADR 0006: the newest name must be safe to
       use, so a remade parent obligates the downstream remake before

@@ -268,10 +268,23 @@ def cmd_propose(args, source):
     return 0
 
 
+# Chain order for listings: a tier the chain does not name sorts after
+# these, alphabetically, rather than being refused -- `members` is a
+# listing, not a gate.
+TIER_RANK = {t: i for i, t in enumerate(('dts', 'dig', 'mcs', 'nts', 'ntd', 'bck'))}
+
+
+def _member_sort_key(m):
+    return (TIER_RANK.get(m.tier, len(TIER_RANK)), m.tier, m.desc, m.epoch, m.name)
+
+
 def cmd_members(args, source):
+    """Tier-major in chain order (dig, mcs, nts, ...), then desc, then
+    epoch: the reader scans one tier at a time, and the epoch column says
+    where each row came from."""
     cat = _catalog(args, source)
     rows = []
-    for m in sorted(cat.members.values(), key=lambda m: (m.epoch, m.tier, m.desc, m.name)):
+    for m in sorted(cat.members.values(), key=_member_sort_key):
         if not _keep(args, m.key.family, m.epoch):
             continue
         if args.tier and m.tier != args.tier:
@@ -280,7 +293,7 @@ def cmd_members(args, source):
             continue
         rows.append({'dataset': m.name, 'epoch': m.epoch, 'tier': m.tier, 'desc': m.desc,
                      'status': m.status, 'hold': m.hold, 'nfiles': m.nfiles})
-    _emit(rows, args.json, lambda rs: [f"{r['status']:<10} {r['nfiles']:>6} {r['dataset']}"
+    _emit(rows, args.json, lambda rs: [f"{r['status']:<10} {r['tier']:<4} {r['epoch']:<10} {r['nfiles']:>6} {r['dataset']}"
                                       + (f"  [hold: {r['hold']}]" if r['hold'] else '') for r in rs])
     _report_noise(cat, source)
     return 0

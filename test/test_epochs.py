@@ -1590,6 +1590,42 @@ def _run(argv, source, epochs_dir, tty=False):
     return rc, out.getvalue(), err.getvalue()
 
 
+class TestMembersOrder(unittest.TestCase):
+    """`members` lists tier-major in chain order, then desc, then epoch,
+    and the text row names the tier and the epoch."""
+
+    def setUp(self):
+        self.d = _tmpdir()
+        for name in ('MDC2025au', 'MDC2025an'):
+            write_epoch_file(self.d, propose_epoch(name + '_best_v1_0'))
+
+    def test_text_rows_are_tier_major_in_chain_order_with_epoch(self):
+        g = _small_graph()
+        # a second desc, so tier-major and desc-major listings differ
+        g[f'dig.mu2e.Aaa.{AU}.art'] = {'n': 10, 'children': [f'mcs.mu2e.Aaa.{AU}.art']}
+        g[f'mcs.mu2e.Aaa.{AU}.art'] = {'n': 10, 'children': [f'nts.mu2e.Aaa.{AU}.root']}
+        g[f'nts.mu2e.Aaa.{AU}.root'] = {'n': 10, 'children': []}
+        rc, out, err = _run(['members', '--status', 'current'], FakeSource(g), self.d)
+        self.assertEqual(rc, 0, err)
+        rows = [line.split() for line in out.splitlines()]
+        tiers = [r[1] for r in rows]
+        self.assertEqual(tiers, ['dig', 'dig', 'mcs', 'mcs', 'nts', 'nts'], out)
+        self.assertTrue(all(r[2] == 'MDC2025au' for r in rows), out)
+        # within a tier, desc order
+        self.assertEqual([r[4].split('.')[2] for r in rows if r[1] == 'dig'],
+                         ['Aaa', 'CeEndpointOnSpill'])
+
+    def test_unknown_tier_sorts_after_the_chain_not_refused(self):
+        g = _small_graph()
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(f'zzz.mu2e.CeEndpointOnSpill.{AU}.root')
+        g[f'zzz.mu2e.CeEndpointOnSpill.{AU}.root'] = {'n': 1, 'children': []}
+        rc, out, err = _run(['members', '--status', 'current'], FakeSource(g), self.d)
+        self.assertEqual(rc, 0, err)
+        tiers = [line.split()[1] for line in out.splitlines()]
+        self.assertEqual(tiers[-1], 'zzz', out)
+        self.assertEqual(tiers[:-1], sorted(tiers[:-1], key=lambda t: epochs_cli.TIER_RANK[t]))
+
+
 class TestGapsRule(unittest.TestCase):
     """ADR 0006: the newest name must be safe to use. A stale member in a
     current epoch is a rule violation, and `gaps` says so with exit 1."""
