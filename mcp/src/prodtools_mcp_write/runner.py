@@ -53,6 +53,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
 # script this server was never meant to expose" as mu2epro.
 ALLOWED_ENTRY_POINTS = frozenset({
     'bin/json2jobdef',
+    'bin/push_file',
     'bin/submissions',
 })
 

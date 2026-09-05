@@ -18332,3 +18332,218 @@ class TestInferDatasetLocationImports(unittest.TestCase):
                    side_effect=SAMError('SAM down')):
             self.assertEqual(file_resolver.infer_dataset_location('sim.mu2e.X.v1.art'),
                              'N/A')
+
+
+# ---------------------------------------------------------------------------
+# push_file: publish one already-built file to SAM through pushOutput
+# ---------------------------------------------------------------------------
+
+class TestPushFileValidate(unittest.TestCase):
+    """The one rule for what may be pushed, shared by the CLI (owner from
+    $USER) and the MCP tool (owner from run_as)."""
+
+    def setUp(self):
+        self.d = _mkdtemp()
+        self.path = self._file('etc.u.TBeam-bm.e470313.0.txt')
+
+    def _file(self, name):
+        p = os.path.join(self.d, name)
+        Path(p).write_text('#BLTrackFile: Source file\n')
+        return p
+
+    def _validate(self, path=None, location='scratch', parents=(), owner='u'):
+        from utils.push_file import validate
+        return validate(path or self.path, location, list(parents), owner=owner)
+
+    def test_accepts_a_six_field_name_owned_by_the_identity(self):
+        name = self._validate(parents=['nts.u.T.e470313.00000000.root'])
+        self.assertEqual((name.tier, name.owner, name.sequencer, name.extension),
+                         ('etc', 'u', '0', 'txt'))
+
+    def test_refuses_a_missing_file(self):
+        with self.assertRaisesRegex(ValueError, 'not a file'):
+            self._validate(path=os.path.join(self.d, 'etc.u.X.e470313.0.txt'))
+
+    def test_refuses_a_dataset_shaped_name(self):
+        """Five fields is a DATASET name; pushOutput needs the sequencer."""
+        with self.assertRaisesRegex(ValueError, 'sequencer'):
+            self._validate(path=self._file('etc.u.TBeam-bm.e470313.txt'))
+
+    def test_refuses_a_name_that_is_not_mu2e_shaped(self):
+        with self.assertRaisesRegex(ValueError, 'Mu2e file name'):
+            self._validate(path=self._file('beam.txt'))
+
+    def test_refuses_another_owner(self):
+        with self.assertRaisesRegex(ValueError, "owned by 'u'.*'mu2e'"):
+            self._validate(owner='mu2e')
+
+    def test_refuses_outstage_and_unknown_locations(self):
+        for loc in ('outstage', 'presistent', ''):
+            with self.subTest(location=loc):
+                with self.assertRaisesRegex(ValueError, 'location'):
+                    self._validate(location=loc)
+
+    def test_refuses_a_parent_that_is_not_a_file_name(self):
+        with self.assertRaisesRegex(ValueError, 'parent'):
+            self._validate(parents=['nts.u.T.e470313.root'])
+
+
+class TestPushFileCli(unittest.TestCase):
+    """utils/push_file.py main: validate, refuse a name already in SAM,
+    write parents_list.txt, hand pushOutput one output.txt line."""
+
+    def setUp(self):
+        self.src = _mkdtemp()
+        self.path = os.path.join(self.src, 'etc.u.TBeam-bm.e470313.0.txt')
+        Path(self.path).write_text('#BLTrackFile: Source file\n')
+
+    def _run(self, argv, *, in_sam='', push=0):
+        from utils import push_file
+        seen = {}
+
+        def fake_push_output(output_specs, output_file='output.txt', simjob_setup=None):
+            seen['specs'] = output_specs
+            seen['output_file'] = output_file
+            if isinstance(push, Exception):
+                raise push
+            return push
+
+        work = _mkdtemp()
+        cwd = os.getcwd()
+        try:
+            os.chdir(work)
+            with patch.object(push_file, 'push_output', fake_push_output), \
+                 patch.object(push_file, 'locate_file', return_value=in_sam), \
+                 patch.object(push_file, 'default_owner', return_value='u'):
+                rc = push_file.main(argv)
+        finally:
+            os.chdir(cwd)
+        return rc, seen, Path(work)
+
+    def test_writes_parents_list_and_one_output_line(self):
+        rc, seen, work = self._run(['--file', self.path, '--location', 'scratch',
+                                    '--parent', 'nts.u.T.e470313.00000000.root',
+                                    '--parent', 'nts.u.T.e470313.00000001.root'])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen['specs'], [('scratch', self.path, 'parents_list.txt')])
+        self.assertEqual(seen['output_file'], 'output.txt')
+        self.assertEqual((work / 'parents_list.txt').read_text(),
+                         'nts.u.T.e470313.00000000.root\nnts.u.T.e470313.00000001.root\n')
+
+    def test_no_parents_means_none_and_no_parents_file(self):
+        rc, seen, work = self._run(['--file', self.path, '--location', 'tape'])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen['specs'], [('tape', self.path, 'none')])
+        self.assertFalse((work / 'parents_list.txt').exists())
+
+    def test_refuses_a_name_already_in_sam_before_pushing(self):
+        rc, seen, _ = self._run(['--file', self.path, '--location', 'scratch'],
+                                in_sam='enstore:/pnfs/x')
+        self.assertEqual(rc, 2)
+        self.assertNotIn('specs', seen)
+
+    def test_validation_failure_exits_2_before_pushing(self):
+        bad = os.path.join(self.src, 'etc.u.TBeam-bm.e470313.txt')
+        Path(bad).write_text('x\n')
+        rc, seen, _ = self._run(['--file', bad, '--location', 'scratch'])
+        self.assertEqual(rc, 2)
+        self.assertNotIn('specs', seen)
+
+    def test_pushoutput_failure_is_the_exit_code(self):
+        import subprocess as sp
+        rc, _, _ = self._run(['--file', self.path, '--location', 'scratch'],
+                             push=sp.CalledProcessError(3, 'pushOutput output.txt'))
+        self.assertEqual(rc, 3)
+
+
+class TestPushFileTool(unittest.TestCase):
+    """prodtools_mcp_write.tools.push_file: the same gates as push_cnf,
+    every refusal before run_cli, argv composed for bin/push_file."""
+
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        self.tools = tools
+        self.src = _mkdtemp()
+        self.work = _mkdtemp()
+        self.name = 'etc.u.TBeam-bm.e470313.0.txt'
+        self.path = os.path.join(self.src, self.name)
+        Path(self.path).write_text('#BLTrackFile: Source file\n')
+        self.parents = ['nts.u.T.e470313.00000000.root']
+
+    def _push(self, *, path=None, location='scratch', parents=None, run_as='self',
+              confirm=False, cli=None):
+        cli = cli if cli is not None else {'rc': 0, 'stdout': 'pushed', 'stderr': ''}
+        with patch('prodtools_mcp_write.runner.run_cli', return_value=cli) as run, \
+             patch('prodtools_mcp_write.tools.getpass.getuser', return_value='u'), \
+             patch('prodtools_mcp_write.tools._self_workdir', return_value=self.work):
+            self.last_run = run
+            out = self.tools.push_file(
+                path=path or self.path, location=location,
+                parents=self.parents if parents is None else parents,
+                run_as=run_as, confirm=confirm)
+        return out
+
+    def test_entry_point_is_allowed(self):
+        from prodtools_mcp_write import runner
+        self.assertIn('bin/push_file', runner.ALLOWED_ENTRY_POINTS)
+
+    def test_mu2epro_without_confirm_refused_before_running_anything(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(PermissionError):
+                self.tools.push_file(path=self.path, location='tape',
+                                     parents=self.parents, run_as='mu2epro')
+        run.assert_not_called()
+
+    def test_argv_names_the_file_location_and_every_parent(self):
+        out = self._push(parents=['nts.u.T.e470313.00000000.root',
+                                  'nts.u.T.e470313.00000001.root'])
+        argv, run_as = self.last_run.call_args.args
+        self.assertEqual(argv, ['bin/push_file', '--file', self.path, '--location', 'scratch',
+                                '--parent', 'nts.u.T.e470313.00000000.root',
+                                '--parent', 'nts.u.T.e470313.00000001.root'])
+        self.assertEqual(run_as, 'self')
+        self.assertEqual(self.last_run.call_args.kwargs, {'cwd': self.work})
+        self.assertEqual(out, {'name': self.name, 'location': 'scratch', 'parents': 2, 'rc': 0})
+
+    def test_self_runs_in_its_own_workdir_and_removes_it_on_success(self):
+        self._push()
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_mu2epro_gets_no_cwd_and_expects_the_mu2e_owner(self):
+        with self.assertRaisesRegex(ValueError, "owned by 'u'.*'mu2e'"):
+            self._push(run_as='mu2epro', confirm=True)
+        self.last_run.assert_not_called()
+        prod = os.path.join(self.src, 'etc.mu2e.TBeam-bm.e470313.0.txt')
+        Path(prod).write_text('x\n')
+        self._push(path=prod, location='tape', run_as='mu2epro', confirm=True)
+        self.assertEqual(self.last_run.call_args.kwargs, {'cwd': None})
+        self.assertEqual(self.last_run.call_args.args[1], 'mu2epro')
+
+    def test_refusals_happen_before_run_cli(self):
+        cases = {
+            'missing file': dict(path=os.path.join(self.src, 'etc.u.X.e470313.0.txt')),
+            'dataset-shaped name': dict(path=self._write('etc.u.TBeam-bm.e470313.txt')),
+            'outstage': dict(location='outstage'),
+            'parents not a list': dict(parents='nts.u.T.e470313.00000000.root'),
+            'empty parent': dict(parents=['']),
+        }
+        for label, kw in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError):
+                    self._push(**kw)
+                self.last_run.assert_not_called()
+
+    def _write(self, name):
+        p = os.path.join(self.src, name)
+        Path(p).write_text('x\n')
+        return p
+
+    def test_nonzero_rc_raises_with_both_streams_and_keeps_the_workdir(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._push(cli={'rc': 1, 'stdout': 'gfal-copy error: HTTP 403',
+                            'stderr': 'Traceback'})
+        msg = str(cm.exception)
+        self.assertIn('HTTP 403', msg)
+        self.assertIn('Traceback', msg)
+        self.assertIn(self.work, msg)
+        self.assertTrue(os.path.exists(self.work))

@@ -214,7 +214,8 @@ When regenerating, read in this order:
     user-facing CLI: `famtree`,
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `jobquery`,
-    `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`, `jobwait`.
+    `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`, `jobwait`,
+    `push_file`.
     Ops scripts
     (`install_prodtools.sh`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
