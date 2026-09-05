@@ -1081,9 +1081,11 @@ def manage_campaign(db_path, camp_id, action, note=None, close_rows=False):
     under it orphans the cluster — nothing is written, not even the
     campaign state.
 
-    Cancelling an already-cancelled campaign is a no-op here (the flag
-    is normally reached AFTER a cancel), not an error; bare cancel
-    still raises on it.
+    On an already-cancelled campaign the campaign write is a no-op (the
+    flag is normally reached AFTER a cancel), not an error; bare cancel
+    still raises on it. A 'complete' campaign is treated the same way:
+    every slice is submitted, so only its rows are left to close, and
+    complete -> cancelled is not a ledger transition.
     """
     target = {'pause': 'paused', 'resume': 'active',
               'cancel': 'cancelled', 'complete': 'complete'}[action]
@@ -1113,8 +1115,12 @@ def manage_campaign(db_path, camp_id, action, note=None, close_rows=False):
     if note is None:
         note = ('operator cancel --close-rows: indices deliberately '
                 'not recovered')
-    if camp['state'] == 'cancelled':
-        print(f"campaign {camp_id}: already cancelled")
+    if camp['state'] in ('cancelled', 'complete'):
+        # cancelled: the flag is normally reached after a cancel.
+        # complete: every slice is already submitted, so there is nothing
+        # left to stop expanding and complete -> cancelled is not a
+        # transition; the open rows are what the operator is closing.
+        print(f"campaign {camp_id}: already {camp['state']}; closing rows only")
     else:
         submission_ledger.set_campaign_state(db_path, camp_id, 'cancelled',
                                              note=note)

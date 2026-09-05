@@ -6757,6 +6757,23 @@ class TestManageCampaign(unittest.TestCase):
         self.assertEqual(closed, [rid])
         self.assertEqual(self._state(rid), 'exhausted')
 
+    def test_close_rows_works_on_a_complete_campaign(self):
+        """A fully submitted campaign is 'complete' while its rows still
+        verify, and complete -> cancelled is not a ledger transition. The
+        flag must still close the rows, leaving the campaign complete."""
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        self.sl.set_campaign_state(self.db, self.cid, 'complete')
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 note='deck bug; not recovering',
+                                 close_rows=True)
+        self.assertEqual(closed, [rid])
+        self.assertEqual(self._state(rid), 'exhausted')
+        self.assertEqual(self.sl.row_by_id(self.db, rid)['note'],
+                         'deck bug; not recovering')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'complete')
+
     def test_close_rows_only_applies_to_cancel(self):
         from utils.submissions import manage_campaign
         with self.assertRaises(ValueError):

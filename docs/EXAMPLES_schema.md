@@ -232,7 +232,8 @@ When regenerating, read in this order:
       already-submitted rows keep being recovered, while `--close-rows`
       additionally moves every open row on the campaign's tarball to
       `exhausted` so the next tick recovers nothing (for a round being
-      abandoned after its clusters were removed); `complete CAMP_ID
+      abandoned after its clusters were removed; works on a `cancelled`
+      or `complete` campaign too, closing rows only); `complete CAMP_ID
       [--note TEXT]` — the operator close-out for a draining campaign;
       `set-slice CAMP_ID N` and `set-memory CAMP_ID MEM` — retune a live
       campaign's slice size / memory request for its remaining slices;
