@@ -622,3 +622,49 @@ question is answered.
   numbers here are left exactly as measured, nothing is corrected or
   re-run — but a retire list built with today's code reports 26
   superseded members and no input lines at all, from this same catalog.
+
+## 19. Generation has an era boundary (measured 2026-09-04)
+
+Both routes to a generation read a jobdef **tarball**. MDC2020-era cnfs
+are per-job `.fcl` files that predate the jobdef tarball, so no
+generation is derivable for that family however the cnf is found —
+`read_generation` would hand the `.fcl` straight to `tarfile.open` and
+get `ReadError: not a gzip/bzip2/lzma/tar file`, which reads like
+corruption but is a shape mismatch.
+
+Measured over the full catalog, 762 live members:
+
+| route | count |
+|---|---|
+| declared SAM cnf parent (ADR 0003) | 12 |
+| `data/epochs/cnf_index.json` | 478 |
+| unresolved | 272 |
+
+Of the 272 unresolved, **271 were MDC2020**, one was MDC2025 and none
+were Run1B. All five unreadable cnfs were MDC2020 too: three
+`PermissionError` from dCache, one vanished `/pnfs/mu2e/scratch/` file,
+and one the `.fcl` shape above.
+
+**Decisions taken.** `generation.GENERATION_FAMILIES = {MDC2025, Run1B}`.
+Members outside it are skipped before any lookup, and the era is reported
+once per family rather than once per dataset, so that a blank *inside*
+the scope stays a real signal. `consistency` labels them `not evaluated`,
+reserving `unknown` for an in-scope fault. Adding a future era is one
+entry in that set.
+
+Do **not** key the scope off the epoch file's `status`: every Run1B epoch
+is also `frozen`, and Run1B resolves cleanly. The boundary is a file
+format, not a standing.
+
+**Also fixed here.** `generations()` called `read_generation` unguarded,
+so the first unreadable cnf aborted `consistency` and `publish` with exit
+3 — `build_cnf_index` had isolated per-cnf failures since it was written
+("one bad tarball must never abort the whole index build"), but the
+function consuming its output had not. Failures are now recorded under
+three distinct reasons (unresolved / unlocatable / unreadable), on stderr
+and in the published document.
+
+Note on ADR 0003: the declared-parent route is sparse but **not** empty
+(12 of 762). `runmu2e.py` does not append the cnf to `parents_list.txt`,
+so it does not fire for every new output; where it fires, parentage was
+declared by some other path.
