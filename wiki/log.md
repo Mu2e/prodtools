@@ -1402,3 +1402,7 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 `g4bl-runner` documents the optional `g4bl_params` dict (command-line `key=value` overrides, worker-owned names refused) so deck modes such as `READ_Beam_File=1` come from the JSON instead of an edited `.in`.
 
 ## [2026-09-04] update | beamkit implemented; first g4bl thin-client grid smoke
+
+## [2026-09-04] update | beamkit architecture pass: five bugs, identity/publishing/naming re-homed
+
+`beamkit` records the pass (`1ff5d29..848206f`, 221 tests): make_recoveries uses the bare tick on a `complete` campaign, a failed push's campaign is adopted, rc=2 is state `needs_attention`, inputs are refused before side effects, and the bridge has a contract test against real prodtools.

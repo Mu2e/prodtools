@@ -21,10 +21,33 @@ it, and a beam-file builder for the ntuples a run produces.
 
 ## Status (2026-09-04)
 
-Implemented on branch `v1`, 33 commits, 181 tests. Seven MCP tools:
+Implemented on branch `v1`, 51 commits, 221 tests. Seven MCP tools:
 `run_beamline`, `make_recoveries`, `beamline_status`, `list_beamline_runs`,
 `beamline_outputs`, `make_beamfile`, `get_server_info`. Module map and
-diagrams live in the repo at `docs/architecture.md`.
+diagrams live in the repo at `docs/architecture.md`; the domain vocabulary
+in `CONTEXT.md`.
+
+An architecture pass on 2026-09-04 (`1ff5d29..848206f`) fixed five bugs
+and re-homed three rules:
+
+- **A run past its last slice was unrecoverable through beamkit.** prodtools
+  marks a campaign `complete` when its last slice is submitted, rows still
+  verifying, and refuses a scoped tick on it. `make_recoveries` now reads
+  the campaign state from the ledger and runs the bare tick once it is not
+  `active`; the result names which form ran. The first smoke (campaign 6)
+  was already in that state.
+- **A failed `push_cnf` whose campaign exists is adopted**, not orphaned:
+  the record takes the campaign id in state `created` and `make_recoveries`
+  submits it. Before, the retry burned the next dsconf.
+- prodtools rc=2 is now run state `needs_attention`; every caller input is
+  refused before the deck fetch and SAM probe; the campaign's `njobs` from
+  `push_cnf` is what `missing_indices` is measured against.
+- `identity.py` is the one home for what `run_as` means and the only reader
+  of `BEAMKIT_PRODTOOLS_DIR`; `publishing.py` holds the beam-file
+  link/push/unwind; `naming.py` holds every Mu2e name. `make_beamfile` has a
+  `label` (files and SAM artifact) distinct from `flavor` (cuts).
+- `tests/test_bridge_contract.py` binds every bridge call to the real
+  prodtools signatures when `BEAMKIT_PRODTOOLS_ROOT` names a checkout.
 
 One prerequisite is still unbuilt: **prodtools has no `push_file`**, so
 `make_beamfile(publish=True)` is refused up front by
