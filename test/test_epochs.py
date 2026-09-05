@@ -1250,6 +1250,151 @@ class TestGeneration(unittest.TestCase):
         self.assertEqual(via_index.source, 'index')
 
 
+from utils.epochs.generation import GENERATION_FAMILIES
+
+BA = 'MDC2020ba_best_v1_3'          # an out-of-scope (legacy) family
+
+
+def _legacy_graph():
+    """One MDC2020 dig with a downstream mcs, plus one in-scope MDC2025
+    chain, so a single catalog spans both sides of the era boundary."""
+    g = _small_graph()
+    g[f'dig.mu2e.Legacy.{BA}.art'] = {'n': 10, 'children': [f'mcs.mu2e.Legacy.{BA}.art']}
+    g[f'mcs.mu2e.Legacy.{BA}.art'] = {'n': 10, 'children': []}
+    return g
+
+
+def _both_epochs():
+    return {'MDC2025au': _epoch('MDC2025au'), 'MDC2025an': _epoch('MDC2025an'),
+            'MDC2020ba': _epoch('MDC2020ba')}
+
+
+class TestGenerationScope(unittest.TestCase):
+    """A+B: generation is attempted only for GENERATION_FAMILIES, and every
+    in-scope failure is isolated per cnf and reported by reason."""
+
+    def _cat_src(self, cnfs=None):
+        src = FakeSource(_legacy_graph(), cnfs=cnfs or {})
+        cat = assign_status(build_catalog(_both_epochs(), src, ['MDC2025', 'MDC2020']))
+        return cat, src
+
+    def test_scope_names_the_two_live_families(self):
+        self.assertEqual(GENERATION_FAMILIES, frozenset({'MDC2025', 'Run1B'}))
+
+    def test_out_of_scope_family_is_blank_and_reported_once_by_family(self):
+        cat, src = self._cat_src()
+        gens = generations(cat, src, {})
+        legacy = [n for n in gens if f'.{BA}.' in n]
+        self.assertTrue(legacy, 'fixture must contain MDC2020 members')
+        for n in legacy:
+            self.assertIsNone(gens[n])
+        # one family-level statement, NOT one complaint per dataset
+        self.assertEqual(cat.generation_out_of_scope, {'MDC2020'})
+        # and an out-of-scope member is never counted as a fault
+        for n in legacy:
+            self.assertNotIn(n, cat.generation_unresolved)
+
+    def test_out_of_scope_member_costs_no_cnf_lookup(self):
+        # the skip happens before cnf_for, so a legacy member must not be
+        # able to claim a cnf through the index either
+        cat, src = self._cat_src()
+        legacy = next(n for n in cat.members if f'.{BA}.' in n)
+        gens = generations(cat, src, {legacy: 'cnf.mu2e.Whatever.MDC2020ba_best_v1_3.0.tar'})
+        self.assertIsNone(gens[legacy])
+        self.assertEqual(cat.generation_unreadable, {})
+        self.assertEqual(cat.generation_unlocatable, set())
+
+    def test_in_scope_member_with_no_cnf_is_reported_unresolved(self):
+        cat, src = self._cat_src()
+        gens = generations(cat, src, {})
+        au = f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'
+        self.assertIsNone(gens[au])
+        self.assertIn(au, cat.generation_unresolved)
+
+    def test_unreadable_cnf_is_isolated_not_fatal(self):
+        # a cnf that SAM locates but that will not open (dCache denial,
+        # corrupt tarball, vanished scratch file) must degrade ONE
+        # member's generation, never abort the verb.
+        d = _tmpdir()
+        bad = os.path.join(d, 'not-a-tarball.tar')
+        with open(bad, 'w') as f:
+            f.write('this is not a tar file')
+        good_name = 'cnf.mu2e.Good.MDC2025au_best_v1_5.0.tar'
+        good = _make_cnf(d, good_name, SETUP_B,
+                         [f'nts.mu2e.CeEndpointOnSpill.{AU}-001.sequencer.root'])
+        bad_name = 'cnf.mu2e.Bad.MDC2025au_best_v1_5.0.tar'
+        cat, src = self._cat_src(cnfs={good_name: good, bad_name: bad})
+        au = f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'
+        nts = f'nts.mu2e.CeEndpointOnSpill.{AU}-001.root'
+        gens = generations(cat, src, {au: bad_name, nts: good_name})   # no raise
+        self.assertIsNone(gens[au])
+        self.assertIn(bad_name, cat.generation_unreadable)
+        self.assertIn('ReadError', cat.generation_unreadable[bad_name])
+        # the healthy member is unaffected
+        self.assertIsNotNone(gens[nts])
+        self.assertEqual(gens[nts].version, 'v02_01_00')
+
+    def test_unlocatable_cnf_is_recorded_separately(self):
+        cat, src = self._cat_src()                     # FakeSource knows no cnfs
+        au = f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'
+        gens = generations(cat, src, {au: 'cnf.mu2e.Gone.MDC2025au_best_v1_5.0.tar'})
+        self.assertIsNone(gens[au])
+        self.assertIn('cnf.mu2e.Gone.MDC2025au_best_v1_5.0.tar', cat.generation_unlocatable)
+        self.assertEqual(cat.generation_unreadable, {})   # a different reason
+
+    def test_publish_document_carries_each_reason(self):
+        cat, src = self._cat_src()
+        au = f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'
+        gens = generations(cat, src, {au: 'cnf.mu2e.Gone.MDC2025au_best_v1_5.0.tar'})
+        doc = catalog_document(cat, gens, '2026-09-04T00:00:00Z')
+        self.assertEqual(doc['generation_out_of_scope'], ['MDC2020'])
+        self.assertIn('cnf.mu2e.Gone.MDC2025au_best_v1_5.0.tar', doc['generation_unlocatable'])
+        self.assertIsInstance(doc['generation_unresolved'], list)
+        self.assertIsInstance(doc['generation_unreadable'], dict)
+
+    def test_cli_reports_the_era_once_and_names_a_fault(self):
+        d = _tmpdir()
+        for name in ('MDC2025au', 'MDC2025an', 'MDC2020ba'):
+            with open(os.path.join(d, name + '.json'), 'w') as f:
+                e = _epoch(name)
+                json.dump({'name': e.name, 'purpose': e.purpose, 'status': e.status,
+                           'roots': e.roots, 'pins': e.pins}, f)
+        src = FakeSource(_legacy_graph())
+        rc, _, err = _run(['consistency'], src, d)
+        self.assertEqual(rc, 0)
+        era = [ln for ln in err.splitlines() if 'generation not evaluated' in ln]
+        self.assertEqual(len(era), 1, f'era line must appear once, got {era}')
+        self.assertIn('MDC2020', era[0])
+        self.assertIn('.fcl', era[0])
+        # an in-scope member with no cnf is named individually
+        self.assertTrue([ln for ln in err.splitlines()
+                         if ln.startswith('no generation:') and AU in ln])
+
+    def test_consistency_separates_not_evaluated_from_unknown(self):
+        # a legacy era and a genuine in-scope failure must not share a
+        # label -- that conflation is what hides a real fault.
+        cat, src = self._cat_src()
+        gens = generations(cat, src, {})
+        rows = {(r['family'], r['tier']): r['generation'] for r in consistency(cat, gens)}
+        legacy = [v for (fam, _), v in rows.items() if fam == 'MDC2020']
+        in_scope = [v for (fam, _), v in rows.items() if fam == 'MDC2025']
+        self.assertTrue(legacy and all(v == 'not evaluated' for v in legacy), rows)
+        self.assertTrue(in_scope and all(v == 'unknown' for v in in_scope), rows)
+
+    def test_reentrant_reports_each_fault_once(self):
+        # `consistency` and `publish` both call generations(); a second
+        # call on the same catalog must not double-report.
+        cat, src = self._cat_src()
+        au = f'mcs.mu2e.CeEndpointOnSpill.{AU}.art'
+        generations(cat, src, {au: 'cnf.mu2e.Gone.MDC2025au_best_v1_5.0.tar'})
+        first = (set(cat.generation_out_of_scope), set(cat.generation_unresolved),
+                 set(cat.generation_unlocatable), dict(cat.generation_unreadable))
+        generations(cat, src, {au: 'cnf.mu2e.Gone.MDC2025au_best_v1_5.0.tar'})
+        second = (set(cat.generation_out_of_scope), set(cat.generation_unresolved),
+                  set(cat.generation_unlocatable), dict(cat.generation_unreadable))
+        self.assertEqual(first, second)
+
+
 from utils.epochs.publish import catalog_document, write_catalog
 
 
@@ -1824,13 +1969,26 @@ class TestCliScope(unittest.TestCase):
         walked = ' '.join(self.src.calls['children'])
         self.assertIn(f'dig.mu2e.CeEndpointOnSpill.{AN}.art', walked)
 
-    def test_epoch_alone_does_not_scope_a_verb_that_ignores_epoch(self):
-        # `consistency` accepts --epoch and never filters on it, so
-        # inferring a scope from it would silently drop rows the verb is
-        # documented to print.
-        rc, out, _ = _run(['consistency', '--epoch', 'MDC2025au'], self.src, self.d)
-        self.assertEqual(rc, 0)
-        self.assertEqual(sorted(self.src.calls['dig_datasets']), ['MDC2025', 'Run1B'])
+    def test_epoch_is_refused_on_a_verb_that_ignores_it(self):
+        # `consistency` neither scopes on --epoch nor filters on it.
+        # Accepting it silently bought a whole-catalog build and changed
+        # nothing about the answer, so it is a usage error (exit 2).
+        rc, out, err = _run(['consistency', '--epoch', 'MDC2025au'], self.src, self.d)
+        self.assertEqual(rc, 2)
+        self.assertIn('--epoch does not apply', err)
+        self.assertIn('--family', err)
+        self.assertEqual(self.src.calls['dig_datasets'], [])   # refused before any SAM call
+
+    def test_epoch_is_refused_on_lookup_too(self):
+        rc, _, err = _run(['lookup', '--epoch', 'MDC2025au', 'x.mu2e.y.z.art'],
+                          self.src, self.d)
+        self.assertEqual(rc, 2)
+        self.assertIn('--epoch does not apply', err)
+
+    def test_epoch_still_works_on_the_verbs_that_use_it(self):
+        for verb in ('members', 'gaps'):
+            rc, _, _ = _run([verb, '--epoch', 'MDC2025au'], self.src, self.d)
+            self.assertEqual(rc, 0, f'{verb} must still accept --epoch')
 
     # -- what must never be scoped ---------------------------------------
     def test_retire_and_publish_are_not_in_the_scopable_set(self):

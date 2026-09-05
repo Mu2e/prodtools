@@ -223,13 +223,25 @@ def count_warnings(cat: Catalog, ratio: float = 0.5,
 
 def consistency(cat: Catalog, gens: Dict[str, Optional['Generation']]) -> List[Dict]:
     """Per (family, tier): how many current members sit on each generation,
-    which descs are on the minority ones. 'unknown' = no cnf found."""
+    which descs are on the minority ones.
+
+    Two different blanks, kept apart on purpose: 'not evaluated' is a
+    family outside `generation.GENERATION_FAMILIES`, where no generation
+    was ever attempted and none is derivable; 'unknown' is an IN-SCOPE
+    member whose cnf was looked for and not found, or found and not read.
+    Collapsing them would hide a real fault inside a legacy era's rows —
+    `cat.generation_*` carries the reason for each."""
     table: Dict[tuple, Dict[str, List[str]]] = {}
     for m in cat.members.values():
         if m.status != 'current':
             continue
         g = gens.get(m.name)
-        label = g.label() if g is not None else 'unknown'
+        if g is not None:
+            label = g.label()
+        elif m.key.family in cat.generation_out_of_scope:
+            label = 'not evaluated'
+        else:
+            label = 'unknown'
         table.setdefault((m.key.family, m.tier), {}).setdefault(label, []).append(m.desc)
     out = []
     for (family, tier), by_gen in sorted(table.items()):

@@ -91,6 +91,20 @@ class Catalog:
     # surface. Does not block retire() — a generation is provenance, not
     # a deletion input.
     generation_conflicts: List[str] = field(default_factory=list)
+    # Families outside `generation.GENERATION_FAMILIES`. Their members get
+    # no generation and that is NOT a fault: MDC2020-era cnfs are per-job
+    # .fcl files, not jobdef tarballs, so nothing is derivable from them.
+    # Reported once per family, never per dataset.
+    generation_out_of_scope: Set[str] = field(default_factory=set)
+    # In-scope members for which no cnf could be found by either route.
+    # A true negative: SAM holds no cnf claiming the dataset.
+    generation_unresolved: Set[str] = field(default_factory=set)
+    # In-scope cnfs SAM located but that could not be read (dCache denial,
+    # corrupt tarball, vanished scratch file). Same per-cnf isolation
+    # `build_cnf_index` applies: one bad tarball must never abort a verb.
+    generation_unreadable: Dict[str, str] = field(default_factory=dict)
+    # In-scope cnfs SAM knows by name but can give no location for.
+    generation_unlocatable: Set[str] = field(default_factory=set)
 
 
 def _claim(epochs: Dict[str, EpochFile], dig: str):

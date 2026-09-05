@@ -66,6 +66,13 @@ def catalog_document(cat: Catalog, gens: Dict, generated_at: str) -> dict:
         # document carries the anomaly.
         'generation_conflicts': list(cat.generation_conflicts),
         'foreign': sorted(cat.foreign),
+        # Why a member's `generation` is blank, by reason. Out-of-scope is
+        # a family-level statement, not a per-dataset fault; the other
+        # three are in-scope faults naming the cnf or the dataset.
+        'generation_out_of_scope': sorted(cat.generation_out_of_scope),
+        'generation_unresolved': sorted(cat.generation_unresolved),
+        'generation_unlocatable': sorted(cat.generation_unlocatable),
+        'generation_unreadable': dict(sorted(cat.generation_unreadable.items())),
         'unclaimed_digs': {k: sorted(v) for k, v in cat.unclaimed_digs.items()},
         'missing_families': list(cat.missing_families),
         'gaps': gaps(cat),

@@ -8,6 +8,10 @@ Two routes to a member's cnf, tried in this order and REPORTED:
            every dataset of that tier and dsconf that no explicit cnf
            claims.
 No third route. A member with neither is reported as generation None.
+
+Generation is only attempted for `GENERATION_FAMILIES`. Every failure
+inside that scope is recorded on the Catalog and reported; nothing is
+silently blank.
 """
 import hashlib
 import json
@@ -25,6 +29,17 @@ _FCL_KEYS = {
     'bfield': re.compile(r'bfgeomFile\s*:\s*"([^"]*)"'),
 }
 DROP_TIERS = frozenset({'log', 'cnf', 'etc'})
+
+# Both routes to a generation read a jobdef TARBALL. MDC2020-era cnfs are
+# per-job `.fcl` files that predate the jobdef tarball, so no generation is
+# derivable for that family however the cnf is found -- `read_generation`
+# would hand the .fcl straight to `tarfile.open`. Measured 2026-09-04 over
+# the full catalog: 271 of 272 unresolved members were MDC2020, and all
+# five unreadable cnfs were MDC2020. Members outside this set get a blank
+# generation reported ONCE per family, not once per dataset, so that a
+# blank inside the set stays a real signal. Adding a future era is one
+# entry here.
+GENERATION_FAMILIES = frozenset({'MDC2025', 'Run1B'})
 
 
 class Generation(NamedTuple):
@@ -159,11 +174,13 @@ def build_cnf_index(source, existing: Dict) -> Dict:
 
 
 def cnf_for(m: Member, cat: Catalog, index: Dict) -> Optional[Tuple[str, str]]:
-    """The declared SAM parent wins over the index (ADR 0003). Today no
-    cnf parentage is declared in production, so this route is correctly
-    empty and every generation resolves through the index; it lights up
-    for new outputs once ADR 0003's `push_data` change lands, without a
-    cnf ever becoming a member, an input or a retire candidate.
+    """The declared SAM parent wins over the index (ADR 0003). This route
+    is sparse but NOT empty: measured 2026-09-04 over the full catalog,
+    12 of 762 live members resolved through a declared cnf parent and 478
+    through the index. `runmu2e` does not yet append the cnf to
+    `parents_list.txt`, so it does not light up for every new output; it
+    fires only where parentage was declared by some other path. A cnf
+    never becomes a member, an input or a retire candidate either way.
 
     Two declared cnf parents — a campaign cnf plus the recovery cnf built
     on a newer Musing, the normal shape once ADR 0003 lands — is the
@@ -192,22 +209,52 @@ def generations(cat: Catalog, source, index: Dict) -> Dict[str, Optional[Generat
     """A cnf is read at most once (`cache`), but `.source` reflects the
     ROUTE the current member took (parent vs index), not whichever
     member happened to populate the cache first — two members can reach
-    the same cnf by different routes."""
+    the same cnf by different routes.
+
+    Members outside `GENERATION_FAMILIES` are skipped before any lookup:
+    their family is recorded once and their generation is blank by
+    design, not by failure.
+
+    In scope, every way of arriving at no generation is recorded on the
+    catalog under its own reason — unresolved (no cnf claims it),
+    unlocatable (SAM gives no location) or unreadable (the cnf is there
+    but will not open). The read is guarded per cnf exactly as
+    `build_cnf_index` guards its own: a dCache denial mid-stream, a
+    corrupt tarball or a vanished scratch file must degrade one member's
+    generation, never abort `consistency` or `publish` for the whole
+    catalog. Re-entrant: the record fields are sets/dicts, so calling
+    this twice on one catalog reports each fault once."""
     out: Dict[str, Optional[Generation]] = {}
     cache: Dict[str, Generation] = {}
     for m in cat.members.values():
         if m.status not in ('current', 'stale'):
             continue
+        if m.key.family not in GENERATION_FAMILIES:
+            cat.generation_out_of_scope.add(m.key.family)
+            out[m.name] = None
+            continue
         found = cnf_for(m, cat, index)
         if found is None:
+            cat.generation_unresolved.add(m.name)
             out[m.name] = None
             continue
         cnf, kind = found
-        if cnf not in cache:
-            path = source.local_path(cnf)
-            if not path:
-                out[m.name] = None
-                continue
+        if cnf in cache:
+            out[m.name] = cache[cnf]._replace(source=kind)
+            continue
+        if cnf in cat.generation_unreadable or cnf in cat.generation_unlocatable:
+            out[m.name] = None          # already diagnosed; do not re-probe
+            continue
+        path = source.local_path(cnf)
+        if not path:
+            cat.generation_unlocatable.add(cnf)
+            out[m.name] = None
+            continue
+        try:
             cache[cnf] = read_generation(path, cnf, kind)
+        except (tarfile.ReadError, OSError, ValueError, json.JSONDecodeError) as exc:
+            cat.generation_unreadable[cnf] = f'{type(exc).__name__}: {exc}'
+            out[m.name] = None
+            continue
         out[m.name] = cache[cnf]._replace(source=kind)
     return out

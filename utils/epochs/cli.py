@@ -90,6 +90,13 @@ SCOPABLE_VERBS = frozenset({'members', 'gaps', 'lookup', 'consistency'})
 # The verbs whose answer for one family cannot depend on another family
 # being in the catalog. `retire` and `publish` are deliberately absent
 # and must stay absent: see the module docstring.
+EPOCH_INERT_VERBS = frozenset({'consistency', 'lookup'})
+# `--epoch` neither scopes the build nor filters the output on these two:
+# `consistency` groups by family and `lookup` answers about one named
+# dataset. `common()` adds the flag uniformly, so accepting it here would
+# silently buy a whole-catalog build and change nothing about the answer.
+# Refusing is the honest option; --family is what these verbs respect.
+
 EPOCH_SCOPABLE_VERBS = frozenset({'members', 'gaps'})
 # ...and of those, the ones where `--epoch` is ALREADY an output filter
 # (`_keep`), so inferring its family changes no printed row. `lookup` and
@@ -215,6 +222,15 @@ def _report_noise(cat, source):
         print(f'epoch conflict: {line}', file=sys.stderr)
     for line in cat.generation_conflicts:
         print(f'generation conflict: {line}', file=sys.stderr)
+    for fam in sorted(cat.generation_out_of_scope):
+        print(f'generation not evaluated for {fam}: cnfs of that era are per-job '
+              f'.fcl files, not jobdef tarballs', file=sys.stderr)
+    for name in sorted(cat.generation_unresolved):
+        print(f'no generation: {name}: no cnf in SAM claims this dataset', file=sys.stderr)
+    for cnf in sorted(cat.generation_unlocatable):
+        print(f'no generation: cnf {cnf} has no SAM location', file=sys.stderr)
+    for cnf, err in sorted(cat.generation_unreadable.items()):
+        print(f'no generation: cnf {cnf} could not be read: {err}', file=sys.stderr)
     for fam in sorted(cat.missing_families):
         print(f"missing epoch file for family {fam} (digs exist); "
               f"run 'epochs propose --family {fam}'", file=sys.stderr)
@@ -381,6 +397,10 @@ def main(argv: Optional[List[str]] = None, source=None, now_fn=None) -> int:
     now_fn = now_fn or _now
     sam_error = _sam_error_class()
     try:
+        if args.epoch and args.verb in EPOCH_INERT_VERBS:
+            raise ScopeError(f"--epoch does not apply to '{args.verb}': it neither "
+                             f"restricts the build nor filters the output. "
+                             f"Use --family instead.")
         if args.verb == 'propose':
             return cmd_propose(args, source)
         if args.verb == 'members':
