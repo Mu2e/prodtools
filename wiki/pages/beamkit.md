@@ -2,7 +2,7 @@
 title: beamkit — g4bl thin client over prodtools
 tags: [reference, g4bl, beamkit, mcp, decision, smoke]
 sources: [2026-09-03-beamkit-design]
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 # beamkit
@@ -111,5 +111,28 @@ correctly: skipped the data push, still pushed the logs to
 
 A green run needs either `params={"epsMax": "0.01"}` or the deck fix committed
 upstream and re-pinned.
+
+## Second grid smoke (2026-09-05): release path, green end to end
+
+prodtools v3.3.2 was tagged at `49b3b57` and installed on cvmfs the same
+day (`current -> v3.3.2`, worker files byte-identical to main). With
+`BEAMKIT_PRODTOOLS_DIR` unset, `run_beamline(tag="G4blSmoke",
+deck_ref=e470313, params={"epsMax": "0.01"}, njobs=3, events_per_job=10,
+run_as="self")` produced run `G4blSmoke.e470313-001` (the dsconf collided
+with the first smoke and took `-001`, as designed), campaign 7, row 13,
+cluster 30101196 on jobsub05, entry pinned to
+`/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v3.3.2`. All three jobs
+exited 0 in 200-483 s. `make_recoveries` ran the bare tick (campaign
+already `complete`), verified row 13 against SAM; `beamline_outputs`
+listed 3 nts files (237 kB) at scratch; `make_beamfile(flavor="bm")`
+built `beamfiles/G4blSmoke.e470313-001.bm.txt`: 175 rows in, 26 out
+(97 dropped by `drop_pdg`, 44 by `min_p_mev`, 6 backward, 2 duplicate),
+pot 30, no missing indices. First beam file from grid output; every
+beamkit tool has now run against the real prodtools release.
+
+Before it, smoke campaign 6 (row 12) was closed with `submissions cancel
+6 --close-rows`, which needed the fix on branch `close-rows-on-complete`:
+the flag refused a `complete` campaign because `complete -> cancelled` is
+not a ledger transition, and every one-slice campaign has that shape.
 
 Related: [[g4bl-runner]], [[g4bl-epsmax-deck-gap]].
