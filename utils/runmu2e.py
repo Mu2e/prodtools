@@ -9,8 +9,10 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
+from typing import NamedTuple, Optional
 
 # Allow running this file directly: make package root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -111,8 +113,8 @@ def replace_file_extensions(input_str, first_field, last_field):
 def validate_jobdesc(jobdesc):
     """Validate the job description and pick the dispatch mode.
 
-    Returns 'direct_input' or False (normal mode); exits via fail() on
-    invalid input.
+    Returns 'g4bl', 'direct_input' or False (normal mode); exits via
+    fail() on invalid input.
     """
     if not jobdesc:
         fail("Error: No job description found in ops")
@@ -123,6 +125,13 @@ def validate_jobdesc(jobdesc):
     if 'firstjob' in jobdesc and 'njobs' not in jobdesc:
         fail("Error: jobdesc has 'firstjob' but no 'njobs' — "
              "index windows require a fixed job count")
+
+    # g4bl mode: runner marker from the entry. No inloc (no inputs at
+    # all), no fcl — the tarball is self-describing (spec 2026-08-31).
+    if jobdesc.get('runner') == 'g4bl':
+        _require_fields(jobdesc, ['tarball', 'outputs', 'njobs'],
+                        'g4bl mode')
+        return 'g4bl'
 
     # Direct-input mode: tarball present, no njobs.
     if 'tarball' in jobdesc and 'njobs' not in jobdesc:
@@ -382,12 +391,47 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
                          simjob_setup=simjob_setup) or rc
     return rc
 
-def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
-    """Declare/push the log file.
+def _materialize_log(log_file):
+    """Create the SAM-named log from the jobsub log, BEFORE the manifest.
 
-    Pass `fcl` (log filename derived via replace_file_extensions) or
-    `log_file` directly; at least one is required, and `log_file` wins if
-    both are given (for runners with no FCL, e.g. g4bl).
+    On a worker nothing writes `log.<owner>.<desc>.<dsconf>.<seq>.log`
+    itself — every runner streams to stdout, which jobsub captures in
+    `$JSB_TMP/JOBSUB_LOG_FILE`. Copying it here (rather than inside
+    push_logs, after the manifest step had already found the file
+    missing) matters for two reasons, not one: (1) `push_output` only
+    lists files that already exist, so without this copy a pushOutput
+    destination (disk/scratch/tape) has nothing to push at all; (2) it
+    carries runmu2e's own content on the `outstage` path, which is
+    copied verbatim by ifdh and never passes through pushOutput. It is
+    NOT how the manifest reaches a SAM log — OfflineOps pushOutput's
+    `writeLog` (Util/pushOutput.py:801) rewrites every pushOutput-bound
+    `log`-tier file from this same `$JSB_TMP/JOBSUB_LOG_FILE` before
+    declaring it, discarding whatever runmu2e wrote here; `_emit_manifest`
+    reaches those logs by printing to stdout instead (see its docstring).
+    The jobsub log is the superset, so it overwrites any partial file a
+    runner may have written. Without JSB_TMP (local runs) an existing
+    file is kept; a missing one is a warning, never invented.
+    """
+    jsb_tmp = os.getenv("JSB_TMP")
+    if jsb_tmp:
+        src = os.path.join(jsb_tmp, "JOBSUB_LOG_FILE")
+        if os.path.isfile(src):
+            print(f"Copying jobsub log from {src} to {log_file}")
+            shutil.copy(src, log_file)
+            return
+        print(f"Warning: Jobsub log not found at {src}")
+    if not Path(log_file).exists():
+        print(f"Warning: {log_file} does not exist and no jobsub log to "
+              f"copy — manifest and log push will be skipped")
+
+
+def push_logs(log_file, simjob_setup=None, location="disk", track_parents=True):
+    """Declare/push the SAM-named log file, already materialized in cwd
+    by `_materialize_log`. For a pushOutput destination (disk/scratch/
+    tape), OfflineOps `writeLog` rewrites the file again from
+    `$JSB_TMP/JOBSUB_LOG_FILE` before declaring it — the manifest
+    reaches those SAM logs because `_emit_manifest` also printed it to
+    stdout, not because of anything written to this file.
 
     `location` is a pushOutput destination class — "disk" (default,
     persistent), "scratch" (for user runs lacking `storage.modify` on
@@ -396,46 +440,24 @@ def push_logs(fcl=None, simjob_setup=None, log_file=None, location="disk"):
     undeclared, matching a job whose data went to outstage (a declared
     log would name undeclared parents) — log_storage_location() routes
     it here.
+
+    `track_parents` is the same flag push_data received. parents_list.txt
+    is named only when it is wanted AND on disk: pushOutput reports
+    `ERROR - parents file ... not found` then exits 0, so a missing file
+    makes the log push a SILENT no-op — and it is routinely absent (mu2e
+    failed so push_data never ran; or track_parents=False for `dir:`
+    inputs and g4bl, which have no SAM parents).
     """
-
-    if log_file is not None:
-        logfile = log_file
-    elif fcl is not None:
-        logfile = replace_file_extensions(fcl, "log", "log")
-    else:
-        print("Warning: push_logs called with neither fcl nor log_file; nothing to push")
+    if not Path(log_file).exists():
+        print(f"Warning: Log file {log_file} not found, skipping log push")
         return 0
-
-    # Only meaningful when derived from fcl (JOBSUB_LOG_FILE is the
-    # canonical source); for explicit log_file the runner already
-    # streamed to it.
-    jsb_tmp = os.getenv("JSB_TMP")
-    if jsb_tmp and log_file is None:
-        src = os.path.join(jsb_tmp, "JOBSUB_LOG_FILE")
-        print(f"Copying jobsub log from {src} to {logfile}")
-        try:
-            shutil.copy(src, logfile)
-        except FileNotFoundError:
-            print(f"Warning: Jobsub log not found at {src}")
-
-    if Path(logfile).exists():
-        if location == OUTSTAGE_LOCATION:
-            return _copy_to_outstage([logfile])
-        # Name parents_list.txt only if it's actually on disk: pushOutput
-        # reports `ERROR - parents file ... not found` then exits 0, so a
-        # missing file makes the log push a SILENT no-op. push_data writes
-        # it, and it's routinely absent — mu2e failed (push_data skipped,
-        # exactly when the log is the only evidence left) or
-        # track_parents=False (inloc `dir:`, non-SAM inputs). G4bl passes
-        # log_file and never has SAM parents.
-        parents = ("parents_list.txt"
-                   if log_file is None and Path("parents_list.txt").is_file()
-                   else "none")
-        output_specs = [(location, logfile, parents)]
-        return push_output(output_specs, "log_output.txt", simjob_setup=simjob_setup)
-    else:
-        print(f"Warning: Log file {logfile} not found, skipping log push")
-        return 0
+    if location == OUTSTAGE_LOCATION:
+        return _copy_to_outstage([log_file])
+    parents = ("parents_list.txt"
+               if track_parents and Path("parents_list.txt").is_file()
+               else "none")
+    return push_output([(location, log_file, parents)], "log_output.txt",
+                       simjob_setup=simjob_setup)
 
 
 # ============================================================
@@ -488,8 +510,19 @@ def _synthesize_direct_fname(index):
 
 def _emit_manifest(log_path, manifest_files):
     """Append the SHA256 manifest block to the log file, in a format
-    `mu2eClusterCheckAndMove` can parse. Port of `addManifest` from
+    `mu2eClusterCheckAndMove` can parse, AND print the identical block
+    to stdout. Port of `addManifest` from
     mu2egrid::impl/mu2ejobsub.sh:44-56.
+
+    The file append by itself never reaches a pushOutput-declared SAM
+    log: OfflineOps pushOutput's `writeLog` (Util/pushOutput.py:801)
+    rewrites every `log`-tier file it pushes from
+    `$JSB_TMP/JOBSUB_LOG_FILE` plus a JOBSUB_ERR banner, discarding
+    whatever this function wrote to the file on disk. On a worker,
+    stdout IS `$JSB_TMP/JOBSUB_LOG_FILE`, so printing the block is what
+    actually lands it in a disk/scratch/tape SAM log; the file append
+    only serves the `outstage` destination, which ifdh copies verbatim
+    and which pushOutput/writeLog never touches.
 
     Format (the parser is regex-strict):
 
@@ -519,22 +552,24 @@ def _emit_manifest(log_path, manifest_files):
     ls = subprocess.run(['ls', '-al'], capture_output=True, text=True,
                         env={**os.environ, 'LC_ALL': 'C'}, check=False)
 
+    lines = [f"mu2egrid diskUse = {du_out}\n",
+             "#" + "=" * 64 + "\n",
+             "# mu2egrid manifest\n"]
+    for line in ls.stdout.splitlines():
+        lines.append(f"# {line}\n")
+    lines.append("#" + "-" * 64 + "\n")
+    lines.append("# algorithm: sha256sum\n")
+    for fname in manifest_files:
+        if not Path(fname).exists():
+            continue
+        h = hashlib.sha256()
+        with open(fname, 'rb') as g:
+            for chunk in iter(lambda: g.read(1 << 20), b''):
+                h.update(chunk)
+        lines.append(f"{h.hexdigest()}  {fname}\n")
+
     with log.open('a') as f:
-        f.write(f"mu2egrid diskUse = {du_out}\n")
-        f.write("#" + "=" * 64 + "\n")
-        f.write("# mu2egrid manifest\n")
-        for line in ls.stdout.splitlines():
-            f.write(f"# {line}\n")
-        f.write("#" + "-" * 64 + "\n")
-        f.write("# algorithm: sha256sum\n")
-        for fname in manifest_files:
-            if not Path(fname).exists():
-                continue
-            h = hashlib.sha256()
-            with open(fname, 'rb') as g:
-                for chunk in iter(lambda: g.read(1 << 20), b''):
-                    h.update(chunk)
-            f.write(f"{h.hexdigest()}  {fname}\n")
+        f.writelines(lines)
 
     # Selfcheck: sha256sum of everything written so far, in `sha256sum <
     # log` format ("  -" trailer, no filename).
@@ -542,8 +577,15 @@ def _emit_manifest(log_path, manifest_files):
     with log.open('rb') as g:
         for chunk in iter(lambda: g.read(1 << 20), b''):
             sc.update(chunk)
+    selfcheck_line = f"# mu2egrid manifest selfcheck: {sc.hexdigest()}  -\n"
     with log.open('a') as f:
-        f.write(f"# mu2egrid manifest selfcheck: {sc.hexdigest()}  -\n")
+        f.write(selfcheck_line)
+    lines.append(selfcheck_line)
+
+    # Print the SAME block to stdout — see the docstring above for why
+    # this, not the file write, is what a SAM log actually ends up with.
+    print(''.join(lines), end='')
+    sys.stdout.flush()
 
 
 def _is_terminal_push_error(output):
@@ -684,15 +726,170 @@ def _validation_enabled(jobdesc, args):
     return enabled
 
 
-def _direct_dispatch(args, ops, index):
-    """Dispatch one direct-mode job: run the entry's
-    prep — normal index mode via process_jobdef, or a draining batch
-    (ops ships a `files` list) via process_direct_input — then the
-    shared mu2e -c → manifest → push (with retries) tail."""
-    jobdesc = ops['jobdesc']
-    files = ops.get('files')
+def _g4bl_script(main_input, first_event, num_events, histo_path, params=None):
+    """Bash for one g4bl process — the proven 401e3da recipe: native
+    AL9 spack, selective env unset (muse setup ops leaves SPACK_ENV
+    pointing at ops-019, where g4beamline does not exist), and CLI
+    `key=value` overrides (g4bl 3.08b rejects `param k=v` on the
+    command line; that form is input-file syntax only).
 
-    mode = validate_jobdesc(jobdesc)
+    `params` are the entry's `g4bl_params` (jobpars), appended after the
+    worker's own overrides in sorted order — a stable command line, and
+    the validator at enqueue guarantees no key collides with the
+    worker's (json2jobdef.G4BL_WORKER_PARAMS)."""
+    extra = "".join(f" {k}={shlex.quote(str(v))}"
+                    for k, v in sorted((params or {}).items()))
+    return (
+        "unset SPACK_ENV PYTHONHOME PYTHONPATH PYTHONNOUSERSITE\n"
+        "source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh"
+        " > /dev/null 2>&1\n"
+        'eval "$(spack load --sh g4beamline)"\n'
+        "cd work\n"
+        f"g4bl {shlex.quote(main_input)} viewer=none "
+        f"First_Event={first_event} Num_Events={num_events} "
+        f"histoFile={shlex.quote(histo_path)}" + extra
+    )
+
+
+class JobRun(NamedTuple):
+    """What a runner hands _finish_job: the facts the shared push tail
+    needs, and nothing about how the job was produced.
+
+    outputs        jobdesc['outputs']: [{'dataset': glob, 'location': ...}]
+    log_file       SAM-named log in cwd; may not exist yet (the tail
+                   materializes it from the jobsub log)
+    job_failed     True iff the payload process failed
+    owner          routes the log location and the dCache namespace —
+                   parsed from the cnf/fcl name, never a literal 'mu2e'
+    infiles        space-separated SAM parents; "" = none
+    simjob_setup   Musing setup.sh to source for pushOutput; None = the
+                   worker bootstrap's own OfflineOps (g4bl)
+    track_parents  whether infiles are SAM-registered parents
+    """
+    outputs: list
+    log_file: str
+    job_failed: bool
+    owner: str
+    infiles: str = ""
+    simjob_setup: Optional[str] = None
+    track_parents: bool = False
+
+
+def _finish_job(args, job):
+    """Shared direct-mode tail for every runner: materialize the log,
+    append the SHA256 manifest, push data (success only) then the log
+    (always — including when the data push raises, see _push_all),
+    honoring --dry-run. Returns job.job_failed."""
+    # A failed materialize/manifest step (e.g. ENOSPC writing the log)
+    # must never take the pushes down with it — _push_all is the last
+    # chance to get SOMETHING registered in SAM for this job.
+    try:
+        _materialize_log(job.log_file)
+
+        # Append the SHA256 manifest before pushing, and print the
+        # identical block to stdout — on a worker stdout IS
+        # $JSB_TMP/JOBSUB_LOG_FILE, which is what actually carries the
+        # manifest into a pushOutput-declared SAM log (writeLog rewrites
+        # the file copy away); the file append only serves `outstage`,
+        # which pushOutput never touches. A failed job names no outputs
+        # (nothing is pushed for it).
+        manifest_files = []
+        if not job.job_failed:
+            for o in job.outputs:
+                manifest_files.extend(
+                    str(p) for p in sorted(Path('.').glob(o['dataset'])))
+        if Path(job.log_file).exists():
+            _emit_manifest(job.log_file, manifest_files)
+    except OSError as e:
+        print(f"[direct] WARNING: log materialize/manifest step failed "
+              f"({e}); pushing anyway")
+
+    # Logs share the first output's location so the worker token's
+    # storage.modify scope covers both. Without this, a non-mu2epro
+    # account whose data goes to `scratch` would still try to push the
+    # log to `disk`, which `/mu2e/persistent/datasets/...` doesn't grant.
+    log_location = log_storage_location(job.outputs, owner=job.owner)
+
+    def data_push():
+        if job.job_failed:
+            return
+        _push_with_retry(push_data, job.outputs, job.infiles,
+                         simjob_setup=job.simjob_setup,
+                         track_parents=job.track_parents)
+
+    def log_push():
+        _push_with_retry(push_logs, job.log_file,
+                         simjob_setup=job.simjob_setup,
+                         location=log_location,
+                         track_parents=job.track_parents)
+
+    if args.dry_run:
+        datasets = ('none (job failed)' if job.job_failed
+                    else ', '.join(o['dataset'] for o in job.outputs))
+        print(f"[direct] DRY RUN — would push data: {datasets}; "
+              f"would push log to '{log_location}'. Skipping pushes.")
+        return job.job_failed
+
+    if job.job_failed:
+        print("[direct] job failed — skipping data push, still pushing log")
+    _push_all(data_push, log_push)
+    return job.job_failed
+
+
+def _run_g4bl_job(jobdesc, index):
+    """g4bl runner: extract the cnf (already fetched into cwd by
+    _direct_main), run one g4bl process through prod_utils.run — its
+    output reaches $JSB_TMP/JOBSUB_LOG_FILE via the worker's stdout like
+    every other job — and return the JobRun for _finish_job.
+    RuntimeError on prep failures: nothing ran, so there is no log to
+    push and the recovery pass re-fires the index."""
+    tarball = Path(jobdesc['tarball']).name
+    if not Path(tarball).is_file():
+        raise RuntimeError(f"g4bl cnf not found in cwd: {tarball}")
+    with tarfile.open(tarball) as t:
+        t.extractall('.')
+    if not Path('work').is_dir():
+        raise RuntimeError(f"tarball missing 'work/' subdir: {tarball}")
+    if not Path('jobpars.json').is_file():
+        raise RuntimeError(f"tarball missing jobpars.json: {tarball}")
+    jp = json.loads(Path('jobpars.json').read_text())
+    main_input = jp['main_input']
+    events_per_job = int(jp['events_per_job'])
+    if not (Path('work') / main_input).is_file():
+        raise RuntimeError(f"main_input not found: work/{main_input}")
+
+    # Owner comes from the cnf tarball name, never a literal 'mu2e' —
+    # the owner field routes the dCache/pushOutput namespace (production
+    # phy-nts/phy-etc vs. a user's own scope); a user bearer token
+    # cannot write production paths (2026-09-01 live-smoke 403).
+    owner = Mu2eName(jobdesc['tarball']).owner
+    sequencer = f"{index:08d}"
+    first_event = index * events_per_job + 1
+    name_fields = dict(owner=owner, description=jp['desc'],
+                       dsconf=jp['dsconf'], sequencer=sequencer)
+    histo_file = str(Mu2eName.build(tier='nts', extension='root', **name_fields))
+    log_file = str(Mu2eName.build(tier='log', extension='log', **name_fields))
+    params = jp.get('g4bl_params') or {}
+    script = _g4bl_script(main_input, first_event, events_per_job,
+                          os.path.abspath(histo_file), params=params)
+    print(f"[g4bl] events_per_job={events_per_job} "
+          f"first_event={first_event} histo={histo_file}"
+          + (f" params={params}" if params else ""))
+    try:
+        run(['bash', '-c', script], shell=False)
+        job_failed = False
+    except subprocess.CalledProcessError as e:
+        print(f"[g4bl] g4bl failed with exit code {e.returncode}")
+        job_failed = True
+    return JobRun(outputs=jobdesc['outputs'], log_file=log_file,
+                  job_failed=job_failed, owner=owner)
+
+
+def _run_mu2e_job(args, jobdesc, files, mode, index):
+    """mu2e runner: the entry's prep — a draining batch (ops ships a
+    `files` list) via process_direct_input, or normal index mode via
+    process_jobdef — then `mu2e -c`, then the optional output read-back.
+    Returns the JobRun for _finish_job."""
     if files is not None:
         # Draining batch: PROCESS → position in the batch → input file.
         if mode != 'direct_input':
@@ -729,10 +926,6 @@ def _direct_dispatch(args, ops, index):
         fcl, simjob_setup, infiles, outputs, inloc = process_jobdef(
             jobdesc, fname, args)
 
-    # `dir:<path>` inloc means inputs come from a locally-mounted FS and
-    # have no SAM parents.
-    track_parents = not is_dir_inloc(inloc)
-
     job_failed = _execute_mu2e(fcl, simjob_setup, args)
 
     if not job_failed and _validation_enabled(jobdesc, args):
@@ -741,48 +934,36 @@ def _direct_dispatch(args, ops, index):
             produced.extend(str(p) for p in sorted(Path('.').glob(o['dataset'])))
         job_failed = _validate_outputs(produced, simjob_setup)
 
-    # Append SHA256 manifest before pushing — mu2eClusterCheckAndMove
-    # parses the log for `mu2egrid manifest`.
-    log_file = replace_file_extensions(fcl, "log", "log")
-    if Path(log_file).exists():
-        manifest_files = []
-        if not job_failed:
-            for o in outputs:
-                pattern = o['dataset']
-                manifest_files.extend(sorted(Path('.').glob(pattern)))
-        _emit_manifest(log_file, [str(f) for f in manifest_files])
+    return JobRun(
+        outputs=outputs,
+        log_file=replace_file_extensions(fcl, "log", "log"),
+        job_failed=job_failed,
+        owner=Mu2eName(Path(fcl).name).owner,
+        infiles=infiles,
+        simjob_setup=simjob_setup,
+        # `dir:<path>` inloc means inputs come from a locally-mounted FS
+        # and have no SAM parents.
+        track_parents=not is_dir_inloc(inloc))
 
-    # Logs share the first output's location so the worker token's
-    # storage.modify scope covers both. Without this, a non-mu2epro
-    # account whose data goes to `scratch` would still try to push the
-    # log to `disk` (push_logs default), which
-    # `/mu2e/persistent/datasets/...` doesn't grant.
-    log_location = log_storage_location(outputs)
 
-    def data_push():
-        if job_failed:
-            return
-        _push_with_retry(push_data, outputs, infiles,
-                         simjob_setup=simjob_setup, track_parents=track_parents)
+def _direct_dispatch(args, ops, index):
+    """Dispatch one direct-mode job: pick the runner for the jobdesc's
+    mode (g4bl, or mu2e in its draining / normal shapes), run it, and
+    hand its JobRun to the shared push tail."""
+    jobdesc = ops['jobdesc']
+    files = ops.get('files')
 
-    def log_push():
-        _push_with_retry(push_logs, fcl, simjob_setup=simjob_setup,
-                         location=log_location)
-
-    if args.dry_run:
-        datasets = ('none (job failed)' if job_failed
-                    else ', '.join(o['dataset'] for o in outputs))
-        print(f"[direct] DRY RUN — would push data: {datasets}; "
-              f"would push log to '{log_location}'. Skipping pushes.")
-        return job_failed
-
-    if job_failed:
-        print("[direct] mu2e failed — skipping data push, still pushing log")
-    # Push outputs only on success; the log ALWAYS — including when the
-    # data push itself raises (see _push_all).
-    _push_all(data_push, log_push)
-
-    return job_failed
+    mode = validate_jobdesc(jobdesc)
+    if mode == 'g4bl':
+        if files is not None:
+            print("ERROR: ops carries a files list but the jobdesc is "
+                  "g4bl mode — g4bl entries have no input files and "
+                  "take no draining batches.")
+            sys.exit(1)
+        job = _run_g4bl_job(jobdesc, index)
+    else:
+        job = _run_mu2e_job(args, jobdesc, files, mode, index)
+    return _finish_job(args, job)
 
 
 def _direct_main(args):

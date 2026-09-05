@@ -69,6 +69,15 @@ class Mu2eJobPars(Mu2eJobBase):
         key — jobdef writes only code/setup/code_ref/tbs/jobname. Uses
         job_outputs(0), the same name-pattern resolution --output-files
         walks, so the two agree by construction.
+
+        Reports each name's OWN extension — never coerced to .art. A
+        g4bl cnf's only output is a .root ntuple; forcing '.art' derived
+        a phantom dataset SAM never holds a file under, so build_file_maps
+        (utils/jobdef_lookup.py) never matched the real filenames and
+        verify_row raised "no expected output files" on every g4bl row.
+        A no-op for art cnfs (the extension is already 'art'), and
+        matches the MCP status tool's uncoerced names
+        (mcp/src/prodtools_mcp/tools/status.py:_cnf_output_datasets).
         """
         datasets = set()
         for filename in self.job_outputs(0).values():
@@ -76,7 +85,7 @@ class Mu2eJobPars(Mu2eJobBase):
                 name = Mu2eName.parse(filename)
             except ValueError:
                 continue
-            datasets.add(str(name.with_extension('art').dataset))
+            datasets.add(str(name.dataset))
         return sorted(datasets)
     
     def codesize(self):
@@ -123,7 +132,21 @@ class Mu2eJobPars(Mu2eJobBase):
         try:
             fcl = self._extract_member('mu2e.fcl').decode()
         except ValueError:
-            lines.append("# (no embedded mu2e.fcl — code-tarball job definition)")
+            if self.json_data.get('runner') == 'g4bl':
+                # A g4bl cnf carries no mu2e.fcl and no code tarball at
+                # all — the worker runs the g4bl deck under work/
+                # directly (see _build_g4bl_tarball). Same "no fcl"
+                # symptom as a code-tarball cnf, but calling it that
+                # here is actively wrong — --recipe is the tool people
+                # point at a mystery cnf to identify it.
+                lines.append("# runner: g4bl — no embedded mu2e.fcl; "
+                             "work/ carries the g4bl deck directly")
+                params = self.json_data.get('g4bl_params') or {}
+                if params:
+                    lines.append("# g4bl_params: " + " ".join(
+                        f"{k}={v}" for k, v in sorted(params.items())))
+            else:
+                lines.append("# (no embedded mu2e.fcl — code-tarball job definition)")
         else:
             lines.append(fcl.rstrip('\n'))
         return '\n'.join(lines)

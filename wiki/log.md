@@ -1299,3 +1299,111 @@ Pages updated: index.md
 
 ## [2026-08-28] update | Read-back validation gate added to the worker (corrupt-basket incident)
 Pages updated: 2026-08-28-corrupt-basket-dig-passes-integrity-gates
+
+## [2026-08-28] incident | Self-account submit blocked by expired kerberos ticket; grid smoke as oksuzian verified
+Pages updated: 2026-08-28-self-submit-fails-on-expired-kerberos-ticket, index.md
+
+## [2026-09-01] update | g4bl revived as a direct-backend entry mode; retired path marked historical
+Rewrote g4bl-runner.md's "Current execution path" section: g4bl is now
+`"runner": "g4bl"` in the prodtools direct backend (spec+plan
+2026-08-31, commits 8d5182c..469a2f6) — self-describing cnf
+(work/+jobpars.json), zero new MCP tools, ledger/slicing/recovery
+unchanged. Output/log names are owner-aware
+(`nts.<owner>.<desc>.<dsconf>.<seq>.root`, never a literal `mu2e`) —
+a hardcoded-`mu2e` defect inherited from the retired path was found
+live in the 2026-09-01 local smoke (`DESTINATION MAKE_PARENT HTTP
+403` for a self-submitted cnf) and fixed in dd0d437; the smoke then
+confirmed the push chain end to end as self (nts declared in SAM
+under the owner-routed usr-nts namespace; log push blocked only by a
+known local-harness limitation, not worker code). The mu2ejobsub-era
+`process_g4bl_jobdef` implementation and its POMS-map shape are
+retired (2026-07-19) and now documented as historical; the `401e3da`
+native-AL9-spack execution recipe is kept verbatim — it is exactly
+what the new worker branch runs, only the caller changed. Grid
+rollout is pending the prodtools v3.3.1 cvmfs release.
+Pages updated: g4bl-runner, index.md
+Source: docs/superpowers/specs/2026-08-31-g4bl-entry-mode-design.md, docs/superpowers/plans/2026-08-31-g4bl-entry-mode.md, .superpowers/sdd/2026-08-31-g4bl-entry-mode/progress.md
+
+## [2026-09-01] update | Incident: direct-backend art logs never carried the SAM manifest (fixed v3.3.2)
+Wrote incident-mu2e-log-manifest-never-landed: `_direct_dispatch`
+appended the `mu2egrid manifest` block only `if
+Path(log_file).exists()`, but nothing created the SAM-named log
+before that point on a worker — `push_logs` created it afterwards by
+copying the jobsub log, so the manifest step always found the file
+missing. g4bl was exempt only because its runner streamed its own
+log file first. Evidence:
+log.mu2e.CeEndpoint.Run1Ban-001.617-1781534797.log (0 matches for
+`mu2egrid manifest`; line 891 shows the jobsub-log copy happening
+after the point where the manifest would have been appended). Fixed
+in commit `92dc555` ("fix(runmu2e): materialize the SAM log before
+the manifest step"): `_materialize_log` now copies the jobsub log
+first, `_finish_job` appends the manifest for both runners. Also
+updated g4bl-runner.md (its references to the now-retired g4bl
+dispatch function were stale — the runner is now `_run_g4bl_job` ->
+`JobRun` -> the shared `_finish_job` tail) and EXAMPLES_schema.md
+section 7 with the shared push-tail description and the pre-v3.3.2
+missing-manifest caveat.
+Pages written: incident-mu2e-log-manifest-never-landed
+Pages updated: g4bl-runner, index.md
+Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/task-5-brief.md
+
+## [2026-09-01] update | Manifest incident had a second, deeper layer: pushOutput's writeLog discards the file append
+Final-review pass on the runmu2e consolidation branch found that
+92dc555 (materialize the log before the manifest) was NOT sufficient:
+OfflineOps pushOutput's `writeLog` (Util/pushOutput.py:801)
+`os.remove()`s every `log`-tier file it pushes and rewrites it from
+`$JSB_TMP/JOBSUB_LOG_FILE` before declaring it, for every
+disk/scratch/tape destination — discarding whatever `_emit_manifest`
+had appended to the file. Only the `outstage` path (ifdh, no
+pushOutput) ever shipped runmu2e's own file untouched. Fixed in commit
+`987f987` ("fix(runmu2e): print the SAM manifest to stdout, not just
+the log file"): `_emit_manifest` now builds the manifest block once,
+appends it to the file (still serving `outstage`), and prints the
+identical block to stdout — which IS `$JSB_TMP/JOBSUB_LOG_FILE` on a
+worker, so it survives `writeLog`'s rewrite. Also wrapped the
+materialize/manifest step in `_finish_job` in `try/except OSError` so
+a failure there (e.g. ENOSPC) can never skip `_push_all` (M1), and
+fixed two stale comments: `utils/jobsub_argv.py:147` named
+`runmu2e._direct_dispatch` as the `process_jobdef` consumer (it's
+`_run_mu2e_job`), and `_finish_job`'s manifest comment cited
+`mu2eClusterCheckAndMove` as a consumer, which has no implementation
+in this repo. Renamed incident-mu2e-log-manifest-never-landed →
+2026-09-01-mu2e-log-manifest-never-landed (date-prefix convention) and
+rewrote its Root cause as the two stacked layers above; updated
+`docs/superpowers/specs/2026-09-01-runmu2e-runner-consolidation-design.md`
+(§1, §2.3, §3.1, §6) and `docs/EXAMPLES_schema.md` §7 to describe the
+print-based mechanism.
+Pages written: 2026-09-01-mu2e-log-manifest-never-landed (renamed from incident-mu2e-log-manifest-never-landed)
+Pages updated: g4bl-runner, index.md
+Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/final-fix-report.md
+
+## [2026-09-02] update | sim-epochs design proposal
+
+New page `2026-09-02-sim-epochs-design`: catalog design rooted at dig patterns, membership rule, remake cases, generation/format attributes, derived products, phases, Slack draft for Ray.
+
+## [2026-09-02] ingest | trkqual xgboost inf single-file loss
+
+New page `2026-09-02-trkqual-xgboost-inf-single-file-loss` from job log 86501262@jobsub01 and condor history 71817349@jobsub03.
+
+## [2026-09-02] update | dev prodtools tarball restored as opt-in
+
+Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechanism from 4314038^, opt-in via non-cvmfs `--prodtools-dir`, digest-pinned `prodtools_tar`/`prodtools_ref`, mu2epro refused) and `g4bl-runner` (grid smoke without a cvmfs release).
+
+## [2026-09-02] update | g4bl grid smoke passed via dev prodtools tarball
+
+`g4bl-runner` gains the grid smoke section (self campaign 5, cluster 29824782@jobsub04, 3 jobs exit 0, nts+logs in SAM, SAM log shows tar mode and 2 manifest lines); `2026-09-01-mu2e-log-manifest-never-landed` records the first SAM-declared log carrying the manifest; the cvmfs-release decision page notes the validation.
+
+## [2026-09-02] update | data/g4bl/g4bl.json checked in
+
+`g4bl-runner` now points at the checked-in config `data/g4bl/g4bl.json` (G4blSmoke entry, dsconf MCPTest007 next free); EXAMPLES regenerated for the three command sites.
+
+## [2026-09-03] update | g4bl_params entry key
+
+`g4bl-runner` documents the optional `g4bl_params` dict (command-line `key=value` overrides, worker-owned names refused) so deck modes such as `READ_Beam_File=1` come from the JSON instead of an edited `.in`.
+
+## [2026-09-04] update | beamkit implemented; first g4bl thin-client grid smoke
+
+## [2026-09-04] update | beamkit architecture pass: five bugs, identity/publishing/naming re-homed
+
+`beamkit` records the pass (`1ff5d29..848206f`, 221 tests): make_recoveries uses the bare tick on a `complete` campaign, a failed push's campaign is adopted, rc=2 is state `needs_attention`, inputs are refused before side effects, and the bridge has a contract test against real prodtools.
+- 2026-09-04 beamkit simplify pass: one error base, direct FastMCP registration, leaner record; see [[beamkit]].

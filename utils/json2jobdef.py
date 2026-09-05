@@ -7,6 +7,7 @@ Usage (from the repo root, with `muse setup ops` sourced):
   - As module:   python3 -m utils.json2jobdef --help
   - Direct file: python3 utils/json2jobdef.py --help
 """
+import io
 import os, sys
 import re
 import random
@@ -15,6 +16,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import json
+import shutil
+import getpass
+import tarfile
 from pathlib import Path
 from utils.prod_utils import *
 from utils.mixing_utils import *
@@ -24,7 +28,9 @@ from utils.jobdesc import (
     validate_entry_value,
     validate_outloc,
     validate_window,
-                           PRODTOOLS_CVMFS_CURRENT, resolve_prodtools_dir)
+                           PRODTOOLS_CVMFS_CURRENT, PRODTOOLS_CVMFS_ROOT,
+                           is_cvmfs_prodtools_dir, resolve_prodtools_dir)
+from utils.submit import bundle_prodtools
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.jobdef import create_jobdef, get_output_dataset_names
@@ -314,6 +320,75 @@ def get_parfile_name(config):
     """Generate consistent parfile name from config (see config_utils.cnf_name)."""
     return cnf_name(config, 'tar')
 
+def _validate_entry_values(config):
+    """Value-check tail shared by art and g4bl entries: ENTRY_VALUE_KEYS
+    plus outloc, converted to a fail-loud CLI exit."""
+    try:
+        for key in ENTRY_VALUE_KEYS:
+            if key in config:
+                validate_entry_value(key, config[key])
+        validate_outloc(config['outloc'])
+    except ValueError as exc:
+        sys.exit(f"json2jobdef: {exc}")
+
+def _validate_g4bl_entry(config):
+    """Boundary validation for runner: g4bl entries. g4bl is decoupled
+    from Offline: no fcl, no Musing, no SAM inputs — presence of any
+    art-pipeline key is a config error, not something to ignore."""
+    for req in ('desc', 'dsconf', 'outloc', 'g4bl_dir', 'main_input',
+                'events_per_job', 'njobs'):
+        if not config.get(req):
+            sys.exit(f"json2jobdef: g4bl entry missing required field: {req}")
+    forbidden = ('fcl', 'simjob_setup', 'code', 'input_data',
+                 'resampler_name', 'pbeam', 'generic_tarball',
+                 'input_pattern', 'firstjob', 'inloc')
+    for key in forbidden:
+        if key in config:
+            sys.exit(f"json2jobdef: g4bl entry must not carry '{key}'")
+    for key in ('events_per_job', 'njobs'):
+        v = config[key]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+            sys.exit(f"json2jobdef: g4bl entry '{key}' must be a "
+                     f"positive integer, got {v!r}")
+    g4bl_dir = Path(config['g4bl_dir'])
+    if not g4bl_dir.is_dir():
+        sys.exit(f"json2jobdef: g4bl_dir not found: {g4bl_dir}")
+    if not (g4bl_dir / config['main_input']).is_file():
+        sys.exit(f"json2jobdef: main_input not found: "
+                 f"{g4bl_dir / config['main_input']}")
+    if 'g4bl_params' in config:
+        _validate_g4bl_params(config['g4bl_params'])
+    _validate_entry_values(config)
+
+
+# Command-line params the worker itself sets on every g4bl job
+# (utils/runmu2e._g4bl_script). An entry override of one of these would
+# silently change every job's event range or output name, so it is a
+# config error.
+G4BL_WORKER_PARAMS = ('First_Event', 'Num_Events', 'histoFile', 'viewer')
+_G4BL_PARAM_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _validate_g4bl_params(params):
+    """`g4bl_params`: {g4bl parameter name: scalar}. Each pair becomes a
+    `key=value` command-line override for the deck's `param -unset`
+    defaults (e.g. READ_Beam_File=1), so the JSON, not an edited .in,
+    selects a deck mode. Values are str/int/float; bool is refused as
+    ambiguous (g4bl reads 0/1)."""
+    if not isinstance(params, dict):
+        sys.exit(f"json2jobdef: g4bl_params must be a dict of "
+                 f"name -> value, got {params!r}")
+    for name, value in params.items():
+        if not isinstance(name, str) or not _G4BL_PARAM_NAME.match(name):
+            sys.exit(f"json2jobdef: g4bl_params name {name!r} is not a "
+                     f"g4bl parameter name ([A-Za-z_][A-Za-z0-9_]*)")
+        if name in G4BL_WORKER_PARAMS:
+            sys.exit(f"json2jobdef: g4bl_params must not set {name!r}: "
+                     f"the worker owns {', '.join(G4BL_WORKER_PARAMS)}")
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            sys.exit(f"json2jobdef: g4bl_params[{name!r}] must be a "
+                     f"string or number, got {value!r}")
+
 def validate_required_fields(config):
     """Validate required fields, and that supplied entry values are well formed.
 
@@ -326,6 +401,8 @@ def validate_required_fields(config):
     Keys are validated only when present — inloc defaults to 'none'
     (process_single_entry), and the resource keys usually come from CLI flags.
     """
+    if determine_job_type(config) == 'g4bl':
+        return _validate_g4bl_entry(config)
     for req in ('fcl', 'dsconf', 'outloc'):
         if not config.get(req):
             sys.exit(f"Missing required field: {req}")
@@ -334,13 +411,7 @@ def validate_required_fields(config):
     if bool(config.get('simjob_setup')) == bool(config.get('code')):
         sys.exit("Exactly one of 'simjob_setup' and 'code' is required")
     validate_era_agreement(config)
-    try:
-        for key in ENTRY_VALUE_KEYS:
-            if key in config:
-                validate_entry_value(key, config[key])
-        validate_outloc(config['outloc'])
-    except ValueError as exc:
-        sys.exit(f"json2jobdef: {exc}")
+    _validate_entry_values(config)
 
 # A Mu2e era tag: a campaign family (Run1B, MDC2025, MDC2030, ...) followed
 # by the era letters and an optional revision digit. Anything else -- a
@@ -427,10 +498,13 @@ def determine_job_type(config):
         'merge'     - File merging jobs with input_data dict
         'mixing'    - Pileup mixing jobs with pbeam
         'stage1'    - Primary simulation jobs (cosmic, beam, etc.)
+        'g4bl'      - G4Beamline jobs (runner: g4bl)
 
     Note: Order matters. chunk and resampler must be checked before
     the generic `merge` fallback that only tests for a dict input_data.
     """
+    if config.get('runner') == 'g4bl':
+        return 'g4bl'
     input_data = config.get('input_data')
     if isinstance(input_data, dict):
         specs = normalize_input_data(input_data)
@@ -444,6 +518,55 @@ def determine_job_type(config):
         return 'merge'
     else:
         return 'stage1'
+
+def _build_g4bl_tarball(config):
+    """Pack the self-describing g4bl cnf: work/ (a copy of g4bl_dir)
+    plus jobpars.json. No fcl, no mu2ejobdef — the worker's g4bl
+    branch consumes this shape directly (spec section 2)."""
+    parfile_name = get_parfile_name(config)
+    # Same derivation the tarball name itself uses (get_parfile_name ->
+    # cnf_name), so a top-level owner is present for whoever reads this
+    # cnf through Mu2eJobBase (submit, verify) regardless of $USER.
+    owner = Mu2eName(parfile_name).owner
+    jobpars = {
+        'runner': 'g4bl',
+        'desc': config['desc'],
+        'dsconf': config['dsconf'],
+        'main_input': config['main_input'],
+        'events_per_job': config['events_per_job'],
+        'njobs': config['njobs'],
+        'owner': owner,
+        # g4bl_params (validated at the boundary) ride verbatim; absent
+        # means absent, so older cnfs and the exact-shape test agree.
+        **({'g4bl_params': config['g4bl_params']} if config.get('g4bl_params') else {}),
+        # Mu2eJobBase has no g4bl-shaped reader of its own: submit's
+        # _read_cnf_facts and verify_row both go through job_outputs()/
+        # njobs(), which only look at tbs. njobs here must match the flat
+        # njobs above; the outfiles template's owner/version/sequencer
+        # tokens are substituted by job_outputs() from self.owner/
+        # self.dsconf/self.sequencer(index) — same as every other runner.
+        'tbs': {
+            'njobs': config['njobs'],
+            'outfiles': {'g4bl': f"nts.owner.{config['desc']}.version.sequencer.root"},
+        },
+    }
+    def _skip_vcs(tarinfo):
+        """Drop VCS internals (.git/.svn/.hg) from the cnf: g4bl_dir is
+        often a live checkout, and this tarball is pushed to SAM
+        permanently and dropbox-staged to every grid job — it must
+        never carry repo internals."""
+        if any(part in ('.git', '.svn', '.hg')
+               for part in tarinfo.name.split('/')):
+            return None
+        return tarinfo
+
+    data = (json.dumps(jobpars, indent=2) + '\n').encode()
+    with tarfile.open(parfile_name, 'w') as tar:
+        tar.add(config['g4bl_dir'], arcname='work', filter=_skip_vcs)
+        info = tarfile.TarInfo('jobpars.json')
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    print(f"Created {parfile_name}")
 
 def build_jobdef(config, job_args):
     # Embed template.fcl to preserve fcl_overrides. Mixing jobs already have
@@ -535,6 +658,9 @@ def build_jobdesc(config):
         "outputs": []
     }
 
+    if config.get('runner') == 'g4bl':
+        jobdef_entry['runner'] = 'g4bl'
+
     # Optional per-entry resource requests, read at submit time via
     # jobdesc.resources_of (CLI flag > entry key > built-in default).
     for key in RESOURCE_KEYS:
@@ -614,10 +740,13 @@ def main():
     p.add_argument('--verbose', action='store_true', help='Verbose logging')
     p.add_argument('--no-cleanup', action='store_true', help='Keep temporary files (inputs.txt, template.fcl, *Cat.txt)')
     p.add_argument('--prodtools-dir', default=None,
-                   help='cvmfs prodtools release the campaign runs '
-                        '(default: /cvmfs/mu2e.opensciencegrid.org/bin/'
-                        'prodtools/current, resolved to its version dir '
-                        'and recorded in the ledger). Requires --enqueue.')
+                   help='prodtools the campaign runs (default: /cvmfs/'
+                        'mu2e.opensciencegrid.org/bin/prodtools/current, '
+                        'resolved to its version dir and recorded in the '
+                        'ledger). A path outside that cvmfs root is a dev '
+                        'CHECKOUT: its bin/ + utils/ are tarred once here, '
+                        'digest recorded, and shipped to every job — '
+                        'refused for mu2epro. Requires --enqueue.')
     p.add_argument('--enqueue', action='store_true',
                    help='After pushing the cnf, register the entry as a '
                         'sliced campaign in the ledger. Requires --prod.')
@@ -787,36 +916,48 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     config['inloc'] = config.get('inloc', 'none')
     config['njobs'] = config.get('njobs', -1)
 
-    # Generic tarball mode: no input_data, {desc} deferred for runtime resolution
-    if config.get('generic_tarball'):
-        config['_defer_keys'] = {'desc'}
-        config['njobs'] = 0
+    if determine_job_type(config) == 'g4bl':
+        if extend:
+            sys.exit("json2jobdef: --extend is not supported for g4bl "
+                     "entries (no SAM inputs to exclude)")
+        _build_g4bl_tarball(config)
+        result = None
+    else:
+        # Generic tarball mode: no input_data, {desc} deferred for runtime resolution
+        if config.get('generic_tarball'):
+            config['_defer_keys'] = {'desc'}
+            config['njobs'] = 0
 
-    # Auto-generate desc from input_data (3rd field of the dataset name,
-    # e.g. "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")
-    if not config.get('desc'):
-        config = prepare_fields_for_job(config, job_type='standard')
+        # Auto-generate desc from input_data (3rd field of the dataset name,
+        # e.g. "ensembleMDS3a" from "dts.mu2e.ensembleMDS3a.MDC2025af.art")
+        if not config.get('desc'):
+            config = prepare_fields_for_job(config, job_type='standard')
 
-    exclude_files = None
-    if extend:
-        exclude_files = _compute_extend_exclusions(config)
+        exclude_files = None
+        if extend:
+            exclude_files = _compute_extend_exclusions(config)
 
-    if config.get('input_data'):
-        _create_inputs_file(config, exclude_files=exclude_files)
+        if config.get('input_data'):
+            _create_inputs_file(config, exclude_files=exclude_files)
 
-    # Check for empty inputs (count once; one extend summary print)
-    remaining = sum(1 for _ in open('inputs.txt')) if Path('inputs.txt').exists() else 0
-    if extend and exclude_files is not None:
-        print(f"  Extend summary: {len(exclude_files)} excluded, {remaining} remaining input files")
-    if Path('inputs.txt').exists() and remaining == 0:
-        if ignore_empty:
-            print(f"  Skipping {config.get('desc', 'unknown')}: no input files available")
-            return None
-        elif extend:
-            sys.exit("--extend: no new input files to process")
+        # Check for empty inputs (count once; one extend summary print)
+        remaining = sum(1 for _ in open('inputs.txt')) if Path('inputs.txt').exists() else 0
+        if extend and exclude_files is not None:
+            print(f"  Extend summary: {len(exclude_files)} excluded, {remaining} remaining input files")
+        if Path('inputs.txt').exists() and remaining == 0:
+            if ignore_empty:
+                print(f"  Skipping {config.get('desc', 'unknown')}: no input files available")
+                return None
+            elif extend:
+                sys.exit("--extend: no new input files to process")
 
-    job_args = _build_job_args(config)
-    result = build_jobdef(config, job_args)
+        if shutil.which('mu2e') is None:
+            sys.exit("json2jobdef: 'mu2e' not on PATH — art entries "
+                     "need a Musing (muse setup SimJob <tag> or source "
+                     "a Musing setup.sh)")
+
+        job_args = _build_job_args(config)
+        result = build_jobdef(config, job_args)
 
     parfile_name = get_parfile_name(config)
 
@@ -831,11 +972,16 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         from utils.submit import enqueue_entry, _resolve_ledger_db
         entry = build_jobdesc(config)
         try:
-            entry['prodtools_dir'] = resolve_prodtools_dir(
-                prodtools_dir or PRODTOOLS_CVMFS_CURRENT)
+            entry.update(prodtools_entry_keys(
+                resolve_prodtools_dir(prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
+                user=getpass.getuser()))
         except ValueError as e:
             sys.exit(f"json2jobdef: {e}")
         print(f"Campaign will run prodtools from {entry['prodtools_dir']}")
+        if 'prodtools_tar' in entry:
+            print(f"  dev checkout: {entry['prodtools_tar']} "
+                  f"(sha256 {entry['prodtools_ref']['sha256'][:12]}) ships "
+                  f"to every job")
         enqueue_entry(
             entry,
             ledger_db=_resolve_ledger_db(SimpleNamespace(ledger_db=None)),
@@ -848,6 +994,30 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         _cleanup_temp_files()
 
     return result
+
+def prodtools_entry_keys(prodtools_dir, user):
+    """Entry keys naming the prodtools every job of the campaign runs.
+    `prodtools_dir` is already resolved (resolve_prodtools_dir).
+
+    A release under the cvmfs root is recorded as-is; the worker runs it
+    in place. Any other dir is a dev CHECKOUT — an explicit opt-in via
+    `--prodtools-dir <checkout>`, never a fallback: it is tarred once
+    (utils.submit.bundle_prodtools) into the user's prodtools data dir,
+    the digest recorded as `prodtools_ref`, and shipped to every job
+    (jobdesc.prodtools_tar_of re-checks the digest at each submit).
+    Refused for mu2epro: production runs a published release only, the
+    provenance rule from 4314038."""
+    if is_cvmfs_prodtools_dir(prodtools_dir):
+        return {'prodtools_dir': prodtools_dir}
+    if user == 'mu2epro':
+        sys.exit(f"json2jobdef: --prodtools-dir {prodtools_dir} is not a "
+                 f"cvmfs release; mu2epro campaigns run a published "
+                 f"release under {PRODTOOLS_CVMFS_ROOT} only")
+    dest = f'/exp/mu2e/data/users/{user}/prodtools/prodtools-tarballs'
+    tar, ref = bundle_prodtools(prodtools_dir, dest)
+    return {'prodtools_dir': prodtools_dir, 'prodtools_tar': tar,
+            'prodtools_ref': ref}
+
 
 def is_already_expanded(configs):
     """True if every entry already has scalar values (no lists to expand)."""

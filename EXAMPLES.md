@@ -38,7 +38,9 @@ ops` is required. Building job definitions (`json2jobdef`, `jobdef`)
 needs an Offline environment for `fhicl-get`, so source the SimJob
 Musing that the entry's `simjob_setup` names — or, for a cnf built
 against a `muse tarball` instead of a Musing (section 3), no `muse
-setup SimJob` is needed at all; the build travels with the cnf.
+setup SimJob` is needed at all; the build travels with the cnf. A g4bl
+entry (section 3) needs no Musing either — a bare `muse setup ops`
+environment builds its cnf.
 
 No tool in this repo needs SQLAlchemy or a `pyenv ana` shell — the
 submission ledger and the completeness check read plain sqlite3 from the
@@ -130,6 +132,26 @@ Notes:
   `MU2EGRID_PRODTOOLS_DIR` — older releases (v3.2.0 and before) are
   refused at enqueue, since their `runjob.sh` untars a tarball no
   submission ships any more.
+- **`--prodtools-dir` with a path OUTSIDE
+  `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/` is a dev checkout** —
+  an explicit opt-in, never a fallback. Its `bin/` + `utils/` are tarred
+  once, at enqueue, into
+  `/exp/mu2e/data/users/$USER/prodtools/prodtools-tarballs/prodtools-<sha12>.tar`
+  (content-addressed, `__pycache__` excluded); the entry records
+  `prodtools_tar` and `prodtools_ref = {sha256, size, source_path}`, and
+  the tar ships to every job via `-f dropbox://` with
+  `MU2EGRID_PRODTOOLS_TAR` replacing `MU2EGRID_PRODTOOLS_DIR`
+  (`runjob.sh` extracts it under `$_CONDOR_SCRATCH_DIR`, section 7).
+  Every later submit — slice, direct, recovery — re-hashes the tar and
+  refuses a mismatch, the same gate `code_ref` applies to an Offline
+  build. Refused for `mu2epro`: production runs a published release
+  only. The canonical use is a self-owned grid smoke of unreleased
+  worker code, run from the checkout as yourself:
+
+  ```bash
+  json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest006 \
+      --prod --enqueue --slice-size 100 --prodtools-dir $PWD
+  ```
 - A bulk `--dsconf X --prod --enqueue` that skips any entry exits **2**
   and lists what it skipped. Entries that already processed are left
   alone — they are in SAM and in the ledger.
@@ -160,7 +182,8 @@ Required JSON fields per entry: exactly one of `simjob_setup` or `code`,
 plus `fcl`, `dsconf`, `outloc`. `desc` is derived from `input_data` when
 omitted; `owner` defaults to the current user (mapped to `mu2e` for
 mu2epro); `inloc` defaults to `none`; `njobs: -1` means "derive from the
-input file list".
+input file list". (`"runner": "g4bl"` entries have a different required
+set — see the g4bl subsection below.)
 
 Stage-1 (generator) entry:
 
@@ -426,6 +449,71 @@ it lists:
   search_path error, and an entry-level override cannot suppress an
   include. State the keys inline until the FCL actually ships.
 
+### g4bl entries (`"runner": "g4bl"`)
+
+g4bl (Geant4 Beamline) is a direct-backend entry type independent of
+the Offline chain: no fcl, no Musing, no SAM inputs. The worker runs
+the spack `g4beamline` on a native AL9 environment and pushes the
+histogram file and log through the same pushOutput path as any other
+entry.
+
+```json
+{
+  "runner": "g4bl",
+  "desc": "G4blSmoke",
+  "dsconf": "MCPTest005",
+  "owner": "oksuzian",
+  "g4bl_dir": "/exp/mu2e/app/users/oksuzian/G4BeamlineScripts",
+  "main_input": "Mu2E.in",
+  "events_per_job": 10,
+  "njobs": 1,
+  "outloc": { "nts.*.root": "scratch" }
+}
+```
+
+The checked-in config is `data/g4bl/g4bl.json` (one `G4blSmoke` entry;
+bump `dsconf` per campaign — a dsconf is used once).
+
+```bash
+json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005
+json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
+            --prod --enqueue --slice-size 100
+```
+
+- `runner` must be the literal string `"g4bl"`.
+- `g4bl_dir` is a local directory holding the deck and its support
+  files; it is copied wholesale into the cnf as `work/` and must exist.
+  `main_input` is the deck filename relative to `g4bl_dir` and must
+  exist inside it. `events_per_job` and `njobs` are positive integers.
+  `outloc` is the standard dataset-glob → location map. `desc`,
+  `dsconf`, and `owner` are the same top-level keys every entry uses.
+- `g4bl_params` (optional) is a dict of g4bl parameter name → string or
+  number. Each pair is appended to the g4bl command line as `key=value`,
+  after the worker's own `First_Event`/`Num_Events`/`histoFile`, and
+  overrides the deck's `param -unset` default of that name — so
+  `{"READ_Beam_File": 1}` selects a deck mode from the JSON instead of an
+  edited `.in`. Names must be identifiers, values are never booleans
+  (g4bl reads 0/1), and `First_Event`, `Num_Events`, `histoFile`,
+  `viewer` are refused because the worker sets them. They ride in
+  `jobpars.json` verbatim and `jobquery --recipe` prints them.
+- Forbidden alongside `runner: "g4bl"`: `fcl`, `simjob_setup`, `code`,
+  `input_data`, `resampler_name`, `pbeam`, `generic_tarball`,
+  `input_pattern`, `firstjob`, `inloc` — any of these is a validation
+  error, not a silently-ignored key.
+- `json2jobdef` packs a self-describing cnf (`work/` + `jobpars.json`)
+  instead of calling `mu2ejobdef`; a bare `muse setup ops` environment
+  is enough to build one — no SimJob Musing needs to be sourced.
+- Output and log names are owner-aware
+  (`nts.<owner>.<desc>.<dsconf>.<seq>.root`), with `<owner>` parsed
+  from the cnf tarball name — never a literal `mu2e`.
+- Grid execution needs the g4bl worker code, which is in prodtools
+  `>= v3.3.1` on cvmfs (workers run their ledger entry's pinned
+  `prodtools_dir`, section 7). Before that release lands, a self-owned
+  smoke can pin the checkout with `--prodtools-dir $PWD` — the dev
+  tarball described under the `json2jobdef` notes above.
+- `--extend` is refused for g4bl entries — there are no SAM inputs to
+  exclude.
+
 ### Running against a code tarball instead of a Musing
 
 `simjob_setup` (a `/cvmfs` Musing `setup.sh`) and `code` (an absolute
@@ -677,18 +765,26 @@ an "ops JSON" via dropbox, both landing under `$CONDOR_DIR_INPUT`, and
 the worker resolves its own job index from `$PROCESS` through the ops
 JSON's `jobs` lookup table.
 
-The code itself is not shipped. The job executable is `bin/runjob.sh`
-of the cvmfs prodtools release recorded on the campaign (`prodtools_dir`,
-section 3), and `MU2EGRID_PRODTOOLS_DIR` names that release for it —
-jobsub copies the executable into the sandbox, so the script cannot find
-its own tree. `runjob.sh` sources the Mu2e environment, `muse setup ops`,
-OfflineOps, then the release's `bin/setup.sh`, and execs its
-`utils/runmu2e.py`. It refuses to run (exit 1, before any setup) when
-the variable is unset or the directory is not a release on that worker —
-a version published within the hour may not have reached every cvmfs
-catalog yet, and that failure is what lets the recovery pass re-fire the
-index elsewhere later. There is no other way for worker code to reach a
-job: a fix to `runmu2e.py` or `file_resolver.py` reaches production only
+For a release entry the code itself is not shipped. The job executable
+is `bin/runjob.sh` of the cvmfs prodtools release recorded on the
+campaign (`prodtools_dir`, section 3), and `MU2EGRID_PRODTOOLS_DIR`
+names that release for it — jobsub copies the executable into the
+sandbox, so the script cannot find its own tree. `runjob.sh` sources the
+Mu2e environment, `muse setup ops`, OfflineOps, then the release's
+`bin/setup.sh`, and execs its `utils/runmu2e.py`. It refuses to run
+(exit 1, before any setup) when the directory is not a release on that
+worker — a version published within the hour may not have reached every
+cvmfs catalog yet, and that failure is what lets the recovery pass
+re-fire the index elsewhere later.
+
+The one other way for worker code to reach a job is the dev-checkout
+opt-in (section 3): the entry carries `prodtools_tar`, the submission
+ships that tar via `-f dropbox://`, and `MU2EGRID_PRODTOOLS_TAR` names
+it INSTEAD of `MU2EGRID_PRODTOOLS_DIR`. `runjob.sh` then extracts it
+under `$_CONDOR_SCRATCH_DIR/prodtools` and continues through the same
+release check, setup and exec. Both variables set, or neither, is an
+exit 1 — never a guess. Production campaigns (mu2epro) cannot use it: a
+fix to `runmu2e.py` or `file_resolver.py` reaches production only
 through a release (`install_prodtools.sh`, section 11).
 
 To simply run a cnf's jobs on this node — one index or a few dozen, with
@@ -740,7 +836,19 @@ streaming), `--no-validate` (skip the output read-back below).
   re-runs the index elsewhere. Cost is ~15 s per GB, CPU-bound. The JSON
   entry key `"validate_outputs": false` opts one entry out and wins over
   the `--no-validate` flag; anything but a JSON boolean is refused.
-- The log is pushed always, including when the data push itself raises.
+- Every runner (mu2e and g4bl) ends in the same push tail: the SAM-named
+  log is created from `$JSB_TMP/JOBSUB_LOG_FILE`, then the SHA256
+  `mu2egrid manifest` block is printed into the worker log — which
+  OfflineOps pushOutput's `writeLog` copies into the SAM log; `writeLog`
+  rebuilds every pushOutput-bound log from that same jobsub log and
+  would discard a plain file append — and also appended to the file
+  directly, which is what carries it on the `outstage` path (ifdh copy,
+  no pushOutput). Then data is pushed on success and the log always —
+  including when the data push itself raises. Art logs from releases
+  before prodtools v3.3.2 carry NO manifest (the log was created after
+  the manifest step, and the append would not have survived `writeLog`
+  anyway; fixed 2026-09). A g4bl SAM log is the full worker log, not
+  just g4bl's own output.
 - Outputs are partitioned by their entry's `outloc` location. Anything
   bound for `outstage` (section 3) is copied to
   `$MU2EGRID_WFOUTSTAGE/$CLUSTER/$PROCESS` with `ifdh` and never reaches
@@ -1060,7 +1168,10 @@ Verbs:
   `expected_lifetime`/`code`/`prodtools_dir` on a live campaign's entry.
   `prodtools_dir` is the cvmfs release the jobs run (section 3); a row
   created before releases were recorded has none and its recovery is
-  refused until this is set **with** `--include-open-rows`. Without
+  refused until this is set **with** `--include-open-rows`. Give it a
+  cvmfs release: `set-entry` bundles nothing, so a checkout path here
+  is invisible to the worker (dev tarballs exist only through
+  `json2jobdef --enqueue --prodtools-dir`). Without
   `--include-open-rows` the change reaches future slices only (same as
   `set-slice`/`set-memory`) — a resubmit builds its options from the
   row's own frozen entry snapshot, not the campaign's current one, so an
@@ -1340,9 +1451,10 @@ takes about an hour. `-n` is a dry run, `-t [DIR]` installs into a local
 writable dir instead of touching CVMFS, and `--no-current` installs the
 version without moving `current` — for a pre-release that campaigns pin
 explicitly with `json2jobdef --prodtools-dir` before it becomes the
-default. Grid jobs run only these releases (section 7), so a worker-side
-change is live in production once it is tagged, installed, and pinned
-or made `current`.
+default. Production grid jobs run only these releases (section 7), so a
+worker-side change is live in production once it is tagged, installed,
+and pinned or made `current`; a self-owned smoke of unreleased code can
+pin a checkout instead (`--prodtools-dir $PWD`, section 3).
 
 ```bash
 ./bin/install_prodtools.sh -n v3.3.0                 # check the tag and the path, change nothing
@@ -1372,6 +1484,32 @@ a one-time operator step (section 11 `submissions`, wiki page
   neither.
 - `Please specify either --desc AND --dsconf, --dsconf only, or --index only`
   — json2jobdef entry selection is exactly one of those three forms.
+- `json2jobdef: 'mu2e' not on PATH — art entries need a Musing (muse
+  setup SimJob <tag> or source a Musing setup.sh)` — an art (non-g4bl)
+  entry was built in a bare `muse setup ops` shell; source the entry's
+  Musing first. g4bl entries never hit this check.
+- `json2jobdef: g4bl entry missing required field: <name>` — a g4bl
+  entry needs `desc`, `dsconf`, `outloc`, `g4bl_dir`, `main_input`,
+  `events_per_job`, `njobs` (section 3).
+- `json2jobdef: g4bl entry must not carry '<key>'` — an art-pipeline
+  key (`fcl`, `simjob_setup`, `inloc`, ...) on a g4bl entry; g4bl is
+  decoupled from Offline, so the key is refused rather than ignored.
+- `json2jobdef: g4bl entry '<key>' must be a positive integer, got
+  <value>` — `events_per_job`/`njobs` must be positive ints (not
+  booleans, not strings).
+- `json2jobdef: g4bl_params must be a dict of name -> value, got ...` /
+  `g4bl_params name '<name>' is not a g4bl parameter name` /
+  `g4bl_params must not set '<name>': the worker owns First_Event,
+  Num_Events, histoFile, viewer` / `g4bl_params['<name>'] must be a
+  string or number` — the entry's `g4bl_params` (section 3) is checked
+  at the boundary; a worker-owned name would silently move every job's
+  event range or output, so it is refused rather than overridden.
+- `json2jobdef: g4bl_dir not found: <dir>` / `json2jobdef: main_input
+  not found: <path>` — the deck directory (or the deck inside it) does
+  not exist; both are checked before anything is built.
+- `json2jobdef: --extend is not supported for g4bl entries (no SAM
+  inputs to exclude)` — drop `--extend`; a g4bl cnf has no input list
+  to diff against.
 - `json2jobdef: --prod requires --enqueue (otherwise a bare --prod
   pushes the cnf to SAM and registers no campaign -- a silent no-op)`
   — add `--enqueue`. There is no `--jobdefs` alternative any more.
@@ -1398,11 +1536,30 @@ a one-time operator step (section 11 `submissions`, wiki page
   --include-open-rows` (prefixed `submit:` from a recovery, `json2jobdef:`
   at enqueue) — a ledger row from before releases were recorded cannot be
   resubmitted until it names one; the flag is what reaches the open rows.
-- Worker log `ERROR: MU2EGRID_PRODTOOLS_DIR is not set — this job was not
-  submitted with a prodtools release` / `ERROR: <dir> is not a prodtools
-  release on this worker` — `runjob.sh` exits 1 before any setup. The
-  second form on a freshly published version usually means that worker's
-  cvmfs catalog has not caught up; the recovery pass re-fires the index.
+- `json2jobdef: --prodtools-dir <dir> is not a cvmfs release; mu2epro
+  campaigns run a published release under
+  /cvmfs/mu2e.opensciencegrid.org/bin/prodtools only` — the dev-checkout
+  tarball (section 3) is a self-account tool; as mu2epro, publish and pin
+  a release.
+- `prodtools_tar '<tar>' sha256 <a> does not match the entry's
+  prodtools_ref <b> (... bytes now, ... at enqueue): the tarball changed
+  under the campaign. Re-enqueue from the checkout` / `prodtools_tar
+  '<tar>' no longer exists` (prefixed `submit:` from a slice or recovery,
+  `json2jobdef:` at enqueue) — the dev tarball is digest-pinned to the
+  campaign; a rebuilt, edited or deleted tar is refused rather than
+  shipped with stale provenance. Enqueue a new campaign from the current
+  checkout.
+- Worker log `ERROR: MU2EGRID_PRODTOOLS_DIR is not set and no
+  MU2EGRID_PRODTOOLS_TAR was shipped — this job was not submitted with a
+  prodtools release` / `ERROR: <dir> is not a prodtools release on this
+  worker` — `runjob.sh` exits 1 before any setup. The second form on a
+  freshly published version usually means that worker's cvmfs catalog
+  has not caught up; the recovery pass re-fires the index.
+- Worker log `ERROR: both MU2EGRID_PRODTOOLS_DIR and MU2EGRID_PRODTOOLS_TAR
+  are set` / `ERROR: tar xf <input>/<tar> failed` — the first cannot come
+  from `jobsub_argv` (it emits exactly one); the second means the dropbox
+  file did not land or is not a tar — check the tar under
+  `prodtools-tarballs/` on the submit host still matches `prodtools_ref`.
 - `json2jobdef: --slice-size requires --enqueue` — `--slice-size` only
   has meaning for the campaign `--enqueue` registers.
 - `json2jobdef: inloc must be one of tape, disk, scratch, resilient,

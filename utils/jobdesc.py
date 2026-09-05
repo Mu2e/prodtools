@@ -27,7 +27,7 @@ boundary, not as a downstream crash.
 import re
 from typing import Optional
 
-from utils.job_common import Mu2eName
+from utils.job_common import Mu2eName, sha256_file
 
 
 def tarball_of(entry: dict) -> str:
@@ -133,9 +133,11 @@ ENTRY_VALUE_KEYS = ('inloc', 'code', 'prodtools_dir') + RESOURCE_KEYS
 # The cvmfs release tree every grid job runs prodtools from. A campaign
 # records the CONCRETE version dir (the `current` symlink resolved at
 # enqueue), so every slice and every recovery runs the same code and the
-# ledger says which. There is no other way for worker code to reach a
-# job: no dev tarball, no checkout.
+# ledger says which. The one other way for worker code to reach a job is
+# the explicit dev-checkout opt-in (prodtools_tar_of): a tarball built
+# once at enqueue and digest-pinned to the entry — never a fallback.
 PRODTOOLS_CVMFS_CURRENT = '/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current'
+PRODTOOLS_CVMFS_ROOT = PRODTOOLS_CVMFS_CURRENT.rsplit('/', 1)[0]
 PRODTOOLS_WORKER_FILES = ('bin/setup.sh', 'bin/runjob.sh', 'utils/runmu2e.py')
 
 
@@ -165,6 +167,46 @@ def resolve_prodtools_dir(path: str) -> str:
     resolved = os.path.realpath(path)
     validate_entry_value('prodtools_dir', resolved)
     return resolved
+
+
+def is_cvmfs_prodtools_dir(path: str) -> bool:
+    """True for a published release under PRODTOOLS_CVMFS_ROOT — the
+    worker can run it in place. Anything else is a checkout that only
+    reaches a worker as a shipped tarball (prodtools_tar_of)."""
+    return path.startswith(PRODTOOLS_CVMFS_ROOT + '/')
+
+
+def prodtools_tar_of(entry: dict) -> Optional[str]:
+    """Dev-checkout mode, opted into with `json2jobdef --enqueue
+    --prodtools-dir <checkout>`: the absolute path of the prodtools
+    tarball shipped to every job, or None for a cvmfs release entry.
+
+    The tar was built ONCE at enqueue (utils.submit.bundle_prodtools) and
+    its digest recorded as `prodtools_ref`. Re-hashed here, before every
+    submit — slice, direct, recovery — so a tar rebuilt or replaced under
+    a live campaign is refused, not shipped with stale provenance. Same
+    rule `code_ref` applies to an Offline build."""
+    import os
+    tar = entry.get('prodtools_tar')
+    if tar is None:
+        return None
+    ref = entry.get('prodtools_ref')
+    if not isinstance(ref, dict) or not ref.get('sha256'):
+        raise ValueError(
+            f"entry has prodtools_tar {tar!r} but no prodtools_ref with a "
+            f"sha256; re-enqueue from the checkout")
+    if not os.path.isfile(tar):
+        raise ValueError(
+            f"prodtools_tar {tar!r} no longer exists; re-enqueue from the "
+            f"checkout")
+    digest, size = sha256_file(tar)
+    if digest != ref['sha256']:
+        raise ValueError(
+            f"prodtools_tar {tar!r} sha256 {digest[:12]} does not match "
+            f"the entry's prodtools_ref {ref['sha256'][:12]} ({size} bytes "
+            f"now, {ref.get('size')} at enqueue): the tarball changed under "
+            f"the campaign. Re-enqueue from the checkout")
+    return tar
 
 
 def resources_of(entry: dict) -> dict:

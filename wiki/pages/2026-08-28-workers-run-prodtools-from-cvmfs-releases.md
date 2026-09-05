@@ -2,7 +2,7 @@
 title: Decision — grid workers run prodtools from a cvmfs release recorded on the campaign; the per-submission dev tarball is gone
 tags: [decision, adr, prodtools, cvmfs, release, runjob, submit, reproducibility]
 sources: []
-updated: 2026-08-28
+updated: 2026-09-02
 ---
 
 # Workers run prodtools from cvmfs releases
@@ -60,10 +60,45 @@ ran different resolver code.
 - A worker whose cvmfs catalog lags a fresh release fails in setup with
   a named error; recovery re-fires elsewhere.
 
+## Amendment 2026-09-02 — dev checkout tarball restored as an explicit opt-in
+The v3.3.1 grid smoke (g4bl entry mode) needed unreleased worker code
+on the grid without a cvmfs publish. The mechanism from before this
+decision was restored from `4314038^` with three changes that keep the
+decision's substance:
+
+- **Opt-in, not always-on.** `json2jobdef --enqueue --prodtools-dir
+  <path>` with a path OUTSIDE `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/`
+  is a checkout. A cvmfs path behaves exactly as above. Refused for
+  `mu2epro`: production still runs a published release only.
+- **Snapshot with provenance.** `utils.submit.bundle_prodtools` tars
+  the checkout's `bin/` + `utils/` ONCE at enqueue into
+  `/exp/mu2e/data/users/<user>/prodtools/prodtools-tarballs/prodtools-<sha12>.tar`
+  (not `/tmp`); the entry records `prodtools_tar` and
+  `prodtools_ref={sha256,size,source_path}`. `jobdesc.prodtools_tar_of`
+  re-hashes before every submit — slice, direct, recovery — and refuses
+  a mismatch, the same gate `code_ref` applies to an Offline build.
+  Answers "nothing recorded which code a given row ran".
+- **Worker has exactly two paths, never both.** `jobsub_argv` emits
+  `MU2EGRID_PRODTOOLS_TAR=<basename>` INSTEAD of `MU2EGRID_PRODTOOLS_DIR`
+  and ships the tar via `-f dropbox://`; `runjob.sh` exits 1 when both
+  or neither is set, extracts the tar under `$_CONDOR_SCRATCH_DIR`, then
+  runs the same release check + setup + exec as the cvmfs path. The
+  executable is still `<checkout>/bin/runjob.sh`, read live at submit —
+  the one file not covered by the digest.
+
+"Keep the tarball as a `run_as=self`-only dev path" below was rejected
+in August because it "works when the env var is forgotten"; the
+restored form cannot be reached by forgetting anything — only by naming
+a non-cvmfs directory. Validated the same day: self campaign 5
+(`cnf.oksuzian.G4blSmoke.MCPTest006.0.tar`, cluster 29824782@jobsub04)
+ran three jobs from the shipped tar, exit 0, outputs and logs in SAM —
+see [[g4bl-runner]].
+
 ## Alternatives considered
-- Keep the tarball as a `run_as=self`-only dev path: rejected — a second
-  way of doing the same thing is a fallback, and it "works" when the env
-  var is forgotten.
+- Keep the tarball as a `run_as=self`-only dev path: rejected in August —
+  a second way of doing the same thing is a fallback, and it "works" when
+  the env var is forgotten. Superseded by the 2026-09-02 amendment above
+  (opt-in by explicit path, digest-pinned).
 - Point at `current` rather than a version: rejected — `current` moved
   mid-campaign on 2026-08-20.
 

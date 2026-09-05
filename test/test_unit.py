@@ -4416,6 +4416,40 @@ class TestLogStorageLocation(unittest.TestCase):
                    {'dataset': 'nts.mu2e.*.root', 'location': 'scratch'}]
         self.assertEqual(log_storage_location(outputs), 'disk')
 
+    # — owner-aware routing (2026-08-31): user tokens have NO
+    #   /mu2e/persistent/datasets scope, so a user-owned log can never
+    #   go to 'disk'. Found live: self-owned tape campaign failed
+    #   submit-time token acquisition on the persistent log scope. ——
+
+    def test_user_owner_tape_data_logs_to_scratch(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'sim.oksuzian.*.art', 'location': 'tape'}]
+        self.assertEqual(log_storage_location(outputs, owner='oksuzian'),
+                         'scratch')
+
+    def test_user_owner_disk_data_logs_to_scratch(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'sim.oksuzian.*.art', 'location': 'disk'}]
+        self.assertEqual(log_storage_location(outputs, owner='oksuzian'),
+                         'scratch')
+
+    def test_mu2e_owner_tape_data_logs_to_disk(self):
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': 'dig.mu2e.*.art', 'location': 'tape'}]
+        self.assertEqual(log_storage_location(outputs, owner='mu2e'), 'disk')
+
+    def test_user_owner_outstage_stays_outstage(self):
+        """outstage means undeclared — owner routing must not override."""
+        from utils.job_common import log_storage_location
+        outputs = [{'dataset': '*.art', 'location': 'outstage'}]
+        self.assertEqual(log_storage_location(outputs, owner='oksuzian'),
+                         'outstage')
+
+    def test_user_owner_missing_outputs_logs_to_scratch(self):
+        from utils.job_common import log_storage_location
+        self.assertEqual(log_storage_location([], owner='oksuzian'),
+                         'scratch')
+
 
 class TestPushLogsParents(unittest.TestCase):
     """The log push must never name a parents file that isn't on disk.
@@ -4425,9 +4459,13 @@ class TestPushLogsParents(unittest.TestCase):
     silent no-op — the log never reaches SAM. That bites hardest on the
     failure path, where push_data is skipped and the log is the only
     evidence left. Observed 2026-07-21 on index 519.
+
+    Whether parents are wanted at all is now the caller's `track_parents`
+    (the same flag push_data gets), not a guess from which filename
+    parameter was passed.
     """
 
-    def _capture(self, tmpdir, *, log_file=None, fcl=None, with_parents):
+    def _capture(self, tmpdir, *, log_file, track_parents, with_parents):
         """Run push_logs in tmpdir and return the parents column it chose."""
         from utils import runmu2e
         captured = {}
@@ -4437,22 +4475,17 @@ class TestPushLogsParents(unittest.TestCase):
             captured['specs'] = output_specs
             return 0
 
-        logname = log_file or runmu2e.replace_file_extensions(fcl, "log", "log")
-        (Path(tmpdir) / logname).write_text('log contents\n')
+        (Path(tmpdir) / log_file).write_text('log contents\n')
         if with_parents:
             (Path(tmpdir) / 'parents_list.txt').write_text('in1.art\n')
 
         cwd = os.getcwd()
-        env = dict(os.environ)
-        os.environ.pop('JSB_TMP', None)   # don't pull in a jobsub log
         try:
             os.chdir(tmpdir)
             with patch.object(runmu2e, 'push_output', fake_push_output):
-                runmu2e.push_logs(fcl=fcl, log_file=log_file)
+                runmu2e.push_logs(log_file, track_parents=track_parents)
         finally:
             os.chdir(cwd)
-            os.environ.clear()
-            os.environ.update(env)
 
         self.assertIn('specs', captured, "push_output was never called")
         self.assertEqual(len(captured['specs']), 1)
@@ -4461,39 +4494,279 @@ class TestPushLogsParents(unittest.TestCase):
     def test_art_success_uses_parents_list(self):
         """Data push ran and wrote parents_list.txt — use it."""
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
-                                    with_parents=True)
+            parents = self._capture(d, log_file='log.mu2e.X.MDC2025ar.519.log',
+                                    track_parents=True, with_parents=True)
             self.assertEqual(parents, 'parents_list.txt')
 
     def test_art_failure_falls_back_to_none(self):
         """mu2e failed, push_data was skipped, so parents_list.txt does not
         exist — the log must still be declarable."""
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, fcl='cnf.mu2e.X.MDC2025ar.519.fcl',
-                                    with_parents=False)
+            parents = self._capture(d, log_file='log.mu2e.X.MDC2025ar.519.log',
+                                    track_parents=True, with_parents=False)
             self.assertEqual(parents, 'none')
 
-    def test_untracked_parents_falls_back_to_none(self):
-        """track_parents=False (inloc dir:, non-SAM inputs) also leaves no
-        parents_list.txt even though the job succeeded."""
+    def test_untracked_parents_is_none_even_with_a_file(self):
+        """track_parents=False (inloc dir:, g4bl) — a stray parents_list.txt
+        must not be named: the job's inputs are not SAM parents."""
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, fcl='cnf.mu2e.Y.MDC2025ar.7.fcl',
-                                    with_parents=False)
+            parents = self._capture(d, log_file='log.mu2e.Y.MDC2025ar.7.log',
+                                    track_parents=False, with_parents=True)
             self.assertEqual(parents, 'none')
 
     def test_g4bl_still_none(self):
-        """g4bl passes log_file explicitly and has no SAM parents."""
+        """g4bl has no SAM parents (track_parents=False)."""
         with tempfile.TemporaryDirectory() as d:
             parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
-                                    with_parents=False)
+                                    track_parents=False, with_parents=False)
             self.assertEqual(parents, 'none')
 
-    def test_g4bl_ignores_stray_parents_file(self):
-        """Even if a parents_list.txt is lying around, g4bl stays 'none'."""
+    def test_missing_log_skips_push(self):
+        """No log on disk: warn and return 0, never call pushOutput."""
+        from utils import runmu2e
         with tempfile.TemporaryDirectory() as d:
-            parents = self._capture(d, log_file='log.mu2e.G.MDC2025ar.3.log',
-                                    with_parents=True)
-            self.assertEqual(parents, 'none')
+            cwd = os.getcwd()
+            try:
+                os.chdir(d)
+                with patch.object(runmu2e, 'push_output') as po:
+                    rc = runmu2e.push_logs('log.mu2e.X.MDC2025ar.1.log')
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(rc, 0)
+            po.assert_not_called()
+
+
+class TestMaterializeLog(unittest.TestCase):
+    """The SAM-named log must exist BEFORE the manifest is appended.
+
+    Production logs never carried a manifest (2026-09-01: 0 `mu2egrid
+    manifest` lines in log.mu2e.CeEndpoint.Run1Ban-001.617) because
+    push_logs created the file from $JSB_TMP/JOBSUB_LOG_FILE only
+    after _emit_manifest had already found it missing. _materialize_log
+    is that copy, moved ahead of the manifest step.
+    """
+
+    LOG = 'log.mu2e.X.MDC2025ar.519.log'
+
+    def _run(self, tmpdir, *, jsb_content, preexisting=None):
+        from utils import runmu2e
+        jsb = Path(tmpdir) / 'jsb_tmp'
+        jsb.mkdir()
+        if jsb_content is not None:
+            (jsb / 'JOBSUB_LOG_FILE').write_text(jsb_content)
+        log = Path(tmpdir) / self.LOG
+        if preexisting is not None:
+            log.write_text(preexisting)
+        with patch.dict(os.environ, {'JSB_TMP': str(jsb)}):
+            runmu2e._materialize_log(str(log))
+        return log
+
+    def test_copies_jobsub_log_into_sam_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self._run(d, jsb_content='worker stdout\n')
+            self.assertEqual(log.read_text(), 'worker stdout\n')
+
+    def test_jobsub_log_overwrites_runner_written_log(self):
+        """The worker log is the superset (every runner streams to stdout)."""
+        with tempfile.TemporaryDirectory() as d:
+            log = self._run(d, jsb_content='full worker log\n',
+                            preexisting='partial\n')
+            self.assertEqual(log.read_text(), 'full worker log\n')
+
+    def test_missing_jobsub_log_keeps_existing_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = self._run(d, jsb_content=None, preexisting='runner log\n')
+            self.assertEqual(log.read_text(), 'runner log\n')
+
+    def test_no_jsb_tmp_and_no_log_warns_only(self):
+        """Nothing to copy and nothing on disk: warn, create nothing."""
+        from utils import runmu2e
+        with tempfile.TemporaryDirectory() as d:
+            env = {k: v for k, v in os.environ.items() if k != 'JSB_TMP'}
+            with patch.dict(os.environ, env, clear=True):
+                runmu2e._materialize_log(str(Path(d) / self.LOG))
+            self.assertFalse((Path(d) / self.LOG).exists())
+
+
+class TestFinishJob(unittest.TestCase):
+    """The shared direct-mode push tail. Runners hand it a JobRun; it
+    materializes the log, appends the manifest, and pushes data (success
+    only) then the log (always), honoring --dry-run."""
+
+    OUTPUTS = [{'dataset': 'mcs.*.art', 'location': 'scratch'}]
+    LOG = 'log.testuser.X.TestConf.00000000.log'
+
+    def _job(self, **over):
+        from utils.runmu2e import JobRun
+        d = dict(outputs=self.OUTPUTS, log_file=self.LOG, job_failed=False,
+                 owner='testuser', infiles='in1.art in2.art',
+                 simjob_setup='/cvmfs/setup.sh', track_parents=True)
+        d.update(over)
+        return JobRun(**d)
+
+    def _in_tmp(self):
+        d = tempfile.mkdtemp(prefix='finish_job_')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, cwd)
+        env = {k: v for k, v in os.environ.items() if k != 'JSB_TMP'}
+        patcher = patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return Path(d)
+
+    def test_jobrun_defaults_describe_a_parentless_job(self):
+        from utils.runmu2e import JobRun
+        job = JobRun(outputs=self.OUTPUTS, log_file=self.LOG,
+                     job_failed=False, owner='testuser')
+        self.assertEqual(job.infiles, '')
+        self.assertIsNone(job.simjob_setup)
+        self.assertFalse(job.track_parents)
+
+    def test_dry_run_skips_pushes(self):
+        from utils import runmu2e
+        self._in_tmp()
+        with patch.object(runmu2e, '_push_all') as pa:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=True),
+                                         self._job())
+        self.assertFalse(failed)
+        pa.assert_not_called()
+
+    def test_failed_job_pushes_log_only(self):
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        with patch.object(runmu2e, 'push_data') as pd, \
+             patch.object(runmu2e, 'push_logs') as pl:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                         self._job(job_failed=True))
+        self.assertTrue(failed)
+        pd.assert_not_called()
+        pl.assert_called_once_with(self.LOG, simjob_setup='/cvmfs/setup.sh',
+                                   location='scratch', track_parents=True)
+
+    def test_success_forwards_jobrun_fields_to_both_pushes(self):
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        with patch.object(runmu2e, 'push_data') as pd, \
+             patch.object(runmu2e, 'push_logs') as pl:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                         self._job())
+        self.assertFalse(failed)
+        pd.assert_called_once_with(self.OUTPUTS, 'in1.art in2.art',
+                                   simjob_setup='/cvmfs/setup.sh',
+                                   track_parents=True)
+        pl.assert_called_once_with(self.LOG, simjob_setup='/cvmfs/setup.sh',
+                                   location='scratch', track_parents=True)
+
+    def test_log_location_follows_owner_and_outputs(self):
+        """A user's data on scratch means the log goes to scratch too —
+        the worker token has no persistent-disk log scope for users."""
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        with patch.object(runmu2e, 'push_data'), \
+             patch.object(runmu2e, 'push_logs') as pl:
+            runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                self._job())
+        self.assertEqual(pl.call_args.kwargs['location'], 'scratch')
+
+    def test_manifest_appended_after_jobsub_log_copy(self):
+        """Ordering pin for the production fix: the copied worker log
+        comes first, the manifest naming the outputs is appended after."""
+        from utils import runmu2e
+        d = self._in_tmp()
+        jsb = d / 'jsb_tmp'
+        jsb.mkdir()
+        (jsb / 'JOBSUB_LOG_FILE').write_text('worker stdout\n')
+        out_name = 'mcs.testuser.X.TestConf.00000000.art'
+        (d / out_name).write_bytes(b'x')
+        captured = io.StringIO()
+        with patch.dict(os.environ, {'JSB_TMP': str(jsb)}), \
+             patch.object(runmu2e, '_push_all'), \
+             patch('sys.stdout', captured):
+            runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                self._job())
+        text = (d / self.LOG).read_text()
+        self.assertTrue(text.startswith('worker stdout\n'), text[:80])
+        self.assertIn('mu2egrid manifest', text)
+        self.assertIn(out_name, text)
+
+        # C1: the manifest must also reach stdout — on a worker that IS
+        # $JSB_TMP/JOBSUB_LOG_FILE, which is what pushOutput's writeLog
+        # rewrites a pushOutput-bound SAM log from (see the module's
+        # verified writeLog fact), so the file append alone never ships.
+        stdout_text = captured.getvalue()
+        self.assertIn('mu2egrid manifest', stdout_text)
+        self.assertIn(out_name, stdout_text)
+
+    def test_failed_job_manifest_names_no_outputs(self):
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')
+        out_name = 'mcs.testuser.X.TestConf.00000000.art'
+        (d / out_name).write_bytes(b'x')
+        with patch.object(runmu2e, '_push_all'):
+            runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                self._job(job_failed=True))
+        text = (d / self.LOG).read_text()
+        self.assertIn('mu2egrid manifest', text)
+        # _emit_manifest's `ls -al` block (unconditional, out of this
+        # test's scope) legitimately lists every file in cwd, stray
+        # outputs included — that's a diagnostic dump, not the pushed
+        # manifest. What must be empty for a failed job is the SHA256
+        # section, whose lines are "<hex>  <file>" (two spaces); the ls
+        # line for the same file has one space before the name, so this
+        # distinguishes them.
+        self.assertNotIn(f"  {out_name}", text)
+
+    def test_manifest_step_failure_does_not_block_pushes(self):
+        """M1: an OSError out of the materialize/manifest step (e.g. an
+        ENOSPC writing the log) must not skip _push_all — the pushes are
+        the last chance to get anything registered in SAM for this job."""
+        from utils import runmu2e
+        d = self._in_tmp()
+        (d / self.LOG).write_text('log\n')  # so _emit_manifest is reached
+        with patch.object(runmu2e, '_emit_manifest',
+                          side_effect=OSError('disk full')), \
+             patch.object(runmu2e, '_push_all') as pa:
+            failed = runmu2e._finish_job(types.SimpleNamespace(dry_run=False),
+                                         self._job())
+        self.assertFalse(failed)
+        pa.assert_called_once()
+
+
+class TestEmitManifest(unittest.TestCase):
+    """C1: the manifest block _emit_manifest appends to the log file must
+    also be printed to stdout, byte-for-byte identical. On a worker,
+    stdout IS $JSB_TMP/JOBSUB_LOG_FILE, which OfflineOps pushOutput's
+    writeLog rewrites every pushOutput-bound log from (discarding the
+    file append) — the print is what actually lands the manifest in a
+    disk/scratch/tape SAM log."""
+
+    def test_printed_block_equals_appended_block(self):
+        from utils import runmu2e
+        d = tempfile.mkdtemp(prefix='emit_manifest_')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, cwd)
+
+        log = Path(d) / 'log.testuser.X.TestConf.00000000.log'
+        log.write_text('')  # starts empty: file content == appended block
+        out_name = 'mcs.testuser.X.TestConf.00000000.art'
+        (Path(d) / out_name).write_bytes(b'payload')
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            runmu2e._emit_manifest(str(log), [out_name])
+
+        self.assertEqual(captured.getvalue(), log.read_text())
+        self.assertIn('mu2egrid manifest', captured.getvalue())
+        self.assertIn('mu2egrid manifest selfcheck', captured.getvalue())
+        self.assertIn(out_name, captured.getvalue())
 
 
 class TestPushDataExcludesInputs(unittest.TestCase):
@@ -5637,7 +5910,8 @@ class TestJobsubArgvCodeTarball(unittest.TestCase):
     def test_code_tarball_does_not_displace_the_two_input_files(self):
         # Regression guard: --tar_file_name is a DIFFERENT mechanism from
         # -f dropbox://. The cnf and the ops JSON must still ship — and
-        # nothing else does: prodtools comes from cvmfs, never per job.
+        # nothing else does for a release entry: prodtools comes from
+        # cvmfs (the dev-checkout opt-in is TestDevProdtoolsTarball).
         argv = self._argv(code_tarball='/exp/build/Code.tar.bz2')
         shipped = [argv[i + 1] for i, a in enumerate(argv) if a == '-f']
         self.assertEqual(len(shipped), 2)
@@ -7319,7 +7593,17 @@ class TestRecoverLoop(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 recover.verify_row(row, sam_lister=lambda ds: [])
 
-    def test_verify_row_nonart_outputs_raise_not_complete(self):
+    def test_verify_row_nonart_outputs_report_missing(self):
+        """A non-art (.root) output stream must verify normally, not raise.
+
+        output_datasets() used to coerce every parsed name through
+        .with_extension('art'), so a .root-only cnf derived a phantom
+        '...art' dataset that never matched the real '.root' filenames;
+        build_file_maps found nothing, every index fell into
+        expected-less 'unverifiable', and verify_row raised RuntimeError
+        — this test used to pin THAT (buggy) behavior. With the real
+        extension preserved, an empty SAM listing means every index is
+        genuinely missing, not unverifiable."""
         from utils import submissions as recover
         files = [f"sim.mu2e.In.C.00000000_{i:08d}.art" for i in range(2)]
         jpars = _root_input_jobpars(files)
@@ -7331,8 +7615,9 @@ class TestRecoverLoop(unittest.TestCase):
                    'indices': [0, 1], 'entry': {}, 'attempt': 1,
                    'jobsub_id': 'x'}
             with patch.object(recover, 'sam_physical_path_or_none', return_value=tar):
-                with self.assertRaises(RuntimeError):
-                    recover.verify_row(row, sam_lister=lambda ds: [])
+                missing, partial = recover.verify_row(row, sam_lister=lambda ds: [])
+            self.assertEqual(missing, [0, 1])
+            self.assertEqual(partial, [])
         finally:
             os.unlink(tar)
 
@@ -11244,7 +11529,8 @@ class TestPushCnfTool(unittest.TestCase):
                           'outputs': [{'dataset': d} for d in datasets]}}
 
     def _push(self, before, after, *, json_path=None, desc='D', dsconf='C',
-              slice_size=500, run_as='self', confirm=False, cli=None):
+              slice_size=500, run_as='self', confirm=False, cli=None,
+              prodtools_dir=None):
         """push_cnf with the ledger faked.
 
         `before`/`after` are what _all_campaigns returns either side of
@@ -11261,7 +11547,8 @@ class TestPushCnfTool(unittest.TestCase):
                    side_effect=[before, after]):
             out = self.tools.push_cnf(
                 json=json_path or self.json_path, desc=desc, dsconf=dsconf,
-                slice_size=slice_size, run_as=run_as, confirm=confirm)
+                slice_size=slice_size, run_as=run_as, confirm=confirm,
+                prodtools_dir=prodtools_dir)
         self.last_run = run
         return out
 
@@ -11568,6 +11855,28 @@ class TestPushCnfTool(unittest.TestCase):
         self.assertEqual(
             out['datasets'],
             ['rec.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art'])
+
+    # — prodtools_dir: dev-tarball opt-in ------------------------------
+
+    def test_prodtools_dir_forwarded_for_self(self):
+        before, after = [], [self._camp(1)]
+        self._push(before, after, prodtools_dir='/exp/mu2e/app/users/u/prodtools')
+        argv = self.last_run.call_args[0][0]
+        i = argv.index('--prodtools-dir')
+        self.assertEqual(argv[i + 1], '/exp/mu2e/app/users/u/prodtools')
+
+    def test_prodtools_dir_absent_by_default(self):
+        before, after = [], [self._camp(1)]
+        self._push(before, after)
+        self.assertNotIn('--prodtools-dir', self.last_run.call_args[0][0])
+
+    def test_prodtools_dir_refused_for_mu2epro(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError):
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C', slice_size=500,
+                                    run_as='mu2epro', confirm=True,
+                                    prodtools_dir='/exp/mu2e/app/users/u/prodtools')
+        run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -12589,6 +12898,61 @@ class TestDirectDispatchFiles(unittest.TestCase):
         with self.assertRaises(SystemExit):
             runmu2e._direct_dispatch(self._args(), ops, 0)
 
+    def test_manifest_lands_in_log_materialized_from_jsb_tmp(self):
+        """Regression for the production gap: the SAM log used to be
+        created by push_logs AFTER _emit_manifest found it missing, so
+        no direct-backend art log ever carried `mu2egrid manifest`."""
+        from utils import runmu2e
+        # validate_outputs=False: read-back validation shells out to
+        # `source {simjob_setup} && ...`, and fake_pdi's simjob_setup
+        # ('/cvmfs/setup.sh') is a placeholder, not a real script — every
+        # other test in this class dodges that subprocess by never
+        # matching an output glob against a real file. This test needs a
+        # real file (to prove it lands in the manifest), so validation
+        # must be turned off explicitly; it isn't what's under test here.
+        drain = dict(self.DRAIN,
+                     outputs=[{'dataset': 'mcs.*.art', 'location': 'tape'}],
+                     validate_outputs=False)
+        out_name = 'mcs.mu2e.A.MDC2025au_best_v1_5.001202_00000001.art'
+        with tempfile.TemporaryDirectory() as d:
+            jsb = Path(d) / 'jsb_tmp'
+            jsb.mkdir()
+            (jsb / 'JOBSUB_LOG_FILE').write_text('worker stdout\n')
+            (Path(d) / out_name).write_bytes(b'x')
+            ops = {'jobs': [0], 'files': [self.FILES[0]], 'jobdesc': drain}
+            cwd = os.getcwd()
+            try:
+                os.chdir(d)
+                with patch.dict(os.environ, {'JSB_TMP': str(jsb)}):
+                    failed, calls, ffl, lfs = self._dispatch(ops, 0)
+            finally:
+                os.chdir(cwd)
+            self.assertFalse(failed)
+            log = Path(d) / 'log.mu2e.A.MDC2025au_best_v1_5.001202_00000001.log'
+            text = log.read_text()
+            self.assertTrue(text.startswith('worker stdout\n'), text[:80])
+            self.assertIn('mu2egrid manifest', text)
+            self.assertIn(out_name, text)
+
+    def test_normal_mode_routes_through_run_mu2e_job(self):
+        """_direct_dispatch only picks the runner; the mu2e runner's
+        JobRun goes straight to _finish_job."""
+        from utils import runmu2e
+        from utils.runmu2e import JobRun
+        normal = dict(self.DRAIN, njobs=10)
+        normal.pop('input_pattern')
+        job = JobRun(outputs=normal['outputs'],
+                     log_file='log.mu2e.reco.MDC2025au_best_v1_5.001202_00000000.log',
+                     job_failed=False, owner='mu2e', infiles='a.art',
+                     simjob_setup='/cvmfs/setup.sh', track_parents=True)
+        args = self._args()
+        with patch.object(runmu2e, '_run_mu2e_job', return_value=job) as rm, \
+             patch.object(runmu2e, '_finish_job', return_value=False) as fj:
+            failed = runmu2e._direct_dispatch(args, {'jobs': [0], 'jobdesc': normal}, 0)
+        self.assertFalse(failed)
+        rm.assert_called_once_with(args, normal, None, False, 0)
+        fj.assert_called_once_with(args, job)
+
 
 # ---------------------------------------------------------------------------
 # 47. Draining campaigns: pending predicate + batch gates
@@ -13607,12 +13971,16 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            with patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+            with patch.object(json2jobdef.shutil, 'which',
+                              return_value='/usr/bin/mu2e'), \
+                 patch.object(json2jobdef, '_build_job_args', return_value=[]), \
                  patch.object(json2jobdef, 'build_jobdef', return_value=None), \
                  patch.object(json2jobdef, 'get_parfile_name',
                               return_value='cnf.mu2e.PhysicalPionStops.Run1Bap.0.tar'), \
                  patch('utils.submit._resolve_ledger_db', return_value=':memory:'), \
-                 patch('utils.submit.enqueue_entry', return_value=1):
+                 patch('utils.submit.enqueue_entry', return_value=1), \
+                 patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
+                              return_value=True):
                 json2jobdef.process_single_entry(
                     dict(config), pushout=False, no_cleanup=True,
                     enqueue=True, slice_size=1000,
@@ -13652,7 +14020,9 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
 
         try:
             os.chdir(tmpdir)
-            with patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+            with patch.object(json2jobdef.shutil, 'which',
+                              return_value='/usr/bin/mu2e'), \
+                 patch.object(json2jobdef, '_build_job_args', return_value=[]), \
                  patch.object(json2jobdef, 'build_jobdef', return_value=None), \
                  patch.object(json2jobdef, 'get_parfile_name',
                               return_value=tarball), \
@@ -13663,13 +14033,17 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                  patch.object(submit, 'check_code_tarball',
                               return_value=(True, [])), \
                  patch.object(submit, '_resolve_ledger_db',
-                              return_value=db_path):
+                              return_value=db_path), \
+                 patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
+                              return_value=True):
                 # Computed under the same patches process_single_entry uses,
                 # so this is exactly what build_jobdesc produced for the
                 # run under test — not a second, differently-mocked call.
                 expected_entry = json2jobdef.build_jobdesc(dict(config))
                 # process_single_entry adds the release the campaign runs;
-                # passed explicitly so the test does not depend on cvmfs.
+                # passed explicitly so the test does not depend on cvmfs,
+                # and declared a release (is_cvmfs_prodtools_dir patched)
+                # so the fake tmp dir is not bundled as a dev checkout.
                 expected_entry['prodtools_dir'] = FAKE_PRODTOOLS_DIR
                 json2jobdef.process_single_entry(
                     dict(config), pushout=True, no_cleanup=True,
@@ -13925,6 +14299,540 @@ class TestJson2JobdefEntryValueValidation(unittest.TestCase):
                 with self.subTest(door=door.__name__, value=value):
                     with self.assertRaises((SystemExit, ValueError)):
                         door(value)
+
+
+class TestG4blEntryValidation(unittest.TestCase):
+    """g4bl entry detection and boundary validation (json2jobdef)."""
+
+    def _entry(self, **over):
+        d = {
+            'runner': 'g4bl',
+            'desc': 'G4blSmoke', 'dsconf': 'TestConf', 'owner': 'testuser',
+            'g4bl_dir': self.g4bl_dir, 'main_input': 'deck.in',
+            'events_per_job': 100, 'njobs': 2,
+            'outloc': {'nts.*.root': 'scratch'},
+        }
+        d.update(over)
+        return d
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='g4bl_test_')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.g4bl_dir = os.path.join(self.tmp, 'scripts')
+        os.makedirs(os.path.join(self.g4bl_dir, 'Geometry'))
+        Path(self.g4bl_dir, 'deck.in').write_text('# deck\n')
+        Path(self.g4bl_dir, 'Geometry', 'g.txt').write_text('geom\n')
+
+    def test_determine_job_type_g4bl(self):
+        from utils.json2jobdef import determine_job_type
+        self.assertEqual(determine_job_type(self._entry()), 'g4bl')
+
+    def test_valid_entry_passes(self):
+        from utils.json2jobdef import validate_required_fields
+        validate_required_fields(self._entry())  # must not raise
+
+    def test_missing_required_key_fails(self):
+        from utils.json2jobdef import validate_required_fields
+        for key in ('desc', 'dsconf', 'outloc', 'g4bl_dir',
+                    'main_input', 'events_per_job', 'njobs'):
+            e = self._entry()
+            del e[key]
+            with self.assertRaises(SystemExit, msg=key):
+                validate_required_fields(e)
+
+    def test_forbidden_key_fails(self):
+        from utils.json2jobdef import validate_required_fields
+        for key, val in (('fcl', 'x.fcl'), ('simjob_setup', '/cvmfs/x'),
+                         ('code', 'c.tar'), ('input_data', {'a': 'b'}),
+                         ('resampler_name', 'r'), ('pbeam', '1BB'),
+                         ('generic_tarball', True), ('input_pattern', 'p'),
+                         ('firstjob', 5), ('inloc', 'tape')):
+            with self.assertRaises(SystemExit, msg=key):
+                validate_required_fields(self._entry(**{key: val}))
+
+    def test_nonpositive_counts_fail(self):
+        from utils.json2jobdef import validate_required_fields
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(njobs=0))
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(events_per_job=-5))
+
+    def test_missing_dir_and_deck_fail(self):
+        from utils.json2jobdef import validate_required_fields
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(g4bl_dir='/nonexistent/x'))
+        with self.assertRaises(SystemExit):
+            validate_required_fields(self._entry(main_input='absent.in'))
+
+
+class TestG4blBuilder(unittest.TestCase):
+    """g4bl cnf tarball contents and jobdesc projection."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='g4bl_build_')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.g4bl_dir = os.path.join(self.tmp, 'scripts')
+        os.makedirs(os.path.join(self.g4bl_dir, 'Geometry'))
+        Path(self.g4bl_dir, 'deck.in').write_text('# deck\n')
+        Path(self.g4bl_dir, 'Geometry', 'g.txt').write_text('geom\n')
+        self.cwd = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, self.cwd)
+        self.config = {
+            'runner': 'g4bl',
+            'desc': 'G4blSmoke', 'dsconf': 'TestConf', 'owner': 'testuser',
+            'g4bl_dir': self.g4bl_dir, 'main_input': 'deck.in',
+            # inloc is FORBIDDEN on the raw entry (Task 1); it appears
+            # here because this config simulates the post-default state
+            # (process_single_entry sets inloc='none' after validation)
+            # and build_jobdesc reads config['inloc'] unconditionally.
+            'events_per_job': 100, 'njobs': 2, 'inloc': 'none',
+            'outloc': {'nts.*.root': 'scratch'},
+        }
+
+    def test_tarball_contents(self):
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        self.assertEqual(name, 'cnf.testuser.G4blSmoke.TestConf.0.tar')
+        with tarfile.open(name) as t:
+            members = set(t.getnames())
+            self.assertIn('jobpars.json', members)
+            self.assertIn('work/deck.in', members)
+            self.assertIn('work/Geometry/g.txt', members)
+            jp = json.load(t.extractfile('jobpars.json'))
+        self.assertEqual(jp, {'runner': 'g4bl', 'desc': 'G4blSmoke',
+                              'dsconf': 'TestConf', 'main_input': 'deck.in',
+                              'events_per_job': 100, 'njobs': 2,
+                              'owner': 'testuser',
+                              'tbs': {'njobs': 2,
+                                      'outfiles': {'g4bl':
+                                          'nts.owner.G4blSmoke.version.sequencer.root'}}})
+
+    def test_g4bl_params_written_to_jobpars_only_when_configured(self):
+        """`g4bl_params` rides in jobpars verbatim so the worker can
+        append them to the g4bl command line; an entry without the key
+        writes no key (test_tarball_contents pins the exact dict)."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        self.config['g4bl_params'] = {'READ_Beam_File': 1, 'Proton_Dump_kill': 0}
+        _build_g4bl_tarball(self.config)
+        with tarfile.open(get_parfile_name(self.config)) as t:
+            jp = json.load(t.extractfile('jobpars.json'))
+        self.assertEqual(jp['g4bl_params'], {'READ_Beam_File': 1, 'Proton_Dump_kill': 0})
+
+    def test_vcs_dirs_excluded_from_tarball(self):
+        """g4bl_dir is often a git checkout. tar.add used to sweep the
+        whole tree (arcname='work') with no filter, shipping .git/
+        internals into a cnf that is pushed to SAM permanently and
+        dropbox-staged to every grid job. .git/.svn/.hg must never
+        appear under work/, and the real deck must still survive."""
+        os.makedirs(os.path.join(self.g4bl_dir, '.git', 'objects'))
+        Path(self.g4bl_dir, '.git', 'objects', 'x').write_text('blob\n')
+        Path(self.g4bl_dir, '.git', 'HEAD').write_text('ref: refs/heads/main\n')
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        with tarfile.open(name) as t:
+            members = t.getnames()
+        self.assertFalse(any('.git' in m.split('/') for m in members),
+                         f"VCS members leaked into cnf: {members}")
+        self.assertIn('work/deck.in', members)
+        self.assertIn('work/Geometry/g.txt', members)
+
+    def test_readable_via_mu2ejobpars(self):
+        """Submit/verify read every cnf through Mu2eJobPars (utils.jobquery),
+        never runmu2e directly — this pins the g4bl jobpars.json shape
+        byte-for-byte against _run_g4bl_job's own output naming so
+        submit._read_cnf_facts (submit.py:495, called at --enqueue) and
+        verify_row don't crash or under-count. Before the fix, jobpars.json
+        had no tbs block and no top-level owner: sequencer() raised
+        ValueError('unsupported JSON content'), job_outputs() returned {},
+        and njobs() silently fell back to 0 (open-ended) instead of the
+        real count."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        from utils.jobquery import Mu2eJobPars
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        jp = Mu2eJobPars(name)
+        self.assertEqual(jp.njobs(), 2)
+        self.assertEqual(jp.sequencer(3), '00000003')
+        self.assertEqual(list(jp.job_outputs(0).values()),
+                         ['nts.testuser.G4blSmoke.TestConf.00000000.root'])
+        # Flat worker keys survive alongside the new tbs/owner additions.
+        self.assertEqual(jp.json_data['runner'], 'g4bl')
+        self.assertEqual(jp.json_data['main_input'], 'deck.in')
+        self.assertEqual(jp.json_data['events_per_job'], 100)
+        self.assertEqual(jp.json_data['owner'], 'testuser')
+
+    def test_recipe_identifies_g4bl_not_code_tarball(self):
+        """--recipe is the tool people point at a mystery cnf. A g4bl
+        cnf has no embedded mu2e.fcl (same symptom as a code-tarball
+        cnf), and used to print the code-tarball line verbatim —
+        actively misleading for a g4bl job, which carries no code
+        tarball at all. The recipe must identify it as g4bl instead."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        from utils.jobquery import Mu2eJobPars
+        _build_g4bl_tarball(self.config)
+        name = get_parfile_name(self.config)
+        out = Mu2eJobPars(name).recipe()
+        self.assertIn('g4bl', out)
+        self.assertNotIn('code-tarball', out)
+
+    def test_build_jobdesc_carries_runner(self):
+        from utils.json2jobdef import build_jobdesc
+        entry = build_jobdesc(self.config)
+        self.assertEqual(entry['runner'], 'g4bl')
+        self.assertEqual(entry['njobs'], 2)
+        self.assertEqual(entry['tarball'],
+                         'cnf.testuser.G4blSmoke.TestConf.0.tar')
+        self.assertEqual(entry['outputs'],
+                         [{'dataset': 'nts.*.root', 'location': 'scratch'}])
+
+    def test_extend_not_supported(self):
+        """process_single_entry refuses --extend for g4bl entries (no SAM
+        inputs to exclude): plan-mandated behavior, pinned here so a future
+        refactor of process_single_entry can't silently drop the check."""
+        from utils.json2jobdef import process_single_entry
+        config = dict(self.config)
+        del config['inloc']  # forbidden on the raw entry (Task 1)
+        with self.assertRaises(SystemExit):
+            process_single_entry(config, extend=True)
+
+
+class TestG4blVerifyRow(unittest.TestCase):
+    """verify_row on a real g4bl cnf. Before the output_datasets() fix,
+    the derived dataset was a phantom '...art' name that never matched
+    any real '.root' filename: build_file_maps's per-dataset map stayed
+    empty, every index fell into `expected`-less 'unverifiable', and
+    verify_row raised RuntimeError on every g4bl row — a g4bl campaign
+    could never verify, complete, or recover."""
+
+    def setUp(self):
+        from utils import submissions as recover
+        self.recover = recover
+        self.tmp = tempfile.mkdtemp(prefix='g4bl_verify_')
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        g4bl_dir = os.path.join(self.tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, cwd)
+        self.config = {
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 3,
+        }
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        _build_g4bl_tarball(self.config)
+        self.tarpath = os.path.join(self.tmp, get_parfile_name(self.config))
+        self.row = {'id': 1, 'tarball': get_parfile_name(self.config),
+                    'indices': [0, 1, 2], 'entry': {}, 'attempt': 1,
+                    'jobsub_id': 'x'}
+
+    def test_all_present_reports_none_missing(self):
+        from utils.jobquery import Mu2eJobPars
+        jp = Mu2eJobPars(self.tarpath)
+        self.assertEqual(jp.output_datasets(),
+                         ['nts.testuser.G4blSmoke.TestConf.root'])
+        all_files = {f for i in range(3) for f in jp.job_outputs(i).values()}
+
+        def fake_lister(ds):
+            return list(all_files)
+
+        with patch.object(self.recover, 'sam_physical_path_or_none',
+                          return_value=self.tarpath):
+            missing, partial = self.recover.verify_row(
+                self.row, sam_lister=fake_lister)
+        self.assertEqual((missing, partial), ([], []))
+
+    def test_one_absent_reports_that_index_missing(self):
+        from utils.jobquery import Mu2eJobPars
+        jp = Mu2eJobPars(self.tarpath)
+        absent = jp.job_outputs(1)['g4bl']
+
+        def fake_lister(ds):
+            return [f for i in range(3) for f in jp.job_outputs(i).values()
+                    if f != absent]
+
+        with patch.object(self.recover, 'sam_physical_path_or_none',
+                          return_value=self.tarpath):
+            missing, partial = self.recover.verify_row(
+                self.row, sam_lister=fake_lister)
+        self.assertEqual(missing, [1])
+        self.assertEqual(partial, [])
+
+
+class TestG4blPreflight(unittest.TestCase):
+    """A g4bl cnf must sail through the enqueue input gate: no tbs
+    block means no inputs to check. Pinned so a future check_inputs
+    change that assumes a mu2ejobdef shape fails HERE, not at enqueue."""
+
+    def test_check_inputs_passes_g4bl_cnf(self):
+        from utils.json2jobdef import _build_g4bl_tarball
+        from utils.check_inputs import check_inputs
+        tmp = tempfile.mkdtemp(prefix='g4bl_pre_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        g4bl_dir = os.path.join(tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        _build_g4bl_tarball({
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 10, 'njobs': 1,
+        })
+        ok, problems = check_inputs(
+            'cnf.testuser.G4blSmoke.TestConf.0.tar', 'none',
+            sam_sizes=lambda ds: {})
+        self.assertTrue(ok, problems)
+        self.assertEqual(problems, [])
+
+
+class TestG4blParamsValidation(unittest.TestCase):
+    """`g4bl_params` is validated at the entry boundary: a dict of
+    g4bl parameter names to scalars, never one of the params the worker
+    owns (First_Event, Num_Events, histoFile, viewer) — a collision
+    there would silently change every job's event range or output."""
+
+    def _config(self, params):
+        d = _mkdtemp()
+        Path(d, 'deck.in').write_text('# deck\n')
+        return {'runner': 'g4bl', 'desc': 'D', 'dsconf': 'C',
+                'g4bl_dir': d, 'main_input': 'deck.in',
+                'events_per_job': 10, 'njobs': 1,
+                'outloc': {'nts.*.root': 'scratch'}, 'g4bl_params': params}
+
+    def _refused(self, params, needle):
+        from utils.json2jobdef import _validate_g4bl_entry
+        with self.assertRaises(SystemExit) as cm:
+            _validate_g4bl_entry(self._config(params))
+        self.assertIn('g4bl_params', str(cm.exception))
+        self.assertIn(needle, str(cm.exception))
+
+    def test_valid_params_pass(self):
+        from utils.json2jobdef import _validate_g4bl_entry
+        _validate_g4bl_entry(self._config({'READ_Beam_File': 1, 'Target_Color': 'red',
+                                           'BsigmaT': 0.5}))
+
+    def test_not_a_dict_refused(self):
+        self._refused(['READ_Beam_File=1'], 'dict')
+
+    def test_reserved_worker_param_refused(self):
+        self._refused({'First_Event': 5}, 'First_Event')
+        self._refused({'histoFile': 'x.root'}, 'histoFile')
+
+    def test_bad_name_refused(self):
+        self._refused({'bad-name': 1}, 'bad-name')
+
+    def test_non_scalar_value_refused(self):
+        self._refused({'Target_Color': [1, 2]}, 'Target_Color')
+
+
+class TestG4blWorker(unittest.TestCase):
+    """Worker-side g4bl mode: jobdesc validation, command construction,
+    run mechanics with a stubbed g4bl, dispatch tail routing."""
+
+    def _jobdesc(self, **over):
+        d = {'runner': 'g4bl',
+             'tarball': 'cnf.testuser.G4blSmoke.TestConf.0.tar',
+             'outputs': [{'dataset': 'nts.*.root', 'location': 'scratch'}],
+             'njobs': 2}
+        d.update(over)
+        return d
+
+    def test_validate_jobdesc_g4bl(self):
+        from utils import runmu2e
+        self.assertEqual(runmu2e.validate_jobdesc(self._jobdesc()), 'g4bl')
+
+    def test_validate_jobdesc_g4bl_missing_field(self):
+        from utils import runmu2e
+        bad = self._jobdesc()
+        del bad['njobs']
+        with self.assertRaises(SystemExit):
+            runmu2e.validate_jobdesc(bad)
+
+    def test_g4bl_script_form(self):
+        from utils.runmu2e import _g4bl_script
+        s = _g4bl_script('deck.in', 101, 100, '/abs/nts.x.root')
+        self.assertIn('unset SPACK_ENV PYTHONHOME PYTHONPATH '
+                      'PYTHONNOUSERSITE', s)
+        self.assertIn('eval "$(spack load --sh g4beamline)"', s)
+        self.assertIn('viewer=none', s)
+        self.assertIn('First_Event=101', s)
+        self.assertIn('Num_Events=100', s)
+        self.assertIn('histoFile=/abs/nts.x.root', s)
+        self.assertNotIn('param ', s)
+
+    def test_g4bl_script_appends_entry_params_after_the_worker_ones(self):
+        """Entry `g4bl_params` become extra `key=value` CLI overrides
+        (the only form g4bl 3.08b accepts on the command line), sorted
+        for a stable command, values shell-quoted."""
+        from utils.runmu2e import _g4bl_script
+        s = _g4bl_script('deck.in', 101, 100, '/abs/nts.x.root',
+                         params={'READ_Beam_File': 1, 'Target_Color': 'a b'})
+        tail = s.split('histoFile=/abs/nts.x.root', 1)[1]
+        self.assertEqual(tail, " READ_Beam_File=1 Target_Color='a b'")
+        self.assertEqual(_g4bl_script('deck.in', 101, 100, '/abs/nts.x.root'),
+                         _g4bl_script('deck.in', 101, 100, '/abs/nts.x.root', params={}))
+
+    def _make_cnf(self, tmp, params=None):
+        g4bl_dir = os.path.join(tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        from utils.json2jobdef import _build_g4bl_tarball
+        _build_g4bl_tarball({
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 2,
+            **({'g4bl_params': params} if params else {})})
+
+    def test_run_g4bl_job_appends_jobpars_params_to_the_command(self):
+        """jobpars.g4bl_params reach the g4bl command line, after the
+        worker's own First_Event/Num_Events/histoFile."""
+        from utils import runmu2e
+        tmp = tempfile.mkdtemp(prefix='g4bl_params_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp, params={'READ_Beam_File': 1})
+        captured = {}
+
+        def fake_run(cmd, shell=False, **kw):
+            captured['script'] = cmd[2]
+            return 0
+
+        with patch.object(runmu2e, 'run', fake_run):
+            runmu2e._run_g4bl_job(self._jobdesc(), 0)
+        cmdline = captured['script'].splitlines()[-1]
+        self.assertTrue(cmdline.endswith(' READ_Beam_File=1'), cmdline)
+        self.assertLess(cmdline.index('histoFile='), cmdline.index('READ_Beam_File='))
+
+    def test_recipe_prints_g4bl_params(self):
+        from utils.jobquery import Mu2eJobPars
+        tmp = tempfile.mkdtemp(prefix='g4bl_recipe_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp, params={'READ_Beam_File': 1, 'BsigmaT': 0.5})
+        text = Mu2eJobPars('cnf.testuser.G4blSmoke.TestConf.0.tar').recipe()
+        self.assertIn('# g4bl_params: BsigmaT=0.5 READ_Beam_File=1', text)
+
+    def test_run_g4bl_job_names_and_first_event(self):
+        from utils import runmu2e
+        tmp = tempfile.mkdtemp(prefix='g4bl_run_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp)
+        captured = {}
+
+        def fake_run(cmd, shell=False, **kw):
+            captured['script'] = cmd[2]
+            return 0
+
+        with patch.object(runmu2e, 'run', fake_run):
+            job = runmu2e._run_g4bl_job(self._jobdesc(), 3)
+        # Owner comes from the cnf tarball name (Mu2eName), never a
+        # literal 'mu2e' — see the 2026-09-01 live-smoke 403 finding.
+        self.assertEqual(job.owner, 'testuser')
+        self.assertEqual(job.log_file, 'log.testuser.G4blSmoke.TestConf.00000003.log')
+        self.assertIn('histoFile=', captured['script'])
+        self.assertIn('nts.testuser.G4blSmoke.TestConf.00000003.root',
+                      captured['script'])
+        self.assertNotIn('.mu2e.', captured['script'])
+        self.assertNotIn('.mu2e.', job.log_file)
+        self.assertIn('First_Event=301', captured['script'])
+        self.assertFalse(job.job_failed)
+        self.assertEqual(job.outputs, self._jobdesc()['outputs'])
+        self.assertEqual(job.infiles, '')
+        self.assertIsNone(job.simjob_setup)
+        self.assertFalse(job.track_parents)
+
+    def test_run_g4bl_job_failure_is_reported_not_raised(self):
+        """A non-zero g4bl exit marks the JobRun failed so the tail still
+        pushes the log — it must not propagate as an exception."""
+        from utils import runmu2e
+        tmp = tempfile.mkdtemp(prefix='g4bl_fail_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        self._make_cnf(tmp)
+
+        def failing_run(cmd, shell=False, **kw):
+            raise subprocess.CalledProcessError(3, cmd, output='g4bl: boom')
+
+        with patch.object(runmu2e, 'run', failing_run):
+            job = runmu2e._run_g4bl_job(self._jobdesc(), 0)
+        self.assertTrue(job.job_failed)
+        self.assertEqual(job.log_file, 'log.testuser.G4blSmoke.TestConf.00000000.log')
+
+    def test_dispatch_g4bl_rejects_draining(self):
+        from utils import runmu2e
+        ops = {'jobdesc': self._jobdesc(), 'files': ['a.art']}
+        args = types.SimpleNamespace(dry_run=True)
+        with self.assertRaises(SystemExit):
+            runmu2e._direct_dispatch(args, ops, 0)
+
+    def _in_tmp(self):
+        """Same pattern as TestFinishJob._in_tmp: this test runs the real
+        _finish_job tail (only _push_all is stubbed), which globs cwd for
+        manifest files and calls _materialize_log — both must not touch
+        the test-process cwd or pick up a stray JSB_TMP from the real
+        environment."""
+        d = tempfile.mkdtemp(prefix='g4bl_dispatch_')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        cwd = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, cwd)
+        env = {k: v for k, v in os.environ.items() if k != 'JSB_TMP'}
+        patcher = patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return Path(d)
+
+    def test_dispatch_g4bl_dry_run_skips_pushes(self):
+        from utils import runmu2e
+        from utils.runmu2e import JobRun
+        self._in_tmp()
+        args = types.SimpleNamespace(dry_run=True)
+        jobdesc = self._jobdesc()
+        job = JobRun(outputs=jobdesc['outputs'],
+                     log_file='log.testuser.G4blSmoke.TestConf.00000000.log',
+                     job_failed=False, owner='testuser')
+        with patch.object(runmu2e, '_run_g4bl_job', return_value=job) as rj, \
+             patch.object(runmu2e, '_push_all') as push_all:
+            failed = runmu2e._direct_dispatch(args, {'jobdesc': jobdesc}, 0)
+        self.assertFalse(failed)
+        push_all.assert_not_called()
+        rj.assert_called_once_with(jobdesc, 0)
+
+
+class TestG4blPushCnfParams(unittest.TestCase):
+    """MCP push_cnf parameter selection for g4bl entries: no Musing
+    to source, so simjob_setup comes back None (falsy -> _musing_clause
+    emits no source step)."""
+
+    def test_select_push_params_g4bl(self):
+        from prodtools_mcp_write import tools
+        tmp = tempfile.mkdtemp(prefix='g4bl_push_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        cfg = os.path.join(tmp, 'g4bl.json')
+        Path(cfg).write_text(json.dumps([{
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': tmp, 'main_input': 'deck.in',
+            'events_per_job': 10, 'njobs': 1,
+            'outloc': {'nts.*.root': 'scratch'}}]))
+        setup, tarball_desc = tools._select_push_params(
+            cfg, 'G4blSmoke', 'TestConf')
+        self.assertIsNone(setup)
+        self.assertEqual(tarball_desc, 'G4blSmoke')
 
 
 class TestEnqueueDoorClosed(unittest.TestCase):
@@ -16831,6 +17739,34 @@ class TestOutputDatasetsDerivedFromTbs(unittest.TestCase):
         jp = self.Mu2eJobPars(tar)
         self.assertEqual(jp.output_datasets(), ['sim.mu2e.TestDesc.TestConf.art'])
 
+    def test_g4bl_output_dataset_not_coerced_to_art(self):
+        """A g4bl cnf's only output is a .root ntuple. output_datasets()
+        used to force every parsed name through .with_extension('art'),
+        so a g4bl cnf reported a phantom '...art' dataset that SAM never
+        holds a file under — build_file_maps then never matches the real
+        .root filenames, and verify_row raises 'no expected output
+        files' on every g4bl row forever. The dataset must come back
+        with its real extension."""
+        from utils.json2jobdef import _build_g4bl_tarball, get_parfile_name
+        tmp = tempfile.mkdtemp(prefix='g4bl_outds_')
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        g4bl_dir = os.path.join(tmp, 'scripts')
+        os.makedirs(g4bl_dir)
+        Path(g4bl_dir, 'deck.in').write_text('# deck\n')
+        cwd = os.getcwd()
+        os.chdir(tmp)
+        self.addCleanup(os.chdir, cwd)
+        config = {
+            'runner': 'g4bl', 'desc': 'G4blSmoke', 'dsconf': 'TestConf',
+            'owner': 'testuser', 'g4bl_dir': g4bl_dir,
+            'main_input': 'deck.in', 'events_per_job': 100, 'njobs': 2,
+        }
+        _build_g4bl_tarball(config)
+        name = get_parfile_name(config)
+        jp = self.Mu2eJobPars(name)
+        self.assertEqual(jp.output_datasets(),
+                         ['nts.testuser.G4blSmoke.TestConf.root'])
+
     def test_multiple_output_streams_are_all_reported(self):
         pars = _root_input_jobpars(files=['dts.mu2e.In.CampA.001430_00000000.art'])
         pars['tbs']['outfiles'] = {
@@ -16949,8 +17885,9 @@ class TestCopyToStashCliExit(unittest.TestCase):
 
 class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
     """Every grid job runs prodtools from a cvmfs release recorded on the
-    entry at enqueue. There is no second way for worker code to reach a
-    job: no dev tarball, no checkout. Each boundary fails loudly."""
+    entry at enqueue, or — explicit opt-in, TestDevProdtoolsTarball — a
+    digest-pinned checkout tarball. Nothing else, no fallback: each
+    boundary fails loudly."""
 
     def test_current_symlink_resolves_to_a_version_dir(self):
         import os, tempfile
@@ -17040,6 +17977,215 @@ class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn('is not a prodtools release on this worker', r.stderr)
 
+
+
+class TestDevProdtoolsTarball(unittest.TestCase):
+    """Opt-in second worker path, restored from 4314038^: a checkout named
+    by `--prodtools-dir` (anything outside the cvmfs release root) is
+    tarred ONCE at enqueue, content-addressed, and shipped per job via
+    -f dropbox://. The entry records the tar and its digest; every submit
+    re-hashes and refuses a mismatch. A cvmfs release entry is untouched:
+    no tar key, no MU2EGRID_PRODTOOLS_TAR, byte-identical argv."""
+
+    def _checkout(self):
+        """A fake checkout: the three worker files plus a pyc that must
+        not ship."""
+        import shutil
+        d = _mkdtemp()
+        shutil.copytree(FAKE_PRODTOOLS_DIR, d, dirs_exist_ok=True)
+        pyc = Path(d) / 'utils' / '__pycache__' / 'runmu2e.cpython-39.pyc'
+        pyc.parent.mkdir(parents=True)
+        pyc.write_bytes(b'\x00')
+        return d
+
+    def _bundled_entry(self):
+        from utils.submit import bundle_prodtools
+        tar, ref = bundle_prodtools(self._checkout(), _mkdtemp())
+        return {'tarball': 'cnf.oksuzian.Dev.C.0.tar', 'njobs': 2,
+                'inloc': 'none', 'outputs': [{'location': 'disk'}],
+                'prodtools_dir': FAKE_PRODTOOLS_DIR,
+                'prodtools_tar': tar, 'prodtools_ref': ref}
+
+    def test_bundle_is_content_addressed_and_skips_pycache(self):
+        import tarfile
+        from utils.submit import bundle_prodtools
+        from utils.job_common import sha256_file
+        checkout, dest = self._checkout(), _mkdtemp()
+        tar, ref = bundle_prodtools(checkout, dest)
+        digest, size = sha256_file(tar)
+        self.assertEqual(ref, {'sha256': digest, 'size': size,
+                               'source_path': checkout})
+        self.assertEqual(os.path.basename(tar), f'prodtools-{digest[:12]}.tar')
+        self.assertEqual(os.path.dirname(tar), dest)
+        with tarfile.open(tar) as t:
+            names = t.getnames()
+        self.assertIn('prodtools/bin/runjob.sh', names)
+        self.assertIn('prodtools/utils/runmu2e.py', names)
+        self.assertFalse([n for n in names if '__pycache__' in n or n.endswith('.pyc')])
+        # Same bytes in, same file out: a second enqueue reuses it.
+        self.assertEqual(bundle_prodtools(checkout, dest)[0], tar)
+
+    def test_release_entry_has_no_tar(self):
+        from utils.jobdesc import prodtools_tar_of
+        self.assertIsNone(prodtools_tar_of({'prodtools_dir': FAKE_PRODTOOLS_DIR}))
+
+    def test_tar_of_returns_the_verified_path(self):
+        from utils.jobdesc import prodtools_tar_of
+        entry = self._bundled_entry()
+        self.assertEqual(prodtools_tar_of(entry), entry['prodtools_tar'])
+
+    def test_tar_of_refuses_a_digest_mismatch(self):
+        from utils.jobdesc import prodtools_tar_of
+        entry = self._bundled_entry()
+        with open(entry['prodtools_tar'], 'ab') as fh:
+            fh.write(b'tampered')
+        with self.assertRaises(ValueError) as cm:
+            prodtools_tar_of(entry)
+        self.assertIn('sha256', str(cm.exception))
+
+    def test_tar_of_refuses_a_tar_without_ref_or_file(self):
+        from utils.jobdesc import prodtools_tar_of
+        entry = self._bundled_entry()
+        with self.assertRaises(ValueError) as cm:
+            prodtools_tar_of({**entry, 'prodtools_ref': None})
+        self.assertIn('prodtools_ref', str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            prodtools_tar_of({**entry, 'prodtools_tar': '/nonexistent/p.tar'})
+        self.assertIn('/nonexistent/p.tar', str(cm.exception))
+
+    def test_argv_ships_the_tar_and_names_it_instead_of_the_dir(self):
+        """Worker gets exactly one of the two env vars. The executable is
+        still the checkout's own runjob.sh (jobsub copies it into the
+        sandbox), and the cnf + ops JSON still ship beside the tar."""
+        from utils.jobsub_argv import build_jobsub_argv
+        argv = build_jobsub_argv(
+            entry={'tarball': 'cnf.oksuzian.Dev.C.0.tar', 'outputs': []},
+            jobset=[0], jobdef_path='/tmp/cnf.oksuzian.Dev.C.0.tar',
+            ops_json_path='/tmp/ops.json', submitter='me',
+            prodtools_dir='/exp/checkout/prodtools',
+            prodtools_tar='/exp/data/prodtools-tarballs/prodtools-abc123def456.tar')
+        envs = [argv[j + 1] for j, a in enumerate(argv) if a == '-e']
+        self.assertIn('MU2EGRID_PRODTOOLS_TAR=prodtools-abc123def456.tar', envs)
+        self.assertFalse([e for e in envs if e.startswith('MU2EGRID_PRODTOOLS_DIR')])
+        shipped = [argv[i + 1] for i, a in enumerate(argv) if a == '-f']
+        self.assertEqual(len(shipped), 3)
+        self.assertIn('dropbox:///exp/data/prodtools-tarballs/prodtools-abc123def456.tar', shipped)
+        self.assertEqual(argv[-1], 'file:///exp/checkout/prodtools/bin/runjob.sh')
+
+    def test_submit_passes_the_verified_tar(self):
+        from utils.submit import submit_entry, SubmitOptions
+        entry = self._bundled_entry()
+        options = SubmitOptions(ledger_db='/tmp/never.db', dry_run=True,
+                                origin='/tmp/m.json')
+        captured = {}
+        def fake_build(**kw):
+            captured.update(kw)
+            return ['--fake-argv']
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv', side_effect=fake_build):
+            submit_entry(entry, 0, options)
+        self.assertEqual(captured['prodtools_tar'], entry['prodtools_tar'])
+
+    def test_submit_refuses_a_tampered_tar_before_anything_runs(self):
+        from utils import submit
+        entry = self._bundled_entry()
+        with open(entry['prodtools_tar'], 'ab') as fh:
+            fh.write(b'x')
+        options = submit.SubmitOptions(ledger_db='/tmp/never.db', dry_run=True,
+                                       origin='/tmp/m.json')
+        with patch.object(submit, '_run_submit') as rs, \
+             patch('utils.submit._jobsub_argv.build_jobsub_argv') as bj, \
+             self.assertRaises(SystemExit) as cm:
+            submit.submit_entry(entry, 0, options)
+        self.assertIn('sha256', str(cm.exception))
+        rs.assert_not_called()
+        bj.assert_not_called()
+
+    def test_release_entry_submits_with_no_tar(self):
+        from utils.submit import submit_entry, SubmitOptions
+        entry = {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                 'prodtools_dir': FAKE_PRODTOOLS_DIR, 'njobs': 5, 'inloc': 'tape',
+                 'outputs': [{'location': 'tape'}]}
+        options = SubmitOptions(ledger_db='/tmp/never.db', dry_run=True,
+                                origin='/tmp/m.json')
+        captured = {}
+        def fake_build(**kw):
+            captured.update(kw)
+            return ['--fake-argv']
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv', side_effect=fake_build):
+            submit_entry(entry, 0, options)
+        self.assertIsNone(captured['prodtools_tar'])
+
+    def test_enqueue_keys_for_a_cvmfs_release_are_just_the_dir(self):
+        from utils.json2jobdef import prodtools_entry_keys
+        d = '/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/v3.3.1'
+        self.assertEqual(prodtools_entry_keys(d, user='oksuzian'),
+                         {'prodtools_dir': d})
+
+    def test_enqueue_keys_for_a_checkout_bundle_it(self):
+        from utils import json2jobdef
+        checkout = self._checkout()
+        with patch.object(json2jobdef, 'bundle_prodtools',
+                          return_value=('/data/prodtools-aaaaaaaaaaaa.tar',
+                                        {'sha256': 'a' * 64, 'size': 1,
+                                         'source_path': checkout})) as bp:
+            keys = json2jobdef.prodtools_entry_keys(checkout, user='oksuzian')
+        bp.assert_called_once()
+        self.assertEqual(bp.call_args[0][0], checkout)
+        self.assertEqual(bp.call_args[0][1],
+                         '/exp/mu2e/data/users/oksuzian/prodtools/prodtools-tarballs')
+        self.assertEqual(keys, {'prodtools_dir': checkout,
+                                'prodtools_tar': '/data/prodtools-aaaaaaaaaaaa.tar',
+                                'prodtools_ref': {'sha256': 'a' * 64, 'size': 1,
+                                                  'source_path': checkout}})
+
+    def test_enqueue_refuses_a_checkout_for_mu2epro(self):
+        """Production runs a release only: the provenance rule from
+        4314038 still binds the production account."""
+        from utils.json2jobdef import prodtools_entry_keys
+        with self.assertRaises(SystemExit) as cm:
+            prodtools_entry_keys(self._checkout(), user='mu2epro')
+        self.assertIn('mu2epro', str(cm.exception))
+        self.assertIn('cvmfs', str(cm.exception))
+
+    def _runjob(self, env_extra):
+        import subprocess
+        script = os.path.join(os.path.dirname(__file__), '..', 'bin', 'runjob.sh')
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('MU2EGRID_PRODTOOLS_DIR', 'MU2EGRID_PRODTOOLS_TAR')}
+        env.update(env_extra)
+        return subprocess.run(['bash', script], env=env, capture_output=True, text=True)
+
+    def test_runjob_sh_refuses_both_env_vars(self):
+        r = self._runjob({'MU2EGRID_PRODTOOLS_DIR': FAKE_PRODTOOLS_DIR,
+                          'MU2EGRID_PRODTOOLS_TAR': 'prodtools-x.tar'})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('both', r.stderr)
+
+    def test_runjob_sh_fails_when_the_shipped_tar_is_missing(self):
+        r = self._runjob({'MU2EGRID_PRODTOOLS_TAR': 'prodtools-x.tar',
+                          'CONDOR_DIR_INPUT': _mkdtemp(),
+                          '_CONDOR_SCRATCH_DIR': _mkdtemp()})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('ERROR: tar xf', r.stderr)
+        self.assertIn('prodtools-x.tar failed', r.stderr)
+        self.assertNotIn('is not a prodtools release on this worker', r.stderr)
+
+    def test_runjob_sh_extracts_the_tar_and_runs_from_scratch_dir(self):
+        """Extraction proven without reaching cvmfs: a tar lacking
+        utils/runmu2e.py trips the release check AT the extracted path."""
+        import tarfile
+        inp, scratch = _mkdtemp(), _mkdtemp()
+        src = _mkdtemp()
+        (Path(src) / 'prodtools' / 'bin').mkdir(parents=True)
+        (Path(src) / 'prodtools' / 'bin' / 'setup.sh').write_text('# x\n')
+        with tarfile.open(os.path.join(inp, 'prodtools-x.tar'), 'w') as t:
+            t.add(os.path.join(src, 'prodtools'), arcname='prodtools')
+        r = self._runjob({'MU2EGRID_PRODTOOLS_TAR': 'prodtools-x.tar',
+                          'CONDOR_DIR_INPUT': inp, '_CONDOR_SCRATCH_DIR': scratch})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f'{scratch}/prodtools is not a prodtools release on this worker',
+                      r.stderr)
+        self.assertTrue(os.path.isfile(os.path.join(scratch, 'prodtools', 'bin', 'setup.sh')))
 
 
 class TestReadBackValidation(unittest.TestCase):

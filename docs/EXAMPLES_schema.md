@@ -64,6 +64,22 @@ When regenerating, read in this order:
    `--jobdefs` flag: `json2jobdef` writes no file recording the
    campaign at all.
 
+   **`--prodtools-dir` (requires `--enqueue`)** — which prodtools the
+   campaign's workers run, recorded on the entry as `prodtools_dir`.
+   Default: `/cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current`,
+   resolved to its concrete version dir. A path OUTSIDE that cvmfs root
+   is a dev **checkout** (explicit opt-in, never a fallback): its
+   `bin/` + `utils/` are tarred once at enqueue into
+   `/exp/mu2e/data/users/$USER/prodtools/prodtools-tarballs/prodtools-<sha12>.tar`,
+   the digest recorded as `prodtools_ref`, and the tar shipped to every
+   job via `-f dropbox://` (`MU2EGRID_PRODTOOLS_TAR` replaces
+   `MU2EGRID_PRODTOOLS_DIR`; `runjob.sh` extracts it under
+   `$_CONDOR_SCRATCH_DIR`). Every later submit — slice, direct, recovery
+   — re-hashes the tar and refuses a mismatch. Refused for `mu2epro`:
+   production runs a published release only. Show the canonical dev
+   smoke: `json2jobdef --json data/g4bl/g4bl.json --desc X --dsconf Y --prod
+   --enqueue --slice-size N --prodtools-dir $PWD` run as yourself.
+
    **Code-tarball builds (`code` vs `simjob_setup`)** — a JSON config
    entry's top-level `simjob_setup` (a `/cvmfs` Musing `setup.sh`) and
    `code` (an absolute path to a `muse tarball` `Code.tar.bz2`) are
@@ -105,6 +121,48 @@ When regenerating, read in this order:
    an entry-level override cannot suppress an include, so state the
    keys inline until the FCL ships.
 
+   **g4bl entries (`"runner": "g4bl"`)** — g4bl (Geant4 Beamline) is a
+   direct-backend entry type independent of the Offline chain: no fcl,
+   no Musing, no SAM inputs. Cover the JSON keys: `runner` (must be the
+   literal string `"g4bl"`), `g4bl_dir` (local directory holding the
+   deck and its support files — copied wholesale into the cnf's
+   `work/`; must exist), `main_input` (deck filename relative to
+   `g4bl_dir`; must exist inside it), `events_per_job` and `njobs`
+   (positive integers), `outloc` (the standard dataset-glob ->
+   location map, e.g. `{"nts.*.root": "scratch"}`), and the optional
+   `g4bl_params` (dict of g4bl parameter name -> string or number; each
+   pair is appended to the g4bl command line as `key=value`, overriding
+   the deck's `param -unset` defaults, so e.g. `{"READ_Beam_File": 1}`
+   selects a deck mode without editing the `.in`; names must be
+   identifiers, values never bool, and `First_Event`, `Num_Events`,
+   `histoFile`, `viewer` are the worker's own and are refused).
+   `jobquery --recipe` prints them. `desc`, `dsconf`,
+   and `owner` are the same top-level keys every entry uses. Forbidden
+   alongside `runner: "g4bl"`: `fcl`, `simjob_setup`, `code`,
+   `input_data`, `resampler_name`, `pbeam`, `generic_tarball`,
+   `input_pattern`, `firstjob`, `inloc` — any of these is a validation
+   error, not a silently-ignored key. `json2jobdef` packs a
+   self-describing cnf (`work/` + `jobpars.json`) instead of calling
+   `mu2ejobdef`; a bare `muse setup ops` env is enough to build one — no
+   SimJob Musing needs to be sourced. Canonical invocation:
+
+   The checked-in config is `data/g4bl/g4bl.json` (one `G4blSmoke`
+   entry; bump `dsconf` per campaign — a dsconf is used once).
+
+   ```bash
+   json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005
+   json2jobdef --json data/g4bl/g4bl.json --desc G4blSmoke --dsconf MCPTest005 \
+               --prod --enqueue --slice-size 100
+   ```
+
+   Output/log names are owner-aware
+   (`nts.<owner>.<desc>.<dsconf>.<seq>.root`), where `<owner>` is
+   parsed from the cnf tarball name — never a literal `mu2e`. Note that
+   grid execution needs the g4bl worker code, which is in prodtools
+   `>= v3.3.1` on cvmfs; before that release lands, a self-owned smoke
+   can pin the checkout with `--prodtools-dir $PWD` (dev tarball, see
+   the `--prodtools-dir` paragraph above).
+
 4. **Random sampling in input data** — the `{"count": N, "random": true}`
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
@@ -134,6 +192,19 @@ When regenerating, read in this order:
    on a failed job means `--tar_file_name` never reached the worker, and
    `bin/runjob.sh`'s diagnostic echo block reports it for exactly that
    reason.
+
+   Say that every runner (mu2e and g4bl) ends in the same push tail: the
+   SAM-named log is created from `$JSB_TMP/JOBSUB_LOG_FILE`, then the
+   SHA256 `mu2egrid manifest` block is printed into the worker log
+   (which OfflineOps pushOutput's `writeLog` copies into the SAM log,
+   since `writeLog` rebuilds every pushOutput-bound log from that same
+   jobsub log and would otherwise discard a plain file append) and also
+   appended to the file directly, which is what carries it on the
+   `outstage` path (ifdh copy, no pushOutput). Then data is pushed on
+   success and the log always. Note that direct-backend art logs before
+   prodtools v3.3.2 carry NO manifest (the log was created after the
+   manifest step — fixed 2026-09), and that a g4bl SAM log is the full
+   worker log, not just g4bl's own output.
 8. **Sequential vs. pseudo-random auxiliary input selection** — the
    `tbs.sequential_aux` flag.
 9. **FCL overrides** — `fcl_overrides` dict, how template + `--embed`
@@ -352,10 +423,13 @@ reading the code:
   2026-08 (legacy stages recover from the `pre-poms-removal` git tag).
 - `direct_input` entries are not index-submittable — they run as
   draining batches (`submissions resubmit ROW_ID --files LIST.txt`). The
-  `template` and `g4bl` runner modes were deleted with the POMS backend
-  (2026-08, tag `pre-poms-removal`); g4bl and HPC submission go through
-  the upstream `mu2ejobsub`/`mu2eg4bl` CLIs, which never touch the
-  submission ledger.
+  `template` runner mode was deleted with the POMS backend (2026-08, tag
+  `pre-poms-removal`). The POMS-era `g4bl` runner was deleted then too,
+  but g4bl came back 2026-09 as a first-class direct-backend entry type
+  (`"runner": "g4bl"`, section 3) — fully ledger-tracked. The upstream
+  `mu2eg4bl` CLI remains only for one-off beamline studies that should
+  stay out of SAM and the ledger; HPC submission still goes through the
+  upstream `mu2ejobsub`.
 - `json2jobdef` writes NO file recording the campaign and has no
   `--jobdefs` flag. Never show one, and never show
   `/exp/mu2e/app/users/mu2epro/production_manager/{poms_map,direct_maps}/`

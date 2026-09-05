@@ -6,8 +6,10 @@ Builds the `jobsub_submit` argv directly and ships prodtools as a
 the entry's cvmfs prodtools release (`prodtools_dir`, recorded at
 enqueue). Worker bootstraps that release's `bin/runjob.sh` -> `utils/runmu2e.py`
 direct mode -> per-job pushOutput. The Phase-1 mu2ejobsub backend was
-retired 2026-07-19: template/direct_input/g4bl entries and HPC
-submission run via the upstream mu2ejobsub/mu2eg4bl CLIs, never here.
+retired 2026-07-19. template entries died with it; direct_input entries
+run as ledger-tracked draining batches, and g4bl came back 2026-09 as a
+direct-backend entry type — both submit through here. Only HPC
+submission still goes via the upstream mu2ejobsub CLI.
 
 Plans:
 - wiki/pages/2026-04-29-remove-poms-from-submit-loop.md (Phase 1, POMS removal)
@@ -22,6 +24,8 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tarfile
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -30,9 +34,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
-                              expected_outputs_for)
+                              expected_outputs_for, sha256_file)
 from utils.jobdesc import (ENTRY_VALUE_KEYS, prodtools_dir_of,
-                           tarball_of, outputs_of, njobs_of,
+                           prodtools_tar_of, tarball_of, outputs_of, njobs_of,
                            inloc_of, firstjob_of, validate_window,
                            resources_of, is_draining, validate_entry_value,
                            OUTSTAGE_LOCATION, code_of)
@@ -416,6 +420,7 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     _validate_entry_values(entry)
     try:
         prodtools_dir_of(entry)
+        prodtools_tar_of(entry)
     except ValueError as e:
         sys.exit(f"json2jobdef: {e}")
     _refuse_outstage_campaign(entry)
@@ -488,6 +493,34 @@ def _create_campaign(ledger_db, entry, snap, slice_size, provenance):
             slice_size=slice_size, origin=provenance)
     except (ValueError, sqlite3.Error) as e:
         sys.exit(f"json2jobdef: {e}")
+
+
+def bundle_prodtools(checkout, dest_dir):
+    """Tar `bin/` + `utils/` of a prodtools checkout into a
+    content-addressed `<dest_dir>/prodtools-<sha12>.tar`, worker layout
+    `prodtools/{bin,utils}` (what runjob.sh extracts under
+    $_CONDOR_SCRATCH_DIR). Returns (tar_path, {'sha256', 'size',
+    'source_path'}) — the ref the entry records and prodtools_tar_of
+    re-checks at every submit.
+
+    Restored from 4314038^ without its mtime skip: the digest, not a
+    timestamp, decides whether a tar is reused, so the same checkout
+    bytes always map to the same file and a changed checkout to a new one.
+    """
+    checkout = os.path.abspath(checkout)
+    os.makedirs(dest_dir, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='prodtools-', suffix='.part', dir=dest_dir)
+    os.close(fd)
+    with tarfile.open(tmp, 'w') as tar:
+        for sub in ('bin', 'utils'):
+            for f in sorted(Path(checkout, sub).rglob('*')):
+                if not f.is_file() or '__pycache__' in f.parts or f.suffix == '.pyc':
+                    continue
+                tar.add(str(f), arcname=str(Path('prodtools') / f.relative_to(checkout)))
+    digest, size = sha256_file(tmp)
+    out = os.path.join(dest_dir, f'prodtools-{digest[:12]}.tar')
+    os.replace(tmp, out)
+    return out, {'sha256': digest, 'size': size, 'source_path': checkout}
 
 
 def _read_cnf_facts(tarball_path):
@@ -640,6 +673,7 @@ def submit_entry(entry, idx, options):
     # prodtools_dir_of's message carries the set-entry fix.
     try:
         prodtools_dir = prodtools_dir_of(entry)
+        prodtools_tar = prodtools_tar_of(entry)
     except ValueError as e:
         sys.exit(f"submit: {e}")
 
@@ -740,13 +774,17 @@ def submit_entry(entry, idx, options):
     submitter = getpass.getuser()
     # Token scopes for direct-mode pushOutput (CB1):
     #   - per data output: /mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>
-    #   - per log: same scheme with tier=log, but logs go to persistent disk
-    #     regardless of data location (log_storage_location), so a tape
-    #     campaign needs BOTH a tape data scope and a disk log scope.
+    #   - per log: same scheme with tier=log. Production logs go to
+    #     persistent disk regardless of data location, so a tape campaign
+    #     needs BOTH a tape data scope and a disk log scope; user-owned
+    #     logs go to scratch (user tokens have no persistent/datasets
+    #     scope) — log_storage_location owns the rule, keyed on the
+    #     tarball's owner field.
     extra_scopes = list(_jobsub_argv.output_storage_dirs(
         output_filenames, outputs_of(entry)))
     if output_filenames:
-        log_location = log_storage_location(entry)
+        log_location = log_storage_location(
+            entry, owner=Mu2eName(entry['tarball']).owner)
         # A cnf output that does not parse is a broken cnf: a silently
         # skipped log scope surfaces as a 403 on the worker's log push.
         first_out = Mu2eName.parse(output_filenames[0])
@@ -762,6 +800,7 @@ def submit_entry(entry, idx, options):
         jobdef_path=str(tarball_path),
         ops_json_path=str(ops_path),
         prodtools_dir=prodtools_dir,
+        prodtools_tar=prodtools_tar,
         submitter=submitter,
         extra_storage_modify=extra_scopes,
         role=options.role,
