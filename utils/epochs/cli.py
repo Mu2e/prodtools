@@ -287,10 +287,21 @@ def cmd_members(args, source):
 
 
 def cmd_gaps(args, source):
+    """Exit 1 when any PRINTED row is `stale` (ADR 0006): the newest name
+    must be safe to use, so a remade parent obligates the downstream
+    remake before the round is complete. `missing` rows are work not yet
+    done, not a violation, and do not fail. The verdict follows the rows
+    the caller asked about — `--epoch X` judges X alone."""
     cat = _catalog(args, source)
     rows = [r for r in gaps(cat) if _keep(args, parse_dsconf(r['epoch']).family, r['epoch'])]
     _emit(rows, args.json, lambda rs: [f"{r['kind']:<8} {r['epoch']:<10} {r['tier']:<4} {r['desc']:<40} {r['note']}" for r in rs])
     _report_noise(cat, source)
+    stale = [r for r in rows if r['kind'] == 'stale']
+    if stale:
+        print(f'epochs: {len(stale)} stale member(s) in a current epoch: the newest name '
+              f'must be safe to use, so the remake is owed before the round is complete '
+              f'(ADR 0006)', file=sys.stderr)
+        return 1
     return 0
 
 

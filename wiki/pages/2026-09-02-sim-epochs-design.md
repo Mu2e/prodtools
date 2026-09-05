@@ -2,7 +2,7 @@
 title: Sim epochs — design proposal (derive, don't curate)
 tags: [decision, sim-epochs, catalog, retirement, mcp, metacat, provenance]
 sources: [slack-dm-ray-2026-07-30, slack-dm-ray-2026-09-02, slack-groupdm-sophie-2026-07-13, sim-epochs-demo-mcp-2026-02-19]
-updated: 2026-09-02
+updated: 2026-09-05
 ---
 
 # Sim epochs — design proposal
@@ -668,3 +668,29 @@ Note on ADR 0003: the declared-parent route is sparse but **not** empty
 (12 of 762). `runmu2e.py` does not append the cnf to `parents_list.txt`,
 so it does not fire for every new output; where it fires, parentage was
 declared by some other path.
+
+## 20. Rule: the newest name is safe to use (decided 2026-09-05)
+
+Yuri's reaction to the `latestDatasets` comparison ("newest name is not
+safe to use") was: it should be. Make it a rule. ADR 0006.
+
+The catalog already ranked the newest name first — `stale` has always
+meant "still the dataset to run on, a remake is owed", not "do not
+use". What was missing was the obligation. The rule: **a remade parent
+obligates remaking every downstream tier that existed for that
+description, before the round is complete.** A stale member in a
+current epoch is a violation.
+
+Where it bites: `bin/epochs gaps` exits 1 when any printed row is
+`stale`. `missing` rows do not fail (work not yet done, not a broken
+promise). The verdict follows the printed rows, so `gaps --epoch X`
+judges X alone; a frozen epoch emits no gap rows and is outside the
+rule. `members` is unchanged — it answers "which one do I use", and the
+answer is still the newest name.
+
+Two stronger forms were offered and not taken: gating
+`json2jobdef --enqueue` on the input being `current` (deferred —
+touches the production path, needs a scoped catalog walk at enqueue
+time), and a naming rule that encodes the parent's letters in every
+downstream dsconf (rejected — a name that sorts newest still remakes
+nothing, and the ntuple `MDC2025-NNN` series would change convention).

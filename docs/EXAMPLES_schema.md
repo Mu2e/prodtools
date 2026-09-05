@@ -230,7 +230,12 @@ When regenerating, read in this order:
       every dig letter family that has no epoch file yet, and refuses
       to run without `--family`; `members [--tier T] [--status S]`
       lists members, optionally filtered; `gaps` lists an expected tier
-      with no member, plus every stale member; `consistency` reports
+      with no member, plus every stale member, and EXITS 1 when any
+      printed row is `stale` (ADR 0006: the newest name must be safe to
+      use, so a remade parent obligates the downstream remake before
+      the round is complete — `missing` rows are work not yet done and
+      do not fail; the verdict follows the printed rows, so `--epoch X`
+      judges X alone); `consistency` reports
       the generation spread per tier, e.g. how many descs a musing or
       Offline version reaches, the report Ray asked for — say that a
       generation is read out of the cnf jobdef tarball and is therefore

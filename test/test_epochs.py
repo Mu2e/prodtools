@@ -1590,6 +1590,78 @@ def _run(argv, source, epochs_dir, tty=False):
     return rc, out.getvalue(), err.getvalue()
 
 
+class TestGapsRule(unittest.TestCase):
+    """ADR 0006: the newest name must be safe to use. A stale member in a
+    current epoch is a rule violation, and `gaps` says so with exit 1."""
+
+    def setUp(self):
+        self.d = _tmpdir()
+        for name in ('MDC2025au', 'MDC2025an'):
+            write_epoch_file(self.d, propose_epoch(name + '_best_v1_0'))
+
+    def _stale_graph(self):
+        # re-reco'd mcs at -001 with no nts yet: both nts become stale
+        g = _small_graph()
+        g[f'dig.mu2e.CeEndpointOnSpill.{AU}.art']['children'].append(
+            f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art')
+        g[f'mcs.mu2e.CeEndpointOnSpill.{AU}-001.art'] = {'n': 100, 'children': []}
+        return g
+
+    def test_stale_member_in_a_current_epoch_exits_1(self):
+        rc, out, err = _run(['gaps'], FakeSource(self._stale_graph()), self.d)
+        self.assertEqual(rc, 1, err)
+        self.assertIn('stale', out)
+        self.assertIn('ADR 0006', err)
+        self.assertIn('newest name', err)
+
+    def test_json_output_carries_the_same_verdict(self):
+        rc, out, err = _run(['gaps', '--json'], FakeSource(self._stale_graph()), self.d)
+        self.assertEqual(rc, 1)
+        rows = json.loads(out)
+        self.assertTrue([r for r in rows if r['kind'] == 'stale'])
+
+    def test_missing_tier_alone_is_not_a_violation(self):
+        # a dig with no mcs yet is work not done, not a broken promise
+        g = _small_graph()
+        g[f'dig.mu2e.DIOtail.{AU}.art'] = {'n': 10, 'children': []}
+        rc, out, err = _run(['gaps'], FakeSource(g), self.d)
+        self.assertEqual(rc, 0, err)
+        self.assertIn('missing', out)
+        self.assertNotIn('ADR 0006', err)
+
+    def test_no_gaps_at_all_exits_0(self):
+        rc, out, err = _run(['gaps'], FakeSource(_small_graph()), self.d)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, '')
+
+    def test_verdict_follows_the_printed_rows(self):
+        # --epoch X judges X alone: the stale nts sit in MDC2025au
+        src = FakeSource(self._stale_graph())
+        rc, out, _ = _run(['gaps', '--epoch', 'MDC2025an'], src, self.d)
+        self.assertEqual(rc, 0)
+        self.assertNotIn('stale', out)
+        rc, out, _ = _run(['gaps', '--epoch', 'MDC2025au'], src, self.d)
+        self.assertEqual(rc, 1)
+        self.assertIn('stale', out)
+
+    def test_frozen_epoch_is_outside_the_rule(self):
+        # frozen = a hold on every member, nothing expected to change, no
+        # gap report -- so nothing to fail on either
+        d = _tmpdir()
+        au = propose_epoch('MDC2025au_best_v1_0'); au['status'] = 'frozen'
+        write_epoch_file(d, au)
+        write_epoch_file(d, propose_epoch('MDC2025an_best_v1_0'))
+        rc, out, err = _run(['gaps'], FakeSource(self._stale_graph()), d)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn('stale', out)
+
+    def test_members_does_not_fail_on_stale(self):
+        # the rule bites on gaps only; members answers "which one do I use"
+        rc, out, err = _run(['members', '--status', 'stale'], FakeSource(self._stale_graph()), self.d)
+        self.assertEqual(rc, 0, err)
+        self.assertIn('stale', out)
+
+
 class TestProgress(unittest.TestCase):
     def _progress(self, interval=0.0):
         stream = io.StringIO()

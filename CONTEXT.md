@@ -101,6 +101,9 @@ retirement list is derived from it, not the other way round.
 
 **Stale**: newest among its siblings, but its parent has moved on. Still
 the dataset to run on; a remake is owed. Never a retirement candidate.
+In a **current** Epoch a stale member is a rule violation, not a state to
+live with: the newest name must be safe to use, so the remake is owed
+before the round is complete (ADR 0006).
 _Avoid_: outdated, pending.
 
 **Superseded**: a newer sibling exists. The only retirement candidate.
