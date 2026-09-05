@@ -21,7 +21,7 @@ it, and a beam-file builder for the ntuples a run produces.
 
 ## Status (2026-09-04)
 
-Implemented on branch `v1`, 51 commits, 221 tests. Seven MCP tools:
+Implemented on branch `v1`, 53 commits, 222 tests. Seven MCP tools:
 `run_beamline`, `make_recoveries`, `beamline_status`, `list_beamline_runs`,
 `beamline_outputs`, `make_beamfile`, `get_server_info`. Module map and
 diagrams live in the repo at `docs/architecture.md`; the domain vocabulary
@@ -48,6 +48,17 @@ and re-homed three rules:
   `label` (files and SAM artifact) distinct from `flavor` (cuts).
 - `tests/test_bridge_contract.py` binds every bridge call to the real
   prodtools signatures when `BEAMKIT_PRODTOOLS_ROOT` names a checkout.
+
+A simplify pass the same day (`dcca7da`, `2226e6b`) took src from 1314 to
+1231 lines and tests from 1907 to 1806 without dropping behaviour: one
+`BeamkitError` base replaces thirteen catch-and-rewrap blocks; `server.py`
+registers the `tools.py` functions directly (FastMCP builds the schema from
+the annotations, so every tool parameter is annotated and `run_as` is
+required on the writing tools), which retired a 148-line AST test; the
+record lost `sweep_id`, `beamfile_in` and `prodtools_datasets`; the contract
+probe now pins the three facts beamkit copies from prodtools (worker g4bl
+params, outloc vocabulary, dot-name grammar). Left in place on purpose: the
+`publish=True` path (~100 lines) that waits on a prodtools `push_file`.
 
 One prerequisite is still unbuilt: **prodtools has no `push_file`**, so
 `make_beamfile(publish=True)` is refused up front by
