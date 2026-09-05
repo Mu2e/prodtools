@@ -87,3 +87,105 @@ The only output location that declares nothing today is `outstage`.
 A node a chain map names but does not submit. It exists so other nodes
 can depend on something the chain did not produce — a pre-existing
 dataset, or work submitted by hand.
+
+## Dataset status
+
+The derived standing of one dataset relative to its siblings:
+**current**, **stale** or **superseded**. Status is a property of a
+dataset, never of a group of datasets; it is computed from what exists,
+not curated, and it answers exactly one question: "should new work use
+this dataset". It is the primary answer the catalog gives, and every
+retirement list is derived from it, not the other way round.
+
+**Current**: newest among its siblings, and its parent is current.
+
+**Stale**: newest among its siblings, but its parent has moved on. Still
+the dataset to run on; a remake is owed. Never a retirement candidate.
+_Avoid_: outdated, pending.
+
+**Superseded**: a newer sibling exists. The only retirement candidate.
+_Avoid_: old, obsolete, "not the latest".
+
+## Hold
+
+A human-placed protection against deletion, on one dataset or on a whole
+Epoch, independent of status. A held dataset can be superseded for new
+work and still undeletable (a published paper's reference reco). Holds
+answer "may this be deleted"; status answers "should I use this". The
+two are never folded into one label.
+_Avoid_: frozen (as a dataset status), pinned, locked.
+
+## Epoch
+
+A named set of simulation datasets that share one truth content and are
+retired together. Epochs never overlap in membership; an Epoch is
+retirable when none of its members is current or stale. An Epoch is one digitization campaign, named by its
+campaign letters (`MDC2025au`), identified by its **Roots** and carrying
+a human-assigned standing: `current` (being worked on), `frozen` (a Hold
+on every member, nothing expected to change), or `retired` (every
+member is a deletion candidate); everything else about it is derived. Re-reconstructing or re-ntupling never starts
+a new Epoch; re-digitizing on new geometry, conditions or code does.
+_Avoid_: generation, version, campaign, "the latest datasets".
+
+## Root
+
+A dataset pattern, by convention at the `dig` tier with the conditions
+version wildcarded, that a human writes to define an Epoch. A dataset
+matching a Root belongs to that Epoch; so does everything downstream of
+it by parentage. Roots are the only curated part of an Epoch.
+
+## Input (of an Epoch)
+
+A dataset upstream of a Root — `dts`, stop and pileup catalogues. Inputs
+are recorded for provenance and shared across Epochs; they are not
+members and do not take an Epoch's standing. An Input is retirable when
+nothing current or stale descends from it and it is not held.
+
+## Family
+
+A simulation line whose datasets compete for "current": the leading
+token of the dsconf, `MDC2025`, `MDC2020`, `Run1B`. Status is decided
+within a Family and across its Epochs; datasets in different Families
+never supersede each other.
+
+## Sibling
+
+Two datasets in the same Family with the same tier, physics content and
+purpose, differing only in dsconf. Siblings may sit in different
+Epochs. Among Siblings exactly one is **current** or **stale**; the
+rest are **superseded**. Datasets with different parents can still be
+Siblings: a remade parent is the usual reason a Sibling exists.
+
+## Gap
+
+An expected dataset that does not exist: a physics content that reached
+`dig` in an Epoch but has no `mcs` or no `nts`, or a **stale** member
+whose remake has not landed. Every dig content is expected at every
+downstream tier unless a person has said otherwise, with a reason.
+
+## Generation
+
+The code and conditions that produced a dataset: musing and version,
+Offline version, fcl and its named settings (DbService version,
+geometry, field). Read from the dataset's cnf, never assigned. Two
+Siblings differ by Generation; two Epochs differ by truth content.
+_Avoid_: version (of a dataset), build, release (alone).
+
+## Relationships (sim epochs)
+
+- A **Family** contains many **Epochs**; an **Epoch** is one digitization campaign.
+- An **Epoch** has one or more **Roots**; every dataset downstream of a Root by parentage is a member of that Epoch and of no other.
+- **Inputs** sit above the Roots and are shared across Epochs.
+- **Siblings** are compared within a Family, across its Epochs; exactly one is current or stale.
+- **Status** is derived per dataset; a **Hold** is placed by a person and never changes status.
+- A **Gap** is an expected member that does not exist, or a stale member.
+- Every member has a **Generation**, read from its cnf.
+
+## Example dialogue (sim epochs)
+
+> **Dev:** "We re-ntupled twenty-one `MDC2025au` datasets. Is that a new Epoch?"
+> **Domain expert:** "No. Same digs, same truth. The new ntuples are Siblings of the old ones, so they become current and the old ones superseded. The Epoch is untouched."
+> **Dev:** "And the ntuples we have not remade yet, whose mcs was re-reco'd last month?"
+> **Domain expert:** "Those are stale: still the file to run on, a remake owed, and never on the delete list. They show up as Gaps."
+> **Dev:** "The reco in the 2025 paper is superseded now. Delete it?"
+> **Domain expert:** "It is superseded for new work, and it carries a Hold. Both are true; the Hold keeps it off the list."
