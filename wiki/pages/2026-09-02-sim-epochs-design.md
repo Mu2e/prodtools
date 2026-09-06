@@ -694,3 +694,32 @@ touches the production path, needs a scoped catalog walk at enqueue
 time), and a naming rule that encodes the parent's letters in every
 downstream dsconf (rejected — a name that sorts newest still remakes
 nothing, and the ntuple `MDC2025-NNN` series would change convention).
+
+## 21. Standalone spike: epochs runs without prodtools (2026-09-05)
+
+Question: does sim-epochs need prodtools? Throwaway copy at
+`claude-scratch/diag/sim-epochs-standalone/` (not committed, delete at
+will): `utils/epochs/` copied to `sim_epochs/`, the four prodtools
+imports (`Mu2eName`, `Mu2eJobPars`, four `samweb_wrapper` calls,
+`path_from_sam_location`) replaced by one 126-line `sim_epochs/mu2e.py`
+— a 5-or-6-field dot-name parser, a tarball reader for `jobpars.json`
+and `mu2e.fcl` with `setup()`, the four SAM calls over `samweb_client`,
+and the location-to-path rule. `cli.py`'s repo root went from three
+`dirname`s to two (the review's I4, confirmed). Tests needed only
+import and path rewrites.
+
+Result: 165/165 tests; `members --family Run1B --status current`,
+`consistency --family Run1B` and `lookup` byte-identical on stdout and
+stderr against the prodtools build, on production SAM. The one thing the
+first shim missed, `Mu2eJobPars.setup()`, the generation tests caught —
+the suite is a real guard for the boundary.
+
+What a standalone still needs at runtime: a Mu2e node with
+`muse setup ops` for `samweb_client` (not on PyPI). What it duplicates:
+~20 lines of name grammar and ~30 lines of SAM wrappers, the fork ADR
+0004 objected to. That is the whole cost; the earlier estimate of ~300
+vendored lines assumed copying `Mu2eName` and `Mu2eJobPars` wholesale
+(~470 lines), which nothing in epochs requires.
+
+Decision on the move itself: still open (section 11's six MCP tools vs
+moving the code out). This section settles only feasibility.
