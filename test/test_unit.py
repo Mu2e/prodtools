@@ -6757,6 +6757,23 @@ class TestManageCampaign(unittest.TestCase):
         self.assertEqual(closed, [rid])
         self.assertEqual(self._state(rid), 'exhausted')
 
+    def test_close_rows_works_on_a_complete_campaign(self):
+        """A fully submitted campaign is 'complete' while its rows still
+        verify, and complete -> cancelled is not a ledger transition. The
+        flag must still close the rows, leaving the campaign complete."""
+        from utils.submissions import manage_campaign
+        rid = self._row([0, 1])
+        self.sl.set_campaign_state(self.db, self.cid, 'complete')
+        closed = manage_campaign(self.db, self.cid, 'cancel',
+                                 note='deck bug; not recovering',
+                                 close_rows=True)
+        self.assertEqual(closed, [rid])
+        self.assertEqual(self._state(rid), 'exhausted')
+        self.assertEqual(self.sl.row_by_id(self.db, rid)['note'],
+                         'deck bug; not recovering')
+        self.assertEqual(self.sl.all_campaigns(self.db)[0]['state'],
+                         'complete')
+
     def test_close_rows_only_applies_to_cancel(self):
         from utils.submissions import manage_campaign
         with self.assertRaises(ValueError):
@@ -11529,7 +11546,8 @@ class TestPushCnfTool(unittest.TestCase):
                           'outputs': [{'dataset': d} for d in datasets]}}
 
     def _push(self, before, after, *, json_path=None, desc='D', dsconf='C',
-              slice_size=500, run_as='self', confirm=False, cli=None):
+              slice_size=500, run_as='self', confirm=False, cli=None,
+              prodtools_dir=None):
         """push_cnf with the ledger faked.
 
         `before`/`after` are what _all_campaigns returns either side of
@@ -11546,7 +11564,8 @@ class TestPushCnfTool(unittest.TestCase):
                    side_effect=[before, after]):
             out = self.tools.push_cnf(
                 json=json_path or self.json_path, desc=desc, dsconf=dsconf,
-                slice_size=slice_size, run_as=run_as, confirm=confirm)
+                slice_size=slice_size, run_as=run_as, confirm=confirm,
+                prodtools_dir=prodtools_dir)
         self.last_run = run
         return out
 
@@ -11854,10 +11873,75 @@ class TestPushCnfTool(unittest.TestCase):
             out['datasets'],
             ['rec.mu2e.CosmicCRYExtracted.MDC2025au_best_v1_5.art'])
 
+    # — prodtools_dir: dev-tarball opt-in ------------------------------
+
+    def test_prodtools_dir_forwarded_for_self(self):
+        before, after = [], [self._camp(1)]
+        self._push(before, after, prodtools_dir='/exp/mu2e/app/users/u/prodtools')
+        argv = self.last_run.call_args[0][0]
+        i = argv.index('--prodtools-dir')
+        self.assertEqual(argv[i + 1], '/exp/mu2e/app/users/u/prodtools')
+
+    def test_prodtools_dir_absent_by_default(self):
+        before, after = [], [self._camp(1)]
+        self._push(before, after)
+        self.assertNotIn('--prodtools-dir', self.last_run.call_args[0][0])
+
+    def test_prodtools_dir_refused_for_mu2epro(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError):
+                self.tools.push_cnf(json=self.json_path, desc='D', dsconf='C', slice_size=500,
+                                    run_as='mu2epro', confirm=True,
+                                    prodtools_dir='/exp/mu2e/app/users/u/prodtools')
+        run.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # run_submissions tool
 # ---------------------------------------------------------------------------
+
+class TestPython39Compat(unittest.TestCase):
+    """prodtools runs under the Python 3.9 that the Mu2e environment and
+    the gpvm nodes ship. A PEP 604 union in an annotation (`int | None`)
+    is evaluated at function-definition time and raises TypeError on
+    import there -- but imports cleanly on 3.10+, so a developer on a
+    newer interpreter never sees it. One such annotation took every
+    test that imports prodtools_mcp_write.tools down with it (46 tests)
+    and the breakage sat on main unnoticed. Scan the source instead of
+    trusting the interpreter the suite happens to run on."""
+
+    ROOTS = ('utils', os.path.join('mcp', 'src'))
+
+    def test_no_pep604_unions_in_annotations(self):
+        import ast
+        repo = Path(__file__).resolve().parent.parent
+        offenders = []
+        for root in self.ROOTS:
+            for path in sorted((repo / root).rglob('*.py')):
+                tree = ast.parse(path.read_text(), filename=str(path))
+                for node in ast.walk(tree):
+                    anns = []
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        args = node.args
+                        anns = [a.annotation for a in
+                                args.posonlyargs + args.args + args.kwonlyargs
+                                if a.annotation is not None]
+                        for extra in (args.vararg, args.kwarg):
+                            if extra is not None and extra.annotation is not None:
+                                anns.append(extra.annotation)
+                        if node.returns is not None:
+                            anns.append(node.returns)
+                    elif isinstance(node, ast.AnnAssign):
+                        anns = [node.annotation]
+                    for ann in anns:
+                        for sub in ast.walk(ann):
+                            if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.BitOr):
+                                offenders.append(
+                                    f"{path.relative_to(repo)}:{sub.lineno}")
+        self.assertEqual(offenders, [],
+                         'PEP 604 unions break import under Python 3.9; '
+                         'use typing.Optional / typing.Union')
+
 
 class TestRunSubmissionsTool(unittest.TestCase):
     """run_submissions and the ledger-identity helpers it (and push_cnf)
@@ -11871,11 +11955,43 @@ class TestRunSubmissionsTool(unittest.TestCase):
         self.sl = sl
         self.db = os.path.join(_mkdtemp(), 'submissions.db')
 
-    def test_campaign_id_is_required(self):
-        import inspect
-        sig = inspect.signature(self.tools.run_submissions)
-        self.assertIs(sig.parameters['campaign_id'].default,
-                      inspect.Parameter.empty)
+    def test_bare_tick_has_no_campaign_filter(self):
+        """campaign_id=None is the bare `submissions run` -- the tick the
+        (nonexistent) cron would fire. It is the only way to close open
+        recovery rows once every campaign has left 'active': a fully
+        submitted campaign is 'complete' while its rows still verify,
+        and the scoped form refuses it as 'not active'. a02eafe added
+        this form but left behind the guard that pinned campaign_id as
+        required; these pins replace that guard."""
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.tools._all_campaigns') as ledger:
+                with patch('prodtools_mcp_write.runner.run_cli',
+                           return_value={'rc': 0, 'stdout': 'ok',
+                                         'stderr': ''}) as run:
+                    out = self.tools.run_submissions(run_as='self')
+        self.assertEqual(run.call_args[0][0], ['bin/submissions', 'run'])
+        # No id to validate: an empty top-up is a real answer here
+        # ("nothing active"), not a masked typo.
+        ledger.assert_not_called()
+        self.assertIsNone(out['campaign_id'])
+        self.assertFalse(out['needs_attention'])
+
+    def test_bare_tick_still_needs_confirm_for_mu2epro(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(PermissionError):
+                self.tools.run_submissions(run_as='mu2epro')
+        run.assert_not_called()
+
+    def test_bare_tick_other_rc_raises(self):
+        with patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value=self.db):
+            with patch('prodtools_mcp_write.runner.run_cli',
+                       return_value={'rc': 1, 'stdout': '',
+                                     'stderr': 'boom'}):
+                with self.assertRaises(RuntimeError) as ctx:
+                    self.tools.run_submissions(run_as='self')
+        self.assertIn('boom', str(ctx.exception))
 
     def _active_campaign(self, tarball='cnf.mu2e.X.Y.0.tar', njobs=10):
         return self.sl.create_campaign(
@@ -13815,6 +13931,18 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
              '--prod'])
         self.assertIn('--prod requires --enqueue', msg)
 
+    def test_prodtools_dir_requires_enqueue(self):
+        """A prodtools release is recorded on the entry at enqueue; with
+        nothing enqueued the flag would be accepted and silently dropped.
+        Moved here from a subprocess test that died on ModuleNotFoundError
+        before argparse ran and passed its returncode check for the wrong
+        reason (see the class docstring)."""
+        msg = self._run_main(
+            ['--json', 'data/Run1B/resampler_beam.json',
+             '--desc', 'PhysicalPionStops', '--dsconf', 'Run1Bap',
+             '--prodtools-dir', '/cvmfs/x'])
+        self.assertIn('--prodtools-dir requires --enqueue', msg)
+
     def test_jobdefs_flag_is_gone(self):
         """`--jobdefs` wrote a submission map for a human to hand-edit
         and feed to submit_map — the POMS-era two-step. It was the only
@@ -13948,6 +14076,93 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         self.assertEqual(camp['entry'], expected_entry)
         self.assertEqual(camp['slice_size'], 7)
         self.assertEqual(camp['origin'], 'data/x.json#IntegDesc@IntegConf')
+
+
+class TestEraAgreement(unittest.TestCase):
+    """validate_era_agreement compares the era letters of a dsconf with
+    those of the Musing that processes it. It must compare only when
+    BOTH tokens are readable as Mu2e era tags; the docstring promise is
+    "tokens with no era letters are skipped, not guessed at". It guessed:
+    any trailing lowercase run counted as an era ('MCPTest001' -> 'est',
+    'Offline' -> 'ffline'), and the Musing tag was whatever directory
+    held setup.sh ('/cvmfs/s.sh' -> 'cvmfs'). Eight unrelated tests died
+    on a fixture path with no Musing in it."""
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.j = json2jobdef
+
+    MUSING = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/{}/setup.sh'
+
+    def _cfg(self, dsconf, setup, **over):
+        cfg = {'fcl': 'a.fcl', 'dsconf': dsconf, 'outloc': {'dts': 'tape'},
+               'simjob_setup': setup}
+        cfg.update(over)
+        return cfg
+
+    def test_era_suffix_reads_only_mu2e_era_tags(self):
+        cases = {'Run1Baw': 'aw', 'MDC2025aw': 'aw', 'Run1Bab2': 'ab',
+                 'MDC2020ak': 'ak', 'MDC2030aa': 'aa',
+                 'Run1B': None, 'MDC2025': None, 'v02_01_00': None,
+                 'MCPTest001': None, 'G4blSmoke': None, 'e470313': None,
+                 'x': None, 'cvmfs': None, 'Offline': None}
+        for token, era in cases.items():
+            with self.subTest(token=token):
+                self.assertEqual(self.j._era_suffix(token), era)
+
+    def test_musing_tag_reads_only_the_musings_layout(self):
+        self.assertEqual(self.j._musing_tag(self.MUSING.format('Run1Baq')),
+                         'Run1Baq')
+        self.assertEqual(self.j._musing_tag(
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/'
+            'v02_00_00/setup.sh'), 'v02_00_00')
+        for not_a_musing in ('/cvmfs/mu2e.opensciencegrid.org/x/setup.sh',
+                             '/cvmfs/s.sh',
+                             '/exp/mu2e/app/users/u/Offline/setup.sh',
+                             '/cvmfs/mu2e.opensciencegrid.org/Musings/'
+                             'SimJob/Run1Baq/other.sh'):
+            with self.subTest(path=not_a_musing):
+                self.assertIsNone(self.j._musing_tag(not_a_musing))
+
+    def test_mismatch_is_refused_naming_both_eras(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.j.validate_era_agreement(
+                self._cfg('Run1Baw_best_v1_5', self.MUSING.format('Run1Baq')))
+        msg = str(cm.exception)
+        self.assertIn("'aw'", msg)
+        self.assertIn("'aq'", msg)
+        self.assertIn('era_mismatch_ok', msg)
+
+    def test_matching_eras_pass_across_families(self):
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw_best_v1_5', self.MUSING.format('Run1Baw')))
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw', self.MUSING.format('MDC2025aw')))
+
+    def test_stated_reason_permits_a_cross_era_pin(self):
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw_best_v1_5', self.MUSING.format('Run1Baq'),
+                      era_mismatch_ok='Baq-era digs; aw throws on VD 136'))
+
+    def test_setup_outside_the_musings_layout_is_not_compared(self):
+        """A dev checkout's setup.sh has no Musing tag. Before: refused
+        as "pins 'Offline' (era 'ffline')"."""
+        self.j.validate_era_agreement(
+            self._cfg('Run1Baw', '/exp/mu2e/app/users/u/Offline/setup.sh'))
+        self.j.validate_era_agreement(self._cfg('Run1Bap', '/cvmfs/s.sh'))
+
+    def test_dsconf_without_era_letters_is_not_compared(self):
+        """A personal dsconf under a real Musing. Before: 'MCPTest001'
+        read as era 'est' and was refused against 'ap'."""
+        self.j.validate_era_agreement(
+            self._cfg('MCPTest001', self.MUSING.format('Run1Bap')))
+        self.j.validate_era_agreement(
+            self._cfg('v02_01_00', self.MUSING.format('Run1Bap')))
+
+    def test_code_tarball_entry_has_nothing_to_compare(self):
+        self.j.validate_era_agreement(
+            {'fcl': 'a.fcl', 'dsconf': 'Run1Baw', 'outloc': {'dts': 'tape'},
+             'code': '/exp/Code.tar.bz2'})
 
 
 class TestJson2JobdefEntryValueValidation(unittest.TestCase):
@@ -17778,15 +17993,6 @@ class TestProdtoolsReleaseIsTheOnlyWorkerPath(unittest.TestCase):
         r = subprocess.run(['bash', script], env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
         self.assertIn('is not a prodtools release on this worker', r.stderr)
-
-    def test_json2jobdef_prodtools_dir_requires_enqueue(self):
-        import subprocess, sys
-        repo = os.path.join(os.path.dirname(__file__), '..')
-        r = subprocess.run([sys.executable, os.path.join(repo, 'utils', 'json2jobdef.py'),
-                            '--json', 'x.json', '--prodtools-dir', '/cvmfs/x'],
-                           capture_output=True, text=True, cwd=repo)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn('--prodtools-dir requires --enqueue', r.stderr + r.stdout)
 
 
 

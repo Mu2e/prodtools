@@ -1377,6 +1377,14 @@ Pages written: 2026-09-01-mu2e-log-manifest-never-landed (renamed from incident-
 Pages updated: g4bl-runner, index.md
 Source: .superpowers/sdd/2026-09-01-runmu2e-runner-consolidation/final-fix-report.md
 
+## [2026-09-02] update | sim-epochs design proposal
+
+New page `2026-09-02-sim-epochs-design`: catalog design rooted at dig patterns, membership rule, remake cases, generation/format attributes, derived products, phases, Slack draft for Ray.
+
+## [2026-09-02] ingest | trkqual xgboost inf single-file loss
+
+New page `2026-09-02-trkqual-xgboost-inf-single-file-loss` from job log 86501262@jobsub01 and condor history 71817349@jobsub03.
+
 ## [2026-09-02] update | dev prodtools tarball restored as opt-in
 
 Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechanism from 4314038^, opt-in via non-cvmfs `--prodtools-dir`, digest-pinned `prodtools_tar`/`prodtools_ref`, mu2epro refused) and `g4bl-runner` (grid smoke without a cvmfs release).
@@ -1392,3 +1400,12 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 ## [2026-09-03] update | g4bl_params entry key
 
 `g4bl-runner` documents the optional `g4bl_params` dict (command-line `key=value` overrides, worker-owned names refused) so deck modes such as `READ_Beam_File=1` come from the JSON instead of an edited `.in`.
+
+## [2026-09-04] update | beamkit implemented; first g4bl thin-client grid smoke
+
+## [2026-09-04] update | beamkit architecture pass: five bugs, identity/publishing/naming re-homed
+
+`beamkit` records the pass (`1ff5d29..848206f`, 221 tests): make_recoveries uses the bare tick on a `complete` campaign, a failed push's campaign is adopted, rc=2 is state `needs_attention`, inputs are refused before side effects, and the bridge has a contract test against real prodtools.
+- 2026-09-04 beamkit simplify pass: one error base, direct FastMCP registration, leaner record; see [[beamkit]].
+- 2026-09-05 `submissions cancel --close-rows` refused a `complete` campaign (complete -> cancelled is not a transition), so a one-slice campaign with doomed rows could not be abandoned; fixed on branch close-rows-on-complete, beamkit smoke campaign 6 row 12 closed. See [[beamkit]], [[g4bl-epsmax-deck-gap]].
+- 2026-09-05 beamkit second grid smoke on prodtools v3.3.2 (release path, no dev tarball): campaign 7, 3/3 exit 0, first beam file built. See [[beamkit]].
