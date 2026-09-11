@@ -8,6 +8,7 @@ from prodtools_mcp_write import tools
 # from what actually gets registered.
 TOOL_FUNCTIONS = {
     'push_cnf': tools.push_cnf,
+    'push_file': tools.push_file,
     'run_submissions': tools.run_submissions,
 }
 

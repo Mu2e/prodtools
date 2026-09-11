@@ -60,9 +60,9 @@ probe now pins the three facts beamkit copies from prodtools (worker g4bl
 params, outloc vocabulary, dot-name grammar). Left in place on purpose: the
 `publish=True` path (~100 lines) that waits on a prodtools `push_file`.
 
-One prerequisite is still unbuilt: **prodtools has no `push_file`**, so
-`make_beamfile(publish=True)` is refused up front by
-`bridge.push_file_available()`. Everything else runs.
+prodtools grew `push_file` on 2026-09-05 (branch `push-file`, `78af6dc`),
+and `make_beamfile(publish=True)` published its first file the same day
+(section below). Every v1 tool has now run for real.
 
 ## What prodtools had to grow for it
 
@@ -134,5 +134,54 @@ Before it, smoke campaign 6 (row 12) was closed with `submissions cancel
 6 --close-rows`, which needed the fix on branch `close-rows-on-complete`:
 the flag refused a `complete` campaign because `complete -> cancelled` is
 not a ledger transition, and every one-slice campaign has that shape.
+
+## Sizing run (2026-09-05): 1000 events per job
+
+`G4blBeam.e470313`, campaign 8, row 14, cluster 93602412 on jobsub02:
+10 jobs x 1000 events, `epsMax=0.01`, release v3.3.2, run as self. All
+10 exit 0.
+
+| quantity | value |
+| --- | --- |
+| wall per job | 948-2454 s, mean 1735 s (spread is node speed, not events) |
+| per event, setup removed (~300 s from the 10-event smokes) | ~0.7-2.1 s, mean ~1.4 s |
+| memory | 1.07 GB per job, flat |
+| nts per job | 530-590 kB; 5.6 MB for 10 000 POT |
+| `bm` beam file | 53 073 rows in, 8119 out (0.81 rows/POT), 1.07 MB |
+| `ps` beam file | 12 453 rows out (1.25 rows/POT), 1.64 MB |
+
+`bm` drops: 23 131 `drop_pdg` (neutrons), 19 969 below the momentum
+floor, 1332 backward, 496 duplicate, 26 exotic. Scaling: a `bm` beam
+file is ~107 bytes per POT, so the 2013 2.6 GB stage-1 file corresponds
+to ~24 M POT, which at 1000 events per job is 24 000 jobs (three
+slices). Raising `events_per_job` to 5000-10000 (2.5-7 h per job, well
+inside the 24 h default lifetime) is the sensible production setting;
+1000 stays the default for smokes. This closes the spec's open question
+1 (per-event cost at the default).
+
+## Publishing (2026-09-05): push_file and the first published beam file
+
+prodtools-write gained `push_file(path, location, parents, run_as,
+confirm=False)` backed by `bin/push_file` / `utils/push_file.py`: it
+writes `output.txt` and `parents_list.txt` and runs `pushOutput`, the same
+call the worker makes in `runmu2e.push_data`, so an off-grid file lands in
+the dataset path its name implies and is declared with its parents. It
+refuses a missing file, a five-field (dataset-shaped) name, an owner other
+than the identity's, `outstage`, a non-file parent, and a name already in
+SAM. Same `run_as`/`confirm` gates as `push_cnf`; the self path runs in a
+scratch workdir beside the personal ledger and keeps it on failure.
+
+Finding on the way: beamkit's beam-file name had five fields
+(`etc.<owner>.<desc>Beam-<label>.<dsconf>.txt`), a dataset name; the first
+real publish would have been refused. It is now six fields with sequencer
+`0`, like the cnf tarball (beamkit `a9da7c1`).
+
+First publish: `make_beamfile("G4blBeam.e470313", "bm", "self",
+publish=True, label="bmpub")` in 19 s end to end. SAM now holds
+`etc.oksuzian.G4blBeamBeam-bmpub.e470313.0.txt` (dataset
+`etc.oksuzian.G4blBeamBeam-bmpub.e470313.txt`) at
+`dcache:/pnfs/mu2e/scratch/datasets/usr-etc/etc/oksuzian/G4blBeamBeam-bmpub/e470313/txt/7d/a5`,
+1 072 002 bytes, with the run's 10 nts files as parents. The local copy
+and its hard link both remain under `beamfiles/`.
 
 Related: [[g4bl-runner]], [[g4bl-epsmax-deck-gap]].

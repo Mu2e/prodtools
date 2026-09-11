@@ -1,6 +1,6 @@
 """Write tool implementations for the prodtools-write MCP server.
 
-Exposes `push_cnf` and `run_submissions`. Campaign creation is
+Exposes `push_cnf`, `push_file` and `run_submissions`. Campaign creation is
 `push_cnf` (one call, mirroring `json2jobdef --prod --enqueue`) --
 there is no separate `enqueue_campaign` tool; that would have paired
 with a map file to enqueue, and no map file exists anywhere in this
@@ -30,14 +30,18 @@ Nothing imported here performs any I/O (SAM query, subprocess, network)
 at import time or during entry selection -- only at model
 instantiation, which this module never does.
 """
+import getpass
 import json as _json
+import shutil
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from prodtools_mcp_write import runner
 from utils.config_utils import get_tarball_desc
 from utils.job_common import Mu2eName
 from utils.json2jobdef import determine_job_type, load_json, find_json_entry
+from utils import push_file as _push_file
 
 
 def _select_push_params(json_path, desc, dsconf):
@@ -403,3 +407,47 @@ def run_submissions(run_as: str, campaign_id: Optional[int] = None,
             'needs_attention': result['rc'] == 2,
             'campaign_id': campaign_id,
             'output': result['stdout']}
+
+
+def _self_workdir(name):
+    """A fresh directory for the self path's output.txt/parents_list.txt,
+    beside the personal ledger. The ksu path makes its own (see
+    runner._KSU_TEMPLATE); run_cli's default cwd for self is REPO_ROOT,
+    which must not collect pushOutput's working files."""
+    base = Path(_ledger_path_for('self')).parent / 'push_file'
+    base.mkdir(parents=True, exist_ok=True)
+    return tempfile.mkdtemp(prefix=f'{name}.', dir=base)
+
+
+def push_file(path: str, location: str, parents: List[str], run_as: str,
+              confirm: bool = False):
+    """Publish one already-built file to SAM with its parents, through the
+    same pushOutput call a grid job makes (`bin/push_file`).
+
+    The file's basename is its SAM name and must be a six-field Mu2e FILE
+    name owned by the identity: your username for run_as="self", `mu2e`
+    for run_as="mu2epro" (which writes production SAM, is not reversible,
+    and requires confirm=true). `location` is a pushOutput action:
+    tape, disk or scratch. `parents` are the SAM file names the file was
+    built from, one per entry; pushOutput declares them as parentage.
+
+    Every refusal here happens before the setup chain runs; the CLI
+    repeats the checks and adds the SAM one (a name already in SAM is
+    never reused). Returns the name, location and parent count.
+    """
+    runner.require_confirmed(run_as, confirm)
+    if not isinstance(parents, list) or not all(isinstance(x, str) and x for x in parents):
+        raise ValueError(f"parents must be a list of SAM file names, got {parents!r}")
+    owner = 'mu2e' if run_as == 'mu2epro' else getpass.getuser()
+    name = _push_file.validate(path, location, parents, owner=owner)
+    argv = ['bin/push_file', '--file', str(Path(path).resolve()), '--location', location]
+    for parent in parents:
+        argv += ['--parent', parent]
+    workdir = _self_workdir(name.filename) if run_as == 'self' else None
+    result = runner.run_cli(argv, run_as, cwd=workdir)
+    if result['rc'] != 0:
+        kept = f" -- workdir kept at {workdir}" if workdir else ""
+        raise RuntimeError(f"push_file failed (rc={result['rc']}): {_both_streams(result)}{kept}")
+    if workdir:
+        shutil.rmtree(workdir, ignore_errors=True)
+    return {'name': name.filename, 'location': location, 'parents': len(parents), 'rc': 0}

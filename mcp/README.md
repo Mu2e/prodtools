@@ -17,7 +17,7 @@ Health check: `bash mcp/scripts/start_mcp.sh --check`.
 
 ## `prodtools-write`
 
-Exposes submission: `push_cnf`, `run_submissions`.
+Exposes submission: `push_cnf`, `run_submissions`, and publishing: `push_file`.
 
 A production campaign takes two calls: `push_cnf(..., slice_size=N)`
 builds the cnf, registers it in SAM and creates the campaign, returning
@@ -30,6 +30,12 @@ snapshot of the ledger taken before the CLI ran. If nothing new appears
 it RAISES rather than returning a pre-existing campaign — handing back
 the wrong id would point `run_submissions` at an unrelated production
 campaign.
+
+`push_file(path, location, parents, run_as, confirm=False)` publishes one
+already-built file to SAM with its parents through the same `pushOutput`
+call a grid job makes (`bin/push_file`). The basename is the SAM name: a
+six-field Mu2e file name owned by the identity (`mu2e` for mu2epro).
+`location` is tape/disk/scratch. A name already in SAM is refused.
 
 `push_cnf(..., prodtools_dir=...)` forwards `--prodtools-dir` so a
 checkout can be run before its release lands on cvmfs; it is refused
