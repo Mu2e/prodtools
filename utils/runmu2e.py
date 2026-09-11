@@ -338,7 +338,7 @@ def _copy_to_outstage(filenames):
                shell=True, retries=3, retry_delay=60)
 
 
-def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
+def push_data(outputs, infiles, simjob_setup=None, track_parents=True, cnf=""):
     """Declare/push data files using wildcard patterns from JSON outputs.
 
     Outputs are partitioned by location. Anything bound for `outstage`
@@ -346,14 +346,25 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
     which has no copy-without-declare mode (`dosam = True` is
     unconditional at pushOutput.py:268).
 
-    `track_parents=False` writes 'none' in output.txt's third column and
-    skips parents_list.txt, for jobs whose inputs aren't SAM-registered
-    (e.g. cvmfs via `inloc: dir:<path>`) — printJson --parents exits 25
-    on non-SAM parents, cascading into KeyError('checksum') inside
-    pushOutput otherwise.
+    `track_parents=False` leaves the input files out of parents_list.txt,
+    for jobs whose inputs aren't SAM-registered (e.g. cvmfs via
+    `inloc: dir:<path>`) — printJson --parents exits 25 on non-SAM
+    parents, cascading into KeyError('checksum') inside pushOutput
+    otherwise.
+
+    `cnf` is the SAM name of the job's cnf tarball, declared as a parent
+    of every output alongside the inputs (ADR 0003): SAM lineage then
+    says what CODE made a file, not only what data. It is always
+    SAM-registered — json2jobdef --prod and the self-owned path push it
+    before any job runs — so it is a parent even when the inputs are
+    not. With neither inputs nor cnf the third column reads 'none' and
+    no parents_list.txt is written.
     """
 
-    parents_field = "parents_list.txt" if track_parents else "none"
+    parents = infiles.split() if (track_parents and infiles) else []
+    if cnf:
+        parents.append(cnf)
+    parents_field = "parents_list.txt" if parents else "none"
 
     # A job's own inputs are never outputs: in direct-input mode the
     # fetched input art file sits in cwd, so a broad glob (e.g. '*.art')
@@ -382,8 +393,8 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True):
 
     # parents_list.txt only exists to give pushOutput the SAM parents for
     # a declare; an outstage-only job has no use for it.
-    if track_parents and declares:
-        Path("parents_list.txt").write_text(infiles.replace(" ", "\n") + "\n")
+    if parents and declares:
+        Path("parents_list.txt").write_text("\n".join(parents) + "\n")
 
     rc = _copy_to_outstage(outstage_files)
     if declares:
@@ -425,7 +436,7 @@ def _materialize_log(log_file):
               f"copy — manifest and log push will be skipped")
 
 
-def push_logs(log_file, simjob_setup=None, location="disk", track_parents=True):
+def push_logs(log_file, simjob_setup=None, location="disk", track_parents=True, cnf=""):
     """Declare/push the SAM-named log file, already materialized in cwd
     by `_materialize_log`. For a pushOutput destination (disk/scratch/
     tape), OfflineOps `writeLog` rewrites the file again from
@@ -441,7 +452,8 @@ def push_logs(log_file, simjob_setup=None, location="disk", track_parents=True):
     log would name undeclared parents) — log_storage_location() routes
     it here.
 
-    `track_parents` is the same flag push_data received. parents_list.txt
+    `track_parents` and `cnf` are what push_data received; the list is
+    wanted when either says there is a parent. parents_list.txt
     is named only when it is wanted AND on disk: pushOutput reports
     `ERROR - parents file ... not found` then exits 0, so a missing file
     makes the log push a SILENT no-op — and it is routinely absent (mu2e
@@ -454,7 +466,7 @@ def push_logs(log_file, simjob_setup=None, location="disk", track_parents=True):
     if location == OUTSTAGE_LOCATION:
         return _copy_to_outstage([log_file])
     parents = ("parents_list.txt"
-               if track_parents and Path("parents_list.txt").is_file()
+               if (track_parents or cnf) and Path("parents_list.txt").is_file()
                else "none")
     return push_output([(location, log_file, parents)], "log_output.txt",
                        simjob_setup=simjob_setup)
@@ -765,6 +777,8 @@ class JobRun(NamedTuple):
     simjob_setup   Musing setup.sh to source for pushOutput; None = the
                    worker bootstrap's own OfflineOps (g4bl)
     track_parents  whether infiles are SAM-registered parents
+    cnf            SAM name of the job's cnf tarball, declared as a parent
+                   of every output and of the log (ADR 0003); "" = none
     """
     outputs: list
     log_file: str
@@ -773,6 +787,7 @@ class JobRun(NamedTuple):
     infiles: str = ""
     simjob_setup: Optional[str] = None
     track_parents: bool = False
+    cnf: str = ""
 
 
 def _finish_job(args, job):
@@ -815,13 +830,13 @@ def _finish_job(args, job):
             return
         _push_with_retry(push_data, job.outputs, job.infiles,
                          simjob_setup=job.simjob_setup,
-                         track_parents=job.track_parents)
+                         track_parents=job.track_parents, cnf=job.cnf)
 
     def log_push():
         _push_with_retry(push_logs, job.log_file,
                          simjob_setup=job.simjob_setup,
                          location=log_location,
-                         track_parents=job.track_parents)
+                         track_parents=job.track_parents, cnf=job.cnf)
 
     if args.dry_run:
         datasets = ('none (job failed)' if job.job_failed
@@ -882,7 +897,8 @@ def _run_g4bl_job(jobdesc, index):
         print(f"[g4bl] g4bl failed with exit code {e.returncode}")
         job_failed = True
     return JobRun(outputs=jobdesc['outputs'], log_file=log_file,
-                  job_failed=job_failed, owner=owner)
+                  job_failed=job_failed, owner=owner,
+                  cnf=Path(jobdesc['tarball']).name)
 
 
 def _run_mu2e_job(args, jobdesc, files, mode, index):
@@ -943,7 +959,8 @@ def _run_mu2e_job(args, jobdesc, files, mode, index):
         simjob_setup=simjob_setup,
         # `dir:<path>` inloc means inputs come from a locally-mounted FS
         # and have no SAM parents.
-        track_parents=not is_dir_inloc(inloc))
+        track_parents=not is_dir_inloc(inloc),
+        cnf=Path(jobdesc['tarball']).name)
 
 
 def _direct_dispatch(args, ops, index):
