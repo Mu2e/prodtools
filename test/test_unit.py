@@ -3603,6 +3603,39 @@ class TestLatestPerDescription(unittest.TestCase):
         self.assertEqual(srows, [])          # single parseable version → nothing
         self.assertEqual(len(skipped), 1)
 
+    def test_cross_tier_datasets_never_compete(self):
+        """A dig remake with a newer dsconf must not mark the latest mcs of
+        the same description superseded: supersession is within one series
+        (tier.owner.description.extension), never across tiers. Real case:
+        dig.CeMLeadingLogMix1BB.MDC2025au_best_v1_3 vs
+        mcs.CeMLeadingLogMix1BB.MDC2025au_best_v1_1 (2026-09-11)."""
+        from utils.latestDatasets import (latest_per_description,
+                                          superseded_per_description)
+        names = [
+            "mcs.mu2e.A.MDC2025au_best_v1_1.art",   # latest mcs of A
+            "dig.mu2e.A.MDC2025au_best_v1_1.art",   # superseded dig of A
+            "dig.mu2e.A.MDC2025au_best_v1_3.art",   # latest dig of A
+        ]
+        latest = {name for _, _, name, _ in latest_per_description(names)[0]}
+        self.assertEqual(latest, {
+            "mcs.mu2e.A.MDC2025au_best_v1_1.art",
+            "dig.mu2e.A.MDC2025au_best_v1_3.art",
+        })
+        sup = {name for _, _, name, _ in superseded_per_description(names)[0]}
+        self.assertEqual(sup, {"dig.mu2e.A.MDC2025au_best_v1_1.art"})
+
+    def test_cross_tier_same_dsconf_no_arbitrary_tiebreak(self):
+        """dig and mcs at the SAME dsconf are two single-version series:
+        neither supersedes the other, regardless of input order (the old
+        description-only grouping broke this tie by SAM return order)."""
+        from utils.latestDatasets import superseded_per_description
+        names = ["mcs.mu2e.B.MDC2025au_best_v1_5.art",
+                 "dig.mu2e.B.MDC2025au_best_v1_5.art"]
+        for order in (names, list(reversed(names))):
+            srows, skipped = superseded_per_description(order)
+            self.assertEqual(srows, [])
+            self.assertEqual(skipped, [])
+
     def test_injected_order_key_overrides_dsconf(self):
         """Real MDC2020 case: the ntuple series sorts BELOW the release series
         lexicographically ('-' < 'a') but was created six months later. An

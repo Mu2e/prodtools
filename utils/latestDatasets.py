@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""For each unique description (3rd field), pick the dataset with the
-latest dsconf (4th field).
+"""For each dataset series (name minus the dsconf, i.e. unique
+tier.owner.description.extension), pick the dataset with the latest
+dsconf (4th field).
 
 Mu2e dataset/definition names are dot-delimited:
 
     <tier>.<owner>.<description>.<dsconf>[.<sequencer>].<format>
 
 Queries `samweb list-definitions` (or reads names from stdin), groups by
-description, and prints the lexicographically-greatest dsconf per group.
+series, and prints the lexicographically-greatest dsconf per group. Tiers
+never compete: a dig remake does not supersede the latest mcs of the same
+description.
 For dsconfs like `MDC2025af_best_v1_3`, lex order tracks campaign letter
 then version.
 
@@ -41,7 +44,12 @@ def _vlog(*args):
 
 
 def parse_name(name):
-    """Return (description, dsconf) or None if the name doesn't parse.
+    """Return (series, dsconf) or None if the name doesn't parse, where
+    series = (tier, owner, description, extension) — the dataset's identity
+    minus the dsconf. Supersession is only meaningful WITHIN one series:
+    a dig remake must never mark the latest mcs of the same description
+    superseded, and dig/mcs at the same dsconf are not each other's
+    replacements.
 
     Lenient at this boundary — SAM may return arbitrary strings here.
     """
@@ -49,7 +57,7 @@ def parse_name(name):
         n = Mu2eName.parse(name)
     except ValueError:
         return None
-    return n.description, n.dsconf
+    return (n.tier, n.owner, n.description, n.extension), n.dsconf
 
 
 def fetch_definitions(defname_pattern, user):
@@ -57,9 +65,9 @@ def fetch_definitions(defname_pattern, user):
 
 
 def _group_by_description(names, order_key=None):
-    """Group dataset names by description (3rd field), members sorted
-    ascending. Returns (groups, skipped): groups maps description ->
-    [(dsconf, name), ...], skipped holds unparseable names.
+    """Group dataset names by series (name minus dsconf — see parse_name),
+    members sorted ascending. Returns (groups, skipped): groups maps series
+    -> [(dsconf, name), ...], skipped holds unparseable names.
 
     order_key: optional callable name -> sortable, deciding which member
     of a group counts as latest. Default (None) orders by dsconf
@@ -81,8 +89,8 @@ def _group_by_description(names, order_key=None):
         if parsed is None:
             skipped.append(name)
             continue
-        description, dsconf = parsed
-        groups[description].append((dsconf, name))
+        series, dsconf = parsed
+        groups[series].append((dsconf, name))
     if order_key is None:
         rank = lambda item: item[0]             # (dsconf, name)
     else:
@@ -93,44 +101,43 @@ def _group_by_description(names, order_key=None):
 
 
 def latest_per_description(names, order_key=None):
-    """Return list of (description, latest_dsconf, latest_name, count).
+    """Return list of (description, latest_dsconf, latest_name, count),
+    one row per series (so two tiers of one description are two rows).
 
     order_key decides which member of each group wins -- see
-    _group_by_description. Row order is always by description, independent
+    _group_by_description. Row order is always by series, independent
     of the key: selection changes, presentation stays stable."""
     groups, skipped = _group_by_description(names, order_key)
     rows = []
-    for description, items in groups.items():
+    for series, items in sorted(groups.items()):
         latest_dsconf, latest_name = items[-1]
-        rows.append((description, latest_dsconf, latest_name, len(items)))
-    rows.sort(key=lambda r: r[0])
+        rows.append((series[2], latest_dsconf, latest_name, len(items)))
     return rows, skipped
 
 
 def superseded_per_description(names, order_key=None):
     """Inverse of latest_per_description: every group member EXCEPT the
-    latest, i.e. datasets replaced by a newer sibling of the same
-    description. Returns (rows, skipped) with rows = (description, dsconf,
-    name, count) sorted by (description, dsconf); count is the total
-    versions in that description's group. Single-version descriptions
-    contribute nothing (no replacement).
+    latest, i.e. datasets replaced by a newer sibling of the same series
+    (same tier.owner.description.extension). Returns (rows, skipped) with
+    rows = (description, dsconf, name, count) sorted by (series, dsconf);
+    count is the total versions in that series' group. Single-version
+    series contribute nothing (no replacement).
 
     MUST be given the same order_key as latest_per_description -- the two
     are set complements, so differing keys would put a dataset in both
     listings or in neither."""
     groups, skipped = _group_by_description(names, order_key)
     rows = []
-    for description, items in groups.items():
+    for series, items in sorted(groups.items()):
         for dsconf, name in items[:-1]:      # all but the latest = superseded
-            rows.append((description, dsconf, name, len(items)))
-    rows.sort(key=lambda r: (r[0], r[1]))
+            rows.append((series[2], dsconf, name, len(items)))
     return rows, skipped
 
 
 def _creation_date_key(names):
     """Build an order_key ranking datasets by SAM definition creation date.
 
-    Only CONTENDED descriptions (2+ versions) are queried: a single-version
+    Only CONTENDED series (2+ versions) are queried: a single-version
     group has nothing to compare against, so its date is never needed. On
     a ~20-desc --emit run where most descs have one version, that's ~2 SAM
     calls instead of ~20.
@@ -345,7 +352,7 @@ def main():
                     help="include a column with how many dsconfs were collapsed per description")
     ap.add_argument("--superseded", action="store_true",
                     help="list mode: print the datasets REPLACED by a newer dsconf "
-                         "(every non-latest version per description) instead of the "
+                         "(every non-latest version per series; tiers never compete) "
                          "latest -- the inverse of the default output. Honors "
                          "--show-count (group version count) and --complete-only.")
     ap.add_argument("--latest-by", choices=("dsconf", "time"), default="dsconf",
