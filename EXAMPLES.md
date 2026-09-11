@@ -992,8 +992,11 @@ stages recover from the `pre-poms-removal` git tag).
 
 ### `latestDatasets`
 
-Latest dsconf per description; also emits ready-to-run json2jobdef
-configs for the next chain stage from `templates/<campaign>/<stage>.json`:
+Latest dsconf per dataset series — the name minus the dsconf, i.e. unique
+`tier.owner.description.extension`. Tiers never compete: a dig remake does
+not supersede the latest mcs of the same description. Also emits
+ready-to-run json2jobdef configs for the next chain stage from
+`templates/<campaign>/<stage>.json`:
 
 ```bash
 latestDatasets --defname 'dig.mu2e.%.MDC2025%.art' --show-count
@@ -1012,10 +1015,13 @@ Flags: `--defname`, `--user`, `--stdin`, `--show-count`, `--superseded`,
 `--complete-only`, `--skip-produced`, `-v/--verbose`.
 
 - `--superseded` prints the inverse of the default listing: every
-  non-latest version per description (the datasets a newer dsconf
-  replaced), honoring `--show-count` and `--complete-only`. It cannot be
-  combined with `--emit` or `--skip-produced`.
-- `--latest-by` picks how "latest" is decided within a description.
+  non-latest version per series (the datasets a newer dsconf replaced),
+  honoring `--show-count` and `--complete-only`. Because grouping is
+  per-series, a cross-tier pattern like `%MDC2025%art` is safe: an mcs
+  dataset is only ever superseded by a newer mcs of the same
+  description, never by its dig sibling. It cannot be combined with
+  `--emit` or `--skip-produced`.
+- `--latest-by` picks how "latest" is decided within a series.
   `dsconf` (the default) sorts the dsconf field lexicographically —
   correct within a single naming series, and issues zero SAM queries, so
   it is what `--emit` relies on for a fast chain hop. `time` sorts by
@@ -1024,7 +1030,7 @@ Flags: `--defname`, `--user`, `--stdin`, `--show-count`, `--superseded`,
   ntuple series `MDC2020-001` sorts BELOW
   `MDC2020aw_best_v1_3_v06_06_00` lexicographically, because `-` < `a`,
   even though it was created six months later). `time` mode queries SAM
-  only for contended descriptions (2+ versions).
+  only for contended series (2+ versions).
 - `--latest-by time` does NOT apply identically everywhere. `--emit
   ntuple` and lister `--campaign` first narrow the discovered inputs to
   the single latest release (max campaign tag, a dsconf-lexicographic
