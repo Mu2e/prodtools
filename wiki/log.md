@@ -1411,3 +1411,8 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 - 2026-09-05 beamkit second grid smoke on prodtools v3.3.2 (release path, no dev tarball): campaign 7, 3/3 exit 0, first beam file built. See [[beamkit]].
 - 2026-09-05 beamkit sizing run (campaign 8, 10x1000 events, v3.3.2): 10/10 green, ~1.4 s/event, 1.07 GB RSS, bm beam file 0.81 rows/POT at ~107 B/POT. See [[beamkit]].
 - 2026-09-05 prodtools push_file (branch push-file) + first published beam file etc.oksuzian.G4blBeamBeam-bmpub.e470313.0.txt with 10 parents; beam-file name fixed to six fields. See [[beamkit]].
+
+## [2026-09-11] update | sim-epochs moved out of prodtools
+
+- Cut with `git filter-repo` on 2026-09-05 to github.com/oksuzian/sim-epochs (transfer to Mu2e pending); PR #58 closed unmerged 2026-09-11, prodtools `main` never carried `utils/epochs`. The design page is now a pointer; full design, glossary and ADRs 0003–0006 live in the new repo. Prodtools owes ADR 0003 (`runmu2e` appends the cnf to `parents_list.txt`). See [[2026-09-02-sim-epochs-design]].
+
