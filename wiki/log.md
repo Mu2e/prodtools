@@ -1409,3 +1409,5 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 - 2026-09-04 beamkit simplify pass: one error base, direct FastMCP registration, leaner record; see [[beamkit]].
 - 2026-09-05 `submissions cancel --close-rows` refused a `complete` campaign (complete -> cancelled is not a transition), so a one-slice campaign with doomed rows could not be abandoned; fixed on branch close-rows-on-complete, beamkit smoke campaign 6 row 12 closed. See [[beamkit]], [[g4bl-epsmax-deck-gap]].
 - 2026-09-05 beamkit second grid smoke on prodtools v3.3.2 (release path, no dev tarball): campaign 7, 3/3 exit 0, first beam file built. See [[beamkit]].
+- 2026-09-05 beamkit sizing run (campaign 8, 10x1000 events, v3.3.2): 10/10 green, ~1.4 s/event, 1.07 GB RSS, bm beam file 0.81 rows/POT at ~107 B/POT. See [[beamkit]].
+- 2026-09-05 prodtools push_file (branch push-file) + first published beam file etc.oksuzian.G4blBeamBeam-bmpub.e470313.0.txt with 10 parents; beam-file name fixed to six fields. See [[beamkit]].

@@ -61,6 +61,7 @@ Core production tools:
   CLI for the submission ledger (verify-and-resubmit recovery +
   sliced-campaign top-up + hand re-firing)
 - `check_inputs` — pre-flight readability check on a campaign's inputs
+- `push_file` — publish one already-built file to SAM with its parents, through the same `pushOutput` call a grid job makes
 
 Analysis / diagnostic tools:
 
@@ -1150,10 +1151,13 @@ Verbs:
   behaviours worth knowing: a row still in `submitting` refuses the
   whole operation and writes nothing at all (its `jobsub_submit` may be
   in flight, and closing under it orphans the cluster — `submissions
-  reconcile` it first), and the flag works on an already-cancelled
-  campaign, since in practice the open rows only become a problem after
-  the cancel. Bare `cancel` still errors on an already-cancelled
-  campaign.
+  reconcile` it first), and the flag works on an already-cancelled or a
+  `complete` campaign, closing rows only — in practice the open rows
+  become a problem after the cancel, and a one-slice campaign is
+  `complete` from its first tick with its rows still verifying
+  (`complete -> cancelled` is not a ledger transition, so the campaign
+  state is left alone). Bare `cancel` still errors on an
+  already-cancelled or complete campaign.
 - `complete CAMP_ID [--note TEXT]` — the operator close-out for a
   draining campaign (default note: `"operator complete"`).
   Already-submitted rows still get verified and recovered. A draining
@@ -1440,6 +1444,47 @@ window), `--poll-s` (default 300), `--outstage` (the submission's
 - Condor history fades — jobs from ~2 weeks back are already gone from
   the mu2e schedds — so the JSON written at drain time is the durable
   per-job outcome record, not a cache of one.
+
+### `push_file`
+
+Publish one file that was built off the grid — a beam file assembled
+from a run's ntuples, a hand-made auxiliary — to SAM with its parents,
+through the same `pushOutput` call `runmu2e` makes for a job's outputs:
+the file lands in the dataset path its name implies and is declared
+with its parentage. Needs the ops environment plus `setup OfflineOps`
+(that is what puts `pushOutput` on PATH); the `prodtools-write` MCP tool
+`push_file(path, location, parents, run_as, confirm)` supplies both and
+runs this as the requested identity.
+
+```bash
+muse setup ops && setup OfflineOps
+push_file --file /exp/mu2e/data/users/$USER/beamkit/beamfiles/etc.oksuzian.G4blBeamBeam-bm.e470313.0.txt \
+          --location scratch \
+          --parent nts.oksuzian.G4blBeam.e470313.00000000.root \
+          --parent nts.oksuzian.G4blBeam.e470313.00000001.root
+
+# No parents (nothing in SAM produced it): third column becomes `none`
+push_file --file ./etc.mu2e.SomeTable.MDC2025au.0.txt --location disk
+```
+
+Flags: `--file` (required; the basename IS the SAM name), `--location`
+(required; `tape`, `disk` or `scratch` — the `pushOutput` actions;
+`outstage` is a worker-side copy with no declare and is refused),
+`--parent SAM_FILE` (repeat once per parent).
+
+- Refused before anything is written, exit 2: a missing file; a name
+  that is not a **six-field** Mu2e file name (five fields is a dataset
+  name — `pushOutput` needs the sequencer); an owner in the name other
+  than this identity's (`$USER`, with `mu2epro` publishing as `mu2e`);
+  a parent that is not itself a file name; a name already in SAM (a
+  file name is never reused). Everything else is `pushOutput`'s own
+  exit code.
+- It writes `output.txt` (one line: `<location> <abs path> <parents>`)
+  and, when parents were given, `parents_list.txt`, in the current
+  directory — run it in a scratch dir, not a checkout. The MCP tool does
+  that for you and keeps the dir on failure so `pushOutput`'s log can be
+  read.
+- The source file is left in place after a successful push.
 
 ### `install_prodtools.sh` / `submissions_cron`
 

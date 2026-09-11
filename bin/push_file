@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# push_file - publish one already-built file to SAM through pushOutput,
+# with its parents. Wrapper for utils/push_file.py. Needs the Mu2e ops
+# environment and OfflineOps (pushOutput); the prodtools-write MCP tool
+# supplies both, a shell needs `muse setup ops && setup OfflineOps`.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/../utils/push_file.py"
+
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+    exec python3 "$PYTHON_SCRIPT" "$@"
+fi
+
+if [[ -z "$MUSE_DIR" ]]; then
+    echo "Error: Mu2e environment not set up. Run: muse setup ops && setup OfflineOps" >&2
+    exit 1
+fi
+
+exec python3 "$PYTHON_SCRIPT" "$@"

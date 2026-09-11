@@ -215,7 +215,7 @@ When regenerating, read in this order:
     `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `jobquery`,
     `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`, `jobwait`,
-    `epochs`.
+    `push_file`, `epochs`.
     Ops scripts
     (`install_prodtools.sh`, `submissions_cron`)
     get a one-line mention. Each subsection: one-line purpose, 1–3 example invocations,
