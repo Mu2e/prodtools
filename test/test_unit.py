@@ -4498,7 +4498,7 @@ class TestPushLogsParents(unittest.TestCase):
     parameter was passed.
     """
 
-    def _capture(self, tmpdir, *, log_file, track_parents, with_parents):
+    def _capture(self, tmpdir, *, log_file, track_parents, with_parents, cnf=''):
         """Run push_logs in tmpdir and return the parents column it chose."""
         from utils import runmu2e
         captured = {}
@@ -4516,7 +4516,7 @@ class TestPushLogsParents(unittest.TestCase):
         try:
             os.chdir(tmpdir)
             with patch.object(runmu2e, 'push_output', fake_push_output):
-                runmu2e.push_logs(log_file, track_parents=track_parents)
+                runmu2e.push_logs(log_file, track_parents=track_parents, cnf=cnf)
         finally:
             os.chdir(cwd)
 
@@ -4546,6 +4546,15 @@ class TestPushLogsParents(unittest.TestCase):
             parents = self._capture(d, log_file='log.mu2e.Y.MDC2025ar.7.log',
                                     track_parents=False, with_parents=True)
             self.assertEqual(parents, 'none')
+
+    def test_cnf_makes_the_list_wanted_without_tracked_inputs(self):
+        """track_parents=False but a cnf was declared: push_data wrote a
+        cnf-only parents_list.txt and the log names it too (ADR 0003)."""
+        with tempfile.TemporaryDirectory() as d:
+            parents = self._capture(d, log_file='log.mu2e.Y.MDC2025ar.7.log',
+                                    track_parents=False, with_parents=True,
+                                    cnf='cnf.mu2e.Y.MDC2025ar.0.tar')
+            self.assertEqual(parents, 'parents_list.txt')
 
     def test_g4bl_still_none(self):
         """g4bl has no SAM parents (track_parents=False)."""
@@ -4677,7 +4686,7 @@ class TestFinishJob(unittest.TestCase):
         self.assertTrue(failed)
         pd.assert_not_called()
         pl.assert_called_once_with(self.LOG, simjob_setup='/cvmfs/setup.sh',
-                                   location='scratch', track_parents=True)
+                                   location='scratch', track_parents=True, cnf='')
 
     def test_success_forwards_jobrun_fields_to_both_pushes(self):
         from utils import runmu2e
@@ -4690,9 +4699,9 @@ class TestFinishJob(unittest.TestCase):
         self.assertFalse(failed)
         pd.assert_called_once_with(self.OUTPUTS, 'in1.art in2.art',
                                    simjob_setup='/cvmfs/setup.sh',
-                                   track_parents=True)
+                                   track_parents=True, cnf='')
         pl.assert_called_once_with(self.LOG, simjob_setup='/cvmfs/setup.sh',
-                                   location='scratch', track_parents=True)
+                                   location='scratch', track_parents=True, cnf='')
 
     def test_log_location_follows_owner_and_outputs(self):
         """A user's data on scratch means the log goes to scratch too —
@@ -4849,6 +4858,62 @@ class TestPushDataExcludesInputs(unittest.TestCase):
             self.assertEqual(
                 (Path(d) / 'parents_list.txt').read_text(),
                 self.IN + '\n')
+
+    # -- ADR 0003: the cnf is a SAM parent of every output ----------------
+
+    CNF = 'cnf.mu2e.X.MDC2025au_best_v1_5.0.tar'
+
+    def _pushed_with(self, tmpdir, outputs, infiles, **kw):
+        from utils import runmu2e
+        captured = {}
+
+        def fake_push_output(output_specs, output_file="output.txt",
+                             simjob_setup=None):
+            captured['specs'] = output_specs
+            return 0
+
+        (Path(tmpdir) / self.IN).write_text('input art\n')
+        (Path(tmpdir) / self.OUT).write_text('output art\n')
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            with patch.object(runmu2e, 'push_output', fake_push_output):
+                runmu2e.push_data(outputs, infiles, **kw)
+        finally:
+            os.chdir(cwd)
+        return captured['specs']
+
+    def test_cnf_joins_the_inputs_in_parents_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            specs = self._pushed_with(d, [{'dataset': '*.art', 'location': 'tape'}],
+                                      infiles=self.IN, cnf=self.CNF)
+            self.assertEqual((Path(d) / 'parents_list.txt').read_text(),
+                             f'{self.IN}\n{self.CNF}\n')
+            self.assertEqual({s[2] for s in specs}, {'parents_list.txt'})
+
+    def test_cnf_is_a_parent_even_when_inputs_are_not(self):
+        """inloc dir: (track_parents=False) used to mean 'none'. The cnf
+        is SAM-registered regardless, so it is declared on its own."""
+        with tempfile.TemporaryDirectory() as d:
+            specs = self._pushed_with(d, [{'dataset': '*.art', 'location': 'tape'}],
+                                      infiles=self.IN, track_parents=False, cnf=self.CNF)
+            self.assertEqual((Path(d) / 'parents_list.txt').read_text(), self.CNF + '\n')
+            self.assertEqual({s[2] for s in specs}, {'parents_list.txt'})
+
+    def test_no_inputs_and_no_cnf_is_still_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            specs = self._pushed_with(d, [{'dataset': '*.art', 'location': 'tape'}],
+                                      infiles=self.IN, track_parents=False)
+            self.assertFalse((Path(d) / 'parents_list.txt').exists())
+            self.assertEqual({s[2] for s in specs}, {'none'})
+
+    def test_resampler_style_job_declares_only_the_cnf(self):
+        """infiles='' (no SAM inputs) used to write an empty parents file;
+        now the cnf is the one parent."""
+        with tempfile.TemporaryDirectory() as d:
+            self._pushed_with(d, [{'dataset': '*.art', 'location': 'tape'}],
+                              infiles='', cnf=self.CNF)
+            self.assertEqual((Path(d) / 'parents_list.txt').read_text(), self.CNF + '\n')
 
     def test_no_infiles_pushes_everything(self):
         """Resampler-style jobs (infiles='') keep the old behavior."""
