@@ -27,6 +27,8 @@ WHAT IT ANSWERS:
 - "What datasets exist?"      -> find_datasets(campaign="MDC2025au")
 - "How big is this dataset?"  -> dataset_details(dataset="dig.mu2e...art")
 - "Where did this come from?" -> trace_provenance(name="...", direction="up")
+- "Does SAM know this file?"  -> locate_file(name="cnf.mu2e....0.tar")
+- "Where are its files?"      -> dataset_files(dataset="nts....root", location="scratch")
 
 READING THE RESULTS:
 - campaign_status called with NO argument is ledger-only and cheap. Name
@@ -87,6 +89,8 @@ TOOL_FUNCTIONS = {
     'list_campaigns': safe_tool(status.list_campaigns),
     'find_datasets': safe_tool(discovery.find_datasets),
     'dataset_details': safe_tool(discovery.dataset_details),
+    'locate_file': safe_tool(discovery.locate_file),
+    'dataset_files': safe_tool(discovery.dataset_files),
     'trace_provenance': safe_tool(lineage.trace_provenance),
 }
 
@@ -191,6 +195,19 @@ def create_mcp_server():
                           'date for one dataset.')
     def dataset_details(dataset: str) -> dict:
         return TOOL_FUNCTIONS['dataset_details'](dataset=dataset)
+
+    @mcp.tool(description='Whether SAM knows a file, and its first '
+                          'location. An unknown name is exists=false, '
+                          'not an error.')
+    def locate_file(name: str) -> dict:
+        return TOOL_FUNCTIONS['locate_file'](name=name)
+
+    @mcp.tool(description='Every file of a dataset with its size and '
+                          'its /pnfs path at a location (scratch, disk '
+                          'or tape), sorted by name.')
+    def dataset_files(dataset: str, location: str) -> dict:
+        return TOOL_FUNCTIONS['dataset_files'](dataset=dataset,
+                                               location=location)
 
     @mcp.tool(description='Trace a file\'s lineage as nodes and edges, '
                           'up (parents) or down (children). Bounded by '

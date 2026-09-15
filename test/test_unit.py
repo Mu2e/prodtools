@@ -10598,6 +10598,83 @@ class TestSamwebParentsOfFile(unittest.TestCase):
         self.assertNotIn('except Exception', src)
 
 
+class TestMcpLocateFile(unittest.TestCase):
+    def test_known_file_exists_with_its_location(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.locate_file('cnf.u.T.e470313.0.tar',
+                                    locate_fn=lambda n: 'enstore:/pnfs/x')
+        self.assertEqual(res, {'name': 'cnf.u.T.e470313.0.tar', 'exists': True,
+                               'locations': ['enstore:/pnfs/x']})
+
+    def test_unknown_file_is_not_an_error(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.locate_file('cnf.u.T.e470313-001.0.tar', locate_fn=lambda n: '')
+        self.assertEqual(res, {'name': 'cnf.u.T.e470313-001.0.tar', 'exists': False,
+                               'locations': []})
+
+    def test_catalog_failure_is_classified(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(n):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.locate_file('x.y.z.w.0.tar', locate_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+
+class TestMcpDatasetFiles(unittest.TestCase):
+    SIZES = {'nts.u.T.e470313.00000002.root': 20, 'nts.u.T.e470313.00000000.root': 10}
+
+    def test_files_with_sizes_and_hashed_paths_sorted_by_name(self):
+        from prodtools_mcp.tools import discovery
+        from utils.job_common import Mu2eName
+        res = discovery.dataset_files(
+            'nts.u.T.e470313.root', 'scratch',
+            sizes_fn=lambda ds: dict(self.SIZES),
+            dataset_dir_fn=lambda ds, loc: f'/pnfs/{loc}/{ds}')
+        self.assertEqual(res['root'], '/pnfs/scratch/nts.u.T.e470313.root')
+        self.assertEqual(res['n_files'], 2)
+        self.assertEqual(res['total_size'], 30)
+        self.assertEqual([f['name'] for f in res['files']],
+                         ['nts.u.T.e470313.00000000.root', 'nts.u.T.e470313.00000002.root'])
+        rel = Mu2eName.parse('nts.u.T.e470313.00000000.root').relpathname()
+        self.assertEqual(res['files'][0],
+                         {'name': 'nts.u.T.e470313.00000000.root', 'size': 10,
+                          'path': f'/pnfs/scratch/nts.u.T.e470313.root/{rel}'})
+
+    def test_unknown_location_is_invalid_argument(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            discovery.dataset_files('nts.u.T.e470313.root', 'resilient',
+                                    sizes_fn=lambda ds: {},
+                                    dataset_dir_fn=lambda ds, loc: '')
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        self.assertIn('resilient', ctx.exception.message)
+
+    def test_listing_failure_is_classified(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.dataset_files('nts.u.T.e470313.root', 'scratch',
+                                    sizes_fn=boom,
+                                    dataset_dir_fn=lambda ds, loc: '/pnfs/x')
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_registered_on_the_read_server(self):
+        from prodtools_mcp import server
+        self.assertIn('locate_file', server.TOOL_FUNCTIONS)
+        self.assertIn('dataset_files', server.TOOL_FUNCTIONS)
+        self.assertIn('locate_file', server.TOOL_NAMES)
+        self.assertIn('dataset_files', server.TOOL_NAMES)
+
+
 # ---------------------------------------------------------------------------
 # MCP lineage
 # ---------------------------------------------------------------------------
@@ -10847,7 +10924,7 @@ class TestMcpServerInfo(unittest.TestCase):
         from prodtools_mcp.server import get_server_info, TOOL_NAMES
         info = get_server_info()
         self.assertEqual(sorted(info['tools']), sorted(TOOL_NAMES))
-        self.assertEqual(len(TOOL_NAMES), 6)
+        self.assertEqual(len(TOOL_NAMES), 8)
 
 
 class TestMcpToolRegistration(unittest.TestCase):

@@ -187,3 +187,60 @@ def dataset_details(dataset, summary_fn=None, created_fn=None):
         'total_size_bytes': summary.get('total_file_size', 0) or 0,
         'created_utc': created.isoformat() if created is not None else None,
     }
+
+
+def _default_locate_fn(name):
+    from utils.samweb_wrapper import locate_file
+    return locate_file(name)
+
+
+def locate_file(name, locate_fn=None):
+    """Whether SAM knows `name`, and its first location. An unknown name
+    is `exists: false`, not an error: this is the existence probe that
+    json2jobdef's pushout path uses (samweb_wrapper.locate_file returns
+    '' for it). Every other SAM failure is classified."""
+    try:
+        loc = (locate_fn or _default_locate_fn)(name)
+    except Exception as exc:
+        raise classify_catalog_error(
+            exc, f'locate failed for {name}: {exc}') from exc
+    return {'name': name, 'exists': bool(loc),
+            'locations': [loc] if loc else []}
+
+
+def _default_sizes_fn(dataset):
+    from utils.samweb_wrapper import file_sizes_in_dataset
+    return file_sizes_in_dataset(dataset)
+
+
+def _default_dataset_dir_fn(dataset, location):
+    from utils.file_resolver import dataset_dir
+    return dataset_dir(dataset, location)
+
+
+def dataset_files(dataset, location, sizes_fn=None, dataset_dir_fn=None):
+    """Every file of `dataset` with its size and the absolute /pnfs path
+    it has at `location` (scratch, disk or tape), sorted by name. The
+    path is where the file lives by the location tables
+    (file_resolver.dataset_dir + Mu2eName.relpathname); presence on that
+    location is not checked here."""
+    try:
+        root = (dataset_dir_fn or _default_dataset_dir_fn)(dataset, location)
+    except ValueError as exc:
+        raise ToolError('invalid_argument', f'{dataset}: {exc}',
+                        'Pass a Mu2e dataset name, tier.owner.desc.dsconf.ext.') from exc
+    if not root:
+        raise ToolError('invalid_argument',
+                        f'unknown dataset location {location!r} for {dataset}',
+                        'Use one of scratch, disk, tape.')
+    try:
+        sizes = (sizes_fn or _default_sizes_fn)(dataset)
+    except Exception as exc:
+        raise classify_catalog_error(
+            exc, f'file listing failed for {dataset}: {exc}') from exc
+    files = [{'name': n, 'size': int(s),
+              'path': f'{root}/{Mu2eName.parse(n).relpathname()}'}
+             for n, s in sorted(sizes.items())]
+    return {'dataset': dataset, 'location': location, 'root': root,
+            'n_files': len(files),
+            'total_size': sum(f['size'] for f in files), 'files': files}

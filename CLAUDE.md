@@ -56,9 +56,10 @@ same indices.
 
 A read-only MCP server at `mcp/` exposes campaign status and dataset
 discovery as typed tools (`campaign_status`, `list_campaigns`,
-`find_datasets`, `dataset_details`, `trace_provenance`,
-`get_server_info`). Prefer it over shelling the CLI for status questions —
-it returns structured JSON and costs less context.
+`find_datasets`, `dataset_details`, `locate_file`, `dataset_files`,
+`trace_provenance`, `get_server_info`). Prefer it over shelling the CLI
+for status questions — it returns structured JSON and costs less
+context.
 
 It performs **no writes**. Submission remains `/mu2epro-submit`.
 

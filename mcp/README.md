@@ -7,10 +7,10 @@ root and enabled in `.claude/settings.json`.
 
 Exposes campaign status and dataset discovery as typed tools:
 `campaign_status`, `list_campaigns`, `find_datasets`, `dataset_details`,
-`trace_provenance`, `get_server_info`. It performs **NO writes** — it
-cannot submit jobs, create or delete SAM definitions, or modify the
-submission ledger. That guarantee is why its tools can be called
-without deliberation; do not weaken it.
+`locate_file`, `dataset_files`, `trace_provenance`, `get_server_info`.
+It performs **NO writes** — it cannot submit jobs, create or delete SAM
+definitions, or modify the submission ledger. That guarantee is why its
+tools can be called without deliberation; do not weaken it.
 
 Setup: `bash mcp/scripts/install.sh`.
 Health check: `bash mcp/scripts/start_mcp.sh --check`.
