@@ -13,10 +13,12 @@ discovery to any MCP client. Spec:
 
 ## What it is
 
-Six tools: `campaign_status`, `list_campaigns`, `find_datasets`,
-`dataset_details`, `trace_provenance`, `get_server_info`. It imports
-`utils/*` in-process and composes existing functions; there is no LLM
-in it and it makes no external API calls.
+Eight tools: `campaign_status`, `list_campaigns`, `find_datasets`,
+`dataset_details`, `locate_file` (whether SAM knows a file, and its
+first location), `dataset_files` (every file of a dataset with size and
+/pnfs path at a location), `trace_provenance`, `get_server_info`. It
+imports `utils/*` in-process and composes existing functions; there is
+no LLM in it and it makes no external API calls.
 
 It performs **no writes** — no submission, no SAM definition create or
 delete, no ledger mutation. Every tool is safe as the calling user;

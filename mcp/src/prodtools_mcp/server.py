@@ -204,10 +204,15 @@ def create_mcp_server():
 
     @mcp.tool(description='Every file of a dataset with its size and '
                           'its /pnfs path at a location (scratch, disk '
-                          'or tape), sorted by name.')
-    def dataset_files(dataset: str, location: str) -> dict:
+                          'or tape), sorted by name. `n_files` and '
+                          '`total_size` are exact over the whole dataset; '
+                          'the `files` list is capped at `limit` (default '
+                          '20000, hard ceiling 100000) and `truncated` '
+                          'says whether the cap bit.')
+    def dataset_files(dataset: str, location: str,
+                      limit: int = discovery.DATASET_FILES_DEFAULT_LIMIT) -> dict:
         return TOOL_FUNCTIONS['dataset_files'](dataset=dataset,
-                                               location=location)
+                                               location=location, limit=limit)
 
     @mcp.tool(description='Trace a file\'s lineage as nodes and edges, '
                           'up (parents) or down (children). Bounded by '

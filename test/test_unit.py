@@ -10637,12 +10637,40 @@ class TestMcpDatasetFiles(unittest.TestCase):
         self.assertEqual(res['root'], '/pnfs/scratch/nts.u.T.e470313.root')
         self.assertEqual(res['n_files'], 2)
         self.assertEqual(res['total_size'], 30)
+        self.assertFalse(res['truncated'])
         self.assertEqual([f['name'] for f in res['files']],
                          ['nts.u.T.e470313.00000000.root', 'nts.u.T.e470313.00000002.root'])
         rel = Mu2eName.parse('nts.u.T.e470313.00000000.root').relpathname()
         self.assertEqual(res['files'][0],
                          {'name': 'nts.u.T.e470313.00000000.root', 'size': 10,
                           'path': f'/pnfs/scratch/nts.u.T.e470313.root/{rel}'})
+
+    def test_limit_truncates_files_but_keeps_exact_totals(self):
+        from prodtools_mcp.tools import discovery
+        sizes = {'nts.u.T.e470313.00000000.root': 10,
+                 'nts.u.T.e470313.00000001.root': 20,
+                 'nts.u.T.e470313.00000002.root': 30}
+        res = discovery.dataset_files(
+            'nts.u.T.e470313.root', 'scratch', limit=2,
+            sizes_fn=lambda ds: dict(sizes),
+            dataset_dir_fn=lambda ds, loc: f'/pnfs/{loc}/{ds}')
+        self.assertEqual(len(res['files']), 2)
+        self.assertEqual(res['n_files'], 3)
+        self.assertEqual(res['total_size'], 60)
+        self.assertTrue(res['truncated'])
+        self.assertEqual([f['name'] for f in res['files']],
+                         ['nts.u.T.e470313.00000000.root', 'nts.u.T.e470313.00000001.root'])
+
+    def test_rejects_bad_limit(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        for bad in (0, discovery.DATASET_FILES_MAX_LIMIT + 1):
+            with self.assertRaises(ToolError) as ctx:
+                discovery.dataset_files(
+                    'nts.u.T.e470313.root', 'scratch', limit=bad,
+                    sizes_fn=lambda ds: dict(self.SIZES),
+                    dataset_dir_fn=lambda ds, loc: f'/pnfs/{loc}/{ds}')
+            self.assertEqual(ctx.exception.kind, 'invalid_argument', bad)
 
     def test_unknown_location_is_invalid_argument(self):
         from prodtools_mcp.tools import discovery

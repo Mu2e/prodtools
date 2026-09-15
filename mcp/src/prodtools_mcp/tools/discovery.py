@@ -26,6 +26,13 @@ DEFAULT_LIMIT = 500
 # second truncation point — DEFAULT_LIMIT stays the default.
 MAX_LIMIT = 5000
 
+# dataset_files itself does one bulk sizes_fn() call, not one query per
+# file, so the ceiling here is generous compared to find_datasets: it
+# exists only so a pathologically large dataset cannot build and
+# serialize an unbounded `files` list inline on FastMCP's event loop.
+DATASET_FILES_DEFAULT_LIMIT = 20000
+DATASET_FILES_MAX_LIMIT = 100000
+
 
 def _default_fetch_fn(pattern, user):
     from utils.latestDatasets import fetch_definitions
@@ -218,12 +225,25 @@ def _default_dataset_dir_fn(dataset, location):
     return dataset_dir(dataset, location)
 
 
-def dataset_files(dataset, location, sizes_fn=None, dataset_dir_fn=None):
+def dataset_files(dataset, location, limit=DATASET_FILES_DEFAULT_LIMIT,
+                  sizes_fn=None, dataset_dir_fn=None):
     """Every file of `dataset` with its size and the absolute /pnfs path
     it has at `location` (scratch, disk or tape), sorted by name. The
     path is where the file lives by the location tables
     (file_resolver.dataset_dir + Mu2eName.relpathname); presence on that
-    location is not checked here."""
+    location is not checked here.
+
+    `n_files` and `total_size` are exact over the whole dataset even when
+    the `files` list is truncated to `limit` entries: FastMCP runs this
+    sync tool inline on the event loop, so the list itself is capped, but
+    the counts a caller checks completeness against must not lie."""
+    if (not isinstance(limit, int) or isinstance(limit, bool)
+            or limit < 1 or limit > DATASET_FILES_MAX_LIMIT):
+        raise ToolError('invalid_argument',
+                        f'limit must be a positive integer in '
+                        f'1..{DATASET_FILES_MAX_LIMIT}, got {limit!r}',
+                        'Omit it for the default of '
+                        f'{DATASET_FILES_DEFAULT_LIMIT}.')
     try:
         root = (dataset_dir_fn or _default_dataset_dir_fn)(dataset, location)
     except ValueError as exc:
@@ -238,9 +258,11 @@ def dataset_files(dataset, location, sizes_fn=None, dataset_dir_fn=None):
     except Exception as exc:
         raise classify_catalog_error(
             exc, f'file listing failed for {dataset}: {exc}') from exc
-    files = [{'name': n, 'size': int(s),
+    names = sorted(sizes)
+    truncated = len(names) > limit
+    files = [{'name': n, 'size': int(sizes[n]),
               'path': f'{root}/{Mu2eName.parse(n).relpathname()}'}
-             for n, s in sorted(sizes.items())]
+             for n in names[:limit]]
     return {'dataset': dataset, 'location': location, 'root': root,
-            'n_files': len(files),
-            'total_size': sum(f['size'] for f in files), 'files': files}
+            'n_files': len(names), 'total_size': sum(int(s) for s in sizes.values()),
+            'truncated': truncated, 'files': files}
