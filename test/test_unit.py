@@ -11362,6 +11362,22 @@ class TestWriteRunnerGate(unittest.TestCase):
             " \\\n  && bash",
             script)
 
+    def test_worker_runjob_sets_up_offlineops_before_muse_ops(self):
+        """Same six.moves trap on the worker: bin/runjob.sh must run
+        `setup OfflineOps` before `muse setup ops` or every grid job
+        dies in runmu2e.py's `import samweb_client` on Python 3.12."""
+        import os
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(here, 'bin', 'runjob.sh')) as fh:
+            script = fh.read()
+        offline = [i for i, l in enumerate(script.splitlines())
+                   if l.startswith('setup OfflineOps')]
+        muse = [i for i, l in enumerate(script.splitlines())
+                if l.strip() == 'muse setup ops']
+        self.assertEqual(len(offline), 1, script)
+        self.assertEqual(len(muse), 1, script)
+        self.assertLess(offline[0], muse[0])
+
     def test_offlineops_is_set_up_before_muse_ops_on_both_identities(self):
         """OfflineOps' UPS sam_web_client v3_6 bundles six 1.11, which has
         no six.moves on the Python 3.12 that `muse setup ops` provides
