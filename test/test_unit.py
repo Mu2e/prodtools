@@ -11349,18 +11349,31 @@ class TestWriteRunnerGate(unittest.TestCase):
         self.assertIn(
             "setupmu2e-art.sh > /dev/null 2>&1 \\\n"
             "  || { echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1; }"
-            " \\\n  && muse setup ops",
-            script)
-        self.assertIn(
-            "muse setup ops > /dev/null 2>&1 \\\n"
-            "  || { echo 'push_cnf: muse setup ops failed' >&2; exit 1; }"
             " \\\n  && setup OfflineOps",
             script)
         self.assertIn(
             "setup OfflineOps > /dev/null 2>&1 \\\n"
             "  || { echo 'push_cnf: setup OfflineOps failed' >&2; exit 1; }"
+            " \\\n  && muse setup ops",
+            script)
+        self.assertIn(
+            "muse setup ops > /dev/null 2>&1 \\\n"
+            "  || { echo 'push_cnf: muse setup ops failed' >&2; exit 1; }"
             " \\\n  && bash",
             script)
+
+    def test_offlineops_is_set_up_before_muse_ops_on_both_identities(self):
+        """OfflineOps' UPS sam_web_client v3_6 bundles six 1.11, which has
+        no six.moves on the Python 3.12 that `muse setup ops` provides
+        since ops-021 (2026-09-12). `muse setup ops` LAST puts the spack
+        view's samweb_client and six 1.16 in front, so json2jobdef's
+        `import samweb_client` works. Reversing the order breaks every
+        push_cnf at import time."""
+        for cmd in (self.runner.ksu_wrapper(['bin/json2jobdef']),
+                    self.runner._self_wrapper(['bin/json2jobdef'])):
+            script = cmd[-1]
+            self.assertLess(script.index('setup OfflineOps'),
+                            script.index('muse setup ops'), script)
 
     def test_setup_chain_syntax_is_valid_bash(self):
         # bash -n (parse-only) on the generated script, so a malformed
@@ -11416,7 +11429,7 @@ class TestWriteRunnerGate(unittest.TestCase):
     # — Round-2 review fixes: no Musing on either identity's env chain --
 
     def test_ksu_wrapper_sources_the_musing_setup_before_the_command(self):
-        # setupmu2e-art.sh + muse setup ops + setup OfflineOps alone
+        # setupmu2e-art.sh + setup OfflineOps + muse setup ops alone
         # leaves MUSE_DIR set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH
         # empty — bin/json2jobdef hard-exits in that state. The
         # Musing must be sourced from the entry's own simjob_setup,
