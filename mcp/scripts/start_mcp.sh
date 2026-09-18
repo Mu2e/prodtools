@@ -13,13 +13,13 @@ if [[ "${1:-}" == "--check" ]]; then
   env -u PYTHONPATH PYTHONPATH="${VENV_SITE:-}:$REPO_ROOT" \
     "$PYTHON_BIN" - <<'PY'
 import importlib
-importlib.import_module("mcp.server.fastmcp")
+importlib.import_module("mcp.server.mcpserver")
 print("OK: mcp imports without the ops PYTHONPATH (self-contained)")
 PY
   echo "== part 2: full environment ==" 1>&2
   "$PYTHON_BIN" - <<'PY'
 import importlib, sys
-importlib.import_module("mcp.server.fastmcp")
+importlib.import_module("mcp.server.mcpserver")
 importlib.import_module("samweb_client")
 from prodtools_mcp.server import create_mcp_server, get_server_info, TOOL_NAMES
 info = get_server_info()

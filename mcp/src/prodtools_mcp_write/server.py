@@ -1,7 +1,7 @@
-"""FastMCP registration for the write server."""
+"""MCPServer (mcp SDK 2.x) registration for the write server."""
 from prodtools_mcp_write import tools
 
-# Computed without touching FastMCP, so registration coverage is
+# Computed without touching the MCP SDK, so registration coverage is
 # checkable under the system python3.9 that runs test_unit.py (the
 # real `mcp` package needs >=3.10). create_write_mcp_server() derives
 # its registrations from this dict, so it and TOOL_NAMES cannot drift
@@ -30,9 +30,9 @@ def get_write_server_info():
 
 
 def create_write_mcp_server():
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
-    mcp = FastMCP('prodtools-write')
+    mcp = MCPServer('prodtools-write')
     for name, fn in TOOL_FUNCTIONS.items():
         mcp.tool(name=name)(fn)
     return mcp

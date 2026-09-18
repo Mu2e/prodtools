@@ -9342,8 +9342,8 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(clusters)
 
     def test_query_owner_jobs_bounds_wall_clock(self):
-        """FastMCP runs sync tools inline on the event loop — a hung
-        schedd must not wedge the whole server. Bounded by `timeout`;
+        """A sync tool blocks its caller until it returns — a hung
+        schedd must not wedge the call. Bounded by `timeout`;
         a timeout is 'unknown' (None), never zero, and the call must
         actually return close to the bound, not the full hang."""
         import time
@@ -10403,7 +10403,7 @@ class TestMcpFindDatasets(unittest.TestCase):
 
     def test_require_files_over_limit_is_refused_not_fanned_out(self):
         """require_files costs one serial HTTP round-trip per record and
-        FastMCP runs sync tools inline on the event loop."""
+        a sync tool blocks its caller until it returns."""
         from prodtools_mcp.tools import discovery
         from prodtools_mcp.adapters import ToolError
         many = [f'dig.mu2e.D{i:04d}.MDC2025au_best_v1_3.art'
@@ -11017,12 +11017,12 @@ class TestMcpToolRegistration(unittest.TestCase):
 
 try:
     import importlib
-    importlib.import_module('mcp.server.fastmcp')
+    importlib.import_module('mcp.server.mcpserver')
     _HAVE_FASTMCP = True
 except ImportError:
     # The mcp package requires Python >= 3.10; this suite also runs under
     # the system python3.9 (no MCP machinery available there, same reason
-    # prodtools_mcp.server defers its own FastMCP import). Skip rather
+    # prodtools_mcp.server defers its own MCPServer import). Skip rather
     # than error so the plain interpreter still gets a clean run; a
     # 3.10+ interpreter exercises the real registration.
     _HAVE_FASTMCP = False
@@ -18926,8 +18926,9 @@ class TestMcpTransportCli(unittest.TestCase):
         calls = {}
 
         class FakeMcp:
-            def run(self, transport='stdio'):
+            def run(self, transport='stdio', **kwargs):
                 calls['transport'] = transport
+                calls['run_kwargs'] = kwargs
                 calls['shared_at_run'] = _runtime.is_shared()
 
         from prodtools_mcp import runtime as _runtime
@@ -18948,15 +18949,24 @@ class TestMcpTransportCli(unittest.TestCase):
         calls = self._run_main([])
         self.assertEqual(calls['transport'], 'stdio')
         self.assertFalse(calls['shared_at_run'])
+        # stdio takes no bind address: mcp 2.x would reject the kwargs.
+        self.assertEqual(calls['run_kwargs'], {})
+
+    def test_http_passes_the_bind_address_to_run(self):
+        # mcp 2.x: host/port belong to run(), not to the server object.
+        calls = self._run_main(['--transport', 'streamable-http',
+                                '--host', '0.0.0.0', '--port', '9001'])
+        self.assertEqual(calls['run_kwargs']['host'], '0.0.0.0')
+        self.assertEqual(calls['run_kwargs']['port'], 9001)
+        self.assertNotIn('transport_security', calls['run_kwargs'])
 
     @unittest.skipUnless(importlib.util.find_spec('mcp.server'),
                          'needs the MCP venv (mcp/scripts/install.sh); the '
                          'rest of this suite runs on the plain ops python')
     def test_allowed_host_turns_on_rebinding_protection(self):
-        mcp = self.server.create_mcp_server(
-            host='0.0.0.0', port=9001,
-            allowed_hosts=['mu2eaigpvm01.fnal.gov:9001'])
-        sec = mcp.settings.transport_security
+        kwargs = self.server.http_run_kwargs(
+            '0.0.0.0', 9001, ['mu2eaigpvm01.fnal.gov:9001'])
+        sec = kwargs['transport_security']
         self.assertTrue(sec.enable_dns_rebinding_protection)
         self.assertIn('mu2eaigpvm01.fnal.gov:9001', sec.allowed_hosts)
 
@@ -18964,10 +18974,11 @@ class TestMcpTransportCli(unittest.TestCase):
                          'needs the MCP venv (mcp/scripts/install.sh)')
     def test_no_allowed_host_leaves_protection_off(self):
         # An empty allowlist WITH protection on rejects every request
-        # (421); the SDK's own default is protection off, and that is
-        # what the other central Mu2e servers run.
-        mcp = self.server.create_mcp_server(host='0.0.0.0', port=9001)
-        self.assertIsNone(mcp.settings.transport_security)
+        # (421). Left out, the SDK decides: localhost binds get a
+        # localhost allowlist, anything else gets none — what the other
+        # central Mu2e servers run.
+        kwargs = self.server.http_run_kwargs('0.0.0.0', 9001)
+        self.assertNotIn('transport_security', kwargs)
 
     def test_server_info_tells_a_shared_reader_to_pass_user(self):
         self.runtime.set_shared(True)

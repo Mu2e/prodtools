@@ -29,8 +29,8 @@ async def main():
             assert 'campaign_status' in names, names
             assert 'get_server_info' in names, names
             result = await session.call_tool('get_server_info', {})
-            print('get_server_info ok:', not result.isError)
-            assert not result.isError, result
+            print('get_server_info ok:', not result.is_error)
+            assert not result.is_error, result
     print('SMOKE OK')
 
 

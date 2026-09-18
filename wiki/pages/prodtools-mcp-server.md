@@ -178,8 +178,9 @@ Clients then need one line and no checkout:
 
 `--host` defaults to `127.0.0.1`, so the flag alone puts nothing on the
 network. `--allowed-host` turns on the SDK's DNS-rebinding check; left
-out, `transport_security` stays `None` and the check is off, which is
-what the other central Mu2e servers run. An allowlist that is ON but
+out, `transport_security` stays `None` and the SDK decides: a localhost
+bind gets the check with a localhost allowlist, any other bind gets
+none, which is what the other central Mu2e servers run. An allowlist that is ON but
 EMPTY rejects every request with 421, which is why the default is not
 "protection on with no hosts".
 
@@ -219,6 +220,23 @@ binding in `mcp/.venv-binding`; an ops-env retirement will present as a
 failed exec rather than an import error.
 
 ## Design notes worth keeping
+
+- **On mcp SDK 2.x since 2026-09-18** (`mcp>=2,<3`; all eight servers
+  on mu2eaigpvm01 run 2.x). What changed for us: `FastMCP` became
+  `MCPServer` (`mcp.server.mcpserver`); host, port and
+  `transport_security` moved from the constructor to `run()`
+  (`server.http_run_kwargs`); client result attributes went snake_case
+  (`is_error`); and **sync tools now run in worker threads** instead of
+  inline on the event loop. Notes below that say "FastMCP runs sync
+  tools inline" describe 1.x: under 2.x a hung call pins one thread and
+  its caller rather than freezing the server, and tool calls can overlap.
+  The bounds stay — they protect the caller's timeout either way — and
+  the overlap is safe because the tools share no mutable state (a fresh
+  samweb client and sqlite connection per call; `lru_cache` is
+  thread-safe; the shared-mode flag is set once before serving).
+  The spec is bounded on both sides because an unbounded `mcp>=1.2.0`
+  is how a fresh `install.sh` broke when 2.0 shipped while older venvs
+  kept working unnoticed.
 
 - **stdout is the JSON-RPC channel.** `trace_provenance` no longer
   touches `famtree` at all — `lineage.py` calls

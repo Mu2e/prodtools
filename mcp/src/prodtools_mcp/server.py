@@ -1,4 +1,4 @@
-"""FastMCP wiring for the read-only prodtools server.
+"""MCPServer (mcp SDK 2.x) wiring for the read-only prodtools server.
 
 This module holds NO logic. Every tool is a plain function in tools/,
 wrapped in adapters.safe_tool and registered here. That keeps the tools
@@ -166,30 +166,32 @@ def _configure_logging():
     )
 
 
-def create_mcp_server(host=None, port=None, allowed_hosts=None):
-    """The server object. `host`/`port` matter only under
-    streamable-http; `allowed_hosts` turns the SDK's DNS-rebinding check
-    on for them.
+def http_run_kwargs(host, port, allowed_hosts=None):
+    """Keyword arguments for `run('streamable-http', ...)`.
 
-    Left alone, transport_security stays None and the SDK disables that
-    check — an allowlist that is ON but EMPTY rejects every request with
-    421, and off is what the other central Mu2e servers run behind the
-    lab network.
+    In mcp 2.x the bind address and transport security belong to the
+    run call, not to the server object.
+
+    With no `allowed_hosts`, transport_security stays None and the SDK
+    decides: a localhost bind gets its DNS-rebinding check switched on
+    with a localhost allowlist, and any other bind (0.0.0.0) gets none,
+    which is what the other central Mu2e servers run behind the lab
+    network. Never pass protection ON with an EMPTY allowlist — that
+    rejects every request with 421.
     """
-    from mcp.server.fastmcp import FastMCP
-
-    settings = {}
-    if host is not None:
-        settings['host'] = host
-    if port is not None:
-        settings['port'] = port
+    kwargs = {'host': host, 'port': port}
     if allowed_hosts:
         from mcp.server.transport_security import TransportSecuritySettings
-        settings['transport_security'] = TransportSecuritySettings(
+        kwargs['transport_security'] = TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=list(allowed_hosts))
+    return kwargs
 
-    mcp = FastMCP('prodtools', instructions=INSTRUCTIONS, **settings)
+
+def create_mcp_server():
+    from mcp.server.mcpserver import MCPServer
+
+    mcp = MCPServer('prodtools', instructions=INSTRUCTIONS)
 
     # Optional[...] everywhere a parameter defaults to None. `str = None`
     # emits {"default": null, "type": "string"} — null is not a string,
@@ -313,12 +315,14 @@ def main(argv=None):
     # Before the server can serve a single call: the tools read this to
     # decide whether `mine` can mean anything.
     runtime.set_shared(args.transport != 'stdio')
-    mcp = create_mcp_server(host=args.host, port=args.port,
-                            allowed_hosts=args.allowed_hosts)
-    if args.transport != 'stdio':
-        logging.getLogger(__name__).info(
-            'serving %s on %s:%s', args.transport, args.host, args.port)
-    mcp.run(transport=args.transport)
+    mcp = create_mcp_server()
+    if args.transport == 'stdio':
+        mcp.run(transport='stdio')
+        return
+    logging.getLogger(__name__).info(
+        'serving %s on %s:%s', args.transport, args.host, args.port)
+    mcp.run(transport=args.transport,
+            **http_run_kwargs(args.host, args.port, args.allowed_hosts))
 
 
 if __name__ == '__main__':

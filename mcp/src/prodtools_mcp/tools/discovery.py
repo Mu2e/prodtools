@@ -13,10 +13,11 @@ _BASIS = ('samweb list-definitions: a definition listing, not an '
           'variants do not. Pass require_files=True to filter to '
           'definitions with at least one file.')
 
-# There are ~20,000 SAM definitions. FastMCP runs sync tools inline on
-# the event loop, so an unbounded result — and especially the one serial
-# HTTP round-trip per record that require_files costs — freezes the
-# whole server, not just this call.
+# There are ~20,000 SAM definitions. A sync tool blocks its caller until
+# it returns, so an unbounded result — and especially the one serial
+# HTTP round-trip per record that require_files costs — outlives the
+# client's timeout (and under mcp 1.x froze the whole server, since
+# tools ran inline on the event loop; 2.x runs them in worker threads).
 DEFAULT_LIMIT = 500
 
 # `limit` itself was unbounded: a caller following the require_files
@@ -29,7 +30,7 @@ MAX_LIMIT = 5000
 # dataset_files itself does one bulk sizes_fn() call, not one query per
 # file, so the ceiling here is generous compared to find_datasets: it
 # exists only so a pathologically large dataset cannot build and
-# serialize an unbounded `files` list inline on FastMCP's event loop.
+# serialize an unbounded `files` list into one reply.
 DATASET_FILES_DEFAULT_LIMIT = 20000
 DATASET_FILES_MAX_LIMIT = 100000
 
@@ -234,9 +235,9 @@ def dataset_files(dataset, location, limit=DATASET_FILES_DEFAULT_LIMIT,
     location is not checked here.
 
     `n_files` and `total_size` are exact over the whole dataset even when
-    the `files` list is truncated to `limit` entries: FastMCP runs this
-    sync tool inline on the event loop, so the list itself is capped, but
-    the counts a caller checks completeness against must not lie."""
+    the `files` list is truncated to `limit` entries: the reply has to
+    stay bounded, so the list itself is capped, but the counts a caller
+    checks completeness against must not lie."""
     if (not isinstance(limit, int) or isinstance(limit, bool)
             or limit < 1 or limit > DATASET_FILES_MAX_LIMIT):
         raise ToolError('invalid_argument',
