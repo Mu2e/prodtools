@@ -1,5 +1,79 @@
 # prodtools MCP servers
 
+Ask an AI assistant about Mu2e production state in plain language —
+"how is MDC2025au doing?", "what datasets came out of it?" — instead of
+remembering which CLI to run.
+
+## Quick start
+
+### 1. Connect
+
+**Someone already runs one for the collaboration.** Nothing to install:
+
+    claude mcp add --transport http prodtools http://<host>:8003/mcp
+
+Other MCP clients take the same thing as config:
+
+```json
+{
+  "mcpServers": {
+    "prodtools": { "type": "http", "url": "http://<host>:8003/mcp" }
+  }
+}
+```
+
+**Or run your own**, on a Fermilab node (mu2egpvm, with CVMFS):
+
+```bash
+git clone https://github.com/Mu2e/prodtools
+cd prodtools
+bash mcp/scripts/install.sh            # once, ~1 minute
+bash mcp/scripts/start_mcp.sh --check  # should print OK three times
+```
+
+Your client then starts it on demand — `.mcp.json` in the clone already
+does this for Claude Code; for another client:
+
+```json
+{
+  "mcpServers": {
+    "prodtools": { "command": "/path/to/prodtools/mcp/scripts/start_mcp.sh" }
+  }
+}
+```
+
+Your own server runs as you, so it reads what your credentials can read.
+A shared one runs as its host account.
+
+### 2. Ask it things
+
+| Question | Tool it uses |
+| --- | --- |
+| "How is MDC2025au doing?" | `campaign_status(campaign="MDC2025au")` |
+| "What is running right now?" | `list_campaigns(state="active")` |
+| "What datasets does MDC2025au have?" | `find_datasets(campaign="MDC2025au")` |
+| "How many files and events in this dataset?" | `dataset_details(dataset="dig.mu2e....art")` |
+| "Where are its files on /pnfs?" | `dataset_files(dataset=..., location="tape")` |
+| "Does SAM know this file?" | `locate_file(name="cnf.mu2e....0.tar")` |
+| "What was this file made from?" | `trace_provenance(name=..., direction="up")` |
+
+Two things to know when you read the answers:
+
+- **Production is the default.** For a campaign you ran yourself, add
+  "for user <login>" so the tool passes `user="<login>"` — it switches
+  both the ledger and the grid queue to that account. Without it you get
+  production's, and an empty result looks exactly like "no campaigns".
+- **`state: "unknown"` is not zero.** It means the query failed. The
+  campaign may well still be running, so never start a recovery on one.
+
+### 3. Nothing it can break
+
+Every tool here is read-only: no job submission, no SAM definition
+create or delete, no ledger change. Submitting is a separate server
+(`prodtools-write`) that is not reachable over HTTP at all.
+
+---
+
 Two servers live under `mcp/`, registered in `.mcp.json` at the repo
 root and enabled in `.claude/settings.json`.
 
@@ -14,6 +88,24 @@ tools can be called without deliberation; do not weaken it.
 
 Setup: `bash mcp/scripts/install.sh`.
 Health check: `bash mcp/scripts/start_mcp.sh --check`.
+
+### Serve it to other people
+
+    bash mcp/scripts/start_mcp.sh --transport streamable-http \
+        --host 0.0.0.0 --port 8003 [--allowed-host <fqdn>:8003]
+
+`--host` defaults to `127.0.0.1`, so nothing reaches the network until
+you say so, and `--allowed-host` (repeatable) turns on the SDK's
+DNS-rebinding check — left out, that check is off, as on the other
+central Mu2e servers. `mcp/deploy/prodtools-mcp.service` is a systemd
+unit for a permanent instance; read its header first, because a shared
+server queries SAM and HTCondor as ITS OWN account and needs a keytab
+plus ticket renewal. A stale ticket shows up as `state: "unknown"`,
+never as zero.
+
+Only the read-only server is servable this way. `prodtools-write` stays
+stdio: it submits as mu2epro behind `ksu`, `confirm=true` and a
+PreToolUse hook, none of which survives being reached over a port.
 
 ## `prodtools-write`
 
@@ -90,19 +182,30 @@ after a `run_as="self"` campaign run through `prodtools-write`. Plain
 `submissions status` will not show a self-run campaign; `submissions
 status --mine` will.
 
-The MCP status tools take the same idea as a parameter: `campaign_status`
-and `list_campaigns` accept `mine` (default `false`). With `mine=true`
-they read `/exp/mu2e/data/users/$USER/prodtools/submissions.db` and count
-YOUR grid queue; with it omitted they read production's ledger and
-mu2epro's queue, exactly as before.
+The MCP status tools take the same idea as two parameters.
+`campaign_status` and `list_campaigns` accept `user` and `mine`, and with
+neither they read production's ledger and mu2epro's queue, exactly as
+before.
+
+`user="<login>"` reads `/exp/mu2e/data/users/<login>/prodtools/
+submissions.db` and counts that account's grid queue. Personal ledgers
+are world-readable, so this needs no privilege and works under either
+transport.
+
+`mine=true` is the same thing derived from the process account. It is
+meaningful only over stdio, where the process IS you. A server started
+with `--transport streamable-http` refuses it with an
+`invalid_argument` naming `user` instead, because there the process
+account is the host: a bare `mine` would hand every reader the host's
+ledger, and an empty answer from the wrong ledger is indistinguishable
+from "no campaigns".
 
 Both axes move together by construction — a call cannot read one
 account's ledger against another's queue. Every reply names what it read:
 `db_path` at the top level, and `owner` inside each `queue` block.
 
-Another person's ledger is NOT reachable through MCP. Use the CLI, which
-already does this:
+A ledger somewhere other than `/exp/mu2e/data/users/<login>/prodtools/`
+is still not reachable through MCP; `user` is validated as a UNIX login,
+not a path. Use the CLI for those:
 
     bash bin/submissions --db /exp/mu2e/data/users/<them>/prodtools/submissions.db status
-
-Personal ledgers are world-readable, so this works without privilege.

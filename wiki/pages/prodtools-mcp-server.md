@@ -2,13 +2,14 @@
 title: prodtools MCP server (read-only)
 tags: [reference, mcp, tooling, commissioned]
 sources: [2026-07-26-prodtools-mcp-design]
-updated: 2026-08-09
+updated: 2026-09-17
 ---
 
 # prodtools MCP server (read-only)
 
-Stdio MCP server exposing prodtools campaign status and dataset
-discovery to any MCP client. Spec:
+MCP server exposing prodtools campaign status and dataset discovery to
+any MCP client, over stdio or, since 2026-09-17, streamable-http so
+several readers can share one instance. Spec:
 `docs/superpowers/specs/2026-07-26-prodtools-mcp-design.md`.
 
 ## What it is
@@ -40,8 +41,19 @@ none needs mu2epro.
   call — an empty ledger reads exactly like "no campaigns" — so a
   self-submitted campaign needs `mine=true` to be found at all. Every
   reply names what it read: `db_path` at the top level, and `owner`
-  inside each `queue` block. Another user's ledger is not reachable
-  through MCP; use `submissions --db <path> status`.
+  inside each `queue` block.
+- **`user="<login>"` (2026-09-17) names the account explicitly**, moving
+  both axes through the same `_resolve_identity`, and works under either
+  transport — so another person's personal ledger IS reachable now
+  (they are world-readable). It is validated against a UNIX-login
+  regex because on a shared server it becomes a path component under
+  `/exp/mu2e/data/users/`. A ledger outside that layout still needs
+  `submissions --db <path> status`.
+- **`mine=true` is refused on a shared server.** Over stdio the process
+  account is the caller; over streamable-http it is the HOST, so a bare
+  `mine` would hand every reader the host's ledger and queue — the same
+  silent-wrong-account failure `mine` itself exists to prevent. The
+  refusal is an `invalid_argument` naming `user`.
 - **The queue block comes from live HTCondor ClassAd queries**
   (`mcp/src/prodtools_mcp/condor.py`), not `jobsub_q` table parsing.
   This is an INDEPENDENT path from `utils/submissions.py`'s
@@ -153,6 +165,41 @@ bash mcp/scripts/install.sh            # once
 bash mcp/scripts/start_mcp.sh --check  # health
 mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py
 ```
+
+### Serving it to other people (2026-09-17)
+
+```bash
+bash mcp/scripts/start_mcp.sh --transport streamable-http \
+    --host 0.0.0.0 --port 8003 [--allowed-host <fqdn>:8003]
+```
+
+Clients then need one line and no checkout:
+`claude mcp add --transport http prodtools http://<host>:8003/mcp`.
+
+`--host` defaults to `127.0.0.1`, so the flag alone puts nothing on the
+network. `--allowed-host` turns on the SDK's DNS-rebinding check; left
+out, `transport_security` stays `None` and the check is off, which is
+what the other central Mu2e servers run. An allowlist that is ON but
+EMPTY rejects every request with 421, which is why the default is not
+"protection on with no hosts".
+
+Port 8003 neighbours the mu2eaigpvm01 servers (8000 registry, 8001 dqm,
+8002 metacat). `mcp/deploy/prodtools-mcp.service` is the systemd unit.
+Two things a shared instance needs that a stdio one does not: CVMFS and
+an HTCondor client on the host (`install.sh` derives the htcondor series
+from `/usr/bin/condor_version`; without a client every queue block reads
+`unknown`), and its own kerberos credential with renewal — SAM and the
+ClassAd queries run as the SERVICE account, and an expired ticket
+surfaces as `state: "unknown"`, never as zero.
+
+Only the read-only server is servable this way. `prodtools-write` stays
+stdio: `ksu`, `confirm=true` and the PreToolUse hook do not survive
+being reached over a port.
+
+Verified live 2026-09-17 on 127.0.0.1:8899 — `initialize` returns the
+server info, `list_campaigns` with no identity reads production (5
+active), `user="oksuzian"` reads the personal ledger path, and
+`mine=true` returns the `invalid_argument` refusal.
 
 `--check` is two-part on purpose. Part 1 imports the MCP dependencies
 **without** the ops `PYTHONPATH`. The neighbouring metacat server fails
