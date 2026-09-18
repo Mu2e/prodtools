@@ -8,7 +8,12 @@ version = "0.1.0"
 description = "Read-only MCP stdio server for Mu2e prodtools status and discovery"
 requires-python = ">=3.10"
 dependencies = [
-  "mcp>=1.2.0",
+  # Bounded on both sides. 2.x is a different API from 1.x (FastMCP
+  # became MCPServer; host/port/transport_security moved from the
+  # constructor to run()), and an unbounded spec is how a fresh install
+  # broke once already while older venvs kept working unnoticed. The
+  # other central Mu2e servers on mu2eaigpvm01 all run 2.x.
+  "mcp>=2,<3",
   # Floor only. The EXACT version is chosen at install time by
   # mcp/scripts/install.sh, which reads /usr/bin/condor_version and
   # installs the matching major.minor series. A literal pin lived here

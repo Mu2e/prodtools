@@ -1,0 +1,55 @@
+# Read-only prodtools MCP server, served over streamable-http so several
+# readers share one instance.
+#
+# A `systemd --user` unit, the way the other centrally hosted Mu2e servers
+# on mu2eaigpvm01 run (account mu2eai, one server per port, releases under
+# /exp/mu2e/app/users/mu2eai/mcp/<name>/releases/<tag>/). As the hosting
+# account:
+#
+#   git clone --branch <tag> https://github.com/Mu2e/prodtools <release dir>
+#   bash <release dir>/mcp/scripts/install.sh
+#   bash <release dir>/mcp/scripts/start_mcp.sh --check
+#   cp <release dir>/mcp/deploy/prodtools-mcp.service ~/.config/systemd/user/
+#   # edit the ExecStart path below, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now prodtools-mcp
+#
+# `loginctl enable-linger <account>` keeps it up with nobody logged in.
+# Port 8008 was the first free one on 2026-09-18; check
+# mcp/registry/ports.json before taking it, and add this server there.
+#
+# The host needs CVMFS (the launcher sources setupmu2e-art.sh and runs
+# `muse setup ops`) and an HTCondor client: install.sh picks the htcondor
+# python series from /usr/bin/condor_version, and without a client every
+# queue block reads state="unknown".
+#
+# OPEN QUESTION FOR THE HOST ADMIN -- credentials. SAM and the HTCondor
+# queries run as THIS account, not as the reader. The HTCondor pool
+# authenticates with SCITOKENS, so the queue block needs a valid bearer
+# token for the hosting account, and those last about three hours. This
+# unit deliberately sets up NO credential: none of the other servers on
+# the host needs one, so there is no local convention to copy, and how
+# the hosting account obtains and renews a token is the admin's call.
+# Without one the server still starts, and queue blocks read
+# state="unknown" with the reason spelled out, which a reader must never
+# treat as zero. Whether the SAM reads need anything on this host has not
+# been tested from an account without credentials.
+#
+# This unit is plain HTTP with no authentication, matching the other
+# servers on the host. Bind it where only the lab network can reach it.
+# To refuse unexpected Host headers, add --allowed-host <fqdn>:8008 to
+# ExecStart.
+
+[Unit]
+Description=Mu2e prodtools read-only MCP server
+Documentation=https://github.com/Mu2e/prodtools/blob/main/mcp/README.md
+
+[Service]
+Type=simple
+Environment=PRODTOOLS_MCP_LOG_LEVEL=INFO
+ExecStart=/exp/mu2e/app/users/mu2eai/mcp/prodtools/releases/CHANGE-ME/mcp/scripts/start_mcp.sh \
+    --transport streamable-http --host 0.0.0.0 --port 8008
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -58,6 +58,7 @@
 
 ### Analyses
 <!-- entries added by wiki-query when answers are filed -->
+- [[nersc-iri-feasibility]] — prodtools at NERSC: HEPCloud jobsub route needs a `site` argv knob; IRI Facility API PROVEN 2026-09-10 — sfapi red client auth (Globus rejected), CFS ops, Slurm submit/status, Mu2e G4 job to art exit 0 AND g4bl (2026-09-11) inside fnal-wn-el9 via apptainer-from-cvmfs; beamkit NERSC backend live-verified 2026-09-12; adapter bugs: >1 volume_mounts, inline bash escapes container _(2026-09-10)_
 
 ### Maintenance
 - [[lint-2026-04-21]] — initial lint; wiki freshly initialized, 0 errors, 0 warnings, 1 info (coverage gap: no sources ingested yet) _(2026-04-21)_

@@ -55,10 +55,16 @@ fi
 
 echo "=== sourcing setupmu2e-art.sh ==="
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh
-echo "=== muse setup ops ==="
-muse setup ops
+# OfflineOps BEFORE muse setup ops, on purpose: OfflineOps (UPS) drags in
+# sam_web_client v3_6 whose bundled six 1.11 has no six.moves on the
+# Python 3.12 that `muse setup ops` provides since ops-021 (2026-09-12);
+# with muse last the spack view's samweb_client and six 1.16 come first
+# and runmu2e.py's `import samweb_client` works. The other order fails
+# every job at import time.
 echo "=== setup OfflineOps ==="
 setup OfflineOps || echo "WARNING: setup OfflineOps failed (continuing — direct mode does not require it)"
+echo "=== muse setup ops ==="
+muse setup ops
 echo "=== source prodtools setup.sh ==="
 source "$MU2EGRID_PRODTOOLS_DIR/bin/setup.sh"
 

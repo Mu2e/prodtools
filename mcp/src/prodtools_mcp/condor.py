@@ -34,10 +34,12 @@ import subprocess
 
 OWNER = 'mu2epro'
 
-# FastMCP runs sync tools inline on the event loop (the same class of
-# bug the trace_provenance fan-out hit): an unbounded multi-schedd
-# query would freeze the whole server. Bound the whole query, not just
-# one schedd's slice of it.
+# A sync tool occupies its caller until it returns (under mcp 1.x it
+# ran inline on the event loop and froze the whole server; under 2.x it
+# runs in a worker thread, so a hang pins that thread and the client's
+# call instead). Either way an unbounded multi-schedd query is the same
+# class of bug the trace_provenance fan-out hit. Bound the whole query,
+# not just one schedd's slice of it.
 QUERY_TIMEOUT_S = 60
 
 # HTCondor JobStatus ClassAd values. Only these three are queried —
@@ -134,10 +136,10 @@ def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
       failure mode that could trigger a recovery pass against jobs
       that are still live on the schedd this call failed to reach.
     - the whole query not finishing inside `timeout` -> None. Slow is
-      indistinguishable from wrong here: this call runs inline on
-      FastMCP's event loop, so it must return within the bound one way
-      or another, and a timeout is exactly the case that must never
-      serialize as a count.
+      indistinguishable from wrong here: the caller is blocked on this
+      call, so it must return within the bound one way or another, and
+      a timeout is exactly the case that must never serialize as a
+      count.
 
     Queries run in parallel (one thread per schedd) so the wall clock
     is close to the slowest single schedd, not the sum of all of them.

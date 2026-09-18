@@ -56,9 +56,10 @@ same indices.
 
 A read-only MCP server at `mcp/` exposes campaign status and dataset
 discovery as typed tools (`campaign_status`, `list_campaigns`,
-`find_datasets`, `dataset_details`, `trace_provenance`,
-`get_server_info`). Prefer it over shelling the CLI for status questions —
-it returns structured JSON and costs less context.
+`find_datasets`, `dataset_details`, `locate_file`, `dataset_files`,
+`trace_provenance`, `get_server_info`). Prefer it over shelling the CLI
+for status questions — it returns structured JSON and costs less
+context.
 
 It performs **no writes**. Submission remains `/mu2epro-submit`.
 
@@ -70,10 +71,17 @@ may still be running. Do not start a recovery pass on an `unknown`.
 campaign you submitted yourself (`run_as="self"`), pass `mine=true` — it
 switches both the ledger and the grid queue to your account. Omitting it
 against a personal campaign returns an empty result that looks exactly
-like "no campaigns". Every reply names the ledger (`db_path`) and the
-queue account (`queue.owner`); check them when a count surprises you.
-Another user's ledger is not reachable here — use
-`submissions --db <path> status`.
+like "no campaigns". `user="<login>"` does the same for any account and
+works under either transport. Every reply names the ledger (`db_path`)
+and the queue account (`queue.owner`); check them when a count surprises
+you. A ledger outside `/exp/mu2e/data/users/<login>/prodtools/` is not
+reachable here — use `submissions --db <path> status`.
+
+The read-only server also runs as a shared HTTP endpoint
+(`start_mcp.sh --transport streamable-http --host 0.0.0.0 --port 8008`,
+systemd unit in `mcp/deploy/`). There the process account is the host,
+not the caller, so `mine=true` is refused and `user=` is the way to read
+a personal ledger. `prodtools-write` stays stdio.
 
 Setup: `bash mcp/scripts/install.sh`. Health check:
 `bash mcp/scripts/start_mcp.sh --check`.

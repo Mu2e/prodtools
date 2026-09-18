@@ -13,10 +13,11 @@ _BASIS = ('samweb list-definitions: a definition listing, not an '
           'variants do not. Pass require_files=True to filter to '
           'definitions with at least one file.')
 
-# There are ~20,000 SAM definitions. FastMCP runs sync tools inline on
-# the event loop, so an unbounded result — and especially the one serial
-# HTTP round-trip per record that require_files costs — freezes the
-# whole server, not just this call.
+# There are ~20,000 SAM definitions. A sync tool blocks its caller until
+# it returns, so an unbounded result — and especially the one serial
+# HTTP round-trip per record that require_files costs — outlives the
+# client's timeout (and under mcp 1.x froze the whole server, since
+# tools ran inline on the event loop; 2.x runs them in worker threads).
 DEFAULT_LIMIT = 500
 
 # `limit` itself was unbounded: a caller following the require_files
@@ -25,6 +26,13 @@ DEFAULT_LIMIT = 500
 # refusal exists to prevent. This is a hard ceiling on the input, not a
 # second truncation point — DEFAULT_LIMIT stays the default.
 MAX_LIMIT = 5000
+
+# dataset_files itself does one bulk sizes_fn() call, not one query per
+# file, so the ceiling here is generous compared to find_datasets: it
+# exists only so a pathologically large dataset cannot build and
+# serialize an unbounded `files` list into one reply.
+DATASET_FILES_DEFAULT_LIMIT = 20000
+DATASET_FILES_MAX_LIMIT = 100000
 
 
 def _default_fetch_fn(pattern, user):
@@ -187,3 +195,75 @@ def dataset_details(dataset, summary_fn=None, created_fn=None):
         'total_size_bytes': summary.get('total_file_size', 0) or 0,
         'created_utc': created.isoformat() if created is not None else None,
     }
+
+
+def _default_locate_fn(name):
+    from utils.samweb_wrapper import locate_file
+    return locate_file(name)
+
+
+def locate_file(name, locate_fn=None):
+    """Whether SAM knows `name`, and its first location. An unknown name
+    is `exists: false`, not an error: this is the existence probe that
+    json2jobdef's pushout path uses (samweb_wrapper.locate_file returns
+    '' for it). Every other SAM failure is classified."""
+    try:
+        loc = (locate_fn or _default_locate_fn)(name)
+    except Exception as exc:
+        raise classify_catalog_error(
+            exc, f'locate failed for {name}: {exc}') from exc
+    return {'name': name, 'exists': bool(loc),
+            'locations': [loc] if loc else []}
+
+
+def _default_sizes_fn(dataset):
+    from utils.samweb_wrapper import file_sizes_in_dataset
+    return file_sizes_in_dataset(dataset)
+
+
+def _default_dataset_dir_fn(dataset, location):
+    from utils.file_resolver import dataset_dir
+    return dataset_dir(dataset, location)
+
+
+def dataset_files(dataset, location, limit=DATASET_FILES_DEFAULT_LIMIT,
+                  sizes_fn=None, dataset_dir_fn=None):
+    """Every file of `dataset` with its size and the absolute /pnfs path
+    it has at `location` (scratch, disk or tape), sorted by name. The
+    path is where the file lives by the location tables
+    (file_resolver.dataset_dir + Mu2eName.relpathname); presence on that
+    location is not checked here.
+
+    `n_files` and `total_size` are exact over the whole dataset even when
+    the `files` list is truncated to `limit` entries: the reply has to
+    stay bounded, so the list itself is capped, but the counts a caller
+    checks completeness against must not lie."""
+    if (not isinstance(limit, int) or isinstance(limit, bool)
+            or limit < 1 or limit > DATASET_FILES_MAX_LIMIT):
+        raise ToolError('invalid_argument',
+                        f'limit must be a positive integer in '
+                        f'1..{DATASET_FILES_MAX_LIMIT}, got {limit!r}',
+                        'Omit it for the default of '
+                        f'{DATASET_FILES_DEFAULT_LIMIT}.')
+    try:
+        root = (dataset_dir_fn or _default_dataset_dir_fn)(dataset, location)
+    except ValueError as exc:
+        raise ToolError('invalid_argument', f'{dataset}: {exc}',
+                        'Pass a Mu2e dataset name, tier.owner.desc.dsconf.ext.') from exc
+    if not root:
+        raise ToolError('invalid_argument',
+                        f'unknown dataset location {location!r} for {dataset}',
+                        'Use one of scratch, disk, tape.')
+    try:
+        sizes = (sizes_fn or _default_sizes_fn)(dataset)
+    except Exception as exc:
+        raise classify_catalog_error(
+            exc, f'file listing failed for {dataset}: {exc}') from exc
+    names = sorted(sizes)
+    truncated = len(names) > limit
+    files = [{'name': n, 'size': int(sizes[n]),
+              'path': f'{root}/{Mu2eName.parse(n).relpathname()}'}
+             for n in names[:limit]]
+    return {'dataset': dataset, 'location': location, 'root': root,
+            'n_files': len(names), 'total_size': sum(int(s) for s in sizes.values()),
+            'truncated': truncated, 'files': files}

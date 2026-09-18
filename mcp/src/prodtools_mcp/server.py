@@ -1,18 +1,25 @@
-"""FastMCP wiring for the read-only prodtools server.
+"""MCPServer (mcp SDK 2.x) wiring for the read-only prodtools server.
 
 This module holds NO logic. Every tool is a plain function in tools/,
 wrapped in adapters.safe_tool and registered here. That keeps the tools
 testable without MCP machinery or a stdio transport.
 """
+import argparse
 import logging
 import os
 import sys
-from typing import Optional
+from typing import List, Optional
 
-from prodtools_mcp import condor
+from prodtools_mcp import condor, runtime
 from prodtools_mcp.adapters import safe_tool
 from prodtools_mcp.tools import discovery, lineage, status
 
+
+# mu2eaigpvm01 runs one server per port, registered in the registry's
+# ports.json: 8000 registry, 8001 dqm, 8002 metacat, 8003 arxiv, 8004
+# inspirehep, 8005 ecl, 8006 runs, 8007 memory (verified 2026-09-18).
+# 8008 is the first free one; check ports.json before claiming it.
+DEFAULT_PORT = 8008
 
 INSTRUCTIONS = """
 Read-only MCP server for Mu2e prodtools production state.
@@ -27,14 +34,21 @@ WHAT IT ANSWERS:
 - "What datasets exist?"      -> find_datasets(campaign="MDC2025au")
 - "How big is this dataset?"  -> dataset_details(dataset="dig.mu2e...art")
 - "Where did this come from?" -> trace_provenance(name="...", direction="up")
+- "Does SAM know this file?"  -> locate_file(name="cnf.mu2e....0.tar")
+- "Where are its files?"      -> dataset_files(dataset="nts....root", location="scratch")
 
 READING THE RESULTS:
 - campaign_status called with NO argument is ledger-only and cheap. Name
   a campaign to include queue and output counts, which hit the network.
 - campaign_status and list_campaigns default to production; omitting
-  `mine` means production. Every reply names what it read: `db_path` at
-  the top level is the ledger, and `queue.owner` inside each campaign is
-  the grid account the counts came from.
+  both `mine` and `user` means production. Every reply names what it
+  read: `db_path` at the top level is the ledger, and `queue.owner`
+  inside each campaign is the grid account the counts came from.
+- To read a personal ledger, pass user="<login>" — it selects the
+  ledger AND the grid queue of that account. `mine=true` is the same
+  thing derived from the process, and works only when you started this
+  server yourself over stdio; a shared HTTP server refuses it, because
+  there the process account is the host rather than you.
 - A queue or outputs block with state="unknown" has NO count keys. Do
   NOT read a missing count as zero: the query failed, and the campaign
   may well be running. Never start a recovery pass on an "unknown".
@@ -87,6 +101,8 @@ TOOL_FUNCTIONS = {
     'list_campaigns': safe_tool(status.list_campaigns),
     'find_datasets': safe_tool(discovery.find_datasets),
     'dataset_details': safe_tool(discovery.dataset_details),
+    'locate_file': safe_tool(discovery.locate_file),
+    'dataset_files': safe_tool(discovery.dataset_files),
     'trace_provenance': safe_tool(lineage.trace_provenance),
 }
 
@@ -119,15 +135,24 @@ def get_server_info():
         'ledger_db': os.environ.get(
             'MU2E_SUBMISSION_DB',
             '/exp/mu2e/data/users/mu2epro/prodtools/submissions.db'),
+        'shared': runtime.is_shared(),
         'identity': {
-            'parameter': 'mine (campaign_status, list_campaigns)',
+            'parameter': 'user, mine (campaign_status, list_campaigns)',
             'default': 'production — the ledger in ledger_db and '
                        'mu2epro\'s grid queue',
-            'mine_true': "your own ledger at "
-                         "/exp/mu2e/data/users/$USER/prodtools/"
-                         "submissions.db, and your own grid queue",
-            'other_accounts': 'not available through MCP — use '
-                              '`submissions --db <path> status`',
+            'user': 'the ledger at /exp/mu2e/data/users/<user>/prodtools/'
+                    'submissions.db and that account\'s grid queue; '
+                    'works under either transport',
+            'mine_true': ('refused on this server: it is shared, so the '
+                          'process account is the host, not you — pass '
+                          'user="<your login>" instead')
+                         if runtime.is_shared() else
+                         ("your own ledger at /exp/mu2e/data/users/$USER/"
+                          "prodtools/submissions.db, and your own grid "
+                          "queue; equivalent to user=\"$USER\""),
+            'other_accounts': 'pass user=<login>; a ledger outside '
+                              '/exp/mu2e/data/users/<login>/prodtools/ '
+                              'needs `submissions --db <path> status`',
         },
         'guidance': INSTRUCTIONS.strip(),
     }
@@ -141,10 +166,32 @@ def _configure_logging():
     )
 
 
-def create_mcp_server():
-    from mcp.server.fastmcp import FastMCP
+def http_run_kwargs(host, port, allowed_hosts=None):
+    """Keyword arguments for `run('streamable-http', ...)`.
 
-    mcp = FastMCP('prodtools', instructions=INSTRUCTIONS)
+    In mcp 2.x the bind address and transport security belong to the
+    run call, not to the server object.
+
+    With no `allowed_hosts`, transport_security stays None and the SDK
+    decides: a localhost bind gets its DNS-rebinding check switched on
+    with a localhost allowlist, and any other bind (0.0.0.0) gets none,
+    which is what the other central Mu2e servers run behind the lab
+    network. Never pass protection ON with an EMPTY allowlist — that
+    rejects every request with 421.
+    """
+    kwargs = {'host': host, 'port': port}
+    if allowed_hosts:
+        from mcp.server.transport_security import TransportSecuritySettings
+        kwargs['transport_security'] = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(allowed_hosts))
+    return kwargs
+
+
+def create_mcp_server():
+    from mcp.server.mcpserver import MCPServer
+
+    mcp = MCPServer('prodtools', instructions=INSTRUCTIONS)
 
     # Optional[...] everywhere a parameter defaults to None. `str = None`
     # emits {"default": null, "type": "string"} — null is not a string,
@@ -152,24 +199,31 @@ def create_mcp_server():
     # layers) reject it, which defeats the "reach other clients" goal.
     @mcp.tool(description='Status of one campaign, or a cheap ledger-only '
                           'summary of all of them when called with no '
-                          'argument. Pass mine=true to read YOUR ledger '
-                          'and queue instead of production\'s.')
+                          'argument. Pass user="<login>" to read that '
+                          'account\'s ledger and queue instead of '
+                          'production\'s; mine=true is the same for the '
+                          'account running this server, and only works '
+                          'over stdio.')
     def campaign_status(campaign: Optional[str] = None,
                         campaign_id: Optional[int] = None,
                         include_queue: bool = True,
                         include_outputs: bool = True,
-                        mine: bool = False) -> dict:
+                        mine: bool = False,
+                        user: Optional[str] = None) -> dict:
         return TOOL_FUNCTIONS['campaign_status'](
             campaign=campaign, campaign_id=campaign_id,
             include_queue=include_queue, include_outputs=include_outputs,
-            mine=mine)
+            mine=mine, user=user)
 
     @mcp.tool(description='List submission campaigns, optionally filtered '
                           'by state (active/complete/paused/cancelled). '
-                          'Pass mine=true for your own ledger.')
+                          'Pass user="<login>" for that account\'s '
+                          'ledger, or mine=true for your own over stdio.')
     def list_campaigns(state: Optional[str] = None,
-                       mine: bool = False) -> dict:
-        return TOOL_FUNCTIONS['list_campaigns'](state=state, mine=mine)
+                       mine: bool = False,
+                       user: Optional[str] = None) -> dict:
+        return TOOL_FUNCTIONS['list_campaigns'](state=state, mine=mine,
+                                                user=user)
 
     @mcp.tool(description='Find datasets by campaign, tier, description, '
                           'or SAM defname pattern (* or % both work). '
@@ -191,6 +245,24 @@ def create_mcp_server():
                           'date for one dataset.')
     def dataset_details(dataset: str) -> dict:
         return TOOL_FUNCTIONS['dataset_details'](dataset=dataset)
+
+    @mcp.tool(description='Whether SAM knows a file, and its first '
+                          'location. An unknown name is exists=false, '
+                          'not an error.')
+    def locate_file(name: str) -> dict:
+        return TOOL_FUNCTIONS['locate_file'](name=name)
+
+    @mcp.tool(description='Every file of a dataset with its size and '
+                          'its /pnfs path at a location (scratch, disk '
+                          'or tape), sorted by name. `n_files` and '
+                          '`total_size` are exact over the whole dataset; '
+                          'the `files` list is capped at `limit` (default '
+                          '20000, hard ceiling 100000) and `truncated` '
+                          'says whether the cap bit.')
+    def dataset_files(dataset: str, location: str,
+                      limit: int = discovery.DATASET_FILES_DEFAULT_LIMIT) -> dict:
+        return TOOL_FUNCTIONS['dataset_files'](dataset=dataset,
+                                               location=location, limit=limit)
 
     @mcp.tool(description='Trace a file\'s lineage as nodes and edges, '
                           'up (parents) or down (children). Bounded by '
@@ -214,9 +286,43 @@ def create_mcp_server():
     return mcp
 
 
-def main():
+def _parse_args(argv=None):
+    ap = argparse.ArgumentParser(
+        prog='prodtools-mcp',
+        description='Read-only MCP server for Mu2e prodtools state.')
+    ap.add_argument('--transport', choices=('stdio', 'streamable-http'),
+                    default='stdio',
+                    help='stdio (default) serves the one client that '
+                         'started this process; streamable-http serves '
+                         'an endpoint several readers share.')
+    ap.add_argument('--host', default='127.0.0.1',
+                    help='interface to bind under streamable-http '
+                         '(default: 127.0.0.1, i.e. not on the network).')
+    ap.add_argument('--port', type=int, default=DEFAULT_PORT,
+                    help=f'port to bind under streamable-http '
+                         f'(default: {DEFAULT_PORT}).')
+    ap.add_argument('--allowed-host', action='append', dest='allowed_hosts',
+                    metavar='HOST[:PORT]',
+                    help='accept only these Host headers (repeatable). '
+                         'Omitted, the DNS-rebinding check is off, as on '
+                         'the other central Mu2e servers.')
+    return ap.parse_args(argv)
+
+
+def main(argv=None):
+    args = _parse_args(argv)
     _configure_logging()
-    create_mcp_server().run()
+    # Before the server can serve a single call: the tools read this to
+    # decide whether `mine` can mean anything.
+    runtime.set_shared(args.transport != 'stdio')
+    mcp = create_mcp_server()
+    if args.transport == 'stdio':
+        mcp.run(transport='stdio')
+        return
+    logging.getLogger(__name__).info(
+        'serving %s on %s:%s', args.transport, args.host, args.port)
+    mcp.run(transport=args.transport,
+            **http_run_kwargs(args.host, args.port, args.allowed_hosts))
 
 
 if __name__ == '__main__':

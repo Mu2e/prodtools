@@ -2,21 +2,24 @@
 title: prodtools MCP server (read-only)
 tags: [reference, mcp, tooling, commissioned]
 sources: [2026-07-26-prodtools-mcp-design]
-updated: 2026-08-09
+updated: 2026-09-17
 ---
 
 # prodtools MCP server (read-only)
 
-Stdio MCP server exposing prodtools campaign status and dataset
-discovery to any MCP client. Spec:
+MCP server exposing prodtools campaign status and dataset discovery to
+any MCP client, over stdio or, since 2026-09-17, streamable-http so
+several readers can share one instance. Spec:
 `docs/superpowers/specs/2026-07-26-prodtools-mcp-design.md`.
 
 ## What it is
 
-Six tools: `campaign_status`, `list_campaigns`, `find_datasets`,
-`dataset_details`, `trace_provenance`, `get_server_info`. It imports
-`utils/*` in-process and composes existing functions; there is no LLM
-in it and it makes no external API calls.
+Eight tools: `campaign_status`, `list_campaigns`, `find_datasets`,
+`dataset_details`, `locate_file` (whether SAM knows a file, and its
+first location), `dataset_files` (every file of a dataset with size and
+/pnfs path at a location), `trace_provenance`, `get_server_info`. It
+imports `utils/*` in-process and composes existing functions; there is
+no LLM in it and it makes no external API calls.
 
 It performs **no writes** — no submission, no SAM definition create or
 delete, no ledger mutation. Every tool is safe as the calling user;
@@ -38,8 +41,19 @@ none needs mu2epro.
   call — an empty ledger reads exactly like "no campaigns" — so a
   self-submitted campaign needs `mine=true` to be found at all. Every
   reply names what it read: `db_path` at the top level, and `owner`
-  inside each `queue` block. Another user's ledger is not reachable
-  through MCP; use `submissions --db <path> status`.
+  inside each `queue` block.
+- **`user="<login>"` (2026-09-17) names the account explicitly**, moving
+  both axes through the same `_resolve_identity`, and works under either
+  transport — so another person's personal ledger IS reachable now
+  (they are world-readable). It is validated against a UNIX-login
+  regex because on a shared server it becomes a path component under
+  `/exp/mu2e/data/users/`. A ledger outside that layout still needs
+  `submissions --db <path> status`.
+- **`mine=true` is refused on a shared server.** Over stdio the process
+  account is the caller; over streamable-http it is the HOST, so a bare
+  `mine` would hand every reader the host's ledger and queue — the same
+  silent-wrong-account failure `mine` itself exists to prevent. The
+  refusal is an `invalid_argument` naming `user`.
 - **The queue block comes from live HTCondor ClassAd queries**
   (`mcp/src/prodtools_mcp/condor.py`), not `jobsub_q` table parsing.
   This is an INDEPENDENT path from `utils/submissions.py`'s
@@ -152,6 +166,49 @@ bash mcp/scripts/start_mcp.sh --check  # health
 mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py
 ```
 
+### Serving it to other people (2026-09-17)
+
+```bash
+bash mcp/scripts/start_mcp.sh --transport streamable-http \
+    --host 0.0.0.0 --port 8008 [--allowed-host <fqdn>:8008]
+```
+
+Clients then need one line and no checkout:
+`claude mcp add --transport http prodtools http://<host>:8008/mcp`.
+
+`--host` defaults to `127.0.0.1`, so the flag alone puts nothing on the
+network. `--allowed-host` turns on the SDK's DNS-rebinding check; left
+out, `transport_security` stays `None` and the SDK decides: a localhost
+bind gets the check with a localhost allowlist, any other bind gets
+none, which is what the other central Mu2e servers run. An allowlist that is ON but
+EMPTY rejects every request with 421, which is why the default is not
+"protection on with no hosts".
+
+Port 8008 is the first free one on mu2eaigpvm01, which runs one server
+per port (8000 registry, 8001 dqm, 8002 metacat, 8003 arxiv, 8004
+inspirehep, 8005 ecl, 8006 runs, 8007 memory — verified 2026-09-18 from
+`mcp/registry/ports.json`, which also marks which servers need a
+token). `mcp/deploy/prodtools-mcp.service` is the systemd unit.
+Two things a shared instance needs that a stdio one does not: CVMFS and
+an HTCondor client on the host (`install.sh` derives the htcondor series
+from `/usr/bin/condor_version`; without a client every queue block reads
+`unknown`), and its own credential with renewal — SAM and the ClassAd
+queries run as the SERVICE account, the HTCondor pool authenticates with
+SCITOKENS, and a bearer token lasts about three hours. The unit sets up
+no credential and says so: none of the other servers on the host needs
+one, so how the hosting account obtains a token is an open question for
+the host admin. A missing or expired token surfaces as
+`state: "unknown"`, never as zero.
+
+Only the read-only server is servable this way. `prodtools-write` stays
+stdio: `ksu`, `confirm=true` and the PreToolUse hook do not survive
+being reached over a port.
+
+Verified live 2026-09-17 on 127.0.0.1:8899 — `initialize` returns the
+server info, `list_campaigns` with no identity reads production (5
+active), `user="oksuzian"` reads the personal ledger path, and
+`mine=true` returns the `invalid_argument` refusal.
+
 `--check` is two-part on purpose. Part 1 imports the MCP dependencies
 **without** the ops `PYTHONPATH`. The neighbouring metacat server fails
 exactly this — `import mcp` raises `ModuleNotFoundError: No module
@@ -167,6 +224,23 @@ binding in `mcp/.venv-binding`; an ops-env retirement will present as a
 failed exec rather than an import error.
 
 ## Design notes worth keeping
+
+- **On mcp SDK 2.x since 2026-09-18** (`mcp>=2,<3`; all eight servers
+  on mu2eaigpvm01 run 2.x). What changed for us: `FastMCP` became
+  `MCPServer` (`mcp.server.mcpserver`); host, port and
+  `transport_security` moved from the constructor to `run()`
+  (`server.http_run_kwargs`); client result attributes went snake_case
+  (`is_error`); and **sync tools now run in worker threads** instead of
+  inline on the event loop. Notes below that say "FastMCP runs sync
+  tools inline" describe 1.x: under 2.x a hung call pins one thread and
+  its caller rather than freezing the server, and tool calls can overlap.
+  The bounds stay — they protect the caller's timeout either way — and
+  the overlap is safe because the tools share no mutable state (a fresh
+  samweb client and sqlite connection per call; `lru_cache` is
+  thread-safe; the shared-mode flag is set once before serving).
+  The spec is bounded on both sides because an unbounded `mcp>=1.2.0`
+  is how a fresh `install.sh` broke when 2.0 shipped while older venvs
+  kept working unnoticed.
 
 - **stdout is the JSON-RPC channel.** `trace_provenance` no longer
   touches `famtree` at all — `lineage.py` calls

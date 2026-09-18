@@ -9342,8 +9342,8 @@ class TestMcpCondor(unittest.TestCase):
         self.assertIsNone(clusters)
 
     def test_query_owner_jobs_bounds_wall_clock(self):
-        """FastMCP runs sync tools inline on the event loop — a hung
-        schedd must not wedge the whole server. Bounded by `timeout`;
+        """A sync tool blocks its caller until it returns — a hung
+        schedd must not wedge the call. Bounded by `timeout`;
         a timeout is 'unknown' (None), never zero, and the call must
         actually return close to the bound, not the full hang."""
         import time
@@ -10403,7 +10403,7 @@ class TestMcpFindDatasets(unittest.TestCase):
 
     def test_require_files_over_limit_is_refused_not_fanned_out(self):
         """require_files costs one serial HTTP round-trip per record and
-        FastMCP runs sync tools inline on the event loop."""
+        a sync tool blocks its caller until it returns."""
         from prodtools_mcp.tools import discovery
         from prodtools_mcp.adapters import ToolError
         many = [f'dig.mu2e.D{i:04d}.MDC2025au_best_v1_3.art'
@@ -10596,6 +10596,111 @@ class TestSamwebParentsOfFile(unittest.TestCase):
         from utils import samweb_wrapper
         src = inspect.getsource(samweb_wrapper.file_lineage)
         self.assertNotIn('except Exception', src)
+
+
+class TestMcpLocateFile(unittest.TestCase):
+    def test_known_file_exists_with_its_location(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.locate_file('cnf.u.T.e470313.0.tar',
+                                    locate_fn=lambda n: 'enstore:/pnfs/x')
+        self.assertEqual(res, {'name': 'cnf.u.T.e470313.0.tar', 'exists': True,
+                               'locations': ['enstore:/pnfs/x']})
+
+    def test_unknown_file_is_not_an_error(self):
+        from prodtools_mcp.tools import discovery
+        res = discovery.locate_file('cnf.u.T.e470313-001.0.tar', locate_fn=lambda n: '')
+        self.assertEqual(res, {'name': 'cnf.u.T.e470313-001.0.tar', 'exists': False,
+                               'locations': []})
+
+    def test_catalog_failure_is_classified(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(n):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.locate_file('x.y.z.w.0.tar', locate_fn=boom)
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+
+class TestMcpDatasetFiles(unittest.TestCase):
+    SIZES = {'nts.u.T.e470313.00000002.root': 20, 'nts.u.T.e470313.00000000.root': 10}
+
+    def test_files_with_sizes_and_hashed_paths_sorted_by_name(self):
+        from prodtools_mcp.tools import discovery
+        from utils.job_common import Mu2eName
+        res = discovery.dataset_files(
+            'nts.u.T.e470313.root', 'scratch',
+            sizes_fn=lambda ds: dict(self.SIZES),
+            dataset_dir_fn=lambda ds, loc: f'/pnfs/{loc}/{ds}')
+        self.assertEqual(res['root'], '/pnfs/scratch/nts.u.T.e470313.root')
+        self.assertEqual(res['n_files'], 2)
+        self.assertEqual(res['total_size'], 30)
+        self.assertFalse(res['truncated'])
+        self.assertEqual([f['name'] for f in res['files']],
+                         ['nts.u.T.e470313.00000000.root', 'nts.u.T.e470313.00000002.root'])
+        rel = Mu2eName.parse('nts.u.T.e470313.00000000.root').relpathname()
+        self.assertEqual(res['files'][0],
+                         {'name': 'nts.u.T.e470313.00000000.root', 'size': 10,
+                          'path': f'/pnfs/scratch/nts.u.T.e470313.root/{rel}'})
+
+    def test_limit_truncates_files_but_keeps_exact_totals(self):
+        from prodtools_mcp.tools import discovery
+        sizes = {'nts.u.T.e470313.00000000.root': 10,
+                 'nts.u.T.e470313.00000001.root': 20,
+                 'nts.u.T.e470313.00000002.root': 30}
+        res = discovery.dataset_files(
+            'nts.u.T.e470313.root', 'scratch', limit=2,
+            sizes_fn=lambda ds: dict(sizes),
+            dataset_dir_fn=lambda ds, loc: f'/pnfs/{loc}/{ds}')
+        self.assertEqual(len(res['files']), 2)
+        self.assertEqual(res['n_files'], 3)
+        self.assertEqual(res['total_size'], 60)
+        self.assertTrue(res['truncated'])
+        self.assertEqual([f['name'] for f in res['files']],
+                         ['nts.u.T.e470313.00000000.root', 'nts.u.T.e470313.00000001.root'])
+
+    def test_rejects_bad_limit(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        for bad in (0, discovery.DATASET_FILES_MAX_LIMIT + 1):
+            with self.assertRaises(ToolError) as ctx:
+                discovery.dataset_files(
+                    'nts.u.T.e470313.root', 'scratch', limit=bad,
+                    sizes_fn=lambda ds: dict(self.SIZES),
+                    dataset_dir_fn=lambda ds, loc: f'/pnfs/{loc}/{ds}')
+            self.assertEqual(ctx.exception.kind, 'invalid_argument', bad)
+
+    def test_unknown_location_is_invalid_argument(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+        with self.assertRaises(ToolError) as ctx:
+            discovery.dataset_files('nts.u.T.e470313.root', 'resilient',
+                                    sizes_fn=lambda ds: {},
+                                    dataset_dir_fn=lambda ds, loc: '')
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        self.assertIn('resilient', ctx.exception.message)
+
+    def test_listing_failure_is_classified(self):
+        from prodtools_mcp.tools import discovery
+        from prodtools_mcp.adapters import ToolError
+
+        def boom(ds):
+            raise RuntimeError('SAM down')
+
+        with self.assertRaises(ToolError) as ctx:
+            discovery.dataset_files('nts.u.T.e470313.root', 'scratch',
+                                    sizes_fn=boom,
+                                    dataset_dir_fn=lambda ds, loc: '/pnfs/x')
+        self.assertEqual(ctx.exception.kind, 'catalog_unavailable')
+
+    def test_registered_on_the_read_server(self):
+        from prodtools_mcp import server
+        self.assertIn('locate_file', server.TOOL_FUNCTIONS)
+        self.assertIn('dataset_files', server.TOOL_FUNCTIONS)
+        self.assertIn('locate_file', server.TOOL_NAMES)
+        self.assertIn('dataset_files', server.TOOL_NAMES)
 
 
 # ---------------------------------------------------------------------------
@@ -10847,7 +10952,7 @@ class TestMcpServerInfo(unittest.TestCase):
         from prodtools_mcp.server import get_server_info, TOOL_NAMES
         info = get_server_info()
         self.assertEqual(sorted(info['tools']), sorted(TOOL_NAMES))
-        self.assertEqual(len(TOOL_NAMES), 6)
+        self.assertEqual(len(TOOL_NAMES), 8)
 
 
 class TestMcpToolRegistration(unittest.TestCase):
@@ -10912,14 +11017,21 @@ class TestMcpToolRegistration(unittest.TestCase):
 
 try:
     import importlib
-    importlib.import_module('mcp.server.fastmcp')
+    importlib.import_module('mcp.server.mcpserver')
     _HAVE_FASTMCP = True
 except ImportError:
     # The mcp package requires Python >= 3.10; this suite also runs under
     # the system python3.9 (no MCP machinery available there, same reason
-    # prodtools_mcp.server defers its own FastMCP import). Skip rather
+    # prodtools_mcp.server defers its own MCPServer import). Skip rather
     # than error so the plain interpreter still gets a clean run; a
     # 3.10+ interpreter exercises the real registration.
+    #
+    # Every MCP-dependent skip in this file keys on this flag, never on
+    # importlib.util.find_spec: find_spec('mcp.server') imports the parent
+    # package, so an installed-but-unimportable mcp (the ops
+    # typing_extensions shadowing the venv's, say) raises out of a
+    # decorator at class-definition time and takes the whole module with
+    # it -- 1400 tests lost to skip two.
     _HAVE_FASTMCP = False
 
 
@@ -11244,18 +11356,47 @@ class TestWriteRunnerGate(unittest.TestCase):
         self.assertIn(
             "setupmu2e-art.sh > /dev/null 2>&1 \\\n"
             "  || { echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1; }"
-            " \\\n  && muse setup ops",
-            script)
-        self.assertIn(
-            "muse setup ops > /dev/null 2>&1 \\\n"
-            "  || { echo 'push_cnf: muse setup ops failed' >&2; exit 1; }"
             " \\\n  && setup OfflineOps",
             script)
         self.assertIn(
             "setup OfflineOps > /dev/null 2>&1 \\\n"
             "  || { echo 'push_cnf: setup OfflineOps failed' >&2; exit 1; }"
+            " \\\n  && muse setup ops",
+            script)
+        self.assertIn(
+            "muse setup ops > /dev/null 2>&1 \\\n"
+            "  || { echo 'push_cnf: muse setup ops failed' >&2; exit 1; }"
             " \\\n  && bash",
             script)
+
+    def test_worker_runjob_sets_up_offlineops_before_muse_ops(self):
+        """Same six.moves trap on the worker: bin/runjob.sh must run
+        `setup OfflineOps` before `muse setup ops` or every grid job
+        dies in runmu2e.py's `import samweb_client` on Python 3.12."""
+        import os
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(here, 'bin', 'runjob.sh')) as fh:
+            script = fh.read()
+        offline = [i for i, l in enumerate(script.splitlines())
+                   if l.startswith('setup OfflineOps')]
+        muse = [i for i, l in enumerate(script.splitlines())
+                if l.strip() == 'muse setup ops']
+        self.assertEqual(len(offline), 1, script)
+        self.assertEqual(len(muse), 1, script)
+        self.assertLess(offline[0], muse[0])
+
+    def test_offlineops_is_set_up_before_muse_ops_on_both_identities(self):
+        """OfflineOps' UPS sam_web_client v3_6 bundles six 1.11, which has
+        no six.moves on the Python 3.12 that `muse setup ops` provides
+        since ops-021 (2026-09-12). `muse setup ops` LAST puts the spack
+        view's samweb_client and six 1.16 in front, so json2jobdef's
+        `import samweb_client` works. Reversing the order breaks every
+        push_cnf at import time."""
+        for cmd in (self.runner.ksu_wrapper(['bin/json2jobdef']),
+                    self.runner._self_wrapper(['bin/json2jobdef'])):
+            script = cmd[-1]
+            self.assertLess(script.index('setup OfflineOps'),
+                            script.index('muse setup ops'), script)
 
     def test_setup_chain_syntax_is_valid_bash(self):
         # bash -n (parse-only) on the generated script, so a malformed
@@ -11311,7 +11452,7 @@ class TestWriteRunnerGate(unittest.TestCase):
     # — Round-2 review fixes: no Musing on either identity's env chain --
 
     def test_ksu_wrapper_sources_the_musing_setup_before_the_command(self):
-        # setupmu2e-art.sh + muse setup ops + setup OfflineOps alone
+        # setupmu2e-art.sh + setup OfflineOps + muse setup ops alone
         # leaves MUSE_DIR set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH
         # empty — bin/json2jobdef hard-exits in that state. The
         # Musing must be sourced from the entry's own simjob_setup,
@@ -18645,3 +18786,209 @@ class TestPushFileTool(unittest.TestCase):
         self.assertIn('Traceback', msg)
         self.assertIn(self.work, msg)
         self.assertTrue(os.path.exists(self.work))
+
+
+# ---------------------------------------------------------------------------
+# Shared (streamable-http) mode: transport flags and caller identity
+# ---------------------------------------------------------------------------
+
+class TestMcpSharedRuntime(unittest.TestCase):
+    """One process-wide fact: is this server serving one caller or many."""
+
+    def setUp(self):
+        from prodtools_mcp import runtime
+        self.runtime = runtime
+        self.addCleanup(runtime.set_shared, False)
+
+    def test_stdio_is_the_default(self):
+        self.assertFalse(self.runtime.is_shared())
+
+    def test_set_shared_flips_it(self):
+        self.runtime.set_shared(True)
+        self.assertTrue(self.runtime.is_shared())
+
+
+class TestMcpUserParameter(unittest.TestCase):
+    """`user` names whose ledger and queue to read, for both transports.
+
+    Over stdio the process user IS the caller, so `mine` is meaningful.
+    Over streamable-http the process user is the HOST: `mine` would hand
+    every reader the host's ledger, and an empty answer from the wrong
+    ledger reads exactly like "no campaigns".
+    """
+
+    def setUp(self):
+        from prodtools_mcp import condor, ledger_ro, runtime
+        from prodtools_mcp.adapters import ToolError
+        from prodtools_mcp.tools import status
+        self.status = status
+        self.condor = condor
+        self.ledger_ro = ledger_ro
+        self.runtime = runtime
+        self.ToolError = ToolError
+        self.addCleanup(runtime.set_shared, False)
+
+    def test_user_resolves_both_axes(self):
+        db, owner = self.status._resolve_identity(False, user='alice')
+        self.assertEqual(db,
+                         '/exp/mu2e/data/users/alice/prodtools/submissions.db')
+        self.assertEqual(owner, 'alice')
+
+    def test_user_wins_over_mine(self):
+        with patch('getpass.getuser', return_value='bob'):
+            db, owner = self.status._resolve_identity(True, user='alice')
+        self.assertEqual(owner, 'alice')
+        self.assertIn('/users/alice/', db)
+
+    def test_user_works_on_a_shared_server(self):
+        self.runtime.set_shared(True)
+        db, owner = self.status._resolve_identity(False, user='alice')
+        self.assertEqual(owner, 'alice')
+        self.assertIn('/users/alice/', db)
+
+    def test_mine_without_user_is_refused_when_shared(self):
+        self.runtime.set_shared(True)
+        with self.assertRaises(self.ToolError) as ctx:
+            self.status._resolve_identity(True)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        self.assertIn('user=', ctx.exception.remedy)
+
+    def test_mine_without_user_still_works_over_stdio(self):
+        with patch('getpass.getuser', return_value='bob'):
+            db, owner = self.status._resolve_identity(True)
+        self.assertEqual(owner, 'bob')
+        self.assertIn('/users/bob/', db)
+
+    def test_production_is_still_the_default_when_shared(self):
+        # The shared server's whole point. Only `mine` is refused.
+        self.runtime.set_shared(True)
+        db, owner = self.status._resolve_identity(False)
+        self.assertIsNone(db)
+        self.assertEqual(owner, self.condor.OWNER)
+
+    def test_user_must_be_a_login_not_a_path(self):
+        # `user` becomes a path component on a server other people reach.
+        for bad in ('../mu2epro', 'a/b', '', '.', 'alice; rm'):
+            with self.assertRaises(self.ToolError) as ctx:
+                self.status._resolve_identity(False, user=bad)
+            self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_campaign_status_reads_the_named_users_ledger(self):
+        seen = []
+
+        def snapshot(db_path):
+            seen.append(db_path)
+            return [], []
+
+        with patch.object(self.ledger_ro, 'snapshot', snapshot):
+            out = self.status.campaign_status(user='alice')
+        self.assertEqual(seen,
+                         ['/exp/mu2e/data/users/alice/prodtools/submissions.db'])
+        self.assertEqual(out['db_path'], seen[0])
+
+    def test_list_campaigns_reads_the_named_users_ledger(self):
+        seen = []
+
+        def campaigns(db_path, state=None):
+            seen.append(db_path)
+            return []
+
+        with patch.object(self.ledger_ro, 'campaigns', campaigns):
+            out = self.status.list_campaigns(user='alice')
+        self.assertEqual(seen,
+                         ['/exp/mu2e/data/users/alice/prodtools/submissions.db'])
+        self.assertEqual(out['db_path'], seen[0])
+
+
+class TestMcpTransportCli(unittest.TestCase):
+    """`--transport streamable-http` is what makes the server shareable."""
+
+    def setUp(self):
+        from prodtools_mcp import runtime, server
+        self.server = server
+        self.runtime = runtime
+        self.addCleanup(runtime.set_shared, False)
+
+    def test_defaults_are_stdio_on_localhost(self):
+        args = self.server._parse_args([])
+        self.assertEqual(args.transport, 'stdio')
+        self.assertEqual(args.host, '127.0.0.1')
+        self.assertEqual(args.port, self.server.DEFAULT_PORT)
+
+    def test_http_flags_parse(self):
+        args = self.server._parse_args(
+            ['--transport', 'streamable-http', '--host', '0.0.0.0',
+             '--port', '9001'])
+        self.assertEqual(args.transport, 'streamable-http')
+        self.assertEqual(args.host, '0.0.0.0')
+        self.assertEqual(args.port, 9001)
+
+    def test_unknown_transport_is_refused(self):
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stderr(devnull):
+                with self.assertRaises(SystemExit):
+                    self.server._parse_args(['--transport', 'carrier-pigeon'])
+
+    def _run_main(self, argv):
+        calls = {}
+
+        class FakeMcp:
+            def run(self, transport='stdio', **kwargs):
+                calls['transport'] = transport
+                calls['run_kwargs'] = kwargs
+                calls['shared_at_run'] = _runtime.is_shared()
+
+        from prodtools_mcp import runtime as _runtime
+        def fake_create(**kw):
+            calls['kwargs'] = kw
+            return FakeMcp()
+
+        with patch.object(self.server, 'create_mcp_server', fake_create):
+            self.server.main(argv)
+        return calls
+
+    def test_http_marks_the_server_shared_before_it_serves(self):
+        calls = self._run_main(['--transport', 'streamable-http'])
+        self.assertEqual(calls['transport'], 'streamable-http')
+        self.assertTrue(calls['shared_at_run'])
+
+    def test_stdio_does_not_mark_the_server_shared(self):
+        calls = self._run_main([])
+        self.assertEqual(calls['transport'], 'stdio')
+        self.assertFalse(calls['shared_at_run'])
+        # stdio takes no bind address: mcp 2.x would reject the kwargs.
+        self.assertEqual(calls['run_kwargs'], {})
+
+    def test_http_passes_the_bind_address_to_run(self):
+        # mcp 2.x: host/port belong to run(), not to the server object.
+        calls = self._run_main(['--transport', 'streamable-http',
+                                '--host', '0.0.0.0', '--port', '9001'])
+        self.assertEqual(calls['run_kwargs']['host'], '0.0.0.0')
+        self.assertEqual(calls['run_kwargs']['port'], 9001)
+        self.assertNotIn('transport_security', calls['run_kwargs'])
+
+    @unittest.skipUnless(_HAVE_FASTMCP,
+                         'needs the MCP venv (mcp/scripts/install.sh); the '
+                         'rest of this suite runs on the plain ops python')
+    def test_allowed_host_turns_on_rebinding_protection(self):
+        kwargs = self.server.http_run_kwargs(
+            '0.0.0.0', 9001, ['mu2eaigpvm01.fnal.gov:9001'])
+        sec = kwargs['transport_security']
+        self.assertTrue(sec.enable_dns_rebinding_protection)
+        self.assertIn('mu2eaigpvm01.fnal.gov:9001', sec.allowed_hosts)
+
+    @unittest.skipUnless(_HAVE_FASTMCP,
+                         'needs the MCP venv (mcp/scripts/install.sh)')
+    def test_no_allowed_host_leaves_protection_off(self):
+        # An empty allowlist WITH protection on rejects every request
+        # (421). Left out, the SDK decides: localhost binds get a
+        # localhost allowlist, anything else gets none — what the other
+        # central Mu2e servers run.
+        kwargs = self.server.http_run_kwargs('0.0.0.0', 9001)
+        self.assertNotIn('transport_security', kwargs)
+
+    def test_server_info_tells_a_shared_reader_to_pass_user(self):
+        self.runtime.set_shared(True)
+        ident = self.server.get_server_info()['identity']
+        self.assertIn('user', ident)
+        self.assertIn('user', ident['mine_true'])

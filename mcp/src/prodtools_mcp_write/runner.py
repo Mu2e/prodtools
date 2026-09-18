@@ -77,7 +77,15 @@ ALLOWED_ENTRY_POINTS = frozenset({
 #     statements): a failed CVMFS source or `muse setup ops` must abort
 #     the command, not silently run it in a broken environment
 #
-# `setupmu2e-art.sh && muse setup ops && setup OfflineOps` alone leaves
+# `setup OfflineOps` runs BEFORE `muse setup ops`, on purpose: OfflineOps
+# (UPS) drags in sam_web_client v3_6, whose bundled six 1.11 has no
+# working `six.moves` on the Python 3.12 that `muse setup ops` provides
+# since ops-021 (2026-09-12). With muse last, the spack view's python dir
+# (samweb_client, six 1.16) lands in front of the UPS one and
+# `import samweb_client` works; the other order fails at import inside
+# json2jobdef. Verified 2026-09-15; TestSelfWrapperSetupChain pins it.
+#
+# `setupmu2e-art.sh && setup OfflineOps && muse setup ops` alone leaves
 # MUSE_DIR set but `mu2e` NOTFOUND and MU2E_SEARCH_PATH empty:
 # `bin/json2jobdef` hard-exits without a Musing on top (see its own
 # `command -v mu2e` guard). `{musing_clause}` sources the entry's own
@@ -131,10 +139,10 @@ exit $__prodtools_rc
 _SETUP_CHAIN = """(
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: setupmu2e-art.sh failed' >&2; exit 1; }} \\
-  && {token_clause}muse setup ops > /dev/null 2>&1 \\
-  || {{ echo 'push_cnf: muse setup ops failed' >&2; exit 1; }} \\
-  && setup OfflineOps > /dev/null 2>&1 \\
+  && {token_clause}setup OfflineOps > /dev/null 2>&1 \\
   || {{ echo 'push_cnf: setup OfflineOps failed' >&2; exit 1; }} \\
+  && muse setup ops > /dev/null 2>&1 \\
+  || {{ echo 'push_cnf: muse setup ops failed' >&2; exit 1; }} \\
   && {musing_clause}{command}
 )
 """ + _RC_TAIL
