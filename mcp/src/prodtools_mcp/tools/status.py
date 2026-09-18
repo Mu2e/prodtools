@@ -5,17 +5,23 @@ queue snapshot and SAM output counts. The bare call is ledger-only: a
 23-row ledger fanned out to one SAM count per output dataset would
 exceed the client's timeout.
 """
-from prodtools_mcp import condor, ledger_ro
+from prodtools_mcp import condor, ledger_ro, runtime
 from prodtools_mcp.adapters import ToolError
 
 import getpass
+import re
 
 from utils import submission_ledger
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
+# `user` becomes a path component under /exp/mu2e/data/users/ on a
+# server other people reach, so it is checked rather than trusted: a
+# UNIX login, not a path, not a shell word.
+LOGIN_RE = re.compile(r'^[a-z_][a-z0-9_-]{0,31}$')
 
-def _resolve_identity(mine):
+
+def _resolve_identity(mine, user=None):
     """(ledger path, condor owner) for one call.
 
     ONE resolution feeds BOTH axes. `ledger_for()` with no argument uses
@@ -25,17 +31,39 @@ def _resolve_identity(mine):
     queue come to report different accounts — the failure 171517f fixed
     on the write side.
 
-    The two halves are deliberately asymmetric when mine is False. The
-    ledger returns None so `ledger_ro.DEFAULT_DB` still applies, and that
-    constant is os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB): a
-    resolved path here would silently destroy the override. The condor
+    `user` names an account explicitly and works under either transport.
+    `mine` is the same thing derived from the process, which only holds
+    over stdio: on a shared server (runtime.is_shared()) the process user
+    is the host, so a bare `mine` is refused rather than silently
+    answering for the wrong account.
+
+    The two halves are deliberately asymmetric when neither is given.
+    The ledger returns None so `ledger_ro.DEFAULT_DB` still applies, and
+    that constant is os.environ.get('MU2E_SUBMISSION_DB', PRODUCTION_DB):
+    a resolved path here would silently destroy the override. The condor
     owner has no such override, so it is returned concrete and the
     payload can always name it.
 
     Creates nothing: `ensure_ledger_dir` is the CLI's, not this server's.
     """
+    if user is not None:
+        if not LOGIN_RE.match(user):
+            raise ToolError(
+                'invalid_argument',
+                f'{user!r} is not a UNIX login',
+                'Pass the account name alone, e.g. user="mu2epro". It '
+                'names a directory under /exp/mu2e/data/users/.')
+        return submission_ledger.ledger_for(user), user
     if not mine:
         return None, condor.OWNER
+    if runtime.is_shared():
+        raise ToolError(
+            'invalid_argument',
+            'mine=true means nothing on a shared server',
+            'This process serves several readers over HTTP, so "mine" '
+            'would resolve to the account running the server, not '
+            'yours. Pass user="<your login>" instead, or run your own '
+            'stdio server.')
     return submission_ledger.ledger_for(), getpass.getuser()
 
 
@@ -313,8 +341,9 @@ def _matches(camp, campaign, campaign_id):
 
 
 def campaign_status(campaign=None, campaign_id=None, include_queue=True,
-                    include_outputs=True, mine=False, db_path=None,
-                    clusters_fn=None, count_fn=None, job_pars_fn=None):
+                    include_outputs=True, mine=False, user=None,
+                    db_path=None, clusters_fn=None, count_fn=None,
+                    job_pars_fn=None):
     """Status of one campaign, or a ledger-only summary of all of them.
 
     With neither `campaign` nor `campaign_id`, this is ledger-only: local
@@ -322,7 +351,7 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     """
     from utils.jobdesc import njobs_of
 
-    resolved_db, owner = _resolve_identity(mine)
+    resolved_db, owner = _resolve_identity(mine, user)
     # db_path is test-only: it is not exposed through MCP (server.py
     # offers no such parameter). It wins over the ledger `mine` derived,
     # but leaves `owner` (the queue axis) alone -- `owner` only ever
@@ -401,7 +430,7 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     return {'db_path': db_path or ledger_ro.DEFAULT_DB, 'campaigns': out}
 
 
-def list_campaigns(state=None, mine=False, db_path=None):
+def list_campaigns(state=None, mine=False, user=None, db_path=None):
     """Ledger-only campaign listing. No network.
 
     `db_path` is echoed back for the same reason campaign_status echoes
@@ -413,7 +442,7 @@ def list_campaigns(state=None, mine=False, db_path=None):
             'invalid_argument',
             f'unknown state {state!r}',
             f'Expected one of {CAMPAIGN_STATES}.')
-    resolved_db, _ = _resolve_identity(mine)
+    resolved_db, _ = _resolve_identity(mine, user)
     db_path = db_path or resolved_db
     camps = ledger_ro.campaigns(db_path, state=state)
     from utils.jobdesc import njobs_of

@@ -1,0 +1,47 @@
+# Read-only prodtools MCP server, served over streamable-http so several
+# readers share one instance. Install as
+# /etc/systemd/system/prodtools-mcp.service, edit the three paths and the
+# principal below, then:
+#
+#   systemctl daemon-reload && systemctl enable --now prodtools-mcp
+#
+# The host needs CVMFS (the launcher sources setupmu2e-art.sh and runs
+# `muse setup ops`) and an HTCondor client: mcp/scripts/install.sh picks
+# the htcondor python series from /usr/bin/condor_version, and without a
+# client every queue block reads state="unknown".
+#
+# SAM and the HTCondor queries run as THIS account, not as the reader, so
+# the service needs its own kerberos credential and something to renew
+# it. An expired ticket does not fail loudly: it surfaces as
+# state="unknown", which a reader must never treat as zero.
+#
+# This unit is plain HTTP with no authentication, matching the other
+# centrally hosted Mu2e servers on mu2eaigpvm01. Bind it where only the
+# lab network can reach it. To refuse unexpected Host headers, add
+# --allowed-host <fqdn>:8003 to ExecStart.
+
+[Unit]
+Description=Mu2e prodtools read-only MCP server
+Documentation=https://github.com/Mu2e/prodtools/blob/main/mcp/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mu2eai
+Group=mu2e
+WorkingDirectory=/home/mu2eai
+
+RuntimeDirectory=prodtools-mcp
+Environment=KRB5CCNAME=FILE:/run/prodtools-mcp/krb5cc
+Environment=PRODTOOLS_MCP_LOG_LEVEL=INFO
+
+ExecStartPre=/usr/bin/kinit -k -t /etc/krb5.keytab.mu2eai mu2eai/mu2eaigpvm01.fnal.gov@FNAL.GOV
+ExecStart=/opt/prodtools/mcp/scripts/start_mcp.sh \
+    --transport streamable-http --host 0.0.0.0 --port 8003
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

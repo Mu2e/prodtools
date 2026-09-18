@@ -18779,3 +18779,198 @@ class TestPushFileTool(unittest.TestCase):
         self.assertIn('Traceback', msg)
         self.assertIn(self.work, msg)
         self.assertTrue(os.path.exists(self.work))
+
+
+# ---------------------------------------------------------------------------
+# Shared (streamable-http) mode: transport flags and caller identity
+# ---------------------------------------------------------------------------
+
+class TestMcpSharedRuntime(unittest.TestCase):
+    """One process-wide fact: is this server serving one caller or many."""
+
+    def setUp(self):
+        from prodtools_mcp import runtime
+        self.runtime = runtime
+        self.addCleanup(runtime.set_shared, False)
+
+    def test_stdio_is_the_default(self):
+        self.assertFalse(self.runtime.is_shared())
+
+    def test_set_shared_flips_it(self):
+        self.runtime.set_shared(True)
+        self.assertTrue(self.runtime.is_shared())
+
+
+class TestMcpUserParameter(unittest.TestCase):
+    """`user` names whose ledger and queue to read, for both transports.
+
+    Over stdio the process user IS the caller, so `mine` is meaningful.
+    Over streamable-http the process user is the HOST: `mine` would hand
+    every reader the host's ledger, and an empty answer from the wrong
+    ledger reads exactly like "no campaigns".
+    """
+
+    def setUp(self):
+        from prodtools_mcp import condor, ledger_ro, runtime
+        from prodtools_mcp.adapters import ToolError
+        from prodtools_mcp.tools import status
+        self.status = status
+        self.condor = condor
+        self.ledger_ro = ledger_ro
+        self.runtime = runtime
+        self.ToolError = ToolError
+        self.addCleanup(runtime.set_shared, False)
+
+    def test_user_resolves_both_axes(self):
+        db, owner = self.status._resolve_identity(False, user='alice')
+        self.assertEqual(db,
+                         '/exp/mu2e/data/users/alice/prodtools/submissions.db')
+        self.assertEqual(owner, 'alice')
+
+    def test_user_wins_over_mine(self):
+        with patch('getpass.getuser', return_value='bob'):
+            db, owner = self.status._resolve_identity(True, user='alice')
+        self.assertEqual(owner, 'alice')
+        self.assertIn('/users/alice/', db)
+
+    def test_user_works_on_a_shared_server(self):
+        self.runtime.set_shared(True)
+        db, owner = self.status._resolve_identity(False, user='alice')
+        self.assertEqual(owner, 'alice')
+        self.assertIn('/users/alice/', db)
+
+    def test_mine_without_user_is_refused_when_shared(self):
+        self.runtime.set_shared(True)
+        with self.assertRaises(self.ToolError) as ctx:
+            self.status._resolve_identity(True)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+        self.assertIn('user=', ctx.exception.remedy)
+
+    def test_mine_without_user_still_works_over_stdio(self):
+        with patch('getpass.getuser', return_value='bob'):
+            db, owner = self.status._resolve_identity(True)
+        self.assertEqual(owner, 'bob')
+        self.assertIn('/users/bob/', db)
+
+    def test_production_is_still_the_default_when_shared(self):
+        # The shared server's whole point. Only `mine` is refused.
+        self.runtime.set_shared(True)
+        db, owner = self.status._resolve_identity(False)
+        self.assertIsNone(db)
+        self.assertEqual(owner, self.condor.OWNER)
+
+    def test_user_must_be_a_login_not_a_path(self):
+        # `user` becomes a path component on a server other people reach.
+        for bad in ('../mu2epro', 'a/b', '', '.', 'alice; rm'):
+            with self.assertRaises(self.ToolError) as ctx:
+                self.status._resolve_identity(False, user=bad)
+            self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_campaign_status_reads_the_named_users_ledger(self):
+        seen = []
+
+        def snapshot(db_path):
+            seen.append(db_path)
+            return [], []
+
+        with patch.object(self.ledger_ro, 'snapshot', snapshot):
+            out = self.status.campaign_status(user='alice')
+        self.assertEqual(seen,
+                         ['/exp/mu2e/data/users/alice/prodtools/submissions.db'])
+        self.assertEqual(out['db_path'], seen[0])
+
+    def test_list_campaigns_reads_the_named_users_ledger(self):
+        seen = []
+
+        def campaigns(db_path, state=None):
+            seen.append(db_path)
+            return []
+
+        with patch.object(self.ledger_ro, 'campaigns', campaigns):
+            out = self.status.list_campaigns(user='alice')
+        self.assertEqual(seen,
+                         ['/exp/mu2e/data/users/alice/prodtools/submissions.db'])
+        self.assertEqual(out['db_path'], seen[0])
+
+
+class TestMcpTransportCli(unittest.TestCase):
+    """`--transport streamable-http` is what makes the server shareable."""
+
+    def setUp(self):
+        from prodtools_mcp import runtime, server
+        self.server = server
+        self.runtime = runtime
+        self.addCleanup(runtime.set_shared, False)
+
+    def test_defaults_are_stdio_on_localhost(self):
+        args = self.server._parse_args([])
+        self.assertEqual(args.transport, 'stdio')
+        self.assertEqual(args.host, '127.0.0.1')
+        self.assertEqual(args.port, self.server.DEFAULT_PORT)
+
+    def test_http_flags_parse(self):
+        args = self.server._parse_args(
+            ['--transport', 'streamable-http', '--host', '0.0.0.0',
+             '--port', '9001'])
+        self.assertEqual(args.transport, 'streamable-http')
+        self.assertEqual(args.host, '0.0.0.0')
+        self.assertEqual(args.port, 9001)
+
+    def test_unknown_transport_is_refused(self):
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stderr(devnull):
+                with self.assertRaises(SystemExit):
+                    self.server._parse_args(['--transport', 'carrier-pigeon'])
+
+    def _run_main(self, argv):
+        calls = {}
+
+        class FakeMcp:
+            def run(self, transport='stdio'):
+                calls['transport'] = transport
+                calls['shared_at_run'] = _runtime.is_shared()
+
+        from prodtools_mcp import runtime as _runtime
+        def fake_create(**kw):
+            calls['kwargs'] = kw
+            return FakeMcp()
+
+        with patch.object(self.server, 'create_mcp_server', fake_create):
+            self.server.main(argv)
+        return calls
+
+    def test_http_marks_the_server_shared_before_it_serves(self):
+        calls = self._run_main(['--transport', 'streamable-http'])
+        self.assertEqual(calls['transport'], 'streamable-http')
+        self.assertTrue(calls['shared_at_run'])
+
+    def test_stdio_does_not_mark_the_server_shared(self):
+        calls = self._run_main([])
+        self.assertEqual(calls['transport'], 'stdio')
+        self.assertFalse(calls['shared_at_run'])
+
+    @unittest.skipUnless(importlib.util.find_spec('mcp.server'),
+                         'needs the MCP venv (mcp/scripts/install.sh); the '
+                         'rest of this suite runs on the plain ops python')
+    def test_allowed_host_turns_on_rebinding_protection(self):
+        mcp = self.server.create_mcp_server(
+            host='0.0.0.0', port=9001,
+            allowed_hosts=['mu2eaigpvm01.fnal.gov:9001'])
+        sec = mcp.settings.transport_security
+        self.assertTrue(sec.enable_dns_rebinding_protection)
+        self.assertIn('mu2eaigpvm01.fnal.gov:9001', sec.allowed_hosts)
+
+    @unittest.skipUnless(importlib.util.find_spec('mcp.server'),
+                         'needs the MCP venv (mcp/scripts/install.sh)')
+    def test_no_allowed_host_leaves_protection_off(self):
+        # An empty allowlist WITH protection on rejects every request
+        # (421); the SDK's own default is protection off, and that is
+        # what the other central Mu2e servers run.
+        mcp = self.server.create_mcp_server(host='0.0.0.0', port=9001)
+        self.assertIsNone(mcp.settings.transport_security)
+
+    def test_server_info_tells_a_shared_reader_to_pass_user(self):
+        self.runtime.set_shared(True)
+        ident = self.server.get_server_info()['identity']
+        self.assertIn('user', ident)
+        self.assertIn('user', ident['mine_true'])

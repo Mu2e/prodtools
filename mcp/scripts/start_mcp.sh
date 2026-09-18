@@ -49,4 +49,4 @@ PY
   exit 0
 fi
 
-exec "$PYTHON_BIN" -m prodtools_mcp.server
+exec "$PYTHON_BIN" -m prodtools_mcp.server "$@"
