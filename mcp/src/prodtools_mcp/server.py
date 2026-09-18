@@ -15,9 +15,11 @@ from prodtools_mcp.adapters import safe_tool
 from prodtools_mcp.tools import discovery, lineage, status
 
 
-# 8000 registry, 8001 dqm, 8002 metacat on mu2eaigpvm01; this is the
-# next free one, so the central hosts keep one server per port.
-DEFAULT_PORT = 8003
+# mu2eaigpvm01 runs one server per port, registered in the registry's
+# ports.json: 8000 registry, 8001 dqm, 8002 metacat, 8003 arxiv, 8004
+# inspirehep, 8005 ecl, 8006 runs, 8007 memory (verified 2026-09-18).
+# 8008 is the first free one; check ports.json before claiming it.
+DEFAULT_PORT = 8008
 
 INSTRUCTIONS = """
 Read-only MCP server for Mu2e prodtools production state.

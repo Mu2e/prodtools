@@ -170,11 +170,11 @@ mcp/.venv/bin/python mcp/scripts/smoke_test_stdio.py
 
 ```bash
 bash mcp/scripts/start_mcp.sh --transport streamable-http \
-    --host 0.0.0.0 --port 8003 [--allowed-host <fqdn>:8003]
+    --host 0.0.0.0 --port 8008 [--allowed-host <fqdn>:8008]
 ```
 
 Clients then need one line and no checkout:
-`claude mcp add --transport http prodtools http://<host>:8003/mcp`.
+`claude mcp add --transport http prodtools http://<host>:8008/mcp`.
 
 `--host` defaults to `127.0.0.1`, so the flag alone puts nothing on the
 network. `--allowed-host` turns on the SDK's DNS-rebinding check; left
@@ -183,8 +183,11 @@ what the other central Mu2e servers run. An allowlist that is ON but
 EMPTY rejects every request with 421, which is why the default is not
 "protection on with no hosts".
 
-Port 8003 neighbours the mu2eaigpvm01 servers (8000 registry, 8001 dqm,
-8002 metacat). `mcp/deploy/prodtools-mcp.service` is the systemd unit.
+Port 8008 is the first free one on mu2eaigpvm01, which runs one server
+per port (8000 registry, 8001 dqm, 8002 metacat, 8003 arxiv, 8004
+inspirehep, 8005 ecl, 8006 runs, 8007 memory — verified 2026-09-18 from
+`mcp/registry/ports.json`, which also marks which servers need a
+token). `mcp/deploy/prodtools-mcp.service` is the systemd unit.
 Two things a shared instance needs that a stdio one does not: CVMFS and
 an HTCondor client on the host (`install.sh` derives the htcondor series
 from `/usr/bin/condor_version`; without a client every queue block reads

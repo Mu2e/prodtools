@@ -18,7 +18,7 @@
 # This unit is plain HTTP with no authentication, matching the other
 # centrally hosted Mu2e servers on mu2eaigpvm01. Bind it where only the
 # lab network can reach it. To refuse unexpected Host headers, add
-# --allowed-host <fqdn>:8003 to ExecStart.
+# --allowed-host <fqdn>:8008 to ExecStart.
 
 [Unit]
 Description=Mu2e prodtools read-only MCP server
@@ -38,7 +38,7 @@ Environment=PRODTOOLS_MCP_LOG_LEVEL=INFO
 
 ExecStartPre=/usr/bin/kinit -k -t /etc/krb5.keytab.mu2eai mu2eai/mu2eaigpvm01.fnal.gov@FNAL.GOV
 ExecStart=/opt/prodtools/mcp/scripts/start_mcp.sh \
-    --transport streamable-http --host 0.0.0.0 --port 8003
+    --transport streamable-http --host 0.0.0.0 --port 8008
 
 Restart=on-failure
 RestartSec=10

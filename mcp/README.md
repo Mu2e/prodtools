@@ -10,14 +10,14 @@ remembering which CLI to run.
 
 **Someone already runs one for the collaboration.** Nothing to install:
 
-    claude mcp add --transport http prodtools http://<host>:8003/mcp
+    claude mcp add --transport http prodtools http://<host>:8008/mcp
 
 Other MCP clients take the same thing as config:
 
 ```json
 {
   "mcpServers": {
-    "prodtools": { "type": "http", "url": "http://<host>:8003/mcp" }
+    "prodtools": { "type": "http", "url": "http://<host>:8008/mcp" }
   }
 }
 ```
@@ -92,7 +92,7 @@ Health check: `bash mcp/scripts/start_mcp.sh --check`.
 ### Serve it to other people
 
     bash mcp/scripts/start_mcp.sh --transport streamable-http \
-        --host 0.0.0.0 --port 8003 [--allowed-host <fqdn>:8003]
+        --host 0.0.0.0 --port 8008 [--allowed-host <fqdn>:8008]
 
 `--host` defaults to `127.0.0.1`, so nothing reaches the network until
 you say so, and `--allowed-host` (repeatable) turns on the SDK's

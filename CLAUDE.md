@@ -78,7 +78,7 @@ you. A ledger outside `/exp/mu2e/data/users/<login>/prodtools/` is not
 reachable here — use `submissions --db <path> status`.
 
 The read-only server also runs as a shared HTTP endpoint
-(`start_mcp.sh --transport streamable-http --host 0.0.0.0 --port 8003`,
+(`start_mcp.sh --transport streamable-http --host 0.0.0.0 --port 8008`,
 systemd unit in `mcp/deploy/`). There the process account is the host,
 not the caller, so `mine=true` is refused and `user=` is the way to read
 a personal ledger. `prodtools-write` stays stdio.
