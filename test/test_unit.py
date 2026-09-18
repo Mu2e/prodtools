@@ -11025,6 +11025,13 @@ except ImportError:
     # prodtools_mcp.server defers its own MCPServer import). Skip rather
     # than error so the plain interpreter still gets a clean run; a
     # 3.10+ interpreter exercises the real registration.
+    #
+    # Every MCP-dependent skip in this file keys on this flag, never on
+    # importlib.util.find_spec: find_spec('mcp.server') imports the parent
+    # package, so an installed-but-unimportable mcp (the ops
+    # typing_extensions shadowing the venv's, say) raises out of a
+    # decorator at class-definition time and takes the whole module with
+    # it -- 1400 tests lost to skip two.
     _HAVE_FASTMCP = False
 
 
@@ -18960,7 +18967,7 @@ class TestMcpTransportCli(unittest.TestCase):
         self.assertEqual(calls['run_kwargs']['port'], 9001)
         self.assertNotIn('transport_security', calls['run_kwargs'])
 
-    @unittest.skipUnless(importlib.util.find_spec('mcp.server'),
+    @unittest.skipUnless(_HAVE_FASTMCP,
                          'needs the MCP venv (mcp/scripts/install.sh); the '
                          'rest of this suite runs on the plain ops python')
     def test_allowed_host_turns_on_rebinding_protection(self):
@@ -18970,7 +18977,7 @@ class TestMcpTransportCli(unittest.TestCase):
         self.assertTrue(sec.enable_dns_rebinding_protection)
         self.assertIn('mu2eaigpvm01.fnal.gov:9001', sec.allowed_hosts)
 
-    @unittest.skipUnless(importlib.util.find_spec('mcp.server'),
+    @unittest.skipUnless(_HAVE_FASTMCP,
                          'needs the MCP venv (mcp/scripts/install.sh)')
     def test_no_allowed_host_leaves_protection_off(self):
         # An empty allowlist WITH protection on rejects every request
