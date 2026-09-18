@@ -192,9 +192,13 @@ token). `mcp/deploy/prodtools-mcp.service` is the systemd unit.
 Two things a shared instance needs that a stdio one does not: CVMFS and
 an HTCondor client on the host (`install.sh` derives the htcondor series
 from `/usr/bin/condor_version`; without a client every queue block reads
-`unknown`), and its own kerberos credential with renewal — SAM and the
-ClassAd queries run as the SERVICE account, and an expired ticket
-surfaces as `state: "unknown"`, never as zero.
+`unknown`), and its own credential with renewal — SAM and the ClassAd
+queries run as the SERVICE account, the HTCondor pool authenticates with
+SCITOKENS, and a bearer token lasts about three hours. The unit sets up
+no credential and says so: none of the other servers on the host needs
+one, so how the hosting account obtains a token is an open question for
+the host admin. A missing or expired token surfaces as
+`state: "unknown"`, never as zero.
 
 Only the read-only server is servable this way. `prodtools-write` stays
 stdio: `ksu`, `confirm=true` and the PreToolUse hook do not survive

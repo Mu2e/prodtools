@@ -97,11 +97,12 @@ Health check: `bash mcp/scripts/start_mcp.sh --check`.
 `--host` defaults to `127.0.0.1`, so nothing reaches the network until
 you say so, and `--allowed-host` (repeatable) turns on the SDK's
 DNS-rebinding check — left out, that check is off, as on the other
-central Mu2e servers. `mcp/deploy/prodtools-mcp.service` is a systemd
-unit for a permanent instance; read its header first, because a shared
-server queries SAM and HTCondor as ITS OWN account and needs a keytab
-plus ticket renewal. A stale ticket shows up as `state: "unknown"`,
-never as zero.
+central Mu2e servers. `mcp/deploy/prodtools-mcp.service` is a
+`systemd --user` unit for a permanent instance; read its header first,
+because a shared server queries SAM and HTCondor as ITS OWN account. The
+HTCondor pool wants a bearer token, which lasts about three hours, and
+how the hosting account gets and renews one is left open there. A
+missing or expired token shows up as `state: "unknown"`, never as zero.
 
 Only the read-only server is servable this way. `prodtools-write` stays
 stdio: it submits as mu2epro behind `ksu`, `confirm=true` and a
