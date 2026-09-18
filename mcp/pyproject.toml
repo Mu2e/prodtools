@@ -8,7 +8,12 @@ version = "0.1.0"
 description = "Read-only MCP stdio server for Mu2e prodtools status and discovery"
 requires-python = ">=3.10"
 dependencies = [
-  "mcp>=1.2.0",
+  # Ceiling, not just a floor: mcp 2.x renamed FastMCP to MCPServer and
+  # changed other APIs, so an unpinned fresh install (2.2.0 as of
+  # 2026-09-18) fails at `from mcp.server.fastmcp import FastMCP`. The
+  # SDK's own error says to pin 'mcp<2' to keep running v1 code. Venvs
+  # built before 2.0 kept working, which is how this went unnoticed.
+  "mcp>=1.2.0,<2",
   # Floor only. The EXACT version is chosen at install time by
   # mcp/scripts/install.sh, which reads /usr/bin/condor_version and
   # installs the matching major.minor series. A literal pin lived here
