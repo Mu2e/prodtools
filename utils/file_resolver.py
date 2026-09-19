@@ -8,7 +8,7 @@ token scopes) and the per-inloc location logic that used to be spread
 across jobfcl, stash_utils, datasetFileList, and jobsub_argv. SAM
 access goes exclusively through samweb_wrapper.
 
-Import cost: pure at import time (no samweb_client / gfal2); those are
+Import cost: pure at import time (no samweb_client); that is
 lazily imported on first use, so pure-function consumers (jobsub_argv,
 unit tests) and dir:-mode resolution work without the Mu2e ops env.
 """
@@ -16,13 +16,14 @@ unit tests) and dir:-mode resolution work without the Mu2e ops env.
 import errno
 import os
 import re
+import subprocess
 import sys
 from typing import Optional
 
 from .job_common import Mu2eName, remove_storage_prefix
 from .jobdesc import dir_inloc_path, is_dir_inloc
 
-# xrootd door prefixes: fcl read URLs use `xroot://`, gfal2 stat uses
+# xrootd door prefixes: fcl read URLs use `xroot://`, gfal-stat uses
 # `root://`. Both predate this module; kept as-is — worker fcl output
 # must stay byte-identical.
 XROOT_READ_PREFIX = 'xroot://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/'
@@ -133,7 +134,7 @@ def file_path_at(filename: str, location: str) -> str:
 
 def file_exists_at(path: str) -> bool:
     """True if `path` is readable. CVMFS is POSIX; /pnfs goes through
-    gfal2 xrootd so this answers correctly on a grid worker, which has no
+    gfal-stat over xrootd so this answers correctly on a grid worker, which has no
     dCache mount. A stat never triggers a tape recall — only a read does."""
     if not path:
         return False
@@ -374,40 +375,46 @@ def infer_dataset_location(dataset_name, first_file=_UNSET) -> str:
 # Existence probes
 # ---------------------------------------------------------------------------
 
-_gfal2_ctx = None
+def pnfs_exists(pnfs_path: str, runner=subprocess.run) -> bool:
+    """Check if a /pnfs/ path exists, by `gfal-stat` over xrootd.
 
+    xrootd answers on both interactive and grid worker nodes, which have
+    no POSIX dCache mount. A stat never triggers a tape recall.
 
-def pnfs_exists(pnfs_path: str) -> bool:
-    """Check if a /pnfs/ path exists via gfal2 xrootd.
-
-    gfal2 gives reliable xrootd access on both interactive and grid
-    worker nodes (no POSIX dCache required). Returns False if gfal2 is
-    unavailable or the stat fails, so the caller tries the next area.
-
-    The context is created once and reused — creation loads plugins and
-    dominates the cost of a per-file stat (a resilient mixing job checks
-    ~90 files).
+    The CLI, not the gfal2 python binding. The binding is built against a
+    Boost.Python that predates Python 3.12, and since ops-021 (2026-09-12)
+    `import gfal2` dies in the ops environment with "type
+    Boost.Python.enum has the Py_TPFLAGS_HAVE_GC flag but has no traverse
+    function". That failed every grid job with input files before mu2e
+    started, and jobfcl/fcldump with it. `gfal-stat` runs on the system
+    python and is unaffected; it is in the fnal-wn-el9 worker image next
+    to the gfal-copy that pushOutput already depends on. The price is a
+    process per stat, about 0.3 s: FileResolver stats once per DATASET,
+    not per file, so a mixing job pays for a handful.
     """
-    global _gfal2_ctx
     xroot_url = pnfs_path.replace('/pnfs/', XROOT_STAT_PREFIX, 1)
     try:
-        if _gfal2_ctx is None:
-            import gfal2
-            _gfal2_ctx = gfal2.creat_context()
-        _gfal2_ctx.stat(xroot_url)
-        return True
-    except Exception as e:
-        # Only a genuine "no such file" means absent. Anything else --
-        # an expired token stats as EBADE(52), a dead door, gfal2 not
-        # installed — is a failure to ANSWER the question, and must not
-        # render as "the file is not there": that turns an auth outage
-        # into a bogus claim about the data. Fail loud instead.
-        if getattr(e, 'code', None) == errno.ENOENT:
-            return False
+        res = runner(['gfal-stat', xroot_url], capture_output=True, text=True)
+    except OSError as e:
         raise RuntimeError(
-            f"could not check {pnfs_path}: {e}. This is not evidence the "
-            f"file is absent — an expired bearer token stats as "
-            f"'Invalid exchange' (code 52). Run getToken and retry.") from e
+            f"could not check {pnfs_path}: cannot run gfal-stat ({e}). "
+            f"This is not evidence the file is absent.") from e
+    if res.returncode == 0:
+        return True
+    # gfal-stat exits with the errno. Only a genuine "no such file" means
+    # absent. Anything else -- an expired token stats as EBADE(52), a dead
+    # door -- is a failure to ANSWER the question, and must not render as
+    # "the file is not there": that turns an auth outage into a bogus
+    # claim about the data, and sends the resolver on to the next area.
+    # Fail loud instead.
+    if res.returncode == errno.ENOENT:
+        return False
+    detail = (res.stderr or res.stdout or '').strip().splitlines()
+    raise RuntimeError(
+        f"could not check {pnfs_path}: gfal-stat rc={res.returncode}: "
+        f"{detail[-1] if detail else 'no output'}. This is not evidence "
+        f"the file is absent — an expired bearer token stats as 'Invalid "
+        f"exchange' (rc=52); run getToken and retry if that is what you see.")
 
 
 # Historical name, kept: reads as intent at resilient call sites.
