@@ -25,11 +25,19 @@ Other MCP clients take the same thing as config:
 **Or run your own**, on a Fermilab node (mu2egpvm, with CVMFS):
 
 ```bash
+cd /exp/mu2e/app/users/$USER
 git clone https://github.com/Mu2e/prodtools
 cd prodtools
 bash mcp/scripts/install.sh            # once, ~1 minute
 bash mcp/scripts/start_mcp.sh --check  # should print OK three times
 ```
+
+Every path below assumes that location,
+`/exp/mu2e/app/users/<user>/prodtools`, with `<user>` your login. Any
+other place works as long as you write the full path: not `~`, and not a
+relative one, because the client starts the script from its own
+directory. Inside a shell `$USER` does the substitution for you; in a
+JSON file or a tool call you type the login out.
 
 Your client then starts it on demand — `.mcp.json` in the clone already
 does this for Claude Code; for another client:
@@ -37,7 +45,7 @@ does this for Claude Code; for another client:
 ```json
 {
   "mcpServers": {
-    "prodtools": { "command": "/path/to/prodtools/mcp/scripts/start_mcp.sh" }
+    "prodtools": { "command": "/exp/mu2e/app/users/<user>/prodtools/mcp/scripts/start_mcp.sh" }
   }
 }
 ```
@@ -77,15 +85,15 @@ create or delete, no ledger change. Submitting is a separate server
 This needs your own install (the "run your own" route above): the same
 `install.sh` sets up a second server, `prodtools-write`, and the same
 `.mcp.json` registers it. With `run_as="self"` everything lands under
-your own name — your scratch area, files called `*.<your login>.*` in
+your own name — your scratch area, files called `*.<user>.*` in
 SAM, your own ledger at
-`/exp/mu2e/data/users/<your login>/prodtools/submissions.db`. It cannot
+`/exp/mu2e/data/users/<user>/prodtools/submissions.db`. It cannot
 touch production.
 
 Before the first one, check that
 
 - `getToken` works in your shell;
-- `/exp/mu2e/data/users/<your login>/` exists and you can write to it
+- `/exp/mu2e/data/users/<user>/` exists and you can write to it
   (the `prodtools/` folder inside is created for you, its parent is not);
 - you are a registered Mu2e SAM user — declaring a file fails otherwise.
 
@@ -93,16 +101,18 @@ Before the first one, check that
 G4beamline smoke test, under ten minutes end to end:
 
 ```bash
+cd /exp/mu2e/app/users/$USER
 git clone https://github.com/Mu2e/G4BeamlineScripts
-cp /path/to/prodtools/data/g4bl/g4bl.json ~/my_g4bl.json
-# edit ~/my_g4bl.json: "g4bl_dir" -> your G4BeamlineScripts clone,
-#                      "dsconf"   -> a name you have never used, e.g. MyTest001
+cp prodtools/data/g4bl/g4bl.json my_g4bl.json
+# edit my_g4bl.json:
+#   "g4bl_dir" -> /exp/mu2e/app/users/<user>/G4BeamlineScripts
+#   "dsconf"   -> a name you have never used, e.g. MyTest001
 ```
 
 Then ask the assistant to push that entry and submit it as yourself. It
 makes two calls:
 
-    push_cnf(json="/abs/path/my_g4bl.json", desc="G4blSmoke",
+    push_cnf(json="/exp/mu2e/app/users/<user>/my_g4bl.json", desc="G4blSmoke",
              dsconf="MyTest001", slice_size=3, run_as="self")
     run_submissions(run_as="self", campaign_id=<the id push_cnf returned>)
 
@@ -122,7 +132,7 @@ That pass checks every job's output against SAM, closes the rows that
 are complete and resubmits the ones that are not. It has to be the bare
 form: a campaign whose jobs were all submitted is already `complete`,
 and a tick scoped to it is refused because it would do nothing. The
-files are then in the dataset `nts.<your login>.G4blSmoke.MyTest001.root`;
+files are then in the dataset `nts.<user>.G4blSmoke.MyTest001.root`;
 `dataset_files(dataset=..., location="scratch")` lists them.
 
 **A first art job** goes the same way, with nothing to edit.
@@ -132,14 +142,14 @@ newest MDC2025 SimJob release — three jobs of 500 generated events,
 ten to fifteen minutes on the grid, of which a bit over half pass the primary
 filter (848 of 1500 in the reference run):
 
-    push_cnf(json="/abs/path/to/prodtools/data/examples/ceendpoint.json",
+    push_cnf(json="/exp/mu2e/app/users/<user>/prodtools/data/examples/ceendpoint.json",
              desc="CeEndpoint", dsconf="MDC2025ax", slice_size=3,
              run_as="self")
     run_submissions(run_as="self", campaign_id=<id>)
     campaign_status(campaign_id=<id>, mine=true)     # until the queue is empty
     run_submissions(run_as="self")                   # verify and recover
 
-The result is `dts.<your login>.CeEndpoint.MDC2025ax.art` on scratch.
+The result is `dts.<user>.CeEndpoint.MDC2025ax.art` on scratch.
 The entry leaves `owner` out, so it defaults to whoever runs it. For a
 second attempt change `dsconf` but keep its `MDC2025ax` prefix: it names
 the release, and `simjob_setup` has to agree with it. To move to a newer
@@ -167,8 +177,8 @@ Five things that bite:
   older fail on the grid under Python 3.12 (at `import samweb_client`
   up to v3.3.2, and at `import gfal2` for any job with input files up to
   v3.3.3). To run worker code you changed yourself, add
-  `prodtools_dir="/abs/path/to/prodtools"` to `push_cnf`: it ships that
-  checkout's `bin/` and `utils/` with the jobs. Self only.
+  `prodtools_dir="/exp/mu2e/app/users/<user>/prodtools"` to `push_cnf`:
+  it ships that checkout's `bin/` and `utils/` with the jobs. Self only.
 - **A failed campaign keeps coming back.** The verify-and-recover pass
   covers every open row in your ledger, not only the campaign you name,
   so jobs that failed yesterday are resubmitted next to today's new
