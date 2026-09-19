@@ -126,7 +126,37 @@ and a tick scoped to it is refused because it would do nothing. The
 files are then in the dataset `nts.<your login>.G4blSmoke.MyTest001.root`;
 `dataset_files(dataset=..., location="scratch")` lists them.
 
-Four things that bite:
+**A first art job** goes the same way, with nothing to edit.
+`data/examples/ceendpoint.json` makes a small conversion-electron sample
+(`CeEndpoint` primaries, resampled from the stopped-muon sample) with the
+newest MDC2025 SimJob release — three jobs of 500 generated events,
+about ten minutes on the grid, of which a bit over half pass the primary
+filter (848 of 1500 in the reference run):
+
+    push_cnf(json="/abs/path/to/prodtools/data/examples/ceendpoint.json",
+             desc="CeEndpoint", dsconf="MDC2025ax", slice_size=3,
+             run_as="self", prodtools_dir="/abs/path/to/prodtools")
+    run_submissions(run_as="self", campaign_id=<id>)
+    campaign_status(campaign_id=<id>, mine=true)     # until the queue is empty
+    run_submissions(run_as="self")                   # verify and recover
+
+The result is `dts.<your login>.CeEndpoint.MDC2025ax.art` on scratch.
+The entry leaves `owner` out, so it defaults to whoever runs it. For a
+second attempt change `dsconf` but keep its `MDC2025ax` prefix: it names
+the release, and `simjob_setup` has to agree with it. To move to a newer
+release, take the last line of
+`ls /cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/ | grep '^MDC2025'`
+and change both. For more statistics raise `njobs` rather than
+`events`: jobs run in parallel, and a long job is a job more likely to
+be lost.
+
+A production-sized request is a different thing: the entry
+`CeEndpoint` / `MDC2025ax` in `data/mdc2025/primary_muon.json` (2000 jobs
+of 5000 events, outputs to persistent disk, owned by `mu2e`). That one
+is submitted by the production team with `run_as="mu2epro"`; ask them
+rather than running it yourself.
+
+Five things that bite:
 
 - **`json` must be an absolute path.**
 - **A `desc` + `dsconf` pair is used once.** It names the job package in
@@ -134,10 +164,18 @@ Four things that bite:
   Pick a new `dsconf`.
 - **`prodtools_dir` is needed for now.** It ships your clone's worker
   code with the jobs. Without it they run the CVMFS release, and
-  releases up to v3.3.2 fail on the grid at `import samweb_client`
-  (Python 3.12). Drop the argument once
+  releases up to v3.3.2 fail on the grid under Python 3.12 — at
+  `import samweb_client`, and for any job with input files at
+  `import gfal2`. Drop the argument once
   `readlink /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current` shows
   something newer.
+- **A failed campaign keeps coming back.** The verify-and-recover pass
+  covers every open row in your ledger, not only the campaign you name,
+  so jobs that failed yesterday are resubmitted next to today's new
+  campaign — with the entry they were created with, which fails the
+  same way. Close a campaign you have given up on, from a shell with
+  the prodtools environment:
+  `submissions --mine cancel <id> --close-rows --note "why"`.
 - **Never interrupt `run_submissions`**, and never wrap the CLI it runs
   (`submissions run`) in `timeout`. A kill between "the grid accepted
   the jobs" and "the ledger wrote them down" leaves jobs nothing tracks,
