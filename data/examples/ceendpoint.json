@@ -1,0 +1,17 @@
+[
+    {
+	"_comment": "A small conversion-electron sample anyone can produce under their own name: CeEndpoint primaries made by resampling the stopped-muon sample, with the newest MDC2025 SimJob release. 3 jobs x 500 generated events, about ten minutes on the grid; a bit over half survive the primary filter (848 of 1500 in the reference run). Walkthrough: mcp/README.md, 'A first art job'. Leave 'owner' out: it defaults to the account that runs it. A desc+dsconf pair is used once per owner, so change dsconf (keep the MDC2025ax prefix, it names the release) for a second attempt. For a production-sized request use the CeEndpoint MDC2025ax entry in data/mdc2025/primary_muon.json instead.",
+	"desc": "CeEndpoint",
+	"dsconf": "MDC2025ax",
+	"fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+	"resampler_name": "TargetStopResampler",
+	"input_data": {"sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1},
+	"events": 500,
+	"njobs": 3,
+	"run": 1430,
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ax/setup.sh",
+	"inloc": "tape",
+	"outloc": {"*.art": "scratch"},
+	"sequential_aux": true
+    }
+]

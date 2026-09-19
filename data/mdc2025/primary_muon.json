@@ -167,6 +167,25 @@
         "sequential_aux": true
     },
     {
+        "desc": "CeEndpoint",
+        "dsconf": "MDC2025ax",
+        "fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ax/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
         "desc": "CePLeadingLog",
         "dsconf": "MDC2025ac",
         "fcl": "Production/JobConfig/primary/CePLeadingLog.fcl",
