@@ -72,6 +72,82 @@ Every tool here is read-only: no job submission, no SAM definition
 create or delete, no ledger change. Submitting is a separate server
 (`prodtools-write`) that is not reachable over HTTP at all.
 
+### 4. Submit your own jobs
+
+This needs your own install (the "run your own" route above): the same
+`install.sh` sets up a second server, `prodtools-write`, and the same
+`.mcp.json` registers it. With `run_as="self"` everything lands under
+your own name — your scratch area, files called `*.<your login>.*` in
+SAM, your own ledger at
+`/exp/mu2e/data/users/<your login>/prodtools/submissions.db`. It cannot
+touch production.
+
+Before the first one, check that
+
+- `getToken` works in your shell;
+- `/exp/mu2e/data/users/<your login>/` exists and you can write to it
+  (the `prodtools/` folder inside is created for you, its parent is not);
+- you are a registered Mu2e SAM user — declaring a file fails otherwise.
+
+**A first job that needs no input data and no Musing** is a three-job
+G4beamline smoke test, about ten minutes end to end:
+
+```bash
+git clone https://github.com/Mu2e/G4BeamlineScripts
+cp /path/to/prodtools/data/g4bl/g4bl.json ~/my_g4bl.json
+# edit ~/my_g4bl.json: "g4bl_dir" -> your G4BeamlineScripts clone,
+#                      "dsconf"   -> a name you have never used, e.g. MyTest001
+```
+
+Then ask the assistant to push that entry and submit it as yourself. It
+makes two calls:
+
+    push_cnf(json="/abs/path/my_g4bl.json", desc="G4blSmoke",
+             dsconf="MyTest001", slice_size=3, run_as="self",
+             prodtools_dir="/abs/path/to/prodtools")
+    run_submissions(run_as="self", campaign_id=<the id push_cnf returned>)
+
+`push_cnf` builds the job package, registers it in SAM and creates the
+campaign; `run_submissions` sends the jobs to the grid. Watch them with
+the read-only server:
+
+    campaign_status(campaign_id=<id>, mine=true)
+
+The queue block goes idle, then running, then empty. **Nothing advances
+by itself** — there is no cron. Once the queue is empty, tick once more,
+this time with no campaign id:
+
+    run_submissions(run_as="self")
+
+That pass checks every job's output against SAM, closes the rows that
+are complete and resubmits the ones that are not. It has to be the bare
+form: a campaign whose jobs were all submitted is already `complete`,
+and a tick scoped to it is refused because it would do nothing. The
+files are then in the dataset `nts.<your login>.G4blSmoke.MyTest001.root`;
+`dataset_files(dataset=..., location="scratch")` lists them.
+
+Four things that bite:
+
+- **`json` must be an absolute path.**
+- **A `desc` + `dsconf` pair is used once.** It names the job package in
+  SAM, and a SAM name is never reused — not even after a failed attempt.
+  Pick a new `dsconf`.
+- **`prodtools_dir` is needed for now.** It ships your clone's worker
+  code with the jobs. Without it they run the CVMFS release, and
+  releases up to v3.3.2 fail on the grid at `import samweb_client`
+  (Python 3.12). Drop the argument once
+  `readlink /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current` shows
+  something newer.
+- **Never interrupt `run_submissions`**, and never wrap the CLI it runs
+  (`submissions run`) in `timeout`. A kill between "the grid accepted
+  the jobs" and "the ledger wrote them down" leaves jobs nothing tracks,
+  and the next tick submits the same work again.
+
+Art jobs go the same way with a different entry file; `EXAMPLES.md` at
+the repo root has the entry formats. `run_as="mu2epro"` is production:
+it needs `ksu` rights, `confirm=true` and a confirmation prompt, and is
+described under `prodtools-write` below.
+
 ---
 
 Two servers live under `mcp/`, registered in `.mcp.json` at the repo
