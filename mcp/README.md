@@ -90,7 +90,7 @@ Before the first one, check that
 - you are a registered Mu2e SAM user — declaring a file fails otherwise.
 
 **A first job that needs no input data and no Musing** is a three-job
-G4beamline smoke test, about ten minutes end to end:
+G4beamline smoke test, under ten minutes end to end:
 
 ```bash
 git clone https://github.com/Mu2e/G4BeamlineScripts
@@ -103,8 +103,7 @@ Then ask the assistant to push that entry and submit it as yourself. It
 makes two calls:
 
     push_cnf(json="/abs/path/my_g4bl.json", desc="G4blSmoke",
-             dsconf="MyTest001", slice_size=3, run_as="self",
-             prodtools_dir="/abs/path/to/prodtools")
+             dsconf="MyTest001", slice_size=3, run_as="self")
     run_submissions(run_as="self", campaign_id=<the id push_cnf returned>)
 
 `push_cnf` builds the job package, registers it in SAM and creates the
@@ -130,12 +129,12 @@ files are then in the dataset `nts.<your login>.G4blSmoke.MyTest001.root`;
 `data/examples/ceendpoint.json` makes a small conversion-electron sample
 (`CeEndpoint` primaries, resampled from the stopped-muon sample) with the
 newest MDC2025 SimJob release — three jobs of 500 generated events,
-about ten minutes on the grid, of which a bit over half pass the primary
+ten to fifteen minutes on the grid, of which a bit over half pass the primary
 filter (848 of 1500 in the reference run):
 
     push_cnf(json="/abs/path/to/prodtools/data/examples/ceendpoint.json",
              desc="CeEndpoint", dsconf="MDC2025ax", slice_size=3,
-             run_as="self", prodtools_dir="/abs/path/to/prodtools")
+             run_as="self")
     run_submissions(run_as="self", campaign_id=<id>)
     campaign_status(campaign_id=<id>, mine=true)     # until the queue is empty
     run_submissions(run_as="self")                   # verify and recover
@@ -162,13 +161,14 @@ Five things that bite:
 - **A `desc` + `dsconf` pair is used once.** It names the job package in
   SAM, and a SAM name is never reused — not even after a failed attempt.
   Pick a new `dsconf`.
-- **`prodtools_dir` is needed for now.** It ships your clone's worker
-  code with the jobs. Without it they run the CVMFS release, and
-  releases up to v3.3.2 fail on the grid under Python 3.12 — at
-  `import samweb_client`, and for any job with input files at
-  `import gfal2`. Drop the argument once
-  `readlink /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current` shows
-  something newer.
+- **The jobs run the CVMFS release, not your clone.** Whatever
+  `readlink /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current` names
+  is the worker code, and it has to be **v3.3.4 or newer**: v3.3.3 and
+  older fail on the grid under Python 3.12 (at `import samweb_client`
+  up to v3.3.2, and at `import gfal2` for any job with input files up to
+  v3.3.3). To run worker code you changed yourself, add
+  `prodtools_dir="/abs/path/to/prodtools"` to `push_cnf`: it ships that
+  checkout's `bin/` and `utils/` with the jobs. Self only.
 - **A failed campaign keeps coming back.** The verify-and-recover pass
   covers every open row in your ledger, not only the campaign you name,
   so jobs that failed yesterday are resubmitted next to today's new

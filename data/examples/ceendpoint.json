@@ -1,6 +1,6 @@
 [
     {
-	"_comment": "A small conversion-electron sample anyone can produce under their own name: CeEndpoint primaries made by resampling the stopped-muon sample, with the newest MDC2025 SimJob release. 3 jobs x 500 generated events, about ten minutes on the grid; a bit over half survive the primary filter (848 of 1500 in the reference run). Walkthrough: mcp/README.md, 'A first art job'. Leave 'owner' out: it defaults to the account that runs it. A desc+dsconf pair is used once per owner, so change dsconf (keep the MDC2025ax prefix, it names the release) for a second attempt. For a production-sized request use the CeEndpoint MDC2025ax entry in data/mdc2025/primary_muon.json instead.",
+	"_comment": "A small conversion-electron sample anyone can produce under their own name: CeEndpoint primaries made by resampling the stopped-muon sample, with the newest MDC2025 SimJob release. 3 jobs x 500 generated events, ten to fifteen minutes on the grid; a bit over half survive the primary filter (848 of 1500 in the reference run). Walkthrough: mcp/README.md, 'A first art job'. Leave 'owner' out: it defaults to the account that runs it. A desc+dsconf pair is used once per owner, so change dsconf (keep the MDC2025ax prefix, it names the release) for a second attempt. For a production-sized request use the CeEndpoint MDC2025ax entry in data/mdc2025/primary_muon.json instead.",
 	"desc": "CeEndpoint",
 	"dsconf": "MDC2025ax",
 	"fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
