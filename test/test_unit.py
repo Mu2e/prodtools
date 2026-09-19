@@ -17,6 +17,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -18992,3 +18993,65 @@ class TestMcpTransportCli(unittest.TestCase):
         ident = self.server.get_server_info()['identity']
         self.assertIn('user', ident)
         self.assertIn('user', ident['mine_true'])
+
+
+class TestPnfsExistsUsesGfalStatCli(unittest.TestCase):
+    """pnfs_exists shells `gfal-stat` instead of importing the gfal2
+    python binding. On the ops Python 3.12 (ops-021, 2026-09-12) the
+    binding dies at import ("type Boost.Python.enum has the
+    Py_TPFLAGS_HAVE_GC flag but has no traverse function"), which failed
+    every grid job with input files before mu2e started; the CLI runs on
+    the system python and is unaffected."""
+
+    PNFS = '/pnfs/mu2e/tape/phy-sim/sim/mu2e/X/Y/art/aa/bb/sim.mu2e.X.Y.001.art'
+    URL = ('root://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/mu2e/tape/phy-sim/'
+           'sim/mu2e/X/Y/art/aa/bb/sim.mu2e.X.Y.001.art')
+
+    def _runner(self, rc, stderr=''):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv, kw))
+            return subprocess.CompletedProcess(argv, rc, stdout='', stderr=stderr)
+        return run, calls
+
+    def test_rc_zero_is_present_and_the_xroot_url_is_what_gets_statted(self):
+        from utils import file_resolver
+        run, calls = self._runner(0)
+        self.assertTrue(file_resolver.pnfs_exists(self.PNFS, runner=run))
+        self.assertEqual(calls[0][0], ['gfal-stat', self.URL])
+
+    def test_enoent_is_absent(self):
+        from utils import file_resolver
+        run, _ = self._runner(
+            2, 'gfal-stat error: 2 (No such file or directory) - Failed to stat file')
+        self.assertFalse(file_resolver.pnfs_exists(self.PNFS, runner=run))
+
+    def test_any_other_rc_raises_and_is_never_read_as_absent(self):
+        # An expired token stats as EBADE (52). Absent would send the
+        # resolver on to the next location and end in a bogus "no file".
+        from utils import file_resolver
+        run, _ = self._runner(52, 'gfal-stat error: 52 (Invalid exchange) - denied')
+        with self.assertRaises(RuntimeError) as ctx:
+            file_resolver.pnfs_exists(self.PNFS, runner=run)
+        msg = str(ctx.exception)
+        self.assertIn(self.PNFS, msg)
+        self.assertIn('Invalid exchange', msg)
+        self.assertIn('rc=52', msg)
+
+    def test_missing_gfal_stat_raises_rather_than_reading_as_absent(self):
+        from utils import file_resolver
+
+        def run(argv, **kw):
+            raise FileNotFoundError(2, 'No such file or directory', 'gfal-stat')
+        with self.assertRaises(RuntimeError) as ctx:
+            file_resolver.pnfs_exists(self.PNFS, runner=run)
+        self.assertIn('gfal-stat', str(ctx.exception))
+
+    def test_the_python_binding_is_not_imported(self):
+        from utils import file_resolver
+        with open(file_resolver.__file__) as f:
+            # a statement, not the docstring that explains its absence;
+            # and a bool, so a failure does not dump the module in the log
+            self.assertIsNone(
+                re.search(r'^\s*(import|from) gfal2\b', f.read(), re.M))
