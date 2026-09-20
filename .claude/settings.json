@@ -8,7 +8,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /exp/mu2e/app/users/oksuzian/muse_050125/prodtools/.claude/hooks/mu2epro-guard.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/mu2epro-guard.sh",
             "timeout": 5
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /exp/mu2e/app/users/oksuzian/muse_050125/prodtools/.claude/hooks/mcp-write-guard.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/mcp-write-guard.sh",
             "timeout": 5
           }
         ]

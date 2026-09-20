@@ -27,7 +27,8 @@ directory. Inside a shell `$USER` does the substitution for you; in a
 JSON file or a tool call you type the login out.
 
 Your client then starts it on demand — `.mcp.json` in the clone already
-does this for Claude Code; for another client:
+does this for Claude Code, and it launches the scripts of whichever
+clone you opened; for another client:
 
 ```json
 {

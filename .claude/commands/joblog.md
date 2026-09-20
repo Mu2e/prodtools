@@ -111,7 +111,7 @@ is the usual reason this "doesn't work":
 ```bash
 source /cvmfs/mu2e.opensciencegrid.org/setupmu2e-art.sh > /dev/null 2>&1
 muse setup ops > /dev/null 2>&1
-DEST=/exp/mu2e/data/users/oksuzian/claude-scratch/joblogs/<cluster>.<proc>
+DEST=/exp/mu2e/data/users/$USER/claude-scratch/joblogs/<cluster>.<proc>
 mkdir -p "$DEST"
 for SD in jobsub01 jobsub02 jobsub03 jobsub04 jobsub05; do
   if timeout 45 jobsub_fetchlog --group mu2e \

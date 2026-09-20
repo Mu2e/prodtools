@@ -131,7 +131,7 @@ echo 'source.module_type: EmptyEvent' >> template.fcl
 # 5. Local-dir inputs (wiki "Using a local undeclared input")
 /mu2ejobdef-fcl inspect --jobdef cnf.oksuzian.CosmicCRYAllOffSpillTriggered.MDC2020ai_perfect_v1_3.0.tar \
                         --index 0 \
-                        --default-proto file --default-loc dir:/exp/mu2e/data/users/oksuzian/test3
+                        --default-proto file --default-loc dir:/exp/mu2e/data/users/$USER/test3
 ```
 
 ## Instructions
