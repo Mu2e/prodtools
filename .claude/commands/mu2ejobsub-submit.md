@@ -83,7 +83,7 @@ The flag the skill **always appends** unless the user overrides:
 # JIT-cnf with local-dir inputs (per the JustInTimeFcl wiki workflow)
 /mu2ejobsub-submit cnf.oksuzian.CosmicCRYAllOffSpillTriggered.MDC2020ai_perfect_v1_3.0.tar \
                    --firstjob 0 --njobs 1 \
-                   --inloc dir:/exp/mu2e/data/users/oksuzian/test3 --proto ifdh
+                   --inloc dir:/exp/mu2e/data/users/$USER/test3 --proto ifdh
 
 # Dry-run to inspect the jobsub argv without actually submitting
 /mu2ejobsub-submit cnf.mu2e.Reco.MDC2025af_best_v1_3.0.tar --firstjob 0 --njobs 1 --dry-run --verbose
