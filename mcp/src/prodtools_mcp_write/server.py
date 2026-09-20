@@ -10,6 +10,7 @@ TOOL_FUNCTIONS = {
     'push_cnf': tools.push_cnf,
     'push_file': tools.push_file,
     'run_submissions': tools.run_submissions,
+    'submit_once': tools.submit_once,
 }
 
 TOOL_NAMES = tuple(TOOL_FUNCTIONS)

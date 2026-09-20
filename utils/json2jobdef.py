@@ -820,8 +820,14 @@ def main(argv=None):
         if args.once:
             receipt = submit_once(config, json_path=args.json,
                                   prodtools_dir=args.prodtools_dir)
+            from utils import run_receipt
             print(json.dumps({k: v for k, v in receipt.items()
                               if k != 'entry'}, indent=2))
+            # One line a caller can find without parsing the JSON above
+            # (the write MCP tool reads the receipt from this path).
+            print('RECEIPT ' + os.path.join(
+                run_receipt.runs_root(), receipt['name'],
+                run_receipt.RECEIPT))
             sys.exit(0 if receipt['state'] == 'submitted' else 1)
         process_single_entry(
             config,
