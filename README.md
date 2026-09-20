@@ -44,11 +44,13 @@ invocations, flags, and the JSON config shapes. Start there.
 `mcp/` holds a read-only MCP server that answers campaign and dataset
 questions in plain language from any MCP client — "how is MDC2025au
 doing?", "what came out of it?", "where are the files?". It performs no
-writes. Connect to a shared instance with one line, or run your own:
+writes. You install your own, in about two minutes; a shared instance is
+planned but not running yet:
 
-**[mcp/README.md](mcp/README.md)** has the quick start, including how to
-submit your own grid jobs through the second, write-capable server — a
-ten-minute first job that needs no input data.
+**[mcp/README.md](mcp/README.md)** has the quick start.
+**[mcp/SUBMIT.md](mcp/SUBMIT.md)** is how to submit your own grid jobs
+through the second, write-capable server: a small CeEndpoint sample on
+the newest MDC2025 release, fifteen minutes, nothing to edit.
 
 ## Where things are
 
