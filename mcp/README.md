@@ -8,21 +8,8 @@ remembering which CLI to run.
 
 ### 1. Connect
 
-**Someone already runs one for the collaboration.** Nothing to install:
-
-    claude mcp add --transport http prodtools http://<host>:8008/mcp
-
-Other MCP clients take the same thing as config:
-
-```json
-{
-  "mcpServers": {
-    "prodtools": { "type": "http", "url": "http://<host>:8008/mcp" }
-  }
-}
-```
-
-**Or run your own**, on a Fermilab node (mu2egpvm, with CVMFS):
+Install your own, on a Fermilab node (mu2egpvm, with CVMFS). It takes
+about two minutes:
 
 ```bash
 cd /exp/mu2e/app/users/$USER
@@ -51,7 +38,16 @@ does this for Claude Code; for another client:
 ```
 
 Your own server runs as you, so it reads what your credentials can read.
-A shared one runs as its host account.
+
+There is **no shared server yet.** The read-only server can run as one
+(see "Serve it to other people" below), and the plan is an instance on
+the collaboration's MCP host, but nobody runs it today. Once one exists,
+connecting will be a single line with nothing to install:
+
+    claude mcp add --transport http prodtools http://<host>:8008/mcp
+
+and it will answer questions only; submitting always needs your own
+install, because a shared server runs as its host account, not as you.
 
 Some clients start a server with a stripped environment (the MCP Python
 SDK passes only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`). That
