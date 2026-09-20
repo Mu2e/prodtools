@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from prodtools_mcp import condor, runtime
 from prodtools_mcp.adapters import safe_tool
-from prodtools_mcp.tools import discovery, lineage, status
+from prodtools_mcp.tools import discovery, lineage, runs, status
 
 
 # mu2eaigpvm01 runs one server per port, registered in the registry's
@@ -35,6 +35,7 @@ WHAT IT ANSWERS:
 - "How big is this dataset?"  -> dataset_details(dataset="dig.mu2e...art")
 - "Where did this come from?" -> trace_provenance(name="...", direction="up")
 - "Does SAM know this file?"  -> locate_file(name="cnf.mu2e....0.tar")
+- "How did my --once run go?" -> run_status(name="cnf.<login>....0", user="<login>")
 - "Where are its files?"      -> dataset_files(dataset="nts....root", location="scratch")
 
 READING THE RESULTS:
@@ -104,6 +105,7 @@ TOOL_FUNCTIONS = {
     'locate_file': safe_tool(discovery.locate_file),
     'dataset_files': safe_tool(discovery.dataset_files),
     'trace_provenance': safe_tool(lineage.trace_provenance),
+    'run_status': safe_tool(runs.run_status),
 }
 
 TOOL_NAMES = sorted(list(TOOL_FUNCTIONS) + ['get_server_info'])
@@ -245,6 +247,20 @@ def create_mcp_server():
                           'date for one dataset.')
     def dataset_details(dataset: str) -> dict:
         return TOOL_FUNCTIONS['dataset_details'](dataset=dataset)
+
+    @mcp.tool(description='How a one-shot outstage run (json2jobdef '
+                          '--once / submit_once) went: its receipt, the '
+                          'live queue, and after the cluster left the '
+                          'queue the per-job exit codes and the output '
+                          'paths on outstage. Such a run has no ledger '
+                          'row and nothing in SAM, so no other tool sees '
+                          'it. name is the cnf name without ".tar". Say '
+                          'whose run: user="<login>", or mine=true on '
+                          'your own stdio server. state="unknown" is '
+                          'never a failure and never a success.')
+    def run_status(name: str, mine: bool = False,
+                   user: Optional[str] = None) -> dict:
+        return TOOL_FUNCTIONS['run_status'](name=name, mine=mine, user=user)
 
     @mcp.tool(description='Whether SAM knows a file, and its first '
                           'location. An unknown name is exists=false, '

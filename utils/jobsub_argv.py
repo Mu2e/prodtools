@@ -54,6 +54,22 @@ def compute_outstage(*, wftop, submitter, wfproject):
     return f"{wftop}/{submitter}/workflow/{wfproject}/outstage"
 
 
+def outstage_for(tarball_name, submitter, role=None, wftop=None,
+                 wfproject=None):
+    """The `$MU2EGRID_WFOUTSTAGE` build_jobsub_argv gives the jobs of this
+    cnf, with the same defaulting. For a caller that has to SAY where the
+    outputs will land (a `--once` receipt); pinned against the argv by
+    TestOutstageForMatchesTheSubmitCommand."""
+    if role is None:
+        role = role_for_user(submitter)
+    if wftop is None or wftop == "":
+        wftop = default_wftop(role)
+    if wfproject is None:
+        wfproject = campaign_from_tarball(tarball_name)
+    return compute_outstage(wftop=wftop, submitter=submitter,
+                            wfproject=wfproject)
+
+
 def storage_modify_dir(outstage):
     """Token request directory: `/pnfs/mu2e/...` → `/mu2e/...`. Per
     `mu2ejobsub:142-146`, dCache token paths drop the `/pnfs` prefix."""

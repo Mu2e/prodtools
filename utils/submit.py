@@ -60,8 +60,12 @@ class SubmitOptions(NamedTuple):
     every campaign slice through them (see _compute_jobset). `origin` is
     free-text provenance on the ledger row, echoed back only by MCP
     status tools.
+
+    `ledger_db` is None for a one-shot outstage run (json2jobdef --once)
+    and ONLY for one: see _check_tracking. It has no default on purpose,
+    so no caller gets an untracked submission by leaving it out.
     """
-    ledger_db: str
+    ledger_db: Optional[str]
     dry_run: bool = False
     first: Optional[int] = None
     num: Optional[int] = None
@@ -398,7 +402,37 @@ def _refuse_outstage_campaign(entry):
                 "json2jobdef: outstage outputs are not declared to SAM, so "
                 "campaign verification cannot see them and every slice "
                 "would recover forever. An outstage entry cannot be "
-                "enqueued — submit it by hand.")
+                "enqueued — submit it once with `json2jobdef --once` "
+                "(no ledger, no recovery).")
+
+
+def _check_tracking(entry, options):
+    """A submission is ledger-tracked if and only if its outputs are
+    declared. Both directions, before any side effect.
+
+    No ledger + a declared output is an untracked submission of files
+    that reach SAM: nothing would verify or recover it, and as mu2epro
+    that is an untracked production run. A ledger + an outstage output is
+    the opposite failure: verify_row is SAM-backed and fail-closed, so
+    with nothing declared every index reads as missing and each tick
+    recovers the whole row, forever (_refuse_outstage_campaign stops that
+    at enqueue; this stops it for every other caller).
+    """
+    locations = [o.get('location') for o in entry.get('outputs') or []]
+    n_outstage = sum(1 for loc in locations if loc == OUTSTAGE_LOCATION)
+    if options.ledger_db is None:
+        if not locations or n_outstage != len(locations):
+            raise ValueError(
+                f"submit: no ledger was given, which is only valid when "
+                f"every output goes to outstage; this entry's output "
+                f"locations are {locations}. Declared outputs are "
+                f"ledger-tracked, always.")
+    elif n_outstage:
+        raise ValueError(
+            f"submit: a ledger was given for an entry with outstage "
+            f"outputs ({locations}). Nothing of an outstage run is "
+            f"declared, so the ledger could never verify it; submit it "
+            f"once with `json2jobdef --once`.")
 
 
 def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
@@ -664,6 +698,7 @@ def submit_entry(entry, idx, options):
 
     Returns the same dict shape (tarball/cluster_id/njobs/status).
     """
+    _check_tracking(entry, options)
     tarball_name = tarball_of(entry)
     desc = _jobsub_argv.description_from_tarball(tarball_name)
     files = options.files
@@ -831,6 +866,11 @@ def submit_entry(entry, idx, options):
         raise SystemExit(
             f"input pre-flight FAILED for {tarball_name} — refusing to "
             f"submit. Fix the inputs (or stage them) and retry.")
+
+    if options.ledger_db is None:
+        # One-shot outstage run (_check_tracking passed): the caller's
+        # receipt is the record, reserved before this call.
+        return _run_submit(cmd, tarball_name, len(jobset))
 
     row_id = _reserve_in_ledger(_snapshot_entry(entry, resources), firstjob,
                                 jobset, options, files=files)

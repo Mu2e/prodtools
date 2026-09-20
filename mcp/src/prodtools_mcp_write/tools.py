@@ -336,6 +336,61 @@ def _all_campaigns(db):
             f"as far as writing the ledger") from e
 
 
+def submit_once(json: str, desc: str, dsconf: str, run_as: str,
+                confirm: bool = False, prodtools_dir: Optional[str] = None):
+    """Submit one entry ONCE, with every output on outstage and nothing
+    in SAM -- `json2jobdef --once`.
+
+    For trying something out: no SAM record (the cnf included), no
+    ledger, no slicing, no recovery. Every `outloc` value of the entry
+    must already be "outstage"; this never rewrites the entry. All jobs
+    go in one jobsub_submit (at most 10000). A desc+dsconf pair is used
+    once per user.
+
+    run_as="self" ONLY. Production outputs are declared, always, so
+    run_as="mu2epro" is refused whatever `confirm` says.
+
+    Returns the run's receipt: `name` (what run_status takes), `state`,
+    `jobid`, `njobs`, and `outstage`, the directory the outputs land
+    under as <outstage>/<cluster>/<proc>/. Ask the read-only server's
+    run_status(name=..., user=...) how it went; nothing else can see it.
+
+    `prodtools_dir` ships a checkout's worker code with the jobs, as for
+    push_cnf.
+    """
+    if run_as != 'self':
+        raise ValueError(
+            f"submit_once is run_as=\"self\" only, got {run_as!r}: "
+            f"production outputs are declared to SAM, always. Use push_cnf "
+            f"+ run_submissions.")
+
+    simjob_setup, _ = _select_push_params(json, desc, dsconf)
+    argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
+            '--dsconf', dsconf, '--once']
+    if prodtools_dir is not None:
+        argv += ['--prodtools-dir', prodtools_dir]
+    result = runner.run_cli(argv, run_as, simjob_setup=simjob_setup)
+    if result['rc'] != 0:
+        raise RuntimeError(
+            f"json2jobdef --once failed (rc={result['rc']}): "
+            f"{_both_streams(result)}")
+
+    paths = [line.split(' ', 1)[1].strip()
+             for line in (result.get('stdout') or '').splitlines()
+             if line.startswith('RECEIPT ')]
+    if len(paths) != 1:
+        raise RuntimeError(
+            f"json2jobdef --once exited 0 but printed {len(paths)} RECEIPT "
+            f"lines, so which run this was cannot be told: "
+            f"{_both_streams(result)}")
+    import json as _json
+    with open(paths[0]) as fh:
+        receipt = _json.load(fh)
+    receipt.pop('entry', None)
+    receipt['receipt'] = paths[0]
+    return receipt
+
+
 def run_submissions(run_as: str, campaign_id: Optional[int] = None,
                     confirm: bool = False):
     """Tick `submissions run`: all active campaigns, or one.

@@ -10953,7 +10953,7 @@ class TestMcpServerInfo(unittest.TestCase):
         from prodtools_mcp.server import get_server_info, TOOL_NAMES
         info = get_server_info()
         self.assertEqual(sorted(info['tools']), sorted(TOOL_NAMES))
-        self.assertEqual(len(TOOL_NAMES), 8)
+        self.assertEqual(len(TOOL_NAMES), 9)
 
 
 class TestMcpToolRegistration(unittest.TestCase):
@@ -19055,3 +19055,474 @@ class TestPnfsExistsUsesGfalStatCli(unittest.TestCase):
             # and a bool, so a failure does not dump the module in the log
             self.assertIsNone(
                 re.search(r'^\s*(import|from) gfal2\b', f.read(), re.M))
+
+
+class TestRunReceipt(unittest.TestCase):
+    """A one-shot outstage run has no ledger row; its receipt is the only
+    record. Reserved before the submit, rewritten after, never reused."""
+
+    def setUp(self):
+        from utils import run_receipt
+        self.rr = run_receipt
+        self.root = _mkdtemp()
+        self.entry = {'tarball': 'cnf.u.D.C.0.tar', 'njobs': 3}
+
+    def test_root_follows_the_ledger_directory_of_the_user(self):
+        self.assertEqual(self.rr.runs_root('alice'),
+                         '/exp/mu2e/data/users/alice/prodtools/runs')
+
+    def test_name_is_the_cnf_without_its_extension(self):
+        self.assertEqual(self.rr.run_name('cnf.u.D.C.0.tar'), 'cnf.u.D.C.0')
+
+    def test_reserve_writes_a_submitting_receipt_with_the_entry(self):
+        d = self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        self.assertTrue(os.path.isdir(d))
+        got = self.rr.read(self.root, 'cnf.u.D.C.0')
+        self.assertEqual(got['state'], 'submitting')
+        self.assertEqual(got['name'], 'cnf.u.D.C.0')
+        self.assertEqual(got['entry'], self.entry)
+        self.assertIn('created_utc', got)
+
+    def test_a_name_is_used_once_whatever_state_it_ended_in(self):
+        self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        with self.assertRaises(self.rr.RunExists) as ctx:
+            self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        self.assertIn('dsconf', str(ctx.exception))
+
+    def test_update_merges_and_leaves_no_partial_file(self):
+        d = self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        self.rr.update(d, state='submitted', cluster_id='42',
+                       jobid='42.0@jobsub01.fnal.gov')
+        got = self.rr.read(self.root, 'cnf.u.D.C.0')
+        self.assertEqual(got['state'], 'submitted')
+        self.assertEqual(got['cluster_id'], '42')
+        self.assertEqual(got['entry'], self.entry)
+        self.assertEqual(sorted(os.listdir(d)), ['receipt.json'])
+
+    def test_unknown_run_raises_with_the_path_it_looked_at(self):
+        with self.assertRaises(self.rr.RunNotFound) as ctx:
+            self.rr.read(self.root, 'cnf.u.Nope.C.0')
+        self.assertIn(self.root, str(ctx.exception))
+
+    def test_a_name_that_is_a_path_is_refused(self):
+        for bad in ('../x', 'a/b', '', '.'):
+            with self.assertRaises(ValueError):
+                self.rr.read(self.root, bad)
+
+
+class TestLedgerTrackedIffDeclared(unittest.TestCase):
+    """submit_entry enforces, both ways and before any side effect: a
+    submission has a ledger row if and only if its outputs are declared.
+    No ledger + a declared output would be an untracked production
+    submission; a ledger + outstage would recover forever (verify_row is
+    SAM-backed and nothing was declared)."""
+
+    def _entry(self, *locations):
+        return {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                'prodtools_dir': FAKE_PRODTOOLS_DIR, 'njobs': 3,
+                'inloc': 'tape',
+                'outputs': [{'dataset': f'*.{i}.art', 'location': loc}
+                            for i, loc in enumerate(locations)]}
+
+    def _submit(self, entry, ledger_db, dry_run=True):
+        from utils.submit import submit_entry, SubmitOptions
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   return_value=['--fake']):
+            return submit_entry(entry, 0, SubmitOptions(
+                ledger_db=ledger_db, dry_run=dry_run, origin='t'))
+
+    def test_no_ledger_with_a_declared_output_raises(self):
+        for locs in (('tape',), ('outstage', 'disk'), ()):
+            with self.assertRaises(ValueError) as ctx:
+                self._submit(self._entry(*locs), None)
+            self.assertIn('ledger', str(ctx.exception))
+
+    def test_a_ledger_with_an_outstage_output_raises(self):
+        for locs in (('outstage',), ('tape', 'outstage')):
+            with self.assertRaises(ValueError) as ctx:
+                self._submit(self._entry(*locs), '/tmp/unused-iff.db')
+            self.assertIn('outstage', str(ctx.exception))
+
+    def test_all_outstage_without_a_ledger_is_accepted(self):
+        self.assertEqual(
+            self._submit(self._entry('outstage', 'outstage'), None)['status'],
+            'dry_run')
+
+    def test_declared_with_a_ledger_is_unchanged(self):
+        self.assertEqual(
+            self._submit(self._entry('tape'), '/tmp/unused-iff.db')['status'],
+            'dry_run')
+
+    def test_a_ledgerless_submit_touches_no_ledger_and_no_log(self):
+        from utils import submit
+        from utils.submit import SubmitOptions
+        entry = self._entry('outstage')
+        tmp = _mkdtemp()
+        tar = os.path.join(tmp, entry['tarball'])
+        open(tar, 'w').close()
+        result = {'status': 'submitted', 'cluster_id': '7',
+                  'jobsub_id': '7.0@jobsub01.fnal.gov',
+                  'tarball': entry['tarball'], 'njobs': 3}
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   return_value=['--fake']), \
+             patch('utils.submit._ensure_local_tarball',
+                   return_value=Path(tar)), \
+             patch('utils.submit._read_cnf_facts',
+                   return_value=(3, [], [])), \
+             patch('utils.submit._preflight_inputs',
+                   return_value=(True, [])), \
+             patch('utils.submit._run_submit', return_value=result), \
+             patch('utils.submit._reserve_in_ledger') as reserve, \
+             patch('utils.submit._attach_cluster') as attach, \
+             patch('utils.submit._log_submission') as log:
+            got = submit.submit_entry(entry, 0, SubmitOptions(
+                ledger_db=None, origin='t'))
+        self.assertEqual(got, result)
+        reserve.assert_not_called()
+        attach.assert_not_called()
+        log.assert_not_called()
+
+
+class TestJson2jobdefOnce(unittest.TestCase):
+    """`json2jobdef --once`: build locally, submit everything in one go to
+    outstage, leave a receipt. No SAM, no ledger, self only."""
+
+    def setUp(self):
+        from utils import json2jobdef, run_receipt
+        self.j = json2jobdef
+        self.rr = run_receipt
+        self.root = _mkdtemp()
+        self.cwd = os.getcwd()
+        self.addCleanup(os.chdir, self.cwd)
+        self.calls = {}
+
+    def _config(self, **over):
+        c = {'desc': 'CeEndpoint', 'dsconf': 'T1', 'owner': 'alice',
+             'fcl': 'x.fcl', 'njobs': 3, 'events': 10, 'run': 1,
+             'inloc': 'tape', 'outloc': {'*.art': 'outstage'},
+             'simjob_setup': '/cvmfs/x/setup.sh'}
+        c.update(over)
+        return c
+
+    def _entry(self, config):
+        return {'tarball': 'cnf.alice.CeEndpoint.T1.0.tar',
+                'njobs': config['njobs'], 'inloc': 'tape',
+                'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+
+    def _run(self, config, result=None, build_raises=None, submit_raises=None):
+        result = result or {'status': 'submitted', 'cluster_id': '42',
+                            'jobsub_id': '42.0@jobsub01.fnal.gov',
+                            'tarball': 'cnf.alice.CeEndpoint.T1.0.tar',
+                            'njobs': config.get('njobs')}
+
+        def build(cfg, **kw):
+            self.calls['build_cwd'] = os.getcwd()
+            self.calls['build_kw'] = kw
+            if build_raises:
+                raise build_raises
+
+        def submit(entry, idx, options):
+            self.calls['options'] = options
+            self.calls['state_at_submit'] = self.rr.read(
+                self.root, 'cnf.alice.CeEndpoint.T1.0')['state']
+            if submit_raises:
+                raise submit_raises
+            return result
+
+        with patch.object(self.j, 'build_jobdesc', side_effect=self._entry), \
+             patch.object(self.j, 'resolve_prodtools_dir',
+                          return_value=FAKE_PRODTOOLS_DIR), \
+             patch.object(self.j, 'prodtools_entry_keys',
+                          return_value={'prodtools_dir': FAKE_PRODTOOLS_DIR}), \
+             patch.object(self.j.getpass, 'getuser', return_value='alice'):
+            return self.j.submit_once(config, json_path='/j.json',
+                                      root=self.root, build=build,
+                                      submit=submit)
+
+    def test_happy_path_builds_in_the_run_dir_and_records_the_cluster(self):
+        receipt = self._run(self._config())
+        run_dir = os.path.join(self.root, 'cnf.alice.CeEndpoint.T1.0')
+        self.assertEqual(os.path.realpath(self.calls['build_cwd']),
+                         os.path.realpath(run_dir))
+        self.assertFalse(self.calls['build_kw'].get('pushout'))
+        self.assertFalse(self.calls['build_kw'].get('enqueue'))
+        self.assertIsNone(self.calls['options'].ledger_db)
+        self.assertEqual(self.calls['state_at_submit'], 'submitting')
+        self.assertEqual(receipt['state'], 'submitted')
+        self.assertEqual(receipt['jobid'], '42.0@jobsub01.fnal.gov')
+        self.assertEqual(receipt['cluster_id'], '42')
+        self.assertEqual(receipt['njobs'], 3)
+        self.assertEqual(
+            receipt['outstage'],
+            '/pnfs/mu2e/scratch/users/alice/workflow/T1/outstage')
+        self.assertEqual(receipt, self.rr.read(
+            self.root, 'cnf.alice.CeEndpoint.T1.0'))
+
+    def test_any_non_outstage_output_is_refused_before_anything_exists(self):
+        for outloc in ({'*.art': 'scratch'},
+                       {'dts.*.art': 'outstage', '*.root': 'tape'}):
+            with self.assertRaises(SystemExit) as ctx:
+                self._run(self._config(outloc=outloc))
+            self.assertIn('outstage', str(ctx.exception))
+            self.assertIn('outloc', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+        self.assertNotIn('build_cwd', self.calls)
+
+    def test_production_is_refused(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(owner='mu2e'))
+        self.assertIn('declared', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_more_jobs_than_one_jobsub_submit_takes_is_refused(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(njobs=10001))
+        self.assertIn('10000', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_used_name_is_refused(self):
+        self._run(self._config())
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config())
+        self.assertIn('dsconf', str(ctx.exception))
+
+    def test_a_failed_submit_is_recorded_as_failed(self):
+        receipt = self._run(self._config(), result={
+            'status': 'failed', 'cluster_id': None, 'njobs': 3,
+            'tarball': 'cnf.alice.CeEndpoint.T1.0.tar'})
+        self.assertEqual(receipt['state'], 'failed')
+
+    def test_a_refusal_inside_submit_is_recorded_and_still_propagates(self):
+        with self.assertRaises(SystemExit):
+            self._run(self._config(),
+                      submit_raises=SystemExit('input pre-flight FAILED'))
+        got = self.rr.read(self.root, 'cnf.alice.CeEndpoint.T1.0')
+        self.assertEqual(got['state'], 'failed')
+        self.assertIn('pre-flight', got['error'])
+
+    def test_a_build_that_dies_never_reads_as_submitting(self):
+        with self.assertRaises(SystemExit):
+            self._run(self._config(), build_raises=SystemExit('no mu2e'))
+        got = self.rr.read(self.root, 'cnf.alice.CeEndpoint.T1.0')
+        self.assertEqual(got['state'], 'failed')
+
+    def test_once_excludes_prod_and_enqueue_on_the_command_line(self):
+        for extra in (['--prod', '--enqueue'], ['--extend']):
+            with self.assertRaises(SystemExit) as ctx:
+                self.j.main(['--json', '/nope.json', '--desc', 'a',
+                             '--dsconf', 'b', '--once'] + extra)
+            self.assertIn('--once', str(ctx.exception))
+
+
+class TestOutstageForMatchesTheSubmitCommand(unittest.TestCase):
+    def test_receipt_path_equals_what_the_jobs_are_told(self):
+        from utils import jobsub_argv
+        entry = {'tarball': 'cnf.alice.CeEndpoint.T1.0.tar', 'njobs': 1,
+                 'inloc': 'none', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
+                 'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+        argv = jobsub_argv.build_jobsub_argv(
+            entry=entry, jobset=[0], submitter='alice',
+            jobdef_path='/tmp/cnf.alice.CeEndpoint.T1.0.tar',
+            ops_json_path='/tmp/ops.json', prodtools_dir=FAKE_PRODTOOLS_DIR)
+        told = [a.split('=', 1)[1] for a in argv
+                if a.startswith('MU2EGRID_WFOUTSTAGE=')]
+        self.assertEqual(told, [jobsub_argv.outstage_for(
+            'cnf.alice.CeEndpoint.T1.0.tar', 'alice')])
+
+
+class TestMcpRunStatus(unittest.TestCase):
+    """run_status: how a `--once` outstage run went, from its receipt,
+    the live queue, and -- once the cluster has left the queue -- the
+    job exit codes (jobwait's rule: the copy runs inside the job, so exit
+    0 means the files landed). Read-only; nothing is persisted."""
+
+    NAME = 'cnf.alice.CeEndpoint.T1.0'
+    OUT = '/pnfs/mu2e/scratch/users/alice/workflow/T1/outstage'
+
+    def setUp(self):
+        from prodtools_mcp import runtime
+        from prodtools_mcp.adapters import ToolError
+        from prodtools_mcp.tools import runs
+        from utils import run_receipt
+        self.runs, self.rr, self.ToolError = runs, run_receipt, ToolError
+        self.addCleanup(runtime.set_shared, False)
+        self.root = _mkdtemp()
+        self.dir = run_receipt.reserve(self.root, self.NAME,
+                                       {'tarball': self.NAME + '.tar'})
+
+    def _submitted(self):
+        self.rr.update(self.dir, state='submitted', cluster_id='42',
+                       jobid='42.0@jobsub01.fnal.gov', njobs=3,
+                       outstage=self.OUT)
+
+    def _status(self, clusters=None, reason=None, codes=None):
+        class FakePars:
+            def __init__(self, path):
+                pass
+
+            def job_outputs(self, index):
+                return {'o': f'dts.alice.CeEndpoint.T1.001430_{index:08d}.art'}
+
+        seen = {}
+
+        def clusters_fn(owner):
+            seen['owner'] = owner
+            return clusters, reason
+
+        def codes_fn(jobid, njobs, log=None):
+            seen['history'] = (jobid, njobs)
+            return dict(codes or {})
+
+        out = self.runs.run_status(self.NAME, user='alice',
+                                   runs_root=self.root,
+                                   clusters_fn=clusters_fn,
+                                   codes_fn=codes_fn, job_pars_fn=FakePars)
+        return out, seen
+
+    def test_a_run_that_was_never_submitted_reports_its_receipt_state(self):
+        self.rr.update(self.dir, state='failed', error='pre-flight FAILED')
+        out, seen = self._status()
+        self.assertEqual(out['state'], 'failed')
+        self.assertIn('pre-flight', out['error'])
+        self.assertNotIn('queue', out)
+        self.assertEqual(seen, {})
+
+    def test_jobs_in_the_queue_mean_running_and_history_is_not_asked(self):
+        self._submitted()
+        out, seen = self._status(clusters={'42': [
+            {'JobStatus': 2, 'HoldReasonCode': None, 'HoldReason': None},
+            {'JobStatus': 1, 'HoldReasonCode': None, 'HoldReason': None}]})
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(out['queue']['running'], 1)
+        self.assertEqual(out['queue']['idle'], 1)
+        self.assertEqual(out['queue']['owner'], 'alice')
+        self.assertEqual(seen['owner'], 'alice')
+        self.assertNotIn('history', seen)
+
+    def test_a_failed_queue_query_is_unknown_never_done(self):
+        self._submitted()
+        out, seen = self._status(clusters=None, reason='schedd down')
+        self.assertEqual(out['state'], 'unknown')
+        self.assertEqual(out['queue']['state'], 'unknown')
+        self.assertNotIn('history', seen)
+
+    def test_all_zero_exit_codes_is_done_with_the_output_paths(self):
+        self._submitted()
+        out, seen = self._status(clusters={}, codes={0: 0, 1: 0, 2: 0})
+        self.assertEqual(seen['history'], ('42.0@jobsub01.fnal.gov', 3))
+        self.assertEqual(out['state'], 'done')
+        self.assertEqual(out['jobs'], {'expected': 3, 'ok': 3,
+                                       'failed': [], 'unknown': []})
+        self.assertEqual(out['outputs'][1], [
+            f'{self.OUT}/42/1/dts.alice.CeEndpoint.T1.001430_00000001.art'])
+
+    def test_a_nonzero_exit_code_is_short_and_names_the_index(self):
+        self._submitted()
+        out, _ = self._status(clusters={}, codes={0: 0, 1: 65, 2: 0})
+        self.assertEqual(out['state'], 'short')
+        self.assertEqual(out['jobs']['failed'], [1])
+        self.assertEqual(out['jobs']['exit_codes'], {1: 65})
+        self.assertNotIn(1, out['outputs'])
+
+    def test_an_index_history_lost_is_unknown_not_short_and_not_done(self):
+        self._submitted()
+        out, _ = self._status(clusters={}, codes={0: 0, 2: 0})
+        self.assertEqual(out['state'], 'unknown')
+        self.assertEqual(out['jobs']['unknown'], [1])
+        self.assertIn('history', out['note'])
+
+    def test_unknown_run_is_not_found(self):
+        with self.assertRaises(self.ToolError) as ctx:
+            self.runs.run_status('cnf.alice.Nope.T1.0', user='alice',
+                                 runs_root=self.root)
+        self.assertEqual(ctx.exception.kind, 'not_found')
+
+    def test_whose_run_must_be_said(self):
+        with self.assertRaises(self.ToolError) as ctx:
+            self.runs.run_status(self.NAME, runs_root=self.root)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_a_path_for_a_name_is_refused(self):
+        with self.assertRaises(self.ToolError) as ctx:
+            self.runs.run_status('../x', user='alice', runs_root=self.root)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+    def test_bare_mine_is_refused_on_a_shared_server(self):
+        from prodtools_mcp import runtime
+        runtime.set_shared(True)
+        with self.assertRaises(self.ToolError) as ctx:
+            self.runs.run_status(self.NAME, mine=True, runs_root=self.root)
+        self.assertEqual(ctx.exception.kind, 'invalid_argument')
+
+
+class TestSubmitOnceTool(unittest.TestCase):
+    """submit_once: `json2jobdef --once` through the write server. Self
+    only, whatever `confirm` says."""
+
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        self.tools = tools
+        self.tmp = _mkdtemp()
+        self.simjob_setup = (
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/C/setup.sh')
+        self.json_path = os.path.join(self.tmp, 'entries.json')
+        with open(self.json_path, 'w') as f:
+            json.dump([{'desc': 'D', 'dsconf': 'C',
+                        'simjob_setup': self.simjob_setup, 'fcl': 'x.fcl',
+                        'outloc': {'*.art': 'outstage'}}], f)
+        self.receipt = os.path.join(self.tmp, 'receipt.json')
+        with open(self.receipt, 'w') as f:
+            json.dump({'name': 'cnf.alice.D.C.0', 'state': 'submitted',
+                       'cluster_id': '42', 'entry': {'big': 'thing'}}, f)
+
+    def _call(self, cli, **kw):
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value=cli) as run:
+            out = self.tools.submit_once(self.json_path, 'D', 'C',
+                                         kw.pop('run_as', 'self'), **kw)
+        return out, run
+
+    def test_runs_the_cli_with_the_entrys_musing_and_returns_the_receipt(self):
+        out, run = self._call({'rc': 0, 'stderr': '',
+                               'stdout': f'noise\nRECEIPT {self.receipt}\n'})
+        argv = run.call_args[0][0]
+        self.assertEqual(argv, ['bin/json2jobdef', '--json', self.json_path,
+                                '--desc', 'D', '--dsconf', 'C', '--once'])
+        self.assertEqual(run.call_args[0][1], 'self')
+        self.assertEqual(run.call_args[1]['simjob_setup'], self.simjob_setup)
+        self.assertEqual(out['state'], 'submitted')
+        self.assertEqual(out['cluster_id'], '42')
+        self.assertEqual(out['receipt'], self.receipt)
+        self.assertNotIn('entry', out)
+
+    def test_prodtools_dir_is_forwarded(self):
+        _, run = self._call({'rc': 0, 'stderr': '',
+                             'stdout': f'RECEIPT {self.receipt}\n'},
+                            prodtools_dir='/x/prodtools')
+        self.assertEqual(run.call_args[0][0][-2:],
+                         ['--prodtools-dir', '/x/prodtools'])
+
+    def test_mu2epro_is_refused_even_with_confirm(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.submit_once(self.json_path, 'D', 'C', 'mu2epro',
+                                       confirm=True)
+        self.assertIn('declared', str(ctx.exception))
+        run.assert_not_called()
+
+    def test_a_refusal_reports_both_streams(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._call({'rc': 1, 'stdout': 'built nothing',
+                        'stderr': 'json2jobdef: --once needs every output '
+                                  'on outstage'})
+        self.assertIn('outstage', str(ctx.exception))
+        self.assertIn('built nothing', str(ctx.exception))
+
+    def test_success_without_a_receipt_line_is_an_error_not_a_guess(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._call({'rc': 0, 'stdout': 'all good', 'stderr': ''})
+        self.assertIn('RECEIPT', str(ctx.exception))
+
+    def test_it_is_registered(self):
+        from prodtools_mcp_write import server
+        self.assertIn('submit_once', server.TOOL_NAMES)
