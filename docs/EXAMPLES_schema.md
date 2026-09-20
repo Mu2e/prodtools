@@ -212,7 +212,7 @@ When regenerating, read in this order:
 10. **Parity Tests** — `test/parity_test.sh` usage.
 11. **Additional Tools** — one subsection per script in `bin/` that has
     user-facing CLI: `famtree`,
-    `logparser`, `genFilterEff`, `datasetFileList`, `listNewDatasets`,
+    `logparser`, `genFilterEff`, `stageEff`, `datasetFileList`, `listNewDatasets`,
     `latestDatasets`, `jobquery`,
     `submissions`, `check_inputs`, `copy_to_stash`, `runlocal`, `jobwait`,
     `push_file`.
@@ -411,6 +411,22 @@ reading the code:
   `mu2ejobdef` reference implementation.
 - `genFilterEff` output is Proditions-compatible (`TABLE
   SimEfficiencies2`).
+- `genFilterEff` and `SimEfficiencies2` are PER STAGE and include any
+  prescale: a rate per POT is the product along the chain
+  (`MuBeamCat` x `MuminusStopsCat`), and Run1Ban `MuminusStopsCat`
+  3.96e-5 contains the 1/1000 `TargetStopPrescaleFilter` (0.0396 without
+  it). `stageEff` computes the chain and undoes a named prescale.
+- `stageEff` file stages work on art files that are NOT declared in SAM
+  (local scans): it reads `GenEventCount` / `PrescaleFilterFraction` from
+  the SubRuns tree, so subruns that kept zero events still count. It
+  needs ROOT with Mu2e dictionaries — run it under `/mu2e-run <SimJob
+  tag>`, or from an ops shell, where it starts its own `muse setup
+  SimJob [--musing TAG]` subprocess. A dataset-name stage uses SAM sums
+  and has no prescale data. A subrun lists the prescales of every path
+  of the job; the one on the output's path must be named with
+  `--prescale STAGE:LABEL`, it is never chosen automatically. Two files
+  holding the same subrun (a Cat file listed next to its inputs) is an
+  error, not a dedupe.
 - `famtree` auto-excludes `etc*.txt` files from diagrams.
 - Every successful direct-backend submission (`json2jobdef --enqueue`,
   a cron-fed slice, or a `submissions resubmit`) is recorded in the

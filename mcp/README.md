@@ -68,6 +68,7 @@ environment through — `"env": {"KRB5CCNAME": "..."}` in the config, or
 | "Where are its files on /pnfs?" | `dataset_files(dataset=..., location="tape")` |
 | "Does SAM know this file?" | `locate_file(name="cnf.mu2e....0.tar")` |
 | "What was this file made from?" | `trace_provenance(name=..., direction="up")` |
+| "How many stops per POT from these local files?" | `stage_efficiency(stages=[["sim.mu2e.MuBeamCat....art"], ["/path/stops_*.art"]], prescales={"2": "TargetStopPrescaleFilter"})` |
 
 Two things to know when you read the answers:
 
@@ -111,7 +112,7 @@ root and enabled in `.claude/settings.json`.
 Exposes campaign status and dataset discovery as typed tools:
 `campaign_status`, `list_campaigns`, `find_datasets`, `dataset_details`,
 `locate_file`, `dataset_files`, `trace_provenance`, `run_status`,
-`get_server_info`.
+`stage_efficiency`, `get_server_info`.
 It performs **NO writes** — it cannot submit jobs, create or delete SAM
 definitions, or modify the submission ledger. That guarantee is why its
 tools can be called without deliberation; do not weaken it.

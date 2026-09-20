@@ -8,11 +8,11 @@ import argparse
 import logging
 import os
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from prodtools_mcp import condor, runtime
 from prodtools_mcp.adapters import safe_tool
-from prodtools_mcp.tools import discovery, lineage, runs, status
+from prodtools_mcp.tools import discovery, efficiency, lineage, runs, status
 
 
 # mu2eaigpvm01 runs one server per port, registered in the registry's
@@ -91,6 +91,12 @@ READING THE RESULTS:
   earlier round or a smoke wrote into the same dataset.
 - campaign_status `rows` is a count per submission state. `exhausted`
   means the attempt cap was reached and a human must take over.
+- stage_efficiency `eff` is events kept / events generated AS STORED, so
+  it still contains any prescale; `eff_unprescaled` differs only for a
+  stage whose prescale you named. A file stage lists every prescale
+  filter of the job, not just the one on this output's path — the file
+  does not say which is which, so choose it from the job's fcl. A
+  dataset stage has `prescales: null`: SAM does not record them.
 - Errors arrive as {"error": {"kind", "message", "remedy"}}. Never retry
   an auth_expired — tell the user to renew in their own shell. This
   server never refreshes credentials.
@@ -106,6 +112,7 @@ TOOL_FUNCTIONS = {
     'dataset_files': safe_tool(discovery.dataset_files),
     'trace_provenance': safe_tool(lineage.trace_provenance),
     'run_status': safe_tool(runs.run_status),
+    'stage_efficiency': safe_tool(efficiency.stage_efficiency),
 }
 
 TOOL_NAMES = sorted(list(TOOL_FUNCTIONS) + ['get_server_info'])
@@ -290,6 +297,21 @@ def create_mcp_server():
         return TOOL_FUNCTIONS['trace_provenance'](
             name=name, direction=direction, depth=depth,
             max_nodes=max_nodes)
+
+    @mcp.tool(description='Efficiency of a chain of simulation stages: '
+                          'generated events, events kept, and their ratio '
+                          'per stage, plus the chain product (e.g. stops '
+                          'per POT). Each stage is ONE dataset name (SAM '
+                          'sums, no prescale data) or a list of art file '
+                          'paths / globs / xrootd URLs, which need not be '
+                          'declared in SAM. `prescales` maps a 1-based '
+                          'stage number to the prescale filter label to '
+                          'undo; none is ever undone unasked.')
+    def stage_efficiency(stages: List[List[str]],
+                         prescales: Optional[Dict[str, str]] = None,
+                         musing: Optional[str] = None) -> dict:
+        return TOOL_FUNCTIONS['stage_efficiency'](
+            stages=stages, prescales=prescales, musing=musing)
 
     # Registered under the module function's name via name=, because a
     # nested `def get_server_info` would shadow the module-level one and

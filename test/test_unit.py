@@ -10953,7 +10953,7 @@ class TestMcpServerInfo(unittest.TestCase):
         from prodtools_mcp.server import get_server_info, TOOL_NAMES
         info = get_server_info()
         self.assertEqual(sorted(info['tools']), sorted(TOOL_NAMES))
-        self.assertEqual(len(TOOL_NAMES), 9)
+        self.assertEqual(len(TOOL_NAMES), 10)
 
 
 class TestMcpToolRegistration(unittest.TestCase):

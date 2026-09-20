@@ -7,7 +7,7 @@ Instructions for Claude Code when working in this repo.
 Before answering any question about running the prodtools commands
 (`json2jobdef`, `jobfcl`, `fcldump`, `runmu2e`, `jobdef`,
 `jobquery`, `famtree`, `logparser`,
-`genFilterEff`, `datasetFileList`, `listNewDatasets`,
+`genFilterEff`, `stageEff`, `datasetFileList`, `listNewDatasets`,
 `copy_to_stash`), read `EXAMPLES.md` at the repo
 root. It is the authoritative reference for CLI flags, JSON config
 shapes, and canonical invocations. Do not guess flags or copy patterns
@@ -57,7 +57,8 @@ same indices.
 A read-only MCP server at `mcp/` exposes campaign status and dataset
 discovery as typed tools (`campaign_status`, `list_campaigns`,
 `find_datasets`, `dataset_details`, `locate_file`, `dataset_files`,
-`trace_provenance`, `run_status`, `get_server_info`). Prefer it over shelling the CLI
+`trace_provenance`, `run_status`, `stage_efficiency`,
+`get_server_info`). Prefer it over shelling the CLI
 for status questions — it returns structured JSON and costs less
 context.
 

@@ -1,0 +1,6 @@
+#!/bin/bash
+# stageEff - efficiency of a chain of simulation stages, from art files or SAM
+# Usage: stageEff --stage FILES_OR_DATASET [--stage ...] [--prescale STAGE:LABEL]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/../utils/stage_eff.py" "$@"
