@@ -165,6 +165,30 @@ of 5000 events, outputs to persistent disk, owned by `mu2e`). That one
 is submitted by the production team with `run_as="mu2epro"`; ask them
 rather than running it yourself.
 
+**Try something without touching SAM.** For a test or a study whose
+output nobody else should find, send the outputs to *outstage*: a
+directory on scratch, nothing declared. Copy an entry, change its
+`outloc` to `{"*.art": "outstage"}`, and submit it once:
+
+    submit_once(json="/exp/mu2e/app/users/<user>/my_ceendpoint.json",
+                desc="CeEndpoint", dsconf="MDC2025ax_try1", run_as="self")
+    run_status(name="cnf.<user>.CeEndpoint.MDC2025ax_try1.0", user="<user>")
+
+`submit_once` builds the job package locally, sends every job in one go
+and returns a receipt: the run's `name`, its `jobid`, and `outstage`.
+`run_status` says `running`, then `done` — or `short`, with the failed
+job numbers and their exit codes — and lists each finished job's files
+as `<outstage>/<cluster>/<job>/<file>`. A job can only exit 0 after its
+copy landed, so exit codes are the whole answer; `unknown` means the
+grid could not be asked, never that something failed.
+
+What you give up, all of it on purpose: no recovery of failed jobs (make
+a new run under a new `dsconf`), nothing findable through SAM, no
+campaign and no ticks, at most 10000 jobs, never as production. The
+files are on scratch and the grid forgets exit codes after about two
+weeks, so copy what you want to keep. This is a way to look at
+something, not a lighter way to make a dataset.
+
 Five things that bite:
 
 - **`json` must be an absolute path.**
@@ -205,7 +229,8 @@ root and enabled in `.claude/settings.json`.
 
 Exposes campaign status and dataset discovery as typed tools:
 `campaign_status`, `list_campaigns`, `find_datasets`, `dataset_details`,
-`locate_file`, `dataset_files`, `trace_provenance`, `get_server_info`.
+`locate_file`, `dataset_files`, `trace_provenance`, `run_status`,
+`get_server_info`.
 It performs **NO writes** — it cannot submit jobs, create or delete SAM
 definitions, or modify the submission ledger. That guarantee is why its
 tools can be called without deliberation; do not weaken it.
@@ -234,7 +259,8 @@ PreToolUse hook, none of which survives being reached over a port.
 
 ## `prodtools-write`
 
-Exposes submission: `push_cnf`, `run_submissions`, and publishing: `push_file`.
+Exposes submission: `push_cnf`, `run_submissions`, `submit_once`, and
+publishing: `push_file`.
 
 A production campaign takes two calls: `push_cnf(..., slice_size=N)`
 builds the cnf, registers it in SAM and creates the campaign, returning

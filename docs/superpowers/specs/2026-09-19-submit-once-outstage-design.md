@@ -1,7 +1,9 @@
 # One-shot submission to outstage, with nothing in SAM
 
 Date: 2026-09-19
-Status: draft, awaiting review
+Status: approved 2026-09-20 in the SMALLER form: `list_runs` and the
+`submissions runs` CLI verb are not built (the run name comes back from
+`submit_once`, and `run_status` takes it). Everything else as below.
 Origin: "Can the submission work with placing the files to outstage
 without declaring?" Not today. The worker can; nothing can submit it.
 
@@ -122,7 +124,9 @@ a shared HTTP server.
   hold reasons, or `state: "unknown"` with no counts when the query
   failed;
 - once the cluster has left the queue, per-index outcomes from condor
-  history through the htcondor2 bindings the server already uses:
+  history. As built this calls `jobwait.collect_exit_codes` and
+  `jobwait.summary` directly (the `condor_history` CLI), not the
+  htcondor2 bindings first planned, so the exit-code rule has one home:
   `ok`, `failed` with the exit code, or `unknown` for an index history
   no longer has. Counts plus the failed and unknown indices, capped.
 - for every `ok` index the output paths,

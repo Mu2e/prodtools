@@ -57,7 +57,7 @@ same indices.
 A read-only MCP server at `mcp/` exposes campaign status and dataset
 discovery as typed tools (`campaign_status`, `list_campaigns`,
 `find_datasets`, `dataset_details`, `locate_file`, `dataset_files`,
-`trace_provenance`, `get_server_info`). Prefer it over shelling the CLI
+`trace_provenance`, `run_status`, `get_server_info`). Prefer it over shelling the CLI
 for status questions — it returns structured JSON and costs less
 context.
 
@@ -102,6 +102,14 @@ Every tool takes a required `run_as`:
   production grid jobs. It is refused unless `confirm=true`, AND a
   PreToolUse hook prompts. Both gates are deliberate: a hook can be
   un-armed by a settings reload.
+
+A third write tool, `submit_once`, is the one path that declares
+nothing: every output to outstage, no SAM record (the cnf included), no
+ledger, no recovery, `run_as="self"` only. `run_status(name, user=)` on
+the read-only server is the only thing that can see such a run; neither
+`campaign_status` nor any dataset tool can. `utils/submit.py` enforces
+the line both ways: ledger-tracked if and only if the outputs are
+declared.
 
 The read-only `prodtools` server still performs NO writes. Keep it that
 way — that claim is why its tools are called without deliberation.
