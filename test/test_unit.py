@@ -19055,3 +19055,129 @@ class TestPnfsExistsUsesGfalStatCli(unittest.TestCase):
             # and a bool, so a failure does not dump the module in the log
             self.assertIsNone(
                 re.search(r'^\s*(import|from) gfal2\b', f.read(), re.M))
+
+
+class TestRunReceipt(unittest.TestCase):
+    """A one-shot outstage run has no ledger row; its receipt is the only
+    record. Reserved before the submit, rewritten after, never reused."""
+
+    def setUp(self):
+        from utils import run_receipt
+        self.rr = run_receipt
+        self.root = _mkdtemp()
+        self.entry = {'tarball': 'cnf.u.D.C.0.tar', 'njobs': 3}
+
+    def test_root_follows_the_ledger_directory_of_the_user(self):
+        self.assertEqual(self.rr.runs_root('alice'),
+                         '/exp/mu2e/data/users/alice/prodtools/runs')
+
+    def test_name_is_the_cnf_without_its_extension(self):
+        self.assertEqual(self.rr.run_name('cnf.u.D.C.0.tar'), 'cnf.u.D.C.0')
+
+    def test_reserve_writes_a_submitting_receipt_with_the_entry(self):
+        d = self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        self.assertTrue(os.path.isdir(d))
+        got = self.rr.read(self.root, 'cnf.u.D.C.0')
+        self.assertEqual(got['state'], 'submitting')
+        self.assertEqual(got['name'], 'cnf.u.D.C.0')
+        self.assertEqual(got['entry'], self.entry)
+        self.assertIn('created_utc', got)
+
+    def test_a_name_is_used_once_whatever_state_it_ended_in(self):
+        self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        with self.assertRaises(self.rr.RunExists) as ctx:
+            self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        self.assertIn('dsconf', str(ctx.exception))
+
+    def test_update_merges_and_leaves_no_partial_file(self):
+        d = self.rr.reserve(self.root, 'cnf.u.D.C.0', self.entry)
+        self.rr.update(d, state='submitted', cluster_id='42',
+                       jobid='42.0@jobsub01.fnal.gov')
+        got = self.rr.read(self.root, 'cnf.u.D.C.0')
+        self.assertEqual(got['state'], 'submitted')
+        self.assertEqual(got['cluster_id'], '42')
+        self.assertEqual(got['entry'], self.entry)
+        self.assertEqual(sorted(os.listdir(d)), ['receipt.json'])
+
+    def test_unknown_run_raises_with_the_path_it_looked_at(self):
+        with self.assertRaises(self.rr.RunNotFound) as ctx:
+            self.rr.read(self.root, 'cnf.u.Nope.C.0')
+        self.assertIn(self.root, str(ctx.exception))
+
+    def test_a_name_that_is_a_path_is_refused(self):
+        for bad in ('../x', 'a/b', '', '.'):
+            with self.assertRaises(ValueError):
+                self.rr.read(self.root, bad)
+
+
+class TestLedgerTrackedIffDeclared(unittest.TestCase):
+    """submit_entry enforces, both ways and before any side effect: a
+    submission has a ledger row if and only if its outputs are declared.
+    No ledger + a declared output would be an untracked production
+    submission; a ledger + outstage would recover forever (verify_row is
+    SAM-backed and nothing was declared)."""
+
+    def _entry(self, *locations):
+        return {'tarball': 'cnf.mu2e.NoSuchTarballXYZ.TestConf.0.tar',
+                'prodtools_dir': FAKE_PRODTOOLS_DIR, 'njobs': 3,
+                'inloc': 'tape',
+                'outputs': [{'dataset': f'*.{i}.art', 'location': loc}
+                            for i, loc in enumerate(locations)]}
+
+    def _submit(self, entry, ledger_db, dry_run=True):
+        from utils.submit import submit_entry, SubmitOptions
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   return_value=['--fake']):
+            return submit_entry(entry, 0, SubmitOptions(
+                ledger_db=ledger_db, dry_run=dry_run, origin='t'))
+
+    def test_no_ledger_with_a_declared_output_raises(self):
+        for locs in (('tape',), ('outstage', 'disk'), ()):
+            with self.assertRaises(ValueError) as ctx:
+                self._submit(self._entry(*locs), None)
+            self.assertIn('ledger', str(ctx.exception))
+
+    def test_a_ledger_with_an_outstage_output_raises(self):
+        for locs in (('outstage',), ('tape', 'outstage')):
+            with self.assertRaises(ValueError) as ctx:
+                self._submit(self._entry(*locs), '/tmp/unused-iff.db')
+            self.assertIn('outstage', str(ctx.exception))
+
+    def test_all_outstage_without_a_ledger_is_accepted(self):
+        self.assertEqual(
+            self._submit(self._entry('outstage', 'outstage'), None)['status'],
+            'dry_run')
+
+    def test_declared_with_a_ledger_is_unchanged(self):
+        self.assertEqual(
+            self._submit(self._entry('tape'), '/tmp/unused-iff.db')['status'],
+            'dry_run')
+
+    def test_a_ledgerless_submit_touches_no_ledger_and_no_log(self):
+        from utils import submit
+        from utils.submit import SubmitOptions
+        entry = self._entry('outstage')
+        tmp = _mkdtemp()
+        tar = os.path.join(tmp, entry['tarball'])
+        open(tar, 'w').close()
+        result = {'status': 'submitted', 'cluster_id': '7',
+                  'jobsub_id': '7.0@jobsub01.fnal.gov',
+                  'tarball': entry['tarball'], 'njobs': 3}
+        with patch('utils.submit._jobsub_argv.build_jobsub_argv',
+                   return_value=['--fake']), \
+             patch('utils.submit._ensure_local_tarball',
+                   return_value=Path(tar)), \
+             patch('utils.submit._read_cnf_facts',
+                   return_value=(3, [], [])), \
+             patch('utils.submit._preflight_inputs',
+                   return_value=(True, [])), \
+             patch('utils.submit._run_submit', return_value=result), \
+             patch('utils.submit._reserve_in_ledger') as reserve, \
+             patch('utils.submit._attach_cluster') as attach, \
+             patch('utils.submit._log_submission') as log:
+            got = submit.submit_entry(entry, 0, SubmitOptions(
+                ledger_db=None, origin='t'))
+        self.assertEqual(got, result)
+        reserve.assert_not_called()
+        attach.assert_not_called()
+        log.assert_not_called()
