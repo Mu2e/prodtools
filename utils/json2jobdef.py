@@ -24,6 +24,7 @@ from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
 from utils.jobdesc import (
+    OUTSTAGE_LOCATION, njobs_of,
     ENTRY_VALUE_KEYS, RESOURCE_KEYS, firstjob_of, is_dir_inloc,
     validate_entry_value,
     validate_outloc,
@@ -729,7 +730,7 @@ def build_jobdesc(config):
     return jobdef_entry
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description='Generate Mu2e job definitions from JSON configuration')
     p.add_argument('--json', required=True, help='Input JSON file')
     p.add_argument('--desc', type=str, help='Dataset descriptor')
@@ -753,6 +754,12 @@ def main():
     p.add_argument('--slice-size', type=int, default=None,
                    help='Jobs per slice for --enqueue (default 1000; '
                         'frozen into the campaign).')
+    p.add_argument('--once', action='store_true',
+                   help='Submit the entry ONCE to outstage: build the cnf '
+                        'locally, send every job in one jobsub_submit, '
+                        'write a receipt. Nothing reaches SAM, no ledger, '
+                        'no recovery; every outloc must be "outstage"; '
+                        'never as mu2epro. Excludes --prod/--enqueue.')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
                         'Auto-increments tarball version.')
@@ -761,15 +768,29 @@ def main():
                         '(legacy behavior). Default is to include all files.')
     p.add_argument('--ignore-empty', action='store_true',
                    help='Skip entries whose input datasets have no files instead of failing')
-    args = p.parse_args()
+    args = p.parse_args(argv)
+
+    if args.once:
+        clash = [f for f, on in (('--prod', args.prod),
+                                 ('--enqueue', args.enqueue),
+                                 ('--pushout', args.pushout),
+                                 ('--extend', args.extend),
+                                 ('--slice-size', args.slice_size is not None))
+                 if on]
+        if clash:
+            sys.exit(f"json2jobdef: --once excludes {', '.join(clash)} (it "
+                     f"pushes nothing to SAM and creates no campaign)")
+        if args.index is None and not (args.desc and args.dsconf):
+            sys.exit("json2jobdef: --once submits ONE entry: give --desc "
+                     "AND --dsconf, or --index")
 
     if args.enqueue and not args.prod:
         sys.exit("json2jobdef: --enqueue requires --prod (a campaign "
                  "needs the cnf in SAM)")
     if args.slice_size is not None and not args.enqueue:
         sys.exit("json2jobdef: --slice-size requires --enqueue")
-    if args.prodtools_dir is not None and not args.enqueue:
-        sys.exit("json2jobdef: --prodtools-dir requires --enqueue")
+    if args.prodtools_dir is not None and not (args.enqueue or args.once):
+        sys.exit("json2jobdef: --prodtools-dir requires --enqueue or --once")
     if args.slice_size is None:
         args.slice_size = 1000
     if args.prod and not args.enqueue:
@@ -796,6 +817,12 @@ def main():
         else:
             sys.exit("Please specify either --desc AND --dsconf, --dsconf only, or --index only")
         config['_event_count_positive'] = args.event_count_positive
+        if args.once:
+            receipt = submit_once(config, json_path=args.json,
+                                  prodtools_dir=args.prodtools_dir)
+            print(json.dumps({k: v for k, v in receipt.items()
+                              if k != 'entry'}, indent=2))
+            sys.exit(0 if receipt['state'] == 'submitted' else 1)
         process_single_entry(
             config,
             pushout=args.pushout,
@@ -807,6 +834,93 @@ def main():
             json_path=args.json,
             prodtools_dir=args.prodtools_dir,
         )
+
+ONCE_MAX_JOBS = 10000   # one `jobsub_submit -N` takes no more
+
+
+def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
+                build=None, submit=None):
+    """`--once`: build the cnf locally, submit every job in one go to
+    outstage, and leave a receipt (utils/run_receipt). Returns the receipt.
+
+    Nothing reaches SAM, the cnf included: submit_entry ships it with
+    `-f dropbox://` and the worker reads it from $CONDOR_DIR_INPUT. No
+    ledger and no recovery either -- the ledger verifies against SAM, and
+    this declares nothing (submit._check_tracking holds that line).
+
+    Every refusal that can be made from the entry alone is made before
+    anything exists on disk. `build` and `submit` are seams for the tests.
+    """
+    from utils import run_receipt
+    from utils import jobsub_argv
+    from utils.submit import SubmitOptions, submit_entry
+
+    build = build or process_single_entry
+    submit = submit or submit_entry
+    user = getpass.getuser()
+    config['owner'] = config.get('owner', default_owner())
+    if user == 'mu2epro' or config['owner'] == 'mu2e':
+        sys.exit("json2jobdef: --once is for personal runs only. "
+                 "Production outputs are declared to SAM, always; use "
+                 "--prod --enqueue.")
+    try:
+        validate_outloc(config.get('outloc'))
+    except ValueError as exc:
+        sys.exit(f"json2jobdef: {exc}")
+    declared = {pat: loc for pat, loc in config['outloc'].items()
+                if loc != OUTSTAGE_LOCATION}
+    if declared:
+        sys.exit(f"json2jobdef: --once needs every output on outstage, but "
+                 f"outloc sends {declared} to a declared location. Change "
+                 f"those outloc values to \"outstage\" in the entry "
+                 f"(--once never rewrites it), or use --prod --enqueue.")
+    if isinstance(config.get('njobs'), int) and config['njobs'] > ONCE_MAX_JOBS:
+        sys.exit(f"json2jobdef: --once submits everything in one "
+                 f"jobsub_submit, which takes at most {ONCE_MAX_JOBS} jobs; "
+                 f"this entry has njobs={config['njobs']}.")
+
+    name = run_receipt.run_name(get_parfile_name(config))
+    try:
+        run_dir = run_receipt.reserve(root or run_receipt.runs_root(user),
+                                      name, dict(config), state='building')
+    except run_receipt.RunExists as exc:
+        sys.exit(f"json2jobdef: {exc}")
+
+    def fail(exc):
+        return run_receipt.update(run_dir, state='failed', error=str(exc))
+
+    try:
+        os.chdir(run_dir)               # the cnf is built into the cwd
+        build(config, pushout=False, enqueue=False, no_cleanup=False)
+        entry = build_jobdesc(config)
+        entry.update(prodtools_entry_keys(
+            resolve_prodtools_dir(prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
+            user=user))
+        njobs = njobs_of(entry)
+        if njobs is None or njobs < 1 or njobs > ONCE_MAX_JOBS:
+            raise ValueError(
+                f"--once needs between 1 and {ONCE_MAX_JOBS} jobs, the "
+                f"built cnf has njobs={njobs}")
+        # 'submitting' only from here: the one state that means "the grid
+        # may have accepted a cluster this receipt does not name".
+        run_receipt.update(run_dir, state='submitting', entry=entry)
+        result = submit(entry, 0, SubmitOptions(
+            ledger_db=None, origin=_provenance(json_path, config)))
+    except (SystemExit, Exception) as exc:
+        fail(exc)
+        if isinstance(exc, SystemExit):
+            raise
+        sys.exit(f"json2jobdef: {exc}")
+
+    if result.get('status') != 'submitted':
+        return fail(f"jobsub_submit did not return a cluster: {result}")
+    return run_receipt.update(
+        run_dir, state='submitted', cluster_id=result['cluster_id'],
+        jobid=result.get('jobsub_id'), njobs=result.get('njobs', njobs),
+        outstage=jobsub_argv.outstage_for(entry['tarball'], user),
+        prodtools_dir=entry.get('prodtools_dir'),
+        submitted_utc=run_receipt._now())
+
 
 def _build_job_args(config):
     """Dispatch on `determine_job_type(config)` and return the per-mode

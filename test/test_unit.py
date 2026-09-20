@@ -19181,3 +19181,150 @@ class TestLedgerTrackedIffDeclared(unittest.TestCase):
         reserve.assert_not_called()
         attach.assert_not_called()
         log.assert_not_called()
+
+
+class TestJson2jobdefOnce(unittest.TestCase):
+    """`json2jobdef --once`: build locally, submit everything in one go to
+    outstage, leave a receipt. No SAM, no ledger, self only."""
+
+    def setUp(self):
+        from utils import json2jobdef, run_receipt
+        self.j = json2jobdef
+        self.rr = run_receipt
+        self.root = _mkdtemp()
+        self.cwd = os.getcwd()
+        self.addCleanup(os.chdir, self.cwd)
+        self.calls = {}
+
+    def _config(self, **over):
+        c = {'desc': 'CeEndpoint', 'dsconf': 'T1', 'owner': 'alice',
+             'fcl': 'x.fcl', 'njobs': 3, 'events': 10, 'run': 1,
+             'inloc': 'tape', 'outloc': {'*.art': 'outstage'},
+             'simjob_setup': '/cvmfs/x/setup.sh'}
+        c.update(over)
+        return c
+
+    def _entry(self, config):
+        return {'tarball': 'cnf.alice.CeEndpoint.T1.0.tar',
+                'njobs': config['njobs'], 'inloc': 'tape',
+                'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+
+    def _run(self, config, result=None, build_raises=None, submit_raises=None):
+        result = result or {'status': 'submitted', 'cluster_id': '42',
+                            'jobsub_id': '42.0@jobsub01.fnal.gov',
+                            'tarball': 'cnf.alice.CeEndpoint.T1.0.tar',
+                            'njobs': config.get('njobs')}
+
+        def build(cfg, **kw):
+            self.calls['build_cwd'] = os.getcwd()
+            self.calls['build_kw'] = kw
+            if build_raises:
+                raise build_raises
+
+        def submit(entry, idx, options):
+            self.calls['options'] = options
+            self.calls['state_at_submit'] = self.rr.read(
+                self.root, 'cnf.alice.CeEndpoint.T1.0')['state']
+            if submit_raises:
+                raise submit_raises
+            return result
+
+        with patch.object(self.j, 'build_jobdesc', side_effect=self._entry), \
+             patch.object(self.j, 'resolve_prodtools_dir',
+                          return_value=FAKE_PRODTOOLS_DIR), \
+             patch.object(self.j, 'prodtools_entry_keys',
+                          return_value={'prodtools_dir': FAKE_PRODTOOLS_DIR}), \
+             patch.object(self.j.getpass, 'getuser', return_value='alice'):
+            return self.j.submit_once(config, json_path='/j.json',
+                                      root=self.root, build=build,
+                                      submit=submit)
+
+    def test_happy_path_builds_in_the_run_dir_and_records_the_cluster(self):
+        receipt = self._run(self._config())
+        run_dir = os.path.join(self.root, 'cnf.alice.CeEndpoint.T1.0')
+        self.assertEqual(os.path.realpath(self.calls['build_cwd']),
+                         os.path.realpath(run_dir))
+        self.assertFalse(self.calls['build_kw'].get('pushout'))
+        self.assertFalse(self.calls['build_kw'].get('enqueue'))
+        self.assertIsNone(self.calls['options'].ledger_db)
+        self.assertEqual(self.calls['state_at_submit'], 'submitting')
+        self.assertEqual(receipt['state'], 'submitted')
+        self.assertEqual(receipt['jobid'], '42.0@jobsub01.fnal.gov')
+        self.assertEqual(receipt['cluster_id'], '42')
+        self.assertEqual(receipt['njobs'], 3)
+        self.assertEqual(
+            receipt['outstage'],
+            '/pnfs/mu2e/scratch/users/alice/workflow/T1/outstage')
+        self.assertEqual(receipt, self.rr.read(
+            self.root, 'cnf.alice.CeEndpoint.T1.0'))
+
+    def test_any_non_outstage_output_is_refused_before_anything_exists(self):
+        for outloc in ({'*.art': 'scratch'},
+                       {'dts.*.art': 'outstage', '*.root': 'tape'}):
+            with self.assertRaises(SystemExit) as ctx:
+                self._run(self._config(outloc=outloc))
+            self.assertIn('outstage', str(ctx.exception))
+            self.assertIn('outloc', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+        self.assertNotIn('build_cwd', self.calls)
+
+    def test_production_is_refused(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(owner='mu2e'))
+        self.assertIn('declared', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_more_jobs_than_one_jobsub_submit_takes_is_refused(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(njobs=10001))
+        self.assertIn('10000', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_used_name_is_refused(self):
+        self._run(self._config())
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config())
+        self.assertIn('dsconf', str(ctx.exception))
+
+    def test_a_failed_submit_is_recorded_as_failed(self):
+        receipt = self._run(self._config(), result={
+            'status': 'failed', 'cluster_id': None, 'njobs': 3,
+            'tarball': 'cnf.alice.CeEndpoint.T1.0.tar'})
+        self.assertEqual(receipt['state'], 'failed')
+
+    def test_a_refusal_inside_submit_is_recorded_and_still_propagates(self):
+        with self.assertRaises(SystemExit):
+            self._run(self._config(),
+                      submit_raises=SystemExit('input pre-flight FAILED'))
+        got = self.rr.read(self.root, 'cnf.alice.CeEndpoint.T1.0')
+        self.assertEqual(got['state'], 'failed')
+        self.assertIn('pre-flight', got['error'])
+
+    def test_a_build_that_dies_never_reads_as_submitting(self):
+        with self.assertRaises(SystemExit):
+            self._run(self._config(), build_raises=SystemExit('no mu2e'))
+        got = self.rr.read(self.root, 'cnf.alice.CeEndpoint.T1.0')
+        self.assertEqual(got['state'], 'failed')
+
+    def test_once_excludes_prod_and_enqueue_on_the_command_line(self):
+        for extra in (['--prod', '--enqueue'], ['--extend']):
+            with self.assertRaises(SystemExit) as ctx:
+                self.j.main(['--json', '/nope.json', '--desc', 'a',
+                             '--dsconf', 'b', '--once'] + extra)
+            self.assertIn('--once', str(ctx.exception))
+
+
+class TestOutstageForMatchesTheSubmitCommand(unittest.TestCase):
+    def test_receipt_path_equals_what_the_jobs_are_told(self):
+        from utils import jobsub_argv
+        entry = {'tarball': 'cnf.alice.CeEndpoint.T1.0.tar', 'njobs': 1,
+                 'inloc': 'none', 'prodtools_dir': FAKE_PRODTOOLS_DIR,
+                 'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+        argv = jobsub_argv.build_jobsub_argv(
+            entry=entry, jobset=[0], submitter='alice',
+            jobdef_path='/tmp/cnf.alice.CeEndpoint.T1.0.tar',
+            ops_json_path='/tmp/ops.json', prodtools_dir=FAKE_PRODTOOLS_DIR)
+        told = [a.split('=', 1)[1] for a in argv
+                if a.startswith('MU2EGRID_WFOUTSTAGE=')]
+        self.assertEqual(told, [jobsub_argv.outstage_for(
+            'cnf.alice.CeEndpoint.T1.0.tar', 'alice')])

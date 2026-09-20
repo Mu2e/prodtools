@@ -64,8 +64,8 @@ def _write(run_dir, data):
     os.replace(tmp, os.path.join(run_dir, RECEIPT))
 
 
-def reserve(root, name, entry):
-    """Create the run directory and its `submitting` receipt; return the
+def reserve(root, name, entry, state='submitting'):
+    """Create the run directory and its first receipt; return the
     directory. Raises RunExists when the name was ever used."""
     run_dir = os.path.join(root, _checked(name))
     os.makedirs(root, exist_ok=True)
@@ -79,7 +79,7 @@ def reserve(root, name, entry):
             f'"submitting", the previous attempt died mid-submit: look '
             f'for its cluster in jobsub_q before doing anything else. '
             f'Pick a new dsconf.') from None
-    _write(run_dir, {'name': name, 'state': 'submitting',
+    _write(run_dir, {'name': name, 'state': state,
                      'created_utc': _now(), 'entry': entry})
     return run_dir
 
