@@ -53,6 +53,13 @@ does this for Claude Code; for another client:
 Your own server runs as you, so it reads what your credentials can read.
 A shared one runs as its host account.
 
+Some clients start a server with a stripped environment (the MCP Python
+SDK passes only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`). That
+drops `KRB5CCNAME`, and with it your kerberos ticket: submitting then
+fails its input check with `Error checking if token is valid`. Pass the
+environment through — `"env": {"KRB5CCNAME": "..."}` in the config, or
+`env=dict(os.environ)` from the SDK. Claude Code passes its own.
+
 ### 2. Ask it things
 
 | Question | Tool it uses |

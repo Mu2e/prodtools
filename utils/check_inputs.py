@@ -178,6 +178,10 @@ _QUERY_ATTEMPTS = 3       # transport retries per area (not for 404s)
 _QUERY_BACKOFF = 0.5      # seconds, multiplied by attempt number
 
 
+# The one RuntimeError text from mdh.query_dcache that means 404.
+_NOT_FOUND_TEXT = 'File not found in dCache'
+
+
 def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
     """Locality of one file, searching `mdh_loc` first then the disk areas.
 
@@ -193,8 +197,15 @@ def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
         for attempt in range(attempts):
             try:
                 info = client.query_dcache(filename, location=loc)
-            except RuntimeError:
-                break             # 404 in this area — try the next area
+            except RuntimeError as e:
+                if _NOT_FOUND_TEXT in str(e):
+                    break         # 404 in this area — try the next area
+                # mdh raises RuntimeError for everything, an auth failure
+                # included ("Error checking if token is valid" with no
+                # kerberos ticket). That is not a 404: reading it as one
+                # reported an ONLINE file as absent. Fail closed, and
+                # carry the reason — no other area will answer either.
+                return f'ERROR: {e}'
             except Exception:
                 if attempt + 1 == attempts:
                     return 'ERROR'    # persistent failure: fail closed
@@ -257,8 +268,13 @@ def check_tape(dataset, files, locality, dataset_location):
             problems.append(Problem(dataset, f, 'missing',
                                     f'absent from dCache {mdh_loc}'))
         else:
-            problems.append(Problem(dataset, f, 'query_error',
-                                    f'locality query failed for {f}'))
+            why = st[len('ERROR:'):].strip() if st.startswith('ERROR:') else ''
+            hint = (' — kerberos ticket missing or expired? check `klist`'
+                    if 'token' in why.lower() else '')
+            problems.append(Problem(
+                dataset, f, 'query_error',
+                f'locality query failed for {f}'
+                + (f': {why}{hint}' if why else '')))
     return problems
 
 

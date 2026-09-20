@@ -19559,3 +19559,48 @@ class TestSubmitOnceTool(unittest.TestCase):
     def test_it_is_registered(self):
         from prodtools_mcp_write import server
         self.assertIn('submit_once', server.TOOL_NAMES)
+
+
+class TestLocalityAuthFailureIsNotMissing(unittest.TestCase):
+    """mdh raises RuntimeError both for a 404 ("File not found in dCache:
+    ...") and for an auth failure ("Error checking if token is valid",
+    with no kerberos ticket). Treating every RuntimeError as a 404 turned
+    an expired ticket into "absent from dCache tape" for a file that was
+    online -- twice on 2026-09-20, once through an MCP client whose child
+    environment dropped KRB5CCNAME."""
+
+    F = 'sim.mu2e.X.Y.001430_00000000.art'
+
+    class Client:
+        def __init__(self, exc):
+            self.exc, self.calls = exc, []
+
+        def query_dcache(self, filename, location=None):
+            self.calls.append(location)
+            raise self.exc
+
+    def test_a_404_in_every_area_is_missing(self):
+        from utils.check_inputs import _file_locality
+        c = self.Client(RuntimeError(f'File not found in dCache: /pnfs/x/{self.F}'))
+        self.assertEqual(_file_locality(c, 'tape', self.F), 'MISSING')
+        self.assertGreater(len(c.calls), 1)      # it did try the other areas
+
+    def test_an_auth_failure_is_an_error_with_its_reason_not_missing(self):
+        from utils.check_inputs import _file_locality
+        c = self.Client(RuntimeError('Error checking if token is valid'))
+        st = _file_locality(c, 'tape', self.F)
+        self.assertTrue(st.startswith('ERROR'), st)
+        self.assertIn('token is valid', st)
+        self.assertEqual(c.calls, ['tape'])      # no point asking elsewhere
+
+    def test_the_reason_reaches_the_report_with_a_kerberos_hint(self):
+        from utils.check_inputs import check_tape
+        probs = check_tape(
+            'sim.mu2e.X.Y.art', [self.F],
+            locality=lambda loc, files: {
+                self.F: 'ERROR: Error checking if token is valid'},
+            dataset_location=lambda ds: 'enstore')
+        self.assertEqual([p.kind for p in probs], ['query_error'])
+        self.assertIn('token is valid', probs[0].detail)
+        self.assertIn('klist', probs[0].detail)
+        self.assertNotIn('absent', probs[0].detail)
