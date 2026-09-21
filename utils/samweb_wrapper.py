@@ -327,6 +327,31 @@ def metadata_for_files(filenames: List[str]) -> List[Dict]:
             filenames[i:i + MAX_METADATA_BATCH]))
     return out
 
+def dataset_gen_count(dataset: str) -> Optional[int]:
+    """Summed `gen.count` over every file of `dataset`, or None when SAM
+    does not record it for all of them.
+
+    This is the generated-event total of the stage that produced the
+    dataset -- the denominator a downstream resampler needs, and the one
+    quantity a mixing secondary cannot supply to the job reading it (its
+    SubRun products never reach the output). The event total is the
+    `total_event_count` of dataset_summary().
+
+    None rather than a partial sum when any file lacks the key: summing
+    only the files that have it would under-count the pool silently, and
+    the caller can report that plainly instead.
+    """
+    names = files_in_dataset(dataset)
+    if not names:
+        return None
+    total = 0
+    for md in metadata_for_files(names):
+        value = md.get('gen.count')
+        if value is None:
+            return None
+        total += int(value)
+    return total
+
 def definitions_matching(defname: Optional[str] = None,
                          user: Optional[str] = None) -> List[str]:
     """List definitions filtered by name pattern (% wildcard) and/or

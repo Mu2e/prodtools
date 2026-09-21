@@ -583,8 +583,18 @@ def build_jobdef(config, job_args):
         # own fcl_overrides (or the base FCL's) stands undisturbed.
         post_lines = []
         if job_type == 'resampler' and not _is_dir_inloc(config):
+            resampler = config['resampler_name']
             post_lines.append(
-                f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {config['_max_events_to_skip']}")
+                f"physics.filters.{resampler}.mu2e.MaxEventsToSkip: {config['_max_events_to_skip']}")
+            # The pool's totals, for a pool that carries no StageNormalization.
+            # Emitted after the overrides for the same reason MaxEventsToSkip
+            # is: they are derived from SAM and must beat whatever the entry or
+            # the base FCL guessed.
+            if '_pool_gen_count' in config:
+                stem = f"physics.filters.{resampler}.mu2e.products.stageNormMixer"
+                post_lines.append(f"{stem}.poolGenCount: {config['_pool_gen_count']}")
+                post_lines.append(f"{stem}.poolEventCount: {config['_pool_event_count']}")
+                post_lines.append(f'{stem}.srOutInstance: "resampled"')
         write_fcl_template(fcl_path, config.get('fcl_overrides', {}),
                            post_lines=post_lines)
 
@@ -948,6 +958,23 @@ def _build_job_args(config):
                 config['_max_events_to_skip'] = max_events_to_skip(first_dataset)
             except Exception as e:
                 fail(f"Error: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+            # StageNormalization bootstrap, opt-in per entry. Not automatic:
+            # the keys are rejected outright by an Offline release that does
+            # not define them, and which release a cnf runs is the entry's
+            # business, not ours. Only for a pool with no StageNormalization
+            # of its own -- one that has it needs no numbers at all.
+            if config.get('stage_norm_bootstrap'):
+                try:
+                    gen, nevts = pool_counts(first_dataset)
+                except Exception as e:
+                    fail(f"Error: Could not read pool counts for {first_dataset}: {e}")
+                if gen is None:
+                    fail(f"Error: SAM records no gen.count for every file of "
+                         f"{first_dataset}, so its generated total cannot be "
+                         f"summed; drop stage_norm_bootstrap for this entry, or "
+                         f"state the totals in fcl_overrides.")
+                config['_pool_gen_count'] = gen
+                config['_pool_event_count'] = nevts
         merge_factor = calculate_merge_factor(config)
         return ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
 
