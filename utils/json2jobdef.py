@@ -949,6 +949,17 @@ def _build_job_args(config):
         # dataset names (see _is_dir_inloc), so skip the auto-computation
         # rather than feed a basename into a SAM lookup that can only fail.
         # build_jobdef mirrors this guard when emitting post_lines.
+        if _is_dir_inloc(config) and config.get('stage_norm_bootstrap'):
+            # The whole block below is skipped for a dir: input, so the key
+            # would be honoured nowhere and the cnf would come out silently
+            # without its normalization. There is no SAM dataset to sum.
+            fail("Error: stage_norm_bootstrap needs SAM totals, and a dir: "
+                 "inloc entry keys input_data by basename with no dataset to "
+                 "query. State the totals in fcl_overrides instead "
+                 "(stageNormMixer.poolGenCount / .poolEventCount); for an "
+                 "undeclared pool both are readable from the files themselves "
+                 "-- the SubRuns tree holds every GenEventCount and the Events "
+                 "tree its entry count.")
         if not _is_dir_inloc(config):
             # A resampler cnf without MaxEventsToSkip is a physics bug (the
             # resampler silently re-reads the same leading events), so a
@@ -964,12 +975,21 @@ def _build_job_args(config):
             # business, not ours. Only for a pool with no StageNormalization
             # of its own -- one that has it needs no numbers at all.
             if config.get('stage_norm_bootstrap'):
+                pools = normalize_input_data(config['input_data'])
+                if len(pools) > 1:
+                    # MaxEventsToSkip takes input_data[0] and lives with a
+                    # slightly wrong skip range; a normalization built from one
+                    # of several pools is simply wrong, so refuse instead.
+                    fail(f"Error: stage_norm_bootstrap describes one pool, but "
+                         f"this entry resamples {len(pools)}: "
+                         f"{', '.join(p.source for p in pools)}. State the "
+                         f"combined totals in fcl_overrides, or split the entry.")
                 try:
                     gen, nevts = pool_counts(first_dataset)
                 except Exception as e:
                     fail(f"Error: Could not read pool counts for {first_dataset}: {e}")
                 if gen is None:
-                    fail(f"Error: SAM records no gen.count for every file of "
+                    fail(f"Error: SAM records no dh.gencount for every file of "
                          f"{first_dataset}, so its generated total cannot be "
                          f"summed; drop stage_norm_bootstrap for this entry, or "
                          f"state the totals in fcl_overrides.")

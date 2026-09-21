@@ -28,6 +28,11 @@ from samweb_client import SAMWebClient #type: ignore
 from samweb_client import Error as SAMError, FileNotFound  # type: ignore
 
 
+# SAM's per-file generated-event count. Not the metacat spelling of the
+# same quantity ("gen.count"), which is what a metacat query returns and
+# is absent from every samweb metadata record; genFilterEff reads this one.
+GEN_COUNT_KEY = 'dh.gencount'
+
 # SAM rejects getMultipleMetadata outright above this many names
 # ("Too many files requested (max 1000)") rather than truncating, so
 # every batch caller has to respect it.
@@ -328,8 +333,8 @@ def metadata_for_files(filenames: List[str]) -> List[Dict]:
     return out
 
 def dataset_gen_count(dataset: str) -> Optional[int]:
-    """Summed `gen.count` over every file of `dataset`, or None when SAM
-    does not record it for all of them.
+    """Summed generated-event count over every file of `dataset`, or None
+    when SAM does not record it for all of them.
 
     This is the generated-event total of the stage that produced the
     dataset -- the denominator a downstream resampler needs, and the one
@@ -346,7 +351,7 @@ def dataset_gen_count(dataset: str) -> Optional[int]:
         return None
     total = 0
     for md in metadata_for_files(names):
-        value = md.get('gen.count')
+        value = md.get(GEN_COUNT_KEY)
         if value is None:
             return None
         total += int(value)

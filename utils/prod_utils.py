@@ -146,7 +146,7 @@ def pool_counts(dataset):
     event count art never exposes. SAM has both, so a cnf built here can
     state them once instead of every user measuring the files by hand.
 
-    Returns (None, events) when SAM does not record gen.count for every
+    Returns (None, events) when SAM does not record dh.gencount for every
     file of the dataset -- see samweb_wrapper.dataset_gen_count.
     """
     _, nevts = get_def_counts(dataset)          # exits if the dataset is empty

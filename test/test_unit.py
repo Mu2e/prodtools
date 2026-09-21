@@ -8165,6 +8165,73 @@ class TestFileSizesInDataset(unittest.TestCase):
         self.assertTrue(kwargs.get("fileinfo"))
 
 
+class TestDatasetGenCount(unittest.TestCase):
+    """dataset_gen_count / pool_counts: the generated total a resampler's
+    StageNormalization bootstrap needs.
+
+    The key is SAM's dh.gencount. It is NOT metacat's gen.count, which names
+    the same quantity in a different catalogue and appears in no samweb
+    record -- reading that spelling made the function return None for every
+    real dataset while arithmetic checked by hand against metacat still
+    agreed, so these tests go through the function rather than around it."""
+
+    DS = "sim.mu2e.Pool.CampA.art"
+    F1 = "sim.mu2e.Pool.CampA.001430_00000000.art"
+    F2 = "sim.mu2e.Pool.CampA.001430_00000001.art"
+
+    def _patched(self, metadata):
+        from utils import samweb_wrapper
+        fake = MagicMock()
+        fake.listFiles.return_value = [self.F1, self.F2]
+        fake.getMultipleMetadata.return_value = metadata
+        return samweb_wrapper, patch.object(samweb_wrapper, "_client",
+                                            return_value=fake)
+
+    def test_sums_dh_gencount_over_the_dataset(self):
+        sw, ctx = self._patched([{"dh.gencount": 25000000},
+                                 {"dh.gencount": 25000000}])
+        with ctx:
+            self.assertEqual(sw.dataset_gen_count(self.DS), 50000000)
+
+    def test_none_when_a_file_lacks_the_key(self):
+        """A partial sum would under-count the pool silently."""
+        sw, ctx = self._patched([{"dh.gencount": 25000000}, {}])
+        with ctx:
+            self.assertIsNone(sw.dataset_gen_count(self.DS))
+
+    def test_metacat_spelling_is_not_accepted(self):
+        """gen.count is the metacat key; a record carrying only it is not
+        one this function can read, and must not be silently counted."""
+        sw, ctx = self._patched([{"gen.count": 25000000},
+                                 {"gen.count": 25000000}])
+        with ctx:
+            self.assertIsNone(sw.dataset_gen_count(self.DS))
+
+    def test_none_for_an_empty_dataset(self):
+        from utils import samweb_wrapper
+        fake = MagicMock()
+        fake.listFiles.return_value = []
+        with patch.object(samweb_wrapper, "_client", return_value=fake):
+            self.assertIsNone(samweb_wrapper.dataset_gen_count(self.DS))
+
+    def test_pool_counts_pairs_the_two_totals(self):
+        from utils import prod_utils
+        with patch.object(prod_utils, "get_def_counts",
+                          return_value=(2, 639084)), \
+             patch.object(prod_utils, "dataset_gen_count",
+                          return_value=50000000):
+            self.assertEqual(prod_utils.pool_counts(self.DS),
+                             (50000000, 639084))
+
+    def test_pool_counts_passes_none_through(self):
+        from utils import prod_utils
+        with patch.object(prod_utils, "get_def_counts",
+                          return_value=(2, 639084)), \
+             patch.object(prod_utils, "dataset_gen_count",
+                          return_value=None):
+            self.assertEqual(prod_utils.pool_counts(self.DS), (None, 639084))
+
+
 class TestCheckTape(unittest.TestCase):
     """Primary / tape inputs: NEARLINE (evicted) must block with a
     /prestage hint; ONLINE passes; unknown storage or query failure fails
