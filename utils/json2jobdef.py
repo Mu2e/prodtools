@@ -595,6 +595,10 @@ def build_jobdef(config, job_args):
                 post_lines.append(f"{stem}.poolGenCount: {config['_pool_gen_count']}")
                 post_lines.append(f"{stem}.poolEventCount: {config['_pool_event_count']}")
                 post_lines.append(f'{stem}.srOutInstance: "resampled"')
+                # One stage from the origin, which _build_job_args checked, so
+                # these totals really are the origin's generated count.
+                post_lines.append(f"{stem}.poolStages: 1")
+                post_lines.append(f"{stem}.poolFromOrigin: true")
         write_fcl_template(fcl_path, config.get('fcl_overrides', {}),
                            post_lines=post_lines)
 
@@ -975,7 +979,36 @@ def _build_job_args(config):
             # business, not ours. Only for a pool with no StageNormalization
             # of its own -- one that has it needs no numbers at all.
             if config.get('stage_norm_bootstrap'):
+                # The totals below are SAM's, and SAM's dh.gencount is RESET by
+                # a resampling stage to that stage's own draw count. So they are
+                # the origin's only when the pool is one stage from it -- a beam
+                # sample split from the POT output, not a stops sample made by
+                # resampling a beam sample. The entry has to say which, because
+                # nothing in the metadata does: the obvious test, whether this
+                # stage's generated count differs from its parent's, reads EQUAL
+                # on the Run1Ban chain where the beam stage and the resampler
+                # were sized alike.
+                #
+                # Composing a longer chain is deliberately out of scope here;
+                # Mu2e/prodtools#75 has the stage arithmetic and the file reader
+                # that also serves a dir: pool.
+                origin = config.get('stage_norm_origin')
+                if not origin:
+                    fail("Error: stage_norm_bootstrap needs stage_norm_origin, "
+                         "naming the dataset whose generated count these totals "
+                         "are. It may only be the pool itself, i.e. a pool ONE "
+                         "stage from the origin -- SAM's dh.gencount is reset by "
+                         "a resampling stage, so for a resampled pool it counts "
+                         "draws and not protons, and labelling that as the "
+                         "origin overstates the chain by the upstream "
+                         "efficiency (about 78 for Run1B).")
                 pools = normalize_input_data(config['input_data'])
+                if origin != pools[0].source:
+                    fail(f"Error: stage_norm_origin is {origin!r} but the pool "
+                         f"is {pools[0].source!r}. Only a pool one stage from "
+                         f"the origin can be bootstrapped from SAM totals; for "
+                         f"anything deeper the chain has to be composed, which "
+                         f"this does not do.")
                 if len(pools) > 1:
                     # MaxEventsToSkip takes input_data[0] and lives with a
                     # slightly wrong skip range; a normalization built from one

@@ -215,7 +215,11 @@ When regenerating, read in this order:
     / `.poolEventCount` / `.srOutInstance`, for a pool carrying no
     StageNormalization of its own. Opt-in because a release without
     `stageNormMixer` rejects the keys; refused for a `dir:` inloc entry
-    or one resampling more than one dataset.
+    or one resampling more than one dataset. Requires
+    `stage_norm_origin`, which must name the pool itself: SAM's
+    `dh.gencount` is reset by a resampling stage, so it is the origin's
+    generated count only for a pool ONE stage from the origin. A deeper
+    pool needs the chain composed, which this does not do.
 10. **Parity Tests** — `test/parity_test.sh` usage.
 11. **Additional Tools** — one subsection per script in `bin/` that has
     user-facing CLI: `famtree`,
