@@ -583,8 +583,22 @@ def build_jobdef(config, job_args):
         # own fcl_overrides (or the base FCL's) stands undisturbed.
         post_lines = []
         if job_type == 'resampler' and not _is_dir_inloc(config):
+            resampler = config['resampler_name']
             post_lines.append(
-                f"physics.filters.{config['resampler_name']}.mu2e.MaxEventsToSkip: {config['_max_events_to_skip']}")
+                f"physics.filters.{resampler}.mu2e.MaxEventsToSkip: {config['_max_events_to_skip']}")
+            # The pool's totals, for a pool that carries no StageNormalization.
+            # Emitted after the overrides for the same reason MaxEventsToSkip
+            # is: they are derived from SAM and must beat whatever the entry or
+            # the base FCL guessed.
+            if '_pool_gen_count' in config:
+                stem = f"physics.filters.{resampler}.mu2e.products.stageNormMixer"
+                post_lines.append(f"{stem}.poolGenCount: {config['_pool_gen_count']}")
+                post_lines.append(f"{stem}.poolEventCount: {config['_pool_event_count']}")
+                post_lines.append(f'{stem}.srOutInstance: "resampled"')
+                # One stage from the origin, which _build_job_args checked, so
+                # these totals really are the origin's generated count.
+                post_lines.append(f"{stem}.poolStages: 1")
+                post_lines.append(f"{stem}.poolFromOrigin: true")
         write_fcl_template(fcl_path, config.get('fcl_overrides', {}),
                            post_lines=post_lines)
 
@@ -939,6 +953,17 @@ def _build_job_args(config):
         # dataset names (see _is_dir_inloc), so skip the auto-computation
         # rather than feed a basename into a SAM lookup that can only fail.
         # build_jobdef mirrors this guard when emitting post_lines.
+        if _is_dir_inloc(config) and config.get('stage_norm_bootstrap'):
+            # The whole block below is skipped for a dir: input, so the key
+            # would be honoured nowhere and the cnf would come out silently
+            # without its normalization. There is no SAM dataset to sum.
+            fail("Error: stage_norm_bootstrap needs SAM totals, and a dir: "
+                 "inloc entry keys input_data by basename with no dataset to "
+                 "query. State the totals in fcl_overrides instead "
+                 "(stageNormMixer.poolGenCount / .poolEventCount); for an "
+                 "undeclared pool both are readable from the files themselves "
+                 "-- the SubRuns tree holds every GenEventCount and the Events "
+                 "tree its entry count.")
         if not _is_dir_inloc(config):
             # A resampler cnf without MaxEventsToSkip is a physics bug (the
             # resampler silently re-reads the same leading events), so a
@@ -948,6 +973,63 @@ def _build_job_args(config):
                 config['_max_events_to_skip'] = max_events_to_skip(first_dataset)
             except Exception as e:
                 fail(f"Error: Could not calculate MaxEventsToSkip for {first_dataset}: {e}")
+            # StageNormalization bootstrap, opt-in per entry. Not automatic:
+            # the keys are rejected outright by an Offline release that does
+            # not define them, and which release a cnf runs is the entry's
+            # business, not ours. Only for a pool with no StageNormalization
+            # of its own -- one that has it needs no numbers at all.
+            if config.get('stage_norm_bootstrap'):
+                # The totals below are SAM's, and SAM's dh.gencount is RESET by
+                # a resampling stage to that stage's own draw count. They are
+                # therefore the ORIGIN's generated count only for a pool whose
+                # every step up to a parentless file was 1:1, which SAM decides
+                # per file: a 1:1 stage has a file whose gencount equals the sum
+                # over its art parents, and a resampling stage does not. (Per
+                # DATASET it cannot be decided -- Run1Ban reads 2e9 at every
+                # level because the beam stage and the resampler were sized
+                # alike, while per file TargetStops is 400000 against parents
+                # summing to 10000000.)
+                #
+                # Composing a longer chain is out of scope here; Mu2e/prodtools#75
+                # has the stage arithmetic and the file reader that also serves a
+                # dir: pool.
+                pools = normalize_input_data(config['input_data'])
+                if len(pools) > 1:
+                    # MaxEventsToSkip takes input_data[0] and lives with a
+                    # slightly wrong skip range; a normalization built from one
+                    # of several pools is simply wrong, so refuse instead.
+                    fail(f"Error: stage_norm_bootstrap describes one pool, but "
+                         f"this entry resamples {len(pools)}: "
+                         f"{', '.join(p.source for p in pools)}. State the "
+                         f"combined totals in fcl_overrides, or split the entry.")
+                try:
+                    reaches = pool_reaches_origin(first_dataset)
+                except Exception as e:
+                    fail(f"Error: could not walk the parentage of {first_dataset}: {e}")
+                if reaches is None:
+                    fail(f"Error: SAM cannot say whether {first_dataset} reaches "
+                         f"the origin of its chain -- a file on the way up "
+                         f"carries no {GEN_COUNT_KEY}, or the chain is longer "
+                         f"than the walk allows. State the totals in "
+                         f"fcl_overrides if you know them.")
+                if not reaches:
+                    fail(f"Error: {first_dataset} was itself made by resampling, "
+                         f"so SAM's {GEN_COUNT_KEY} for it counts that stage's "
+                         f"draws and not the origin's generated events. "
+                         f"Bootstrapping from it would overstate the chain by "
+                         f"the upstream efficiency (about 78 for Run1B). Compose "
+                         f"the chain, or state the totals in fcl_overrides.")
+                try:
+                    gen, nevts = pool_counts(first_dataset)
+                except Exception as e:
+                    fail(f"Error: Could not read pool counts for {first_dataset}: {e}")
+                if gen is None:
+                    fail(f"Error: SAM records no dh.gencount for every file of "
+                         f"{first_dataset}, so its generated total cannot be "
+                         f"summed; drop stage_norm_bootstrap for this entry, or "
+                         f"state the totals in fcl_overrides.")
+                config['_pool_gen_count'] = gen
+                config['_pool_event_count'] = nevts
         merge_factor = calculate_merge_factor(config)
         return ['--auxinput', f"{merge_factor}:physics.filters.{config['resampler_name']}.fileNames:inputs.txt"]
 

@@ -12,8 +12,11 @@ from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
 from .jobdesc import firstjob_of, njobs_of
 from .samweb_wrapper import (
+    GEN_COUNT_KEY,
+    dataset_gen_count,
     dataset_summary,
     definition_file_count,
+    pool_reaches_origin,
 )
 
 def setup_logging(verbose: bool) -> None:
@@ -135,6 +138,21 @@ def max_events_to_skip(dataset):
     Single home of the derivation (mixing pre_lines + resampler post_lines)."""
     nfiles, nevts = get_def_counts(dataset)  # exits if nfiles == 0
     return nevts // nfiles
+
+def pool_counts(dataset):
+    """(generated, events) totals over `dataset`, for a resampler reading it.
+
+    These are the two numbers StageNormalization's bootstrap needs, and
+    neither is available to the job itself: the pool arrives as a mixing
+    secondary, whose SubRun products do not reach the output and whose
+    event count art never exposes. SAM has both, so a cnf built here can
+    state them once instead of every user measuring the files by hand.
+
+    Returns (None, events) when SAM does not record dh.gencount for every
+    file of the dataset -- see samweb_wrapper.dataset_gen_count.
+    """
+    _, nevts = get_def_counts(dataset)          # exits if the dataset is empty
+    return dataset_gen_count(dataset), nevts
 
 def calculate_merge_factor(fields):
     """Merge factor from the first dataset in fields['input_data']."""

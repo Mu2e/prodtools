@@ -208,7 +208,20 @@ When regenerating, read in this order:
 8. **Sequential vs. pseudo-random auxiliary input selection** — the
    `tbs.sequential_aux` flag.
 9. **FCL overrides** — `fcl_overrides` dict, how template + `--embed`
-    works, that base FCL stays unexpanded.
+    works, that base FCL stays unexpanded. Also `stage_norm_bootstrap`
+    (bool, resampler entries): sum the pool's `dh.gencount` and event
+    totals from SAM and append them as
+    `physics.filters.<resampler>.mu2e.products.stageNormMixer.poolGenCount`
+    / `.poolEventCount` / `.srOutInstance`, for a pool carrying no
+    StageNormalization of its own. Opt-in because a release without
+    `stageNormMixer` rejects the keys; refused for a `dir:` inloc entry
+    or one resampling more than one dataset. Refused
+    for a pool that was itself made by resampling: SAM's `dh.gencount`
+    is reset by a resampling stage, so only a pool whose every step up
+    to a parentless file is 1:1 carries the origin's generated count.
+    That is decided from SAM parentage per file, not asserted by the
+    entry. A deeper pool needs the chain composed, which this does not
+    do.
 10. **Parity Tests** — `test/parity_test.sh` usage.
 11. **Additional Tools** — one subsection per script in `bin/` that has
     user-facing CLI: `famtree`,

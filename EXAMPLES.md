@@ -904,6 +904,38 @@ expanded — workers resolve it from the SimJob release at run time.
 - The template is embedded with `--embed`, so the cnf carries the
   override text verbatim.
 
+### Stage normalization for a resampled pool
+
+`"stage_norm_bootstrap": true` on a resampler entry makes `json2jobdef`
+read the pool's generated and event totals from SAM and append them to
+the cnf, so a job resampling a pool that carries no `StageNormalization`
+of its own can still record what its events represent:
+
+```
+physics.filters.<resampler>.mu2e.products.stageNormMixer.poolGenCount: N
+physics.filters.<resampler>.mu2e.products.stageNormMixer.poolEventCount: M
+physics.filters.<resampler>.mu2e.products.stageNormMixer.srOutInstance: "resampled"
+physics.filters.<resampler>.mu2e.products.stageNormMixer.poolStages: 1
+physics.filters.<resampler>.mu2e.products.stageNormMixer.poolFromOrigin: true
+```
+
+- Opt-in, and deliberately not automatic: FHiCL rejects a parameter the
+  Offline release does not define, so a cnf built against a release
+  without `stageNormMixer` would fail outright.
+- **Refused for a pool that was itself made by resampling.** SAM's
+  `dh.gencount` is reset by a resampling stage to that stage's draw
+  count, so only a pool whose every step up to a parentless file is 1:1
+  carries the origin's generated count. Bootstrapping from a stops
+  sample would overstate the chain by the beam stage's efficiency, about
+  78 for Run1B. This is decided from SAM parentage per file, not taken
+  on trust from the entry — and it cannot be decided per dataset, since
+  a campaign may size a resampler to the same round number as the stage
+  above it (Run1Ban reads 2e9 at every level).
+- Also refused for a `dir:` inloc entry, which has no SAM dataset to
+  query, and for an entry resampling more than one dataset.
+- A pool that already carries a `StageNormalization` needs none of this:
+  the mixer reads it and the chain composes itself.
+
 ## 10. Parity Tests
 
 Validate byte-for-byte equivalence against the Perl `mu2ejobdef`
