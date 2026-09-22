@@ -8232,6 +8232,72 @@ class TestDatasetGenCount(unittest.TestCase):
             self.assertEqual(prod_utils.pool_counts(self.DS), (None, 639084))
 
 
+class TestPoolReachesOrigin(unittest.TestCase):
+    """pool_reaches_origin: does the pool's dh.gencount count ORIGIN events?
+
+    Decided per file. A 1:1 stage has a file whose gencount equals the sum over
+    its art parents; a resampling stage does not. Per DATASET it cannot be
+    decided -- a campaign can size a resampler to the same round number as the
+    beam stage above it, which is what Run1Ban does."""
+
+    DS = "sim.mu2e.Pool.CampA.art"
+
+    def _sam(self, files, meta, parents):
+        from utils import samweb_wrapper
+        fake = MagicMock()
+        fake.listFiles.return_value = files
+        fake.getMetadata.side_effect = lambda f: meta[f]
+        fake.getMultipleMetadata.side_effect = lambda fs: [meta[f] for f in fs]
+        return samweb_wrapper, patch.object(samweb_wrapper, "_client", return_value=fake), \
+               patch.object(samweb_wrapper, "parents_of_file",
+                            side_effect=lambda f: parents.get(f, []))
+
+    def test_one_to_one_chain_to_a_parentless_file(self):
+        meta = {"pool.art": {"dh.gencount": 100}, "beam.art": {"dh.gencount": 100}}
+        sw, c1, c2 = self._sam(["pool.art"], meta, {"pool.art": ["beam.art"]})
+        with c1, c2:
+            self.assertTrue(sw.pool_reaches_origin(self.DS))
+
+    def test_resampled_step_is_detected(self):
+        """The pool's gencount is its own draw count, not its parent's."""
+        meta = {"pool.art": {"dh.gencount": 400000}, "up.art": {"dh.gencount": 10000000}}
+        sw, c1, c2 = self._sam(["pool.art"], meta, {"pool.art": ["up.art"]})
+        with c1, c2:
+            self.assertFalse(sw.pool_reaches_origin(self.DS))
+
+    def test_concatenation_sums_over_all_parents(self):
+        meta = {"cat.art": {"dh.gencount": 300},
+                "a.art": {"dh.gencount": 100}, "b.art": {"dh.gencount": 200}}
+        sw, c1, c2 = self._sam(["cat.art"], meta,
+                               {"cat.art": ["a.art", "b.art"]})
+        with c1, c2:
+            self.assertTrue(sw.pool_reaches_origin(self.DS))
+
+    def test_resample_below_a_one_to_one_step_is_still_found(self):
+        """MuminusStopsCat -> TargetStopsCat -> TargetStops, the real case."""
+        meta = {"cat.art": {"dh.gencount": 1000}, "mid.art": {"dh.gencount": 1000},
+                "stops.art": {"dh.gencount": 400}, "beam.art": {"dh.gencount": 10000}}
+        sw, c1, c2 = self._sam(["cat.art"], meta,
+                               {"cat.art": ["mid.art"], "mid.art": ["stops.art"],
+                                "stops.art": ["beam.art"]})
+        with c1, c2:
+            self.assertFalse(sw.pool_reaches_origin(self.DS))
+
+    def test_none_when_a_file_lacks_the_key(self):
+        meta = {"pool.art": {"dh.gencount": 100}, "up.art": {}}
+        sw, c1, c2 = self._sam(["pool.art"], meta, {"pool.art": ["up.art"]})
+        with c1, c2:
+            self.assertIsNone(sw.pool_reaches_origin(self.DS))
+
+    def test_non_art_parents_are_ignored(self):
+        """The cnf tarball is a parent of every produced file."""
+        meta = {"pool.art": {"dh.gencount": 100}, "beam.art": {"dh.gencount": 100}}
+        sw, c1, c2 = self._sam(["pool.art"], meta,
+                               {"pool.art": ["beam.art", "cnf.mu2e.X.Y.0.tar"]})
+        with c1, c2:
+            self.assertTrue(sw.pool_reaches_origin(self.DS))
+
+
 class TestCheckTape(unittest.TestCase):
     """Primary / tape inputs: NEARLINE (evicted) must block with a
     /prestage hint; ONLINE passes; unknown storage or query failure fails

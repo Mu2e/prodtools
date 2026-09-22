@@ -12,9 +12,11 @@ from .job_common import Mu2eName
 from .jobfcl import Mu2eJobFCL
 from .jobdesc import firstjob_of, njobs_of
 from .samweb_wrapper import (
+    GEN_COUNT_KEY,
     dataset_gen_count,
     dataset_summary,
     definition_file_count,
+    pool_reaches_origin,
 )
 
 def setup_logging(verbose: bool) -> None:

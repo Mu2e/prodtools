@@ -980,35 +980,20 @@ def _build_job_args(config):
             # of its own -- one that has it needs no numbers at all.
             if config.get('stage_norm_bootstrap'):
                 # The totals below are SAM's, and SAM's dh.gencount is RESET by
-                # a resampling stage to that stage's own draw count. So they are
-                # the origin's only when the pool is one stage from it -- a beam
-                # sample split from the POT output, not a stops sample made by
-                # resampling a beam sample. The entry has to say which, because
-                # nothing in the metadata does: the obvious test, whether this
-                # stage's generated count differs from its parent's, reads EQUAL
-                # on the Run1Ban chain where the beam stage and the resampler
-                # were sized alike.
+                # a resampling stage to that stage's own draw count. They are
+                # therefore the ORIGIN's generated count only for a pool whose
+                # every step up to a parentless file was 1:1, which SAM decides
+                # per file: a 1:1 stage has a file whose gencount equals the sum
+                # over its art parents, and a resampling stage does not. (Per
+                # DATASET it cannot be decided -- Run1Ban reads 2e9 at every
+                # level because the beam stage and the resampler were sized
+                # alike, while per file TargetStops is 400000 against parents
+                # summing to 10000000.)
                 #
-                # Composing a longer chain is deliberately out of scope here;
-                # Mu2e/prodtools#75 has the stage arithmetic and the file reader
-                # that also serves a dir: pool.
-                origin = config.get('stage_norm_origin')
-                if not origin:
-                    fail("Error: stage_norm_bootstrap needs stage_norm_origin, "
-                         "naming the dataset whose generated count these totals "
-                         "are. It may only be the pool itself, i.e. a pool ONE "
-                         "stage from the origin -- SAM's dh.gencount is reset by "
-                         "a resampling stage, so for a resampled pool it counts "
-                         "draws and not protons, and labelling that as the "
-                         "origin overstates the chain by the upstream "
-                         "efficiency (about 78 for Run1B).")
+                # Composing a longer chain is out of scope here; Mu2e/prodtools#75
+                # has the stage arithmetic and the file reader that also serves a
+                # dir: pool.
                 pools = normalize_input_data(config['input_data'])
-                if origin != pools[0].source:
-                    fail(f"Error: stage_norm_origin is {origin!r} but the pool "
-                         f"is {pools[0].source!r}. Only a pool one stage from "
-                         f"the origin can be bootstrapped from SAM totals; for "
-                         f"anything deeper the chain has to be composed, which "
-                         f"this does not do.")
                 if len(pools) > 1:
                     # MaxEventsToSkip takes input_data[0] and lives with a
                     # slightly wrong skip range; a normalization built from one
@@ -1017,6 +1002,23 @@ def _build_job_args(config):
                          f"this entry resamples {len(pools)}: "
                          f"{', '.join(p.source for p in pools)}. State the "
                          f"combined totals in fcl_overrides, or split the entry.")
+                try:
+                    reaches = pool_reaches_origin(first_dataset)
+                except Exception as e:
+                    fail(f"Error: could not walk the parentage of {first_dataset}: {e}")
+                if reaches is None:
+                    fail(f"Error: SAM cannot say whether {first_dataset} reaches "
+                         f"the origin of its chain -- a file on the way up "
+                         f"carries no {GEN_COUNT_KEY}, or the chain is longer "
+                         f"than the walk allows. State the totals in "
+                         f"fcl_overrides if you know them.")
+                if not reaches:
+                    fail(f"Error: {first_dataset} was itself made by resampling, "
+                         f"so SAM's {GEN_COUNT_KEY} for it counts that stage's "
+                         f"draws and not the origin's generated events. "
+                         f"Bootstrapping from it would overstate the chain by "
+                         f"the upstream efficiency (about 78 for Run1B). Compose "
+                         f"the chain, or state the totals in fcl_overrides.")
                 try:
                     gen, nevts = pool_counts(first_dataset)
                 except Exception as e:

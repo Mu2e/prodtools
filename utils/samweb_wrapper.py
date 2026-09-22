@@ -357,6 +357,44 @@ def dataset_gen_count(dataset: str) -> Optional[int]:
         total += int(value)
     return total
 
+def pool_reaches_origin(dataset: str, max_depth: int = 12) -> Optional[bool]:
+    """Does `dataset`'s dh.gencount count events at the ORIGIN of its chain?
+
+    True when every step from the dataset up to a file with no art parents is
+    1:1, so the generated count has propagated unchanged and the dataset is one
+    stage from the origin. False when some step resampled, which RESETS
+    dh.gencount to that stage's own draw count -- the reason a stops sample's
+    generated total is beam draws and not protons. None when SAM cannot answer
+    (a file without the key, or the walk running past max_depth).
+
+    Decided per FILE, not per dataset. A 1:1 stage -- a splitter, a selector, a
+    concatenation -- has a file whose gencount equals the SUM over its art
+    parents; a resampling stage does not. The dataset totals cannot be compared
+    that way, because a campaign can size a resampler to the same round number
+    as the beam stage above it and they then read equal: Run1Ban is 2e9 at every
+    level, while per file TargetStops is 400000 against parents summing to
+    10000000.
+    """
+    names = files_in_dataset(dataset)
+    if not names:
+        return None
+    current = names[0]
+    for _ in range(max_depth):
+        md = get_metadata(current)
+        gen = md.get(GEN_COUNT_KEY)
+        if gen is None:
+            return None
+        parents = [p for p in parents_of_file(current) if p.endswith('.art')]
+        if not parents:
+            return True                      # reached a file nothing produced
+        pmd = metadata_for_files(parents)
+        if len(pmd) != len(parents) or any(m.get(GEN_COUNT_KEY) is None for m in pmd):
+            return None
+        if sum(int(m[GEN_COUNT_KEY]) for m in pmd) != int(gen):
+            return False                     # this step resampled
+        current = parents[0]
+    return None
+
 def definitions_matching(defname: Optional[str] = None,
                          user: Optional[str] = None) -> List[str]:
     """List definitions filtered by name pattern (% wildcard) and/or
