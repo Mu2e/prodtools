@@ -4,19 +4,20 @@
 A code-tarball entry (`code` set, no `simjob_setup`) has no Musing to
 source: its environment is the tarball's own `Code/setup.sh`, the same
 script the grid worker sources from $INPUT_TAR_DIR_LOCAL. Building its
-cnf needs the tarball unpacked somewhere. This unpacks each tarball
-ONCE, under a directory named for the sha256 of its bytes, so every
-build of the same content shares one tree, and a tarball rebuilt in
-place gets a new one.
+cnf, or running it locally, needs the tarball unpacked somewhere. This
+unpacks each tarball ONCE, under a directory named for the sha256 of its
+bytes, so every build and local run of the same content shares one
+tree, and a tarball rebuilt in place gets a new one.
 
 Pure stdlib and SILENT: the write MCP server calls it in-process, and
 that server's stdout carries the MCP protocol. runlocal.unpack_code
 prints progress and sys.exit()s, which is right for a CLI and fatal
 there.
 
-Nothing evicts entries. To free one nothing is using, mv its <sha256>
-directory aside and delete that: an rm -rf interrupted in place can
-leave Code/setup.sh, which still counts as a hit.
+Nothing evicts entries. To free one no build and no local run is
+using, mv its <sha256> directory aside and delete that: an rm -rf
+interrupted in place can leave Code/setup.sh, which still counts as a
+hit.
 """
 
 import getpass

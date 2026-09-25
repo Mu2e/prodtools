@@ -41,7 +41,8 @@ from typing import List, Optional
 from prodtools_mcp_write import runner
 from utils.config_utils import get_tarball_desc
 from utils.job_common import Mu2eName
-from utils.json2jobdef import determine_job_type, load_json, find_json_entry
+from utils.json2jobdef import (MAX_LOCAL_PARALLEL, determine_job_type,
+                               load_json, find_json_entry)
 from utils import push_file as _push_file
 from utils import code_cache
 
@@ -70,8 +71,8 @@ def _select_push_params(json_path, desc, dsconf, allow_code=False):
     accept one as an argument.
 
     A code-tarball entry (`code`, no `simjob_setup`) has its Musing
-    INSIDE the tarball: with `allow_code` (submit_once) the returned
-    setup script is that tarball's unpacked Code/setup.sh (see
+    INSIDE the tarball: with `allow_code` (submit_once, run_local) the
+    returned setup script is that tarball's unpacked Code/setup.sh (see
     _code_setup); without it (push_cnf) the entry is refused.
     """
     path = Path(json_path)
@@ -124,9 +125,9 @@ def _code_setup(entry, desc, dsconf, json_path, allow_code):
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
             f"{json_path!r} is a code-tarball entry (`code`, no "
-            f"simjob_setup). Those go through submit_once only: a "
-            f"production cnf needs its code tarball on a durable path "
-            f"mu2epro can read first.")
+            f"simjob_setup). Those go through submit_once or run_local "
+            f"only: a production cnf needs its code tarball on a durable "
+            f"path mu2epro can read first.")
     try:
         root = code_cache.unpacked(entry['code'])
     except (ValueError, OSError) as e:
@@ -458,6 +459,11 @@ def run_local(json: str, desc: str, dsconf: str, run_as: str,
     `kill <pid>` (the receipt's pid, on its host) stops the run, jobs
     included.
 
+    `parallel` is jobs at once, at most 16: each job holds ~2.5 GB on a
+    shared interactive node. Concurrent run_local calls add up -- each
+    starts its own runlocal. A larger run belongs on the grid
+    (submit_once).
+
     Returns the receipt: `name`, `state` ("running"), `host`, `pid`,
     `njobs`, `parallel`, `summary`, `log`.
     """
@@ -468,6 +474,13 @@ def run_local(json: str, desc: str, dsconf: str, run_as: str,
     if (not isinstance(parallel, int) or isinstance(parallel, bool)
             or parallel < 1):
         raise ValueError(f"parallel must be an int >= 1, got {parallel!r}")
+    if parallel > MAX_LOCAL_PARALLEL:
+        raise ValueError(
+            f"run_local runs at most {MAX_LOCAL_PARALLEL} jobs at once, got "
+            f"parallel={parallel}: each holds ~2.5 GB on a shared "
+            f"interactive node, and concurrent run_local calls add up. A "
+            f"larger run belongs on the grid (submit_once), or on runlocal "
+            f"directly.")
     simjob_setup, _ = _select_push_params(json, desc, dsconf,
                                           allow_code=True)
     argv = ['bin/json2jobdef', '--json', json, '--desc', desc,

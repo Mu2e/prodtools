@@ -19834,7 +19834,7 @@ class TestLocalityAuthFailureIsNotMissing(unittest.TestCase):
 
 class TestCodeCache(unittest.TestCase):
     """utils/code_cache: one unpack per tarball CONTENT, shared by every
-    cnf build of it. Silent, because the write MCP server
+    cnf build and local run of it. Silent, because the write MCP server
     calls it in-process and its stdout carries the protocol."""
 
     def setUp(self):
@@ -20051,7 +20051,7 @@ class TestCodeEntryPushParams(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             self.tools._select_push_params(self.json_path, 'D', 'C')
         self.assertIn('submit_once', str(ctx.exception))
-        self.assertNotIn('run_local', str(ctx.exception))
+        self.assertIn('run_local', str(ctx.exception))
         self.assertFalse(os.path.exists(self.root))     # nothing unpacked
 
     def test_allow_code_returns_the_unpacked_setup_script(self):
@@ -20762,6 +20762,25 @@ class TestRunLocalTool(unittest.TestCase):
                                          parallel=bad)
             run.assert_not_called()
 
+    def test_parallel_above_the_cap_is_refused_before_anything_runs(self):
+        """Each run_local is its own runlocal at ~2.5 GB a job on a
+        shared node; the cap is json2jobdef's, not a second number."""
+        from utils import json2jobdef
+        self.assertEqual(self.tools.MAX_LOCAL_PARALLEL,
+                         json2jobdef.MAX_LOCAL_PARALLEL)
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.run_local(self.json_path, 'D', 'C', 'self',
+                                     parallel=json2jobdef.MAX_LOCAL_PARALLEL
+                                     + 1)
+        run.assert_not_called()
+        self.assertIn(str(json2jobdef.MAX_LOCAL_PARALLEL), str(ctx.exception))
+        self.assertIn('grid', str(ctx.exception))
+        _, run = self._call(self._ok(),
+                            parallel=json2jobdef.MAX_LOCAL_PARALLEL)
+        self.assertEqual(run.call_args[0][0][-2:],
+                         ['--parallel', str(json2jobdef.MAX_LOCAL_PARALLEL)])
+
     def test_a_code_entry_sources_the_unpacked_setup(self):
         from utils import code_cache
         root = os.path.join(self.tmp, 'cache')
@@ -20893,6 +20912,49 @@ class TestMcpRunStatusLocal(unittest.TestCase):
         out, _ = self._status()
         self.assertEqual(out['state'], 'unknown')
         self.assertIn('3', out['note'])
+
+    def test_a_summary_written_as_the_process_exits_is_read_not_failed(self):
+        """runlocal can write its summary and exit between the summary
+        read and the /proc read; `failed` is final to a caller, so the
+        summary is read again first."""
+        self._running()
+
+        def alive_fn(pid, path):
+            self._write_summary({0: 0, 1: 0, 2: 0})   # ...then it exits
+            return False
+        out = self.runs.run_status(
+            self.NAME, user='alice', runs_root=self.root,
+            alive_fn=alive_fn, host_fn=lambda: 'node.fnal.gov')
+        self.assertEqual(out['state'], 'done')
+        self.assertEqual(out['jobs']['ok'], 3)
+        self.assertNotIn('note', out)
+
+    def _malformed(self, text):
+        self._running()
+        with open(self.summary, 'w') as fh:
+            fh.write(text)
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown', text)
+        self.assertIn(self.summary, out['note'])
+        self.assertIn('malformed', out['note'])
+        return out
+
+    def test_a_summary_of_the_wrong_shape_is_unknown_not_an_error(self):
+        job = {'index': 0, 'rc': 0, 'outputs': []}
+        for text in ('[]', '{}', '{"jobs": {}, "ok": 0, "failed": []}',
+                     '{"jobs": [], "failed": []}',
+                     '{"jobs": [], "ok": 0, "failed": 3}',
+                     json.dumps({'jobs': [7], 'ok': 0, 'failed': []}),
+                     json.dumps({'jobs': [{'index': [0], 'rc': 0,
+                                           'outputs': []}],
+                                 'ok': 1, 'failed': []})):
+            with self.subTest(text=text):
+                self._malformed(text)
+        for key in ('index', 'rc', 'outputs'):
+            with self.subTest(missing=key):
+                bad = {k: v for k, v in job.items() if k != key}
+                self._malformed(json.dumps(
+                    {'jobs': [bad], 'ok': 1, 'failed': []}))
 
     def test_no_summary_and_a_live_process_is_running(self):
         self._running()

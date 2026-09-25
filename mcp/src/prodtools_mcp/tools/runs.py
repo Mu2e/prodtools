@@ -149,16 +149,8 @@ def _local_status(out, receipt, alive_fn, host_fn):
     it wrote one, else whether its process is still there. The state is
     recomputed on every call; the receipt is never rewritten."""
     njobs, path = int(receipt['njobs']), receipt['summary']
-    try:
-        with open(path) as fh:
-            summary = json.load(fh)
-    except FileNotFoundError:
-        summary = None
-    except (OSError, ValueError) as exc:
-        out['state'] = 'unknown'
-        out['note'] = f"runlocal's summary {path} cannot be read: {exc}"
-        return out
-    if summary is None:
+    summary, bad = _read_summary(path)
+    if summary is None and bad is None:
         pid, host = receipt['pid'], receipt.get('host')
         if host != host_fn():
             out['state'] = 'unknown'
@@ -171,12 +163,22 @@ def _local_status(out, receipt, alive_fn, host_fn):
             out['state'] = 'unknown'
             out['note'] = (f'cannot read /proc/{pid} on this host, so '
                            f'whether runlocal is still going is unknown.')
-        elif alive:
+            return out
+        if alive:
             out['state'] = 'running'
-        else:
+            return out
+        # Gone -- but runlocal may have written its summary and exited
+        # between the read above and /proc. `failed` is final to a
+        # caller, so read the summary again before saying it.
+        summary, bad = _read_summary(path)
+        if summary is None and bad is None:
             out['state'] = 'failed'
             out['note'] = (f'runlocal (pid {pid}) is gone and wrote no '
                            f'summary; see {receipt.get("log")}')
+            return out
+    if bad is not None:
+        out['state'] = 'unknown'
+        out['note'] = bad
         return out
     seen = {j['index'] for j in summary['jobs']}
     outside = sorted(i for i in seen if not 0 <= i < njobs)
@@ -196,6 +198,44 @@ def _local_status(out, receipt, alive_fn, host_fn):
     else:
         out['state'] = 'short' if failed else 'done'
     return out
+
+
+def _read_summary(path):
+    """runlocal's summary at `path`: (summary, None); (None, None) while
+    there is no file; (None, note) when there is one that cannot be used
+    -- unreadable, not JSON, or not in the shape _fill_jobs reads. A bad
+    summary is `unknown` to the caller, never an exception out of
+    run_status and never `done`."""
+    try:
+        with open(path) as fh:
+            summary = json.load(fh)
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as exc:
+        return None, f"runlocal's summary {path} cannot be read: {exc}"
+    why = _malformed(summary)
+    if why:
+        return None, f"runlocal's summary {path} is malformed: {why}"
+    return summary, None
+
+
+def _malformed(summary):
+    """Why a parsed summary is not in runlocal's shape, or None."""
+    if not isinstance(summary, dict):
+        return f'its root is a {type(summary).__name__}, not an object'
+    if not isinstance(summary.get('jobs'), list):
+        return "it has no 'jobs' list"
+    if 'ok' not in summary or not isinstance(summary.get('failed'), list):
+        return "it has no 'ok' count or no 'failed' list"
+    for job in summary['jobs']:
+        if not (isinstance(job, dict)
+                and all(k in job for k in ('index', 'rc', 'outputs'))):
+            return (f'a job is not an object with index, rc and outputs: '
+                    f'{job!r:.200}')
+        index = job['index']
+        if not isinstance(index, int) or isinstance(index, bool):
+            return f'a job index is not an integer: {index!r:.200}'
+    return None
 
 
 def _default_alive_fn(pid, summary_path):
