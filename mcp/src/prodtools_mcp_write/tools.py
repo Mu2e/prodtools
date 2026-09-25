@@ -41,8 +41,7 @@ from typing import List, Optional
 from prodtools_mcp_write import runner
 from utils.config_utils import get_tarball_desc
 from utils.job_common import Mu2eName
-from utils.json2jobdef import (MAX_LOCAL_PARALLEL, determine_job_type,
-                               load_json, find_json_entry)
+from utils.json2jobdef import determine_job_type, load_json, find_json_entry
 from utils import push_file as _push_file
 from utils import code_cache
 
@@ -442,7 +441,7 @@ def _receipt_from(result, what):
 
 
 def run_local(json: str, desc: str, dsconf: str, run_as: str,
-              parallel: int = 4):
+              parallel: Optional[int] = None):
     """Run one entry's jobs on THIS node with runlocal -- `json2jobdef
     --once --local`. Returns as soon as runlocal has started; the jobs
     keep running after the call.
@@ -459,8 +458,10 @@ def run_local(json: str, desc: str, dsconf: str, run_as: str,
     `kill <pid>` (the receipt's pid, on its host) stops the run, jobs
     included.
 
-    `parallel` is jobs at once, at most 16: each job holds ~2.5 GB on a
-    shared interactive node. Concurrent run_local calls add up -- each
+    `parallel` is jobs at once; omitted, runlocal's default. json2jobdef
+    caps it (MAX_LOCAL_PARALLEL) and refuses a larger value before
+    building anything: each job holds ~runlocal.GB_PER_JOB on a shared
+    interactive node, and concurrent run_local calls add up -- each
     starts its own runlocal. A larger run belongs on the grid
     (submit_once).
 
@@ -471,21 +472,13 @@ def run_local(json: str, desc: str, dsconf: str, run_as: str,
         raise ValueError(
             f"run_local is run_as=\"self\" only, got {run_as!r}: it runs "
             f"the jobs on this node, as you.")
-    if (not isinstance(parallel, int) or isinstance(parallel, bool)
-            or parallel < 1):
-        raise ValueError(f"parallel must be an int >= 1, got {parallel!r}")
-    if parallel > MAX_LOCAL_PARALLEL:
-        raise ValueError(
-            f"run_local runs at most {MAX_LOCAL_PARALLEL} jobs at once, got "
-            f"parallel={parallel}: each holds ~2.5 GB on a shared "
-            f"interactive node, and concurrent run_local calls add up. A "
-            f"larger run belongs on the grid (submit_once), or on runlocal "
-            f"directly.")
     simjob_setup, _ = _select_push_params(json, desc, dsconf,
                                           allow_code=True)
     argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
-            '--dsconf', dsconf, '--once', '--local',
-            '--parallel', str(parallel)]
+            '--dsconf', dsconf, '--once', '--local']
+    if parallel is not None:
+        # Range-checked by json2jobdef, before it builds anything.
+        argv += ['--parallel', str(parallel)]
     result = runner.run_cli(argv, run_as, simjob_setup=simjob_setup)
     if result['rc'] != 0:
         raise RuntimeError(

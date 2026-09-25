@@ -35,7 +35,6 @@ import shlex
 import signal
 import subprocess
 import sys
-import tarfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -573,39 +572,6 @@ def resolve_jobdef(name_or_path, workdir):
     return str((Path(workdir) / path.name).resolve())
 
 
-def unpack_code(tarball, workdir):
-    """Unpack a `muse tarball` Code.tar.bz2 once, for every child to share.
-
-    Returns the directory holding `Code/` — what `resolve_setup` wants as
-    its code root, same as the grid gets from $INPUT_TAR_DIR_LOCAL.
-
-    ONE unpack, not one per job (build tree runs several GB, driver
-    launches four jobs at once by default). Re-running detects an
-    already-unpacked tree via the `.unpack-complete` sentinel, never via
-    `Code/setup.sh` itself — setup.sh is tarball *payload*, typically
-    extracted early, so a run killed partway through `extractall` can
-    leave it on disk with the rest of the tree missing; keying the early
-    return on it would trust a silently incomplete Offline forever.
-    """
-    root = Path(workdir) / 'code'
-    marker = root / 'Code' / 'setup.sh'
-    sentinel = root / '.unpack-complete'
-    if sentinel.is_file():
-        print(f"[local] code already unpacked at {root}")
-        return str(root)
-    root.mkdir(parents=True, exist_ok=True)
-    print(f"[local] unpacking {tarball} into {root} "
-          f"(several GB — this takes a while)")
-    with tarfile.open(tarball, 'r:bz2') as tar:
-        tar.extractall(root)
-    if not marker.is_file():
-        sys.exit(f"runlocal: {tarball} has no Code/setup.sh — "
-                 f"build it with `muse tarball`")
-    # Written last, so a partial extract is never mistaken for finished.
-    sentinel.write_text(os.path.basename(tarball) + '\n')
-    return str(root)
-
-
 def run_one(index, args):
     """The child: prep and run ONE job in the current directory.
 
@@ -677,11 +643,10 @@ def build_parser():
     parser.add_argument('--code', default=None,
                         help='muse tarball Code.tar.bz2 to run against '
                              'instead of the cnf\'s /cvmfs setup; unpacked '
-                             'once into <workdir>/code')
+                             'once per content into prodtools\' code cache '
+                             '(utils/code_cache)')
     parser.add_argument('--code-root', default=None,
-                        help='an already-unpacked code tarball: the '
-                             'directory holding Code/ (prodtools\' code '
-                             'cache hands this over), instead of --code')
+                        help=argparse.SUPPRESS)  # internal: driver -> child
     parser.add_argument('--one', type=int,
                         help=argparse.SUPPRESS)  # internal: run a single index
     return parser
@@ -709,19 +674,6 @@ def main(argv=None):
             signal.signal(sig, signal.SIG_DFL)
         return run_one(args.one, args)
 
-    if args.code and args.code_root is not None:
-        sys.exit("runlocal: give --code or --code-root, not both")
-    if args.code_root is not None:
-        # `is not None`, not truthiness: an empty --code-root must still
-        # be checked (and refused) below, not silently ignored.
-        if not args.code_root.strip():
-            sys.exit("runlocal: --code-root is empty")
-        # Absolute: every job runs in its own job_NNNNNN/ directory.
-        args.code_root = str(Path(args.code_root).resolve())
-        if not (Path(args.code_root) / 'Code' / 'setup.sh').is_file():
-            sys.exit(f"runlocal: --code-root {args.code_root} has no "
-                     f"Code/setup.sh")
-
     if args.json:
         # Checked before any job starts — the alternative is losing an
         # hour-long run's summary to a directory typo, uncomputable after.
@@ -734,7 +686,17 @@ def main(argv=None):
     Path(args.workdir).mkdir(parents=True, exist_ok=True)
     args.jobdef = resolve_jobdef(args.jobdef, args.workdir)
     if args.code:
-        args.code_root = unpack_code(args.code, args.workdir)
+        # One unpacker for prodtools: the per-content cache json2jobdef
+        # and the write MCP server use too (utils/code_cache).
+        from utils import code_cache
+        tarball = str(Path(args.code).resolve())
+        print(f"[local] code tarball {tarball}: unpacking into the code "
+              f"cache unless it is there already")
+        try:
+            args.code_root = code_cache.unpacked(tarball)
+        except (ValueError, OSError) as exc:
+            sys.exit(f"runlocal: {exc}")
+        print(f"[local] code at {args.code_root}")
     # The module, not bin/runlocal: that wrapper sources the Mu2e
     # environment, which this process already has and children inherit.
     args.entry_point = Path(__file__).resolve()

@@ -98,9 +98,10 @@ When regenerating, read in this order:
    `--tar_file_name dropbox://` sidecar automatically from the entry's
    `code` key (see the Production Execution section for the worker
    side). For a local smoke run without touching the grid, `bin/runlocal
-   --code <tarball>` unpacks the build once into `<workdir>/code/`; a
-   `runlocal` child process takes the already-unpacked tree via
-   `--code-root` instead of re-extracting it. A code-mode campaign
+   --code <tarball>` unpacks the build once per content into prodtools'
+   code cache (`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`),
+   and every job reuses that tree instead of re-extracting it. A
+   code-mode campaign
    cannot be built through the MCP `push_cnf` tool — it requires
    `simjob_setup` and rejects an entry carrying `code` — so use the
    `json2jobdef --prod --enqueue` CLI path for those campaigns instead,
@@ -310,16 +311,13 @@ When regenerating, read in this order:
       record.
 
     - `runlocal` — mention `--code <tarball>` as an alternative to a cnf
-      built from `simjob_setup`: unpacks the build once into
-      `<workdir>/code/` before any jobs run, and each spawned child
-      takes the already-unpacked tree via `--code-root` rather than
-      re-extracting it. Document `--code-root DIR` as a public
-      alternative to `--code` (list it in the flags): an already-unpacked
-      tree holding `Code/` — prodtools' code cache hands one over
-      (`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`, how
-      `json2jobdef --once --local` runs a code-tarball entry). Say it is
-      refused when empty, when `DIR/Code/setup.sh` is missing, or
-      together with `--code`. It is NOT an internal-only flag.
+      built from `simjob_setup`: before any job runs it unpacks the build
+      once per content into prodtools' code cache
+      (`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`, the same
+      cache json2jobdef and the write MCP server use), and every job
+      reuses that tree rather than re-extracting it. A later run of the
+      same tarball unpacks nothing. `--code-root` is internal (driver to
+      job) and not documented.
     - `runlocal` — document how a run is stopped: SIGTERM (`kill
       <pid>`), SIGINT (Ctrl-C) or SIGHUP (the terminal closing) to the
       driver ends every running job's process group the same way as a

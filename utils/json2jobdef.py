@@ -780,9 +780,11 @@ def main(argv=None):
                         'runlocal has started, detached; the receipt says '
                         'where, and run_status reports. Excludes '
                         '--prodtools-dir.')
+    from utils.runlocal import DEFAULT_PARALLEL, GB_PER_JOB
     p.add_argument('--parallel', type=int, default=None,
-                   help=f'With --local: jobs at once (default 4, as '
-                        f'runlocal -j; at most {MAX_LOCAL_PARALLEL}).')
+                   help=f'With --local: jobs at once (default '
+                        f'{DEFAULT_PARALLEL}, as runlocal -j; at most '
+                        f'{MAX_LOCAL_PARALLEL}).')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
                         'Auto-increments tarball version.')
@@ -814,7 +816,6 @@ def main(argv=None):
     if args.parallel is not None and args.parallel < 1:
         sys.exit("json2jobdef: --parallel must be at least 1")
     if args.parallel is not None and args.parallel > MAX_LOCAL_PARALLEL:
-        from utils.runlocal import GB_PER_JOB
         sys.exit(f"json2jobdef: --local runs at most {MAX_LOCAL_PARALLEL} "
                  f"jobs at once, got --parallel {args.parallel}: each "
                  f"holds ~{GB_PER_JOB:g} GB on a shared interactive node. "
@@ -1022,7 +1023,7 @@ def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
     """
     import socket
     import subprocess
-    from utils import code_cache, run_receipt
+    from utils import run_receipt
     from utils.jobdesc import code_of, inloc_of
     from utils.runlocal import DEFAULT_PARALLEL
 
@@ -1045,7 +1046,8 @@ def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
             '--workdir', run_dir,
             '--json', summary]
     if code_of(entry):
-        argv += ['--code-root', code_cache.unpacked(code_of(entry))]
+        # runlocal unpacks it through the same code cache (utils/code_cache).
+        argv += ['--code', code_of(entry)]
     with open(log, 'w') as fh:
         proc = launch(argv, cwd=run_dir, stdin=subprocess.DEVNULL,
                       stdout=fh, stderr=subprocess.STDOUT,

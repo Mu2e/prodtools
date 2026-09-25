@@ -174,14 +174,15 @@ clears that cache. To free an entry nothing is using, first `mv` its
 as a hit. A `<sha256>.part.*` directory is what a killed unpack leaves;
 it can be deleted. `push_cnf` refuses code-tarball entries.
 
-`run_local(json, desc, dsconf, run_as, parallel=4)` runs the same kind
+`run_local(json, desc, dsconf, run_as, parallel=None)` runs the same kind
 of entry on this node instead (`json2jobdef --once --local`): it starts
 `runlocal` detached and returns at once, with a receipt `run_status`
 reads the same way. Outputs stay in
 `/exp/mu2e/data/users/$USER/prodtools/runs/<name>/job_NNNNNN/`, and
 `kill <pid>` (the receipt's `pid`, on its `host`) stops the run, jobs
-included. `parallel` is at most 16 (each job holds ~2.5 GB of a shared
-node), and concurrent `run_local` calls add up: each starts its own
+included. `parallel` defaults to runlocal's 4 and is at most 16, which
+json2jobdef enforces (each job holds ~2.5 GB of a shared node), and
+concurrent `run_local` calls add up: each starts its own
 `runlocal`. Delete a code-cache directory only when no local run is
 still using it.
 

@@ -17204,29 +17204,14 @@ class TestRunLocalChildArgv(unittest.TestCase):
 
 
 class TestRunlocalCode(unittest.TestCase):
-    """The driver unpacks the code tarball ONCE and hands children the
-    directory. 3.6 GB per job times four parallel jobs is not viable."""
+    """The driver hands children the already-unpacked directory, never the
+    tarball: 3.6 GB per job times four parallel jobs is not viable. The
+    unpack itself is utils/code_cache (TestCodeCache)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
-
-    def test_unpack_creates_code_setup(self):
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        self.assertTrue(os.path.isfile(os.path.join(root, 'Code', 'setup.sh')))
-
-    def test_unpack_is_idempotent(self):
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        marker = os.path.join(root, 'Code', 'setup.sh')
-        with open(marker, 'a') as fh:
-            fh.write('# touched\n')
-        before = os.path.getsize(marker)
-        self.assertEqual(unpack_code(self.code, self.dir), root)
-        # Second call must not re-extract over an existing tree.
-        self.assertEqual(os.path.getsize(marker), before)
 
     def test_child_argv_carries_code_root(self):
         from utils.runlocal import child_argv
@@ -17255,32 +17240,6 @@ class TestRunlocalCode(unittest.TestCase):
         child = build_parser().parse_args(
             ['--jobdef', 'cnf.tar', '--one', '3', '--code-root', '/w/code'])
         self.assertEqual(child.code_root, '/w/code')
-
-    def test_sentinel_not_setup_sh_gates_reuse(self):
-        """`Code/setup.sh` is payload, extracted partway through a run
-        that could still be killed. Only the sentinel — written last —
-        proves the extract finished; a run that trusted setup.sh alone
-        would silently reuse a truncated tree forever."""
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
-        self.assertTrue(os.path.isfile(lib))
-        os.remove(lib)  # simulate a partial extract that got past setup.sh
-        self.assertEqual(unpack_code(self.code, self.dir), root)
-        # Sentinel was still present, so the second call trusted it and
-        # did not re-extract — the missing file stays missing.
-        self.assertFalse(os.path.isfile(lib))
-
-    def test_missing_sentinel_forces_re_extraction(self):
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
-        os.remove(lib)
-        os.remove(os.path.join(root, '.unpack-complete'))
-        self.assertEqual(unpack_code(self.code, self.dir), root)
-        # No sentinel meant a real re-extract, which restored the file --
-        # proving the sentinel, not setup.sh, is what actually gates.
-        self.assertTrue(os.path.isfile(lib))
 
 
 class TestRunLocalDrive(unittest.TestCase):
@@ -20108,19 +20067,17 @@ class TestCodeEntryPushParams(unittest.TestCase):
         run.assert_not_called()
 
 
-class TestRunLocalCodeRoot(unittest.TestCase):
-    """--code-root is public: prodtools' code cache hands runlocal an
-    already-unpacked tree, so a local run does not unpack it again. Its
-    jobs run in their own directories, so the path is made absolute."""
+class TestRunLocalCodeUsesTheCache(unittest.TestCase):
+    """`runlocal --code` unpacks through utils/code_cache, the one
+    unpacker json2jobdef and the write MCP server use too, and hands its
+    jobs the cached tree by the internal --code-root."""
 
     def setUp(self):
-        from utils import runlocal
-        self.rl = runlocal
+        from utils import code_cache, runlocal
+        self.rl, self.cc = runlocal, code_cache
         self.dir = _mkdtemp()
+        self.cache = os.path.join(self.dir, 'cache')
         self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
-        self.tree = os.path.join(self.dir, 'tree')
-        with tarfile.open(self.code, 'r:bz2') as tar:
-            tar.extractall(self.tree)
 
     def _main(self, argv):
         seen = {}
@@ -20131,54 +20088,47 @@ class TestRunLocalCodeRoot(unittest.TestCase):
         with patch.object(self.rl, 'drive', side_effect=drive), \
              patch.object(self.rl, 'resolve_jobdef',
                           side_effect=lambda jobdef, workdir: jobdef), \
-             patch.object(self.rl, 'unpack_code',
-                          side_effect=AssertionError('unpacked again')):
+             patch.object(self.cc, 'cache_root', return_value=self.cache), \
+             patch('sys.stdout', new_callable=io.StringIO):
             rc = self.rl.main(argv)
         return rc, seen
 
-    def test_a_code_root_reaches_the_jobs_without_an_unpack(self):
-        rc, seen = self._main(['--jobdef', '/x/cnf.tar', '--workdir',
-                               self.dir, '--code-root', self.tree])
-        self.assertEqual(rc, 0)
-        want = os.path.realpath(self.tree)
-        self.assertEqual(seen['args'].code_root, want)
-        argv = self.rl.child_argv(0, seen['args'])
-        self.assertEqual(argv[argv.index('--code-root') + 1], want)
+    def _cached_tree(self):
+        with open(self.code, 'rb') as fh:
+            return os.path.join(self.cache, hashlib.sha256(fh.read()).hexdigest())
 
-    def test_a_relative_code_root_is_made_absolute(self):
+    def test_code_is_unpacked_into_the_cache_and_reaches_the_jobs(self):
+        rc, seen = self._main(['--jobdef', '/x/cnf.tar', '--workdir',
+                               self.dir, '--code', self.code])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen['args'].code_root, self._cached_tree())
+        self.assertTrue(os.path.isfile(
+            os.path.join(seen['args'].code_root, 'Code', 'setup.sh')))
+        argv = self.rl.child_argv(0, seen['args'])
+        self.assertEqual(argv[argv.index('--code-root') + 1],
+                         self._cached_tree())
+        self.assertNotIn('--code', argv)
+
+    def test_a_relative_code_path_is_resolved_first(self):
+        """code_cache takes absolute paths only."""
         cwd = os.getcwd()
         self.addCleanup(os.chdir, cwd)
         os.chdir(self.dir)
         _, seen = self._main(['--jobdef', '/x/cnf.tar', '--workdir',
-                              self.dir, '--code-root', 'tree'])
-        self.assertTrue(os.path.isabs(seen['args'].code_root))
-        self.assertEqual(seen['args'].code_root, os.path.realpath(self.tree))
+                              self.dir, '--code', 'Code.tar.bz2'])
+        self.assertEqual(seen['args'].code_root, self._cached_tree())
 
-    def test_code_and_code_root_together_are_refused(self):
+    def test_a_missing_tarball_exits_naming_it(self):
+        missing = os.path.join(self.dir, 'nope.tar.bz2')
         with self.assertRaises(SystemExit) as ctx:
-            self._main(['--jobdef', '/x/cnf.tar', '--code', self.code,
-                        '--code-root', self.tree])
-        self.assertIn('not both', str(ctx.exception))
+            self._main(['--jobdef', '/x/cnf.tar', '--workdir', self.dir,
+                        '--code', missing])
+        self.assertIn(missing, str(ctx.exception))
 
-    def test_a_code_root_without_code_setup_is_refused(self):
-        empty = os.path.join(self.dir, 'empty')
-        os.makedirs(empty)
-        with self.assertRaises(SystemExit) as ctx:
-            self._main(['--jobdef', '/x/cnf.tar', '--code-root', empty])
-        self.assertIn('Code/setup.sh', str(ctx.exception))
-
-    def test_an_empty_code_root_is_refused(self):
-        """'' is falsy but not None: a truthiness check would silently
-        ignore it instead of refusing it. Chdir into a directory that DOES
-        have Code/setup.sh (self.tree) first: `Path('').resolve()` is the
-        cwd, so without an explicit emptiness check '' would resolve
-        there and pass the Code/setup.sh test by accident."""
-        cwd = os.getcwd()
-        self.addCleanup(os.chdir, cwd)
-        os.chdir(self.tree)
-        with self.assertRaises(SystemExit) as ctx:
-            self._main(['--jobdef', '/x/cnf.tar', '--code-root', ''])
-        self.assertIn('empty', str(ctx.exception))
+    def test_code_root_is_not_a_public_flag(self):
+        help_text = self.rl.build_parser().format_help()
+        self.assertIn('--code', help_text)
+        self.assertNotIn('--code-root', help_text)
 
 
 class TestRunLocalStop(unittest.TestCase):
@@ -20531,7 +20481,6 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
         with patch.object(self.j, 'build_jobdesc', side_effect=self._entry), \
              patch.object(self.j, 'prodtools_entry_keys',
                           side_effect=AssertionError('no worker bundle')), \
-             patch('utils.code_cache.unpacked', return_value='/cache/abc'), \
              patch('socket.getfqdn', return_value='node.fnal.gov'), \
              patch.object(self.j.getpass, 'getuser', return_value='alice'):
             return self.j.submit_once(
@@ -20569,11 +20518,12 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
         self.assertIn('started_utc', receipt)
         self.assertEqual(receipt, self.rr.read(self.root, self.NAME))
 
-    def test_a_code_entry_hands_runlocal_the_cached_code_root(self):
+    def test_a_code_entry_hands_runlocal_the_tarball(self):
+        """runlocal unpacks it through the same code cache."""
         config = self._config(code='/x/Code.tar.bz2')
         del config['simjob_setup']
         self._run(config)
-        self.assertEqual(self.calls['argv'][-2:], ['--code-root', '/cache/abc'])
+        self.assertEqual(self.calls['argv'][-2:], ['--code', '/x/Code.tar.bz2'])
 
     def test_parallel_is_forwarded(self):
         receipt = self._run(self._config(), parallel=2)
@@ -20735,7 +20685,7 @@ class TestRunLocalTool(unittest.TestCase):
         out, run = self._call(self._ok())
         self.assertEqual(run.call_args[0][0], [
             'bin/json2jobdef', '--json', self.json_path, '--desc', 'D',
-            '--dsconf', 'C', '--once', '--local', '--parallel', '4'])
+            '--dsconf', 'C', '--once', '--local'])
         self.assertEqual(run.call_args[0][1], 'self')
         self.assertEqual(run.call_args[1]['simjob_setup'], self.simjob_setup)
         self.assertEqual(out['state'], 'running')
@@ -20753,33 +20703,6 @@ class TestRunLocalTool(unittest.TestCase):
                 self.tools.run_local(self.json_path, 'D', 'C', 'mu2epro')
         self.assertIn('self', str(ctx.exception))
         run.assert_not_called()
-
-    def test_a_bad_parallel_is_refused(self):
-        for bad in (0, -1, True, '2'):
-            with patch('prodtools_mcp_write.runner.run_cli') as run:
-                with self.assertRaises(ValueError, msg=repr(bad)):
-                    self.tools.run_local(self.json_path, 'D', 'C', 'self',
-                                         parallel=bad)
-            run.assert_not_called()
-
-    def test_parallel_above_the_cap_is_refused_before_anything_runs(self):
-        """Each run_local is its own runlocal at ~2.5 GB a job on a
-        shared node; the cap is json2jobdef's, not a second number."""
-        from utils import json2jobdef
-        self.assertEqual(self.tools.MAX_LOCAL_PARALLEL,
-                         json2jobdef.MAX_LOCAL_PARALLEL)
-        with patch('prodtools_mcp_write.runner.run_cli') as run:
-            with self.assertRaises(ValueError) as ctx:
-                self.tools.run_local(self.json_path, 'D', 'C', 'self',
-                                     parallel=json2jobdef.MAX_LOCAL_PARALLEL
-                                     + 1)
-        run.assert_not_called()
-        self.assertIn(str(json2jobdef.MAX_LOCAL_PARALLEL), str(ctx.exception))
-        self.assertIn('grid', str(ctx.exception))
-        _, run = self._call(self._ok(),
-                            parallel=json2jobdef.MAX_LOCAL_PARALLEL)
-        self.assertEqual(run.call_args[0][0][-2:],
-                         ['--parallel', str(json2jobdef.MAX_LOCAL_PARALLEL)])
 
     def test_a_code_entry_sources_the_unpacked_setup(self):
         from utils import code_cache

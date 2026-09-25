@@ -566,9 +566,8 @@ jobdef --code /exp/mu2e/data/users/$USER/code_tarballs/Code.tar.bz2 \
   jobsub's `--tar_file_name dropbox://<tarball>` automatically from
   `code`; see section 7 for how the worker reads it back.
 - For a local smoke run with no grid involved, `bin/runlocal --code
-  <tarball>` unpacks the build once into `<workdir>/code/` before any
-  job runs (section 11); every spawned child reuses that one unpack via
-  `--code-root`.
+  <tarball>` unpacks the build once per content into prodtools' code
+  cache before any job runs (section 11); every job reuses that tree.
 - `code` is one of the keys `submissions set-entry` can retune on a live
   campaign (`submissions set-entry CAMP_ID code /new/path/Code.tar.bz2`)
   — useful for pointing an existing campaign at the same build after
@@ -1398,8 +1397,8 @@ Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
 `--mu2e-options`, `--copy-input`, `--timeout SECONDS` (default 86400),
 `--json PATH`, `--no-validate` (skip the worker's output read-back,
 section 7), `--code TARBALL` (a `muse tarball` build to run against
-instead of the cnf's own `/cvmfs` setup, unpacked once into
-`<workdir>/code`), `--code-root DIR` (the same, already unpacked).
+instead of the cnf's own `/cvmfs` setup, unpacked once per content into
+`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`).
 
 Job prep is the worker's own `process_jobdef`, so a local run exercises
 the same tarball fetch, inloc handling and `--copy-input` staging the
@@ -1407,16 +1406,12 @@ grid will — only the push tail is missing. Each job runs as a child
 process in `<workdir>/job_<index>/` holding its FCL, art outputs, art
 log and `stdout.log`; the separate directories are required, because
 `process_jobdef` works in cwd and its copy-input branch runs `mkdir
-indir; mv *.art indir/`. A `--code` unpack happens once for the whole
-`runlocal` invocation, before any job starts; each spawned child then
-takes the already-unpacked tree by `--code-root` rather than
-re-extracting several GB per job. `--code-root DIR` is also yours to
-pass, instead of `--code`: `DIR` is an already-unpacked tree holding
-`Code/` — prodtools' code cache hands one over
-(`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`, which is how
-`json2jobdef --once --local` runs a code-tarball entry). It is refused
-when empty, when `DIR/Code/setup.sh` is missing, or together with
-`--code`.
+indir; mv *.art indir/`. A `--code` tarball is unpacked before any job
+starts, into prodtools' code cache
+(`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`, shared with
+`json2jobdef --once --local` and the write MCP server), and every job
+reuses that tree rather than re-extracting several GB. A later run of
+the same tarball unpacks nothing.
 
 `--first`/`--num` are cnf indices directly — `baseSeed = 1 + index` and
 `firstSubRun = index`, with no `firstjob` second index space to confuse

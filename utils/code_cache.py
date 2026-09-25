@@ -9,10 +9,10 @@ unpacks each tarball ONCE, under a directory named for the sha256 of its
 bytes, so every build and local run of the same content shares one
 tree, and a tarball rebuilt in place gets a new one.
 
-Pure stdlib and SILENT: the write MCP server calls it in-process, and
-that server's stdout carries the MCP protocol. runlocal.unpack_code
-prints progress and sys.exit()s, which is right for a CLI and fatal
-there.
+The one unpacker in prodtools: json2jobdef, the write MCP server and
+`runlocal --code` all come here. Pure stdlib and SILENT: the write MCP
+server calls it in-process, and that server's stdout carries the MCP
+protocol; a CLI caller prints its own progress around it.
 
 Nothing evicts entries. To free one no build and no local run is
 using, mv its <sha256> directory aside and delete that: an rm -rf
