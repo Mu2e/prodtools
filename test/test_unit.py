@@ -13,6 +13,7 @@ Run with:  python -m pytest test/test_unit.py -v
 import atexit
 import contextlib
 import copy
+import errno
 import hashlib
 import io
 import json
@@ -20168,10 +20169,16 @@ class TestRunLocalCodeRoot(unittest.TestCase):
 
     def test_an_empty_code_root_is_refused(self):
         """'' is falsy but not None: a truthiness check would silently
-        ignore it instead of refusing it."""
+        ignore it instead of refusing it. Chdir into a directory that DOES
+        have Code/setup.sh (self.tree) first: `Path('').resolve()` is the
+        cwd, so without an explicit emptiness check '' would resolve
+        there and pass the Code/setup.sh test by accident."""
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(self.tree)
         with self.assertRaises(SystemExit) as ctx:
             self._main(['--jobdef', '/x/cnf.tar', '--code-root', ''])
-        self.assertIn('Code/setup.sh', str(ctx.exception))
+        self.assertIn('empty', str(ctx.exception))
 
 
 class TestRunLocalStop(unittest.TestCase):
@@ -20271,6 +20278,16 @@ class TestRunLocalStop(unittest.TestCase):
                 ['sh', '-c',
                  '(trap "" TERM; echo ready; exec sleep 60) & sleep 60'],
                 stdout=subprocess.PIPE, start_new_session=True)
+
+            def _nuke_group():
+                # Safety net: if the assertion below fails, the
+                # TERM-ignoring grandchild would otherwise outlive this
+                # test. Tolerates the group already being gone.
+                try:
+                    os.killpg(job.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self.addCleanup(_nuke_group)
             self.addCleanup(job.stdout.close)
             self.addCleanup(job.wait)
             self.addCleanup(lambda: job.poll() is None and job.kill())
@@ -20278,6 +20295,79 @@ class TestRunLocalStop(unittest.TestCase):
             self.rl.kill_job(job)
             with self.assertRaises(ProcessLookupError):
                 os.killpg(job.pid, 0)
+
+    def test_a_stderr_failure_does_not_stop_kill_job_or_the_exit(self):
+        """The banner write (and kill_job's own diagnostics) must never
+        run ahead of a job actually being signalled: a closed fd or an
+        OSError from a detached driver's log (EPIPE/EIO/EDQUOT) must not
+        let `_terminate` reach os._exit having skipped a job."""
+        fakes = [SimpleNamespace(pid=2 ** 30 + i) for i in range(2)]
+
+        class Unwritable:
+            def write(self, text):
+                raise OSError(errno.EIO, 'Input/output error')
+
+        for broken_stderr in (Unwritable(), None):
+            with self.subTest(stderr=broken_stderr):
+                self.rl._RUNNING.clear()
+                for fake in fakes:
+                    self.rl._RUNNING[id(fake)] = fake
+                ended = []
+                with patch.object(
+                        self.rl, 'kill_job',
+                        side_effect=lambda proc, log=None:
+                        ended.append(proc.pid)), \
+                     patch.object(self.rl.os, '_exit',
+                                  side_effect=SystemExit) as exit_, \
+                     patch.object(self.rl.sys, 'stderr', broken_stderr):
+                    with self.assertRaises(SystemExit):
+                        self.rl._terminate(signal.SIGTERM, None)
+                # _terminate's real _RUNNING_LOCK is deliberately never
+                # released (the real process would have exited); release
+                # it now, BEFORE any assertion below that could fail and
+                # (under subTest) skip past this line -- otherwise the
+                # next sub-iteration's _terminate call deadlocks forever
+                # on its own .acquire().
+                self.rl._RUNNING_LOCK.release()
+                self.assertEqual(sorted(ended), sorted(f.pid for f in fakes))
+                exit_.assert_called_once_with(143)
+
+    def test_the_one_child_resets_sigterm_to_default(self):
+        """A job forked while the driver's own handler had SIG_IGN set
+        (mid-_terminate) would otherwise inherit that disposition, and
+        its mu2e would then ignore a graceful SIGTERM entirely, dying
+        only via SIGKILL after the full grace period."""
+        before = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        self.addCleanup(signal.signal, signal.SIGTERM, before)
+        seen = {}
+
+        def run_one(index, args):
+            seen['handler'] = signal.getsignal(signal.SIGTERM)
+            return 0
+        with patch.object(self.rl, 'run_one', side_effect=run_one):
+            self.rl.main(['--jobdef', '/x/cnf.tar', '--one', '0'])
+        self.assertIs(seen['handler'], signal.SIG_DFL)
+
+    def test_sig_ign_is_set_before_the_lock_is_acquired(self):
+        """Pins the ordering IMPORTANT-1's fix depends on: a second
+        SIGTERM must find SIG_IGN already in effect, not race it against
+        the lock acquisition."""
+        seen = {}
+
+        class FakeLock:
+            def acquire(self):
+                seen['disposition'] = signal.getsignal(signal.SIGTERM)
+                return True
+
+            def locked(self):
+                return True
+
+        with patch.object(self.rl, '_RUNNING_LOCK', FakeLock()):
+            with patch.object(self.rl.os, '_exit', side_effect=SystemExit):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        self.rl._terminate(signal.SIGTERM, None)
+        self.assertIs(seen['disposition'], signal.SIG_IGN)
 
     def test_a_job_is_registered_while_it_runs_and_removed_after(self):
         seen = []

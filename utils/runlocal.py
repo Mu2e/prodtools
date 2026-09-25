@@ -256,6 +256,30 @@ _RUNNING = {}
 _RUNNING_LOCK = threading.Lock()
 
 
+def _note(text):
+    """Best-effort diagnostic write to stderr: MUST NOT raise.
+
+    A closed fd (`sys.stderr is None`), or an OSError from a detached
+    driver's log (EPIPE/EIO/EDQUOT), must never be allowed to abort
+    `_terminate` before every job has been signalled -- an orphaned mu2e
+    is exactly the failure this driver exists to prevent.
+    """
+    try:
+        sys.stderr.write(text)
+    except Exception:
+        pass
+
+
+class _SafeLog:
+    """A `log` for `kill_job` whose `.write` can never raise — see
+    `_note`. `_terminate` passes this instead of the real `sys.stderr`,
+    so a diagnostic write failure inside `kill_job` can't do to it what
+    the unguarded banner write used to do to `_terminate` itself."""
+
+    def write(self, text):
+        _note(text)
+
+
 def _terminate(signum, frame):
     """SIGTERM to the driver: end every running job's group, then exit
     128+signum WITHOUT a summary -- a missing summary is how a reader
@@ -272,23 +296,26 @@ def _terminate(signum, frame):
     try:
         _RUNNING_LOCK.acquire()
         procs = list(_RUNNING.values())
-        sys.stderr.write(f"[local] SIGTERM: ending {len(procs)} running "
-                         f"job(s)\n")
-        # SIGTERM every group up front so their grace periods overlap,
-        # instead of paying KILL_GRACE_SECONDS once per job serially;
-        # kill_job repeats the signal below and reports failures.
+        # Signal every group FIRST, before any output: nothing below —
+        # not even a diagnostic write — may run ahead of a job actually
+        # being signalled. This also lets a group that dies right on
+        # SIGTERM overlap its death with the others' instead of each
+        # paying KILL_GRACE_SECONDS in turn below; a group that lingers
+        # past SIGTERM still pays its own grace period there regardless.
         for proc in procs:
             if proc.pid is not None and proc.pid > 1:
                 try:
                     os.killpg(proc.pid, signal.SIGTERM)
                 except OSError:
                     pass
+        _note(f"[local] SIGTERM: ending {len(procs)} running job(s)\n")
+        log = _SafeLog()
         for proc in procs:
             try:
-                kill_job(proc, sys.stderr)
+                kill_job(proc, log)
             except Exception as exc:
-                sys.stderr.write(f"[local] could not end job group "
-                                 f"{proc.pid}: {exc}\n")
+                _note(f"[local] could not end job group {proc.pid}: "
+                      f"{exc}\n")
         try:
             sys.stdout.flush()
             sys.stderr.flush()
@@ -312,7 +339,7 @@ def _group_gone(pgid, timeout):
     an event, or wedged — with the launcher already gone and nothing
     left in-process to notice.
     """
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     while True:
         try:
             os.killpg(pgid, 0)
@@ -322,7 +349,7 @@ def _group_gone(pgid, timeout):
             # Some other failure probing the group (e.g. permission) —
             # cannot confirm it is gone, so don't claim it is.
             return False
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             return False
         time.sleep(0.1)
 
@@ -658,7 +685,12 @@ def main(argv=None):
         sys.exit("runlocal: --timeout must be 0 (no limit) or positive")
 
     if args.one is not None:
-        # Child: cwd is already this job's directory.
+        # Child: cwd is already this job's directory. Reset SIGTERM to
+        # the default: a job forked while the driver's own handler had
+        # SIG_IGN set (mid-_terminate) would otherwise inherit that
+        # disposition, and its mu2e would then ignore a graceful SIGTERM
+        # entirely, dying only via SIGKILL after the full grace period.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
         return run_one(args.one, args)
 
     if args.code and args.code_root is not None:
@@ -666,6 +698,8 @@ def main(argv=None):
     if args.code_root is not None:
         # `is not None`, not truthiness: an empty --code-root must still
         # be checked (and refused) below, not silently ignored.
+        if not args.code_root.strip():
+            sys.exit("runlocal: --code-root is empty")
         # Absolute: every job runs in its own job_NNNNNN/ directory.
         args.code_root = str(Path(args.code_root).resolve())
         if not (Path(args.code_root) / 'Code' / 'setup.sh').is_file():
