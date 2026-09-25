@@ -98,9 +98,10 @@ When regenerating, read in this order:
    `--tar_file_name dropbox://` sidecar automatically from the entry's
    `code` key (see the Production Execution section for the worker
    side). For a local smoke run without touching the grid, `bin/runlocal
-   --code <tarball>` unpacks the build once into `<workdir>/code/`; a
-   `runlocal` child process takes the already-unpacked tree via
-   `--code-root` instead of re-extracting it. A code-mode campaign
+   --code <tarball>` unpacks the build once per content into prodtools'
+   code cache (`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`),
+   and every job reuses that tree instead of re-extracting it. A
+   code-mode campaign
    cannot be built through the MCP `push_cnf` tool — it requires
    `simjob_setup` and rejects an entry carrying `code` — so use the
    `json2jobdef --prod --enqueue` CLI path for those campaigns instead,
@@ -310,10 +311,20 @@ When regenerating, read in this order:
       record.
 
     - `runlocal` — mention `--code <tarball>` as an alternative to a cnf
-      built from `simjob_setup`: unpacks the build once into
-      `<workdir>/code/` before any jobs run, and each spawned child
-      takes the already-unpacked tree via `--code-root` rather than
-      re-extracting it.
+      built from `simjob_setup`: before any job runs it unpacks the build
+      once per content into prodtools' code cache
+      (`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`, the same
+      cache json2jobdef and the write MCP server use), and every job
+      reuses that tree rather than re-extracting it. A later run of the
+      same tarball unpacks nothing. `--code-root` is internal (driver to
+      job) and not documented.
+    - `runlocal` — document how a run is stopped: SIGTERM (`kill
+      <pid>`), SIGINT (Ctrl-C) or SIGHUP (the terminal closing) to the
+      driver ends every running job's process group the same way as a
+      timeout (SIGTERM, then SIGKILL 10 s later) and exits `128+signal`
+      (143, 130, 129) WITHOUT writing the `--json` summary, so a missing
+      summary means the run was stopped or died. A SIGINT or SIGHUP the
+      driver started with ignored (`nohup`) stays ignored.
     - `runlocal` — document `--json PATH` as the machine-readable half of
       the end-of-run summary, for a caller driving `runlocal` from a
       script. Say three things the printed table cannot: it lists each
@@ -322,9 +333,9 @@ When regenerating, read in this order:
       7-of-8 from 3-of-8, and a caller measuring a rate must divide by
       the jobs that produced output), and it is written whatever the exit
       code. Note the contract on the reader's side — a MISSING file means
-      `runlocal` died before reporting, never that zero jobs ran — and
-      that this `--json` is an OUTPUT path, unlike `json2jobdef --json`,
-      which reads a config.
+      `runlocal` was stopped or died before reporting, never that zero
+      jobs ran — and that this `--json` is an OUTPUT path, unlike
+      `json2jobdef --json`, which reads a config.
     - `runlocal` — document `--timeout SECONDS`, default 86400 (24h, the
       grid's default lease), `0` to disable. Say that a job over the
       limit has its whole process GROUP signalled (SIGTERM, then SIGKILL
@@ -394,7 +405,11 @@ reading the code:
   undeclared parents). An outstage entry CANNOT be enqueued as a
   campaign: verify_row is fail-closed against SAM, so with nothing
   declared every index reads as missing and each tick would recover the
-  whole row forever. Build it and submit it by hand.
+  whole row forever. Submit it with `json2jobdef --once` (every job in one
+  jobsub_submit, a receipt, nothing in SAM), or run it on this node with
+  `json2jobdef --once --local` (runlocal started detached, the same
+  receipt; `--parallel N` jobs at once, default 4, at most 16);
+  `run_status` on the read-only MCP server reports on either.
 - `runlocal` runs cnf jobs on the current node, several at a time, and
   pushes NOTHING: no pushOutput, no SAM declare, no manifest. It shares
   the worker's own prep (`runmu2e.process_jobdef`), so a local run

@@ -77,8 +77,10 @@ def reserve(root, name, entry, state='submitting'):
             f'the output file names derive from it and two runs writing '
             f'the same names cannot be told apart. If its receipt says '
             f'"submitting", the previous attempt died mid-submit: look '
-            f'for its cluster in jobsub_q before doing anything else. '
-            f'Pick a new dsconf.') from None
+            f'for its cluster in jobsub_q before doing anything else. If '
+            f'it says "starting" or "running", a local run may still be '
+            f'going: look for a runlocal process whose command line names '
+            f'{run_dir}. Pick a new dsconf.') from None
     _write(run_dir, {'name': name, 'state': state,
                      'created_utc': _now(), 'entry': entry})
     return run_dir

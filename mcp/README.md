@@ -140,8 +140,8 @@ PreToolUse hook, none of which survives being reached over a port.
 
 ## `prodtools-write`
 
-Exposes submission: `push_cnf`, `run_submissions`, `submit_once`, and
-publishing: `push_file`.
+Exposes submission: `push_cnf`, `run_submissions`, `submit_once`,
+`run_local`, and publishing: `push_file`.
 
 A production campaign takes two calls: `push_cnf(..., slice_size=N)`
 builds the cnf, registers it in SAM and creates the campaign, returning
@@ -160,6 +160,31 @@ already-built file to SAM with its parents through the same `pushOutput`
 call a grid job makes (`bin/push_file`). The basename is the SAM name: a
 six-field Mu2e file name owned by the identity (`mu2e` for mu2epro).
 `location` is tape/disk/scratch. A name already in SAM is refused.
+
+`submit_once(json, desc, dsconf, run_as)` sends one entry to the grid
+once, every output to outstage and nothing to SAM (`json2jobdef
+--once`); the read-only server's `run_status(name, user=)` reports on
+it. It also takes a code-tarball entry (`code`, no `simjob_setup`): the
+tarball is unpacked once into
+`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>/`, and its
+`Code/setup.sh` is sourced where a Musing's `setup.sh` would be. Nothing
+clears that cache. To free an entry nothing is using, first `mv` its
+`<sha256>` directory aside, then delete the moved copy: an interrupted
+`rm -rf` in place can leave `Code/setup.sh` behind, which still counts
+as a hit. A `<sha256>.part.*` directory is what a killed unpack leaves;
+it can be deleted. `push_cnf` refuses code-tarball entries.
+
+`run_local(json, desc, dsconf, run_as, parallel=None)` runs the same kind
+of entry on this node instead (`json2jobdef --once --local`): it starts
+`runlocal` detached and returns at once, with a receipt `run_status`
+reads the same way. Outputs stay in
+`/exp/mu2e/data/users/$USER/prodtools/runs/<name>/job_NNNNNN/`, and
+`kill <pid>` (the receipt's `pid`, on its `host`) stops the run, jobs
+included. `parallel` defaults to runlocal's 4 and is at most 16, which
+json2jobdef enforces (each job holds ~2.5 GB of a shared node), and
+concurrent `run_local` calls add up: each starts its own
+`runlocal`. Delete a code-cache directory only when no local run is
+still using it.
 
 `push_cnf(..., prodtools_dir=...)` forwards `--prodtools-dir` so a
 checkout can be run before its release lands on cvmfs; it is refused

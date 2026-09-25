@@ -309,8 +309,11 @@ otherwise name parents SAM has never heard of.
 An outstage entry **cannot be enqueued as a campaign**: campaign
 verification is fail-closed against SAM, so with nothing declared every
 index reads as missing and each tick would recover the whole row,
-forever. Build it and submit it by hand — or run it on this node with
-`runlocal` (section 11), which pushes nothing at all.
+forever. Submit it with `json2jobdef --once` (every job in one
+jobsub_submit, a receipt, nothing in SAM), or run it on this node with
+`json2jobdef --once --local`, which starts `runlocal` (section 11)
+detached under the same receipt (`--parallel N` jobs at once, default 4,
+at most 16). Neither pushes anything to SAM.
 
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
@@ -563,9 +566,8 @@ jobdef --code /exp/mu2e/data/users/$USER/code_tarballs/Code.tar.bz2 \
   jobsub's `--tar_file_name dropbox://<tarball>` automatically from
   `code`; see section 7 for how the worker reads it back.
 - For a local smoke run with no grid involved, `bin/runlocal --code
-  <tarball>` unpacks the build once into `<workdir>/code/` before any
-  job runs (section 11); every spawned child reuses that one unpack via
-  `--code-root`.
+  <tarball>` unpacks the build once per content into prodtools' code
+  cache before any job runs (section 11); every job reuses that tree.
 - `code` is one of the keys `submissions set-entry` can retune on a live
   campaign (`submissions set-entry CAMP_ID code /new/path/Code.tar.bz2`)
   — useful for pointing an existing campaign at the same build after
@@ -1395,8 +1397,8 @@ Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
 `--mu2e-options`, `--copy-input`, `--timeout SECONDS` (default 86400),
 `--json PATH`, `--no-validate` (skip the worker's output read-back,
 section 7), `--code TARBALL` (a `muse tarball` build to run against
-instead of the cnf's own `/cvmfs` setup, unpacked once into
-`<workdir>/code`).
+instead of the cnf's own `/cvmfs` setup, unpacked once per content into
+`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`).
 
 Job prep is the worker's own `process_jobdef`, so a local run exercises
 the same tarball fetch, inloc handling and `--copy-input` staging the
@@ -1404,11 +1406,12 @@ grid will — only the push tail is missing. Each job runs as a child
 process in `<workdir>/job_<index>/` holding its FCL, art outputs, art
 log and `stdout.log`; the separate directories are required, because
 `process_jobdef` works in cwd and its copy-input branch runs `mkdir
-indir; mv *.art indir/`. A `--code` unpack happens once for the whole
-`runlocal` invocation, before any job starts; each spawned child then
-takes the already-unpacked tree by its own internal `--code-root` flag
-rather than re-extracting several GB per job — that flag is not meant
-to be passed by hand.
+indir; mv *.art indir/`. A `--code` tarball is unpacked before any job
+starts, into prodtools' code cache
+(`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`, shared with
+`json2jobdef --once --local` and the write MCP server), and every job
+reuses that tree rather than re-extracting several GB. A later run of
+the same tarball unpacks nothing.
 
 `--first`/`--num` are cnf indices directly — `baseSeed = 1 + index` and
 `firstSubRun = index`, with no `firstjob` second index space to confuse
@@ -1434,6 +1437,13 @@ the child orphans it. The job is reported as `rc=124` with
 timed-out job's output files are still listed, but they are whatever
 art had written when it died, so treat them as partial.
 
+Stopping a run: SIGTERM (`kill <pid>`), SIGINT (Ctrl-C) or SIGHUP (the
+terminal closing) to the driver ends every running job's process group
+the same way — SIGTERM, then SIGKILL 10 s later — and the driver exits
+`128+signal` (143, 130, 129) **without** writing the `--json` summary.
+A SIGINT or SIGHUP the driver started with ignored (`nohup`) stays
+ignored.
+
 `--json PATH` writes the machine-readable half of the end-of-run
 summary — note this `--json` is an OUTPUT path, unlike `json2jobdef
 --json`, which reads a config. It says three things the printed table
@@ -1442,8 +1452,8 @@ count), the FAILED indices are **named** (one exit code cannot
 distinguish 7-of-8 from 3-of-8, and a caller measuring a rate must
 divide by the jobs that actually produced output), and it is written
 whatever the exit code. On the reader's side the contract is that a
-MISSING file means `runlocal` died before it could report — never that
-zero jobs ran.
+MISSING file means `runlocal` was stopped or died before it could
+report — never that zero jobs ran.
 
 ### `jobwait`
 

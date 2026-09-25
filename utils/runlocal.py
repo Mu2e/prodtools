@@ -35,7 +35,7 @@ import shlex
 import signal
 import subprocess
 import sys
-import tarfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -244,13 +244,134 @@ def child_env():
             if key != 'MUSE_WORK_DIR'}
 
 
+# The jobs running now, so a stop signal to the driver can end them too.
+# Each job has its own session (kill_job signals its GROUP), so a signal
+# to the driver never reaches them: without this, `kill <driver pid>`,
+# Ctrl-C or a closed terminal left every running mu2e orphaned and still
+# writing. Keyed by id(): a Popen is hashable but the tests' stand-ins
+# are not.
+_RUNNING = {}
+# Held across each Popen AND its registration, and by the stop handler
+# until the process exits, so no job can start unseen by it.
+_RUNNING_LOCK = threading.Lock()
+# `kill <pid>`, Ctrl-C, and the terminal going away: each runs _terminate.
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+
+
+def _note(text):
+    """Best-effort diagnostic write to stderr: MUST NOT raise.
+
+    A closed fd (`sys.stderr is None`), or an OSError from a detached
+    driver's log (EPIPE/EIO/EDQUOT), must never be allowed to abort
+    `_terminate` before every job has been signalled -- an orphaned mu2e
+    is exactly the failure this driver exists to prevent.
+    """
+    try:
+        sys.stderr.write(text)
+    except Exception:
+        pass
+
+
+class _SafeLog:
+    """A `log` for `kill_job` whose `.write` can never raise — see
+    `_note`. `_terminate` passes this instead of the real `sys.stderr`,
+    so a diagnostic write failure inside `kill_job` can't do to it what
+    the unguarded banner write used to do to `_terminate` itself."""
+
+    def write(self, text):
+        _note(text)
+
+
+def _terminate(signum, frame):
+    """A stop signal (STOP_SIGNALS) to the driver: end every running
+    job's group, then exit 128+signum WITHOUT a summary -- a missing
+    summary is how a reader tells a stopped run from a finished one (see
+    write_summary). The lock is never released: the process ends here.
+
+    Ignores every stop signal first: `_RUNNING_LOCK` is a plain
+    (non-reentrant) Lock, and CPython delivers a second signal by calling
+    this same handler again, reentrantly, on the main thread -- even
+    mid-handler. Without this, a second signal (another `kill`, a Ctrl-C
+    after a SIGTERM) would re-enter `.acquire()` on a lock this same call
+    already holds and deadlock forever.
+    """
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
+    try:
+        _RUNNING_LOCK.acquire()
+        procs = list(_RUNNING.values())
+        # Signal every group FIRST, before any output: nothing below —
+        # not even a diagnostic write — may run ahead of a job actually
+        # being signalled. This also lets a group that dies right on
+        # SIGTERM overlap its death with the others' instead of each
+        # paying KILL_GRACE_SECONDS in turn below; a group that lingers
+        # past SIGTERM still pays its own grace period there regardless.
+        for proc in procs:
+            if proc.pid is not None and proc.pid > 1:
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except OSError:
+                    pass
+        try:
+            name = signal.Signals(signum).name
+        except Exception:
+            name = f'signal {signum}'
+        _note(f"[local] {name}: ending {len(procs)} running job(s)\n")
+        log = _SafeLog()
+        for proc in procs:
+            try:
+                kill_job(proc, log)
+            except Exception as exc:
+                _note(f"[local] could not end job group {proc.pid}: "
+                      f"{exc}\n")
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+    finally:
+        # os._exit drops buffered output otherwise, and the detached
+        # launcher (json2jobdef --once --local) sends this process's
+        # output to a log file, so the flush above matters even though
+        # nothing reads it here.
+        os._exit(128 + signum)
+
+
+def _group_gone(pgid, timeout):
+    """Whether process group `pgid` has no members left.
+
+    Polls `os.killpg(pgid, 0)` (a null signal — this is a liveness probe,
+    not a kill) every 0.1s for up to `timeout` seconds. The job's
+    LAUNCHER (the `--one` python child) being reaped is not enough proof:
+    mu2e is a grandchild in the SAME group and can outlive it — finishing
+    an event, or wedged — with the launcher already gone and nothing
+    left in-process to notice.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            # Some other failure probing the group (e.g. permission) —
+            # cannot confirm it is gone, so don't claim it is.
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
 def kill_job(proc, log=None):
     """End a job: SIGTERM its process group, SIGKILL what survives.
 
     The GROUP, not the process: `mu2e` is a grandchild (the direct child
     re-execs this module), so signalling only the direct child would
     leave a wedged mu2e with nothing left to reap it. `start_new_session`
-    in the launcher makes the child's pid its group id.
+    in the launcher makes the child's pid its group id. Reaping the
+    launcher (`proc.wait()` returning) is not proof the group is empty
+    either — see `_group_gone` — so each signal is followed by a poll,
+    not just a wait.
     """
     if proc.pid is None or proc.pid <= 1:
         # killpg(0) signals the CALLER's process group — this driver and
@@ -262,14 +383,28 @@ def kill_job(proc, log=None):
         try:
             os.killpg(proc.pid, sig)
         except OSError as exc:
-            if log:
+            # No such group on the FIRST signal: the job is already gone
+            # (it ended after _terminate's pre-pass, or right at its
+            # timeout). Nothing failed; reap its launcher below, quietly.
+            gone = (sig == signal.SIGTERM
+                    and isinstance(exc, ProcessLookupError))
+            if log and not gone:
                 log.write(f"[local] could not signal job group: {exc}\n")
             break
         try:
             proc.wait(timeout=KILL_GRACE_SECONDS)
-            return
         except subprocess.TimeoutExpired:
             continue
+        if _group_gone(proc.pid, KILL_GRACE_SECONDS):
+            return
+        # Launcher reaped but a grandchild (mu2e) survived SIGTERM —
+        # fall through to the SIGKILL pass.
+    else:
+        # Only reached if the loop ran to completion (no OSError break):
+        # SIGKILL was sent and still something in the group survived it.
+        if log:
+            log.write(f"[local] job group {proc.pid} still has processes "
+                      f"after SIGKILL\n")
     # Reap whatever is left, so the driver never exits over a zombie.
     proc.wait()
 
@@ -292,19 +427,26 @@ def _run_child(index, args, globs):
         log.flush()
         # start_new_session so the job owns its process group (see
         # kill_job); Popen not run(timeout=), which kills only the child.
-        proc = subprocess.Popen(argv, cwd=str(directory), env=child_env(),
-                                stdout=log, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+        with _RUNNING_LOCK:
+            proc = subprocess.Popen(argv, cwd=str(directory),
+                                    env=child_env(), stdout=log,
+                                    stderr=subprocess.STDOUT,
+                                    start_new_session=True)
+            _RUNNING[id(proc)] = proc
         try:
-            # 0 means no limit; None is how Popen.wait spells that.
-            rc = proc.wait(timeout=args.timeout or None)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            log.write(f"\n[local] killed after {args.timeout:g}s "
-                      f"(--timeout), reported as rc={TIMEOUT_RC}\n")
-            log.flush()
-            kill_job(proc, log)
-            rc = TIMEOUT_RC
+            try:
+                # 0 means no limit; None is how Popen.wait spells that.
+                rc = proc.wait(timeout=args.timeout or None)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                log.write(f"\n[local] killed after {args.timeout:g}s "
+                          f"(--timeout), reported as rc={TIMEOUT_RC}\n")
+                log.flush()
+                kill_job(proc, log)
+                rc = TIMEOUT_RC
+        finally:
+            with _RUNNING_LOCK:
+                _RUNNING.pop(id(proc), None)
     elapsed = time.time() - start
     produced = sorted(p.name for g in globs for p in directory.glob(g))
     return JobResult(index, rc, elapsed, directory, produced, timed_out)
@@ -430,39 +572,6 @@ def resolve_jobdef(name_or_path, workdir):
     return str((Path(workdir) / path.name).resolve())
 
 
-def unpack_code(tarball, workdir):
-    """Unpack a `muse tarball` Code.tar.bz2 once, for every child to share.
-
-    Returns the directory holding `Code/` — what `resolve_setup` wants as
-    its code root, same as the grid gets from $INPUT_TAR_DIR_LOCAL.
-
-    ONE unpack, not one per job (build tree runs several GB, driver
-    launches four jobs at once by default). Re-running detects an
-    already-unpacked tree via the `.unpack-complete` sentinel, never via
-    `Code/setup.sh` itself — setup.sh is tarball *payload*, typically
-    extracted early, so a run killed partway through `extractall` can
-    leave it on disk with the rest of the tree missing; keying the early
-    return on it would trust a silently incomplete Offline forever.
-    """
-    root = Path(workdir) / 'code'
-    marker = root / 'Code' / 'setup.sh'
-    sentinel = root / '.unpack-complete'
-    if sentinel.is_file():
-        print(f"[local] code already unpacked at {root}")
-        return str(root)
-    root.mkdir(parents=True, exist_ok=True)
-    print(f"[local] unpacking {tarball} into {root} "
-          f"(several GB — this takes a while)")
-    with tarfile.open(tarball, 'r:bz2') as tar:
-        tar.extractall(root)
-    if not marker.is_file():
-        sys.exit(f"runlocal: {tarball} has no Code/setup.sh — "
-                 f"build it with `muse tarball`")
-    # Written last, so a partial extract is never mistaken for finished.
-    sentinel.write_text(os.path.basename(tarball) + '\n')
-    return str(root)
-
-
 def run_one(index, args):
     """The child: prep and run ONE job in the current directory.
 
@@ -534,9 +643,10 @@ def build_parser():
     parser.add_argument('--code', default=None,
                         help='muse tarball Code.tar.bz2 to run against '
                              'instead of the cnf\'s /cvmfs setup; unpacked '
-                             'once into <workdir>/code')
+                             'once per content into prodtools\' code cache '
+                             '(utils/code_cache)')
     parser.add_argument('--code-root', default=None,
-                        help=argparse.SUPPRESS)
+                        help=argparse.SUPPRESS)  # internal: driver -> child
     parser.add_argument('--one', type=int,
                         help=argparse.SUPPRESS)  # internal: run a single index
     return parser
@@ -554,7 +664,14 @@ def main(argv=None):
         sys.exit("runlocal: --timeout must be 0 (no limit) or positive")
 
     if args.one is not None:
-        # Child: cwd is already this job's directory.
+        # Child: cwd is already this job's directory. Reset the stop
+        # signals to the default: a job forked while the driver's own
+        # handler had SIG_IGN set (mid-_terminate) would otherwise inherit
+        # that disposition (SIG_IGN survives exec), and its mu2e would
+        # then ignore a graceful SIGTERM entirely, dying only via SIGKILL
+        # after the full grace period.
+        for sig in STOP_SIGNALS:
+            signal.signal(sig, signal.SIG_DFL)
         return run_one(args.one, args)
 
     if args.json:
@@ -569,11 +686,33 @@ def main(argv=None):
     Path(args.workdir).mkdir(parents=True, exist_ok=True)
     args.jobdef = resolve_jobdef(args.jobdef, args.workdir)
     if args.code:
-        args.code_root = unpack_code(args.code, args.workdir)
+        # One unpacker for prodtools: the per-content cache json2jobdef
+        # and the write MCP server use too (utils/code_cache).
+        from utils import code_cache
+        tarball = str(Path(args.code).resolve())
+        print(f"[local] code tarball {tarball}: unpacking into the code "
+              f"cache unless it is there already")
+        try:
+            args.code_root = code_cache.unpacked(tarball)
+        except (ValueError, OSError) as exc:
+            sys.exit(f"runlocal: {exc}")
+        print(f"[local] code at {args.code_root}")
     # The module, not bin/runlocal: that wrapper sources the Mu2e
     # environment, which this process already has and children inherit.
     args.entry_point = Path(__file__).resolve()
-    return drive(args)
+    previous = {}
+    for sig in STOP_SIGNALS:
+        if sig != signal.SIGTERM and signal.getsignal(sig) == signal.SIG_IGN:
+            # `nohup runlocal ... &` (or a shell's background job) ignores
+            # these on purpose: the run is meant to outlive the terminal,
+            # and a driver that survives orphans nothing.
+            continue
+        previous[sig] = signal.signal(sig, _terminate)
+    try:
+        return drive(args)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == '__main__':

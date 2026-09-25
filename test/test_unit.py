@@ -13,12 +13,14 @@ Run with:  python -m pytest test/test_unit.py -v
 import atexit
 import contextlib
 import copy
+import errno
 import hashlib
 import io
 import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import importlib.machinery
@@ -12263,7 +12265,7 @@ class TestPushCnfTool(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             self.tools.push_cnf(json=path, desc='D', dsconf='C',
                                 slice_size=500, run_as='self')
-        self.assertIn('simjob_setup', str(ctx.exception))
+        self.assertIn('neither simjob_setup nor code', str(ctx.exception))
 
     def test_find_json_entry_ambiguity_becomes_valueerror_not_systemexit(self):
         # find_json_entry sys.exit()s on 0 or >1 matches — fine for a
@@ -17202,29 +17204,14 @@ class TestRunLocalChildArgv(unittest.TestCase):
 
 
 class TestRunlocalCode(unittest.TestCase):
-    """The driver unpacks the code tarball ONCE and hands children the
-    directory. 3.6 GB per job times four parallel jobs is not viable."""
+    """The driver hands children the already-unpacked directory, never the
+    tarball: 3.6 GB per job times four parallel jobs is not viable. The
+    unpack itself is utils/code_cache (TestCodeCache)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
-
-    def test_unpack_creates_code_setup(self):
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        self.assertTrue(os.path.isfile(os.path.join(root, 'Code', 'setup.sh')))
-
-    def test_unpack_is_idempotent(self):
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        marker = os.path.join(root, 'Code', 'setup.sh')
-        with open(marker, 'a') as fh:
-            fh.write('# touched\n')
-        before = os.path.getsize(marker)
-        self.assertEqual(unpack_code(self.code, self.dir), root)
-        # Second call must not re-extract over an existing tree.
-        self.assertEqual(os.path.getsize(marker), before)
 
     def test_child_argv_carries_code_root(self):
         from utils.runlocal import child_argv
@@ -17253,32 +17240,6 @@ class TestRunlocalCode(unittest.TestCase):
         child = build_parser().parse_args(
             ['--jobdef', 'cnf.tar', '--one', '3', '--code-root', '/w/code'])
         self.assertEqual(child.code_root, '/w/code')
-
-    def test_sentinel_not_setup_sh_gates_reuse(self):
-        """`Code/setup.sh` is payload, extracted partway through a run
-        that could still be killed. Only the sentinel — written last —
-        proves the extract finished; a run that trusted setup.sh alone
-        would silently reuse a truncated tree forever."""
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
-        self.assertTrue(os.path.isfile(lib))
-        os.remove(lib)  # simulate a partial extract that got past setup.sh
-        self.assertEqual(unpack_code(self.code, self.dir), root)
-        # Sentinel was still present, so the second call trusted it and
-        # did not re-extract — the missing file stays missing.
-        self.assertFalse(os.path.isfile(lib))
-
-    def test_missing_sentinel_forces_re_extraction(self):
-        from utils.runlocal import unpack_code
-        root = unpack_code(self.code, self.dir)
-        lib = os.path.join(root, 'Code', 'lib', 'libFake.so')
-        os.remove(lib)
-        os.remove(os.path.join(root, '.unpack-complete'))
-        self.assertEqual(unpack_code(self.code, self.dir), root)
-        # No sentinel meant a real re-extract, which restored the file --
-        # proving the sentinel, not setup.sh, is what actually gates.
-        self.assertTrue(os.path.isfile(lib))
 
 
 class TestRunLocalDrive(unittest.TestCase):
@@ -17348,21 +17309,34 @@ class TestRunLocalDrive(unittest.TestCase):
         self.assertIn('rerun index 1', out)
 
     def test_never_exceeds_the_parallel_limit(self):
+        """The 'work' belongs in wait(), not in the Popen() call: a real
+        Popen returns as soon as the child is forked, and _run_child now
+        holds _RUNNING_LOCK across that call (registering the job before
+        it can be missed by a concurrent SIGTERM) — a fake that instead
+        blocks INSIDE Popen() would be serialized by that lock, which a
+        real (near-instant) Popen never is."""
         import threading
         import time
+        from utils import runlocal
         lock = threading.Lock()
         state = {'now': 0, 'peak': 0}
 
-        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
-            with lock:
-                state['now'] += 1
-                state['peak'] = max(state['peak'], state['now'])
-            time.sleep(0.05)
-            with lock:
-                state['now'] -= 1
-            return SimpleNamespace(returncode=0)
+        def popen(argv, cwd=None, env=None, stdout=None, stderr=None,
+                 **kwargs):
+            def wait(timeout=None):
+                with lock:
+                    state['now'] += 1
+                    state['peak'] = max(state['peak'], state['now'])
+                time.sleep(0.05)
+                with lock:
+                    state['now'] -= 1
+                return 0
+            return SimpleNamespace(pid=2 ** 30, wait=wait)
 
-        self._drive(self._args(indices=list(range(6)), parallel=2), fake)
+        with patch.object(runlocal.subprocess, 'Popen', popen):
+            with contextlib.redirect_stdout(io.StringIO()):
+                runlocal.drive(self._args(indices=list(range(6)),
+                                          parallel=2))
         self.assertEqual(state['peak'], 2)
 
     def test_a_preset_muse_does_not_reach_the_job(self):
@@ -17434,6 +17408,14 @@ class TestRunLocalTimeout(unittest.TestCase):
         killers = []
 
         def killpg(pid, sig):
+            # sig=0 is kill_job's/`_group_gone`'s liveness PROBE, not a
+            # kill: this fake's "job" dies as soon as it has actually
+            # been signalled, so the probe reports it gone right away
+            # instead of polling for the real KILL_GRACE_SECONDS.
+            if sig == 0:
+                if any(p == pid for p, _ in self.killed):
+                    raise ProcessLookupError
+                return
             killers.append((pid, sig))
             self.killed.append((pid, sig))
         with patch.object(runlocal.subprocess, 'Popen', popen):
@@ -18784,9 +18766,6 @@ class TestReadBackValidation(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn('BAD', out.getvalue())
 
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
-
 
 class TestInferDatasetLocationImports(unittest.TestCase):
     """The function body imports SAMError lazily; it must execute under the
@@ -19810,3 +19789,1147 @@ class TestLocalityAuthFailureIsNotMissing(unittest.TestCase):
         self.assertIn('token is valid', probs[0].detail)
         self.assertIn('klist', probs[0].detail)
         self.assertNotIn('absent', probs[0].detail)
+
+
+class TestCodeCache(unittest.TestCase):
+    """utils/code_cache: one unpack per tarball CONTENT, shared by every
+    cnf build and local run of it. Silent, because the write MCP server
+    calls it in-process and its stdout carries the protocol."""
+
+    def setUp(self):
+        from utils import code_cache
+        self.cc = code_cache
+        self.dir = _mkdtemp()
+        self.root = os.path.join(self.dir, 'cache')
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+
+    @staticmethod
+    def _sha(path):
+        with open(path, 'rb') as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+    def test_a_miss_unpacks_under_the_content_hash(self):
+        got = self.cc.unpacked(self.code, self.root)
+        self.assertEqual(got, os.path.join(self.root, self._sha(self.code)))
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertTrue(os.path.isfile(
+            os.path.join(got, 'Code', 'lib', 'libFake.so')))
+
+    def test_a_hit_does_not_open_the_tarball_again(self):
+        first = self.cc.unpacked(self.code, self.root)
+        with patch.object(self.cc.tarfile, 'open',
+                          side_effect=AssertionError('re-extracted')):
+            self.assertEqual(self.cc.unpacked(self.code, self.root), first)
+
+    def test_the_key_is_the_content_not_the_file_name(self):
+        other = os.path.join(self.dir, 'Renamed.tar.bz2')
+        shutil.copy(self.code, other)
+        self.assertEqual(self.cc.unpacked(self.code, self.root),
+                         self.cc.unpacked(other, self.root))
+        self.assertEqual(len(os.listdir(self.root)), 1)
+
+    def test_no_code_setup_is_refused_and_leaves_nothing(self):
+        bad = _make_code_tarball(os.path.join(self.dir, 'NoSetup.tar.bz2'),
+                                 with_setup=False)
+        with self.assertRaises(ValueError) as ctx:
+            self.cc.unpacked(bad, self.root)
+        self.assertIn('Code/setup.sh', str(ctx.exception))
+        self.assertIn('muse tarball', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_tarball_that_is_not_bzip2_is_refused_and_leaves_nothing(self):
+        bad = _make_code_tarball(os.path.join(self.dir, 'Plain.tar'),
+                                 bzip2=False)
+        with self.assertRaises(ValueError) as ctx:
+            self.cc.unpacked(bad, self.root)
+        self.assertIn('bzip2', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_relative_and_missing_paths_are_refused(self):
+        for bad in ('Code.tar.bz2',
+                    os.path.join(self.dir, 'nope.tar.bz2'),
+                    None):
+            with self.assertRaises(ValueError, msg=bad):
+                self.cc.unpacked(bad, self.root)
+        self.assertFalse(os.path.exists(self.root))
+
+    def test_a_lost_rename_race_returns_the_winners_tree(self):
+        """Two builds of one new tarball at once (autoresearch starts
+        several stages together): the loser uses the winner's tree and
+        leaves no part directory behind."""
+        def racing(src, dst):
+            shutil.copytree(src, dst)          # the other process won
+            raise OSError(39, 'Directory not empty', dst)
+        with patch.object(self.cc.os, 'rename', side_effect=racing):
+            got = self.cc.unpacked(self.code, self.root)
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertEqual(os.listdir(self.root), [os.path.basename(got)])
+
+    def test_a_stale_part_dir_from_a_killed_unpack_is_left_alone(self):
+        stale = os.path.join(self.root, self._sha(self.code) + '.part.99999')
+        os.makedirs(os.path.join(stale, 'Code'))
+        got = self.cc.unpacked(self.code, self.root)
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertTrue(os.path.isdir(stale))
+
+    def test_a_concurrent_unpack_in_this_process_is_left_alone(self):
+        """The write server may run two calls at once in one process; a
+        part dir named only by pid would be shared, and one call would
+        delete the other's extract."""
+        busy = os.path.join(self.root, self._sha(self.code) + f'.part.{os.getpid()}')
+        os.makedirs(os.path.join(busy, 'Code'))
+        marker = os.path.join(busy, 'Code', 'in-flight')
+        open(marker, 'w').close()
+        got = self.cc.unpacked(self.code, self.root)
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertTrue(os.path.isfile(marker))
+
+    def test_it_never_writes_to_stdout(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.cc.unpacked(self.code, self.root)
+            self.cc.unpacked(self.code, self.root)
+        self.assertEqual(out.getvalue(), '')
+
+    def _spy_extractall(self):
+        """Record each TarFile.extractall call's keyword arguments and
+        do the real extraction (warnings silenced: the no-filter case
+        warns on a backported 3.9)."""
+        calls = []
+        real = tarfile.TarFile.extractall
+
+        def spy(tar, path='.', *args, **kwargs):
+            calls.append(kwargs)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                return real(tar, path, *args, **kwargs)
+        return calls, patch.object(tarfile.TarFile, 'extractall', spy)
+
+    @unittest.skipUnless(hasattr(tarfile, 'tar_filter'),
+                         'this interpreter has no extraction filters')
+    def test_the_tar_filter_is_pinned_where_filters_exist(self):
+        """'tar', not the interpreter's default: 3.14 defaults to 'data',
+        which would refuse the absolute or symlink members a muse
+        tarball may carry."""
+        calls, spy = self._spy_extractall()
+        with spy:
+            self.cc.unpacked(self.code, self.root)
+        self.assertEqual(calls, [{'filter': 'tar'}])
+
+    def test_no_filter_is_passed_where_filters_do_not_exist(self):
+        calls, spy = self._spy_extractall()
+        bare = SimpleNamespace(open=tarfile.open, ReadError=tarfile.ReadError)
+        with spy, patch.object(self.cc, 'tarfile', bare):
+            got = self.cc.unpacked(self.code, self.root)
+        self.assertEqual(calls, [{}])
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+
+    def _tarball_with(self, name, member):
+        path = os.path.join(self.dir, name)
+        with tarfile.open(path, 'w:bz2') as tar:
+            setup = tarfile.TarInfo('Code/setup.sh')
+            setup.size = 2
+            tar.addfile(setup, io.BytesIO(b'x\n'))
+            tar.addfile(member)
+        return path
+
+    def test_the_absolute_backing_symlink_survives(self):
+        """Every muse tarball carries Code/backing -> /cvmfs/...; the
+        'data' filter would refuse it."""
+        link = tarfile.TarInfo('Code/backing')
+        link.type = tarfile.SYMTYPE
+        link.linkname = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/X'
+        got = self.cc.unpacked(
+            self._tarball_with('Backing.tar.bz2', link), self.root)
+        self.assertEqual(os.readlink(os.path.join(got, 'Code', 'backing')),
+                         link.linkname)
+
+    @unittest.skipUnless(hasattr(tarfile, 'tar_filter'),
+                         'this interpreter has no extraction filters')
+    def test_a_member_the_filter_refuses_is_a_valueerror(self):
+        """The contract is ValueError or OSError: the write server's
+        callers catch those, not tarfile's FilterError."""
+        escape = tarfile.TarInfo('../escape')
+        with self.assertRaises(ValueError) as ctx:
+            self.cc.unpacked(
+                self._tarball_with('Escape.tar.bz2', escape), self.root)
+        self.assertIn('cannot be unpacked', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'escape')))
+
+    def test_unpacking_raises_no_warning(self):
+        import warnings
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter('always')
+            self.cc.unpacked(self.code, self.root)
+        self.assertEqual([str(w.message) for w in seen], [])
+
+    def test_the_default_root_sits_next_to_runs(self):
+        from utils import run_receipt
+        self.assertEqual(self.cc.cache_root('alice'),
+                         '/exp/mu2e/data/users/alice/prodtools/code')
+        self.assertEqual(os.path.dirname(self.cc.cache_root('alice')),
+                         os.path.dirname(run_receipt.runs_root('alice')))
+
+
+class TestCodeEntryPushParams(unittest.TestCase):
+    """A code-tarball entry (`code`, no simjob_setup) builds in the
+    tarball's own environment: submit_once sources the unpacked
+    Code/setup.sh where it would source a Musing's setup.sh (the two are
+    the same script). push_cnf refuses: a production cnf needs its code
+    tarball on a durable path mu2epro can read first."""
+
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        from utils import code_cache
+        self.tools = tools
+        self.tmp = _mkdtemp()
+        self.root = os.path.join(self.tmp, 'cache')
+        patcher = patch.object(code_cache, 'cache_root',
+                               return_value=self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.code = _make_code_tarball(os.path.join(self.tmp, 'Code.tar.bz2'))
+        with open(self.code, 'rb') as fh:
+            self.setup = os.path.join(
+                self.root, hashlib.sha256(fh.read()).hexdigest(),
+                'Code', 'setup.sh')
+        self.json_path = self._write({'code': self.code})
+
+    def _write(self, keys, name='entries.json'):
+        path = os.path.join(self.tmp, name)
+        entry = {'desc': 'D', 'dsconf': 'C', 'fcl': 'x.fcl',
+                 'outloc': {'*.art': 'outstage'}}
+        entry.update(keys)
+        with open(path, 'w') as fh:
+            json.dump([entry], fh)
+        return path
+
+    def test_push_cnf_params_refuse_a_code_entry_and_name_the_way(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.tools._select_push_params(self.json_path, 'D', 'C')
+        self.assertIn('submit_once', str(ctx.exception))
+        self.assertIn('run_local', str(ctx.exception))
+        self.assertFalse(os.path.exists(self.root))     # nothing unpacked
+
+    def test_allow_code_returns_the_unpacked_setup_script(self):
+        setup, desc = self.tools._select_push_params(
+            self.json_path, 'D', 'C', allow_code=True)
+        self.assertEqual(setup, self.setup)
+        self.assertTrue(os.path.isfile(setup))
+        self.assertEqual(desc, 'D')
+
+    def test_an_unusable_tarball_is_refused_naming_the_entry(self):
+        path = self._write(
+            {'code': os.path.join(self.tmp, 'gone.tar.bz2')}, 'gone.json')
+        with self.assertRaises(ValueError) as ctx:
+            self.tools._select_push_params(path, 'D', 'C', allow_code=True)
+        self.assertIn("desc='D'", str(ctx.exception))
+        self.assertIn('does not exist', str(ctx.exception))
+
+    def test_a_musing_entry_is_unchanged(self):
+        musing = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/C/setup.sh'
+        path = self._write({'simjob_setup': musing}, 'musing.json')
+        for allow in (False, True):
+            self.assertEqual(self.tools._select_push_params(
+                path, 'D', 'C', allow_code=allow)[0], musing)
+        self.assertFalse(os.path.exists(self.root))
+
+    def test_submit_once_sources_the_unpacked_setup(self):
+        receipt = os.path.join(self.tmp, 'receipt.json')
+        with open(receipt, 'w') as fh:
+            json.dump({'name': 'cnf.alice.D.C.0', 'state': 'submitted'}, fh)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stderr': '',
+                                 'stdout': f'RECEIPT {receipt}\n'}) as run:
+            self.tools.submit_once(self.json_path, 'D', 'C', 'self')
+        self.assertEqual(run.call_args[1]['simjob_setup'], self.setup)
+
+    def test_an_entry_with_neither_setup_nor_code_says_so(self):
+        """submit_once reaches the same refusal as push_cnf, so it must
+        not speak only of simjob_setup."""
+        path = self._write({}, 'neither.json')
+        for allow in (False, True):
+            with self.assertRaises(ValueError, msg=allow) as ctx:
+                self.tools._select_push_params(
+                    path, 'D', 'C', allow_code=allow)
+            self.assertIn('neither simjob_setup nor code',
+                          str(ctx.exception))
+            self.assertTrue(str(ctx.exception).startswith('push_cnf: '))
+        self.assertFalse(os.path.exists(self.root))
+
+    def test_push_cnf_refuses_before_running_anything(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.push_cnf(self.json_path, 'D', 'C', 1000, 'self')
+        self.assertIn('submit_once', str(ctx.exception))
+        run.assert_not_called()
+
+
+class TestRunLocalCodeUsesTheCache(unittest.TestCase):
+    """`runlocal --code` unpacks through utils/code_cache, the one
+    unpacker json2jobdef and the write MCP server use too, and hands its
+    jobs the cached tree by the internal --code-root."""
+
+    def setUp(self):
+        from utils import code_cache, runlocal
+        self.rl, self.cc = runlocal, code_cache
+        self.dir = _mkdtemp()
+        self.cache = os.path.join(self.dir, 'cache')
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+
+    def _main(self, argv):
+        seen = {}
+
+        def drive(args):
+            seen['args'] = args
+            return 0
+        with patch.object(self.rl, 'drive', side_effect=drive), \
+             patch.object(self.rl, 'resolve_jobdef',
+                          side_effect=lambda jobdef, workdir: jobdef), \
+             patch.object(self.cc, 'cache_root', return_value=self.cache), \
+             patch('sys.stdout', new_callable=io.StringIO):
+            rc = self.rl.main(argv)
+        return rc, seen
+
+    def _cached_tree(self):
+        with open(self.code, 'rb') as fh:
+            return os.path.join(self.cache, hashlib.sha256(fh.read()).hexdigest())
+
+    def test_code_is_unpacked_into_the_cache_and_reaches_the_jobs(self):
+        rc, seen = self._main(['--jobdef', '/x/cnf.tar', '--workdir',
+                               self.dir, '--code', self.code])
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen['args'].code_root, self._cached_tree())
+        self.assertTrue(os.path.isfile(
+            os.path.join(seen['args'].code_root, 'Code', 'setup.sh')))
+        argv = self.rl.child_argv(0, seen['args'])
+        self.assertEqual(argv[argv.index('--code-root') + 1],
+                         self._cached_tree())
+        self.assertNotIn('--code', argv)
+
+    def test_a_relative_code_path_is_resolved_first(self):
+        """code_cache takes absolute paths only."""
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(self.dir)
+        _, seen = self._main(['--jobdef', '/x/cnf.tar', '--workdir',
+                              self.dir, '--code', 'Code.tar.bz2'])
+        self.assertEqual(seen['args'].code_root, self._cached_tree())
+
+    def test_a_missing_tarball_exits_naming_it(self):
+        missing = os.path.join(self.dir, 'nope.tar.bz2')
+        with self.assertRaises(SystemExit) as ctx:
+            self._main(['--jobdef', '/x/cnf.tar', '--workdir', self.dir,
+                        '--code', missing])
+        self.assertIn(missing, str(ctx.exception))
+
+    def test_code_root_is_not_a_public_flag(self):
+        help_text = self.rl.build_parser().format_help()
+        self.assertIn('--code', help_text)
+        self.assertNotIn('--code-root', help_text)
+
+
+class TestRunLocalStop(unittest.TestCase):
+    """SIGTERM (or Ctrl-C's SIGINT, or a hangup's SIGHUP) to the driver
+    ends its jobs too. Each job runs in its own session (so a timeout can
+    kill its whole group), which also means a signal to the driver alone
+    never reached them: `kill <driver>` left every mu2e orphaned and
+    still writing."""
+
+    STOP = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+
+    def setUp(self):
+        from utils import runlocal
+        self.rl = runlocal
+        self.addCleanup(self._reset)
+        # `_terminate` sets SIG_IGN in THIS process (the test runner) for
+        # every stop signal; restore whatever was in effect before.
+        for sig in self.STOP:
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+
+    def _reset(self):
+        if self.rl._RUNNING_LOCK.locked():
+            self.rl._RUNNING_LOCK.release()
+        self.rl._RUNNING.clear()
+
+    def test_sigterm_ends_a_real_job_in_its_own_session_and_exits_143(self):
+        job = subprocess.Popen(
+            [sys.executable, '-c', 'import time; time.sleep(60)'],
+            start_new_session=True)
+        self.addCleanup(job.wait)
+        self.addCleanup(lambda: job.poll() is None and job.kill())
+        self.rl._RUNNING[id(job)] = job
+        with patch.object(self.rl.os, '_exit',
+                          side_effect=SystemExit) as exit_:
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
+        exit_.assert_called_once_with(143)
+        self.assertIsNotNone(job.poll())
+
+    def test_every_running_job_is_ended_before_the_exit(self):
+        events = []
+        fakes = [SimpleNamespace(pid=2 ** 30 + i) for i in range(3)]
+        for fake in fakes:
+            self.rl._RUNNING[id(fake)] = fake
+
+        def exit_(code):
+            events.append(('exit', code))
+            raise SystemExit(code)
+        with patch.object(
+                self.rl, 'kill_job',
+                side_effect=lambda proc, log=None: events.append(proc.pid)), \
+             patch.object(self.rl.os, '_exit', side_effect=exit_):
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
+        self.assertEqual(sorted(events[:3]), [f.pid for f in fakes])
+        self.assertEqual(events[3:], [('exit', 143)])
+
+    def test_a_second_sigterm_is_ignored_while_the_first_is_handled(self):
+        """CPython re-enters a Python signal handler on a second delivery,
+        on the same (main) thread, even mid-handler -- the non-reentrant
+        `_RUNNING_LOCK` would then deadlock on its second `.acquire()`.
+        `_terminate` heads this off by going SIG_IGN immediately."""
+        with patch.object(self.rl.os, '_exit', side_effect=SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
+        for sig in self.STOP:
+            self.assertIs(signal.getsignal(sig), signal.SIG_IGN, sig)
+
+    def test_sigint_and_sighup_stop_too_exiting_128_plus_the_signal(self):
+        for sig, code in ((signal.SIGINT, 130), (signal.SIGHUP, 129)):
+            with self.subTest(sig=sig):
+                fake = SimpleNamespace(pid=2 ** 30)
+                self.rl._RUNNING.clear()
+                self.rl._RUNNING[id(fake)] = fake
+                ended = []
+                try:
+                    with patch.object(
+                            self.rl, 'kill_job',
+                            side_effect=lambda proc, log=None:
+                            ended.append(proc.pid)), \
+                         patch.object(self.rl.os, '_exit',
+                                      side_effect=SystemExit) as exit_:
+                        with contextlib.redirect_stderr(io.StringIO()):
+                            with self.assertRaises(SystemExit):
+                                self.rl._terminate(sig, None)
+                finally:
+                    if self.rl._RUNNING_LOCK.locked():
+                        self.rl._RUNNING_LOCK.release()
+                self.assertEqual(ended, [fake.pid])
+                exit_.assert_called_once_with(code)
+
+    def test_one_failing_job_does_not_stop_the_rest(self):
+        fakes = [SimpleNamespace(pid=2 ** 30 + i) for i in range(2)]
+        for fake in fakes:
+            self.rl._RUNNING[id(fake)] = fake
+        ended = []
+
+        def kill_job(proc, log=None):
+            if proc.pid == fakes[0].pid:
+                raise RuntimeError('boom')
+            ended.append(proc.pid)
+
+        buf = io.StringIO()
+        with patch.object(self.rl, 'kill_job', side_effect=kill_job), \
+             patch.object(self.rl.os, '_exit',
+                          side_effect=SystemExit) as exit_:
+            with contextlib.redirect_stderr(buf):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
+        self.assertEqual(ended, [fakes[1].pid])
+        exit_.assert_called_once_with(143)
+        self.assertIn(str(fakes[0].pid), buf.getvalue())
+
+    def test_a_grandchild_that_ignores_sigterm_is_killed_with_its_group(self):
+        """kill_job must reap the whole GROUP, not just the launcher: this
+        child backgrounds a grandchild that ignores SIGTERM (mimicking a
+        wedged mu2e outliving its launcher), which the launcher-only
+        `proc.wait()` used to treat as done."""
+        with patch.object(self.rl, 'KILL_GRACE_SECONDS', 1):
+            job = subprocess.Popen(
+                ['sh', '-c',
+                 '(trap "" TERM; echo ready; exec sleep 60) & sleep 60'],
+                stdout=subprocess.PIPE, start_new_session=True)
+
+            def _nuke_group():
+                # Safety net: if the assertion below fails, the
+                # TERM-ignoring grandchild would otherwise outlive this
+                # test. Tolerates the group already being gone.
+                try:
+                    os.killpg(job.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self.addCleanup(_nuke_group)
+            self.addCleanup(job.stdout.close)
+            self.addCleanup(job.wait)
+            self.addCleanup(lambda: job.poll() is None and job.kill())
+            self.assertEqual(job.stdout.readline().strip(), b'ready')
+            self.rl.kill_job(job)
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(job.pid, 0)
+
+    def test_a_stderr_failure_does_not_stop_kill_job_or_the_exit(self):
+        """The banner write (and kill_job's own diagnostics) must never
+        run ahead of a job actually being signalled: a closed fd or an
+        OSError from a detached driver's log (EPIPE/EIO/EDQUOT) must not
+        let `_terminate` reach os._exit having skipped a job."""
+        fakes = [SimpleNamespace(pid=2 ** 30 + i) for i in range(2)]
+
+        class Unwritable:
+            def write(self, text):
+                raise OSError(errno.EIO, 'Input/output error')
+
+        for broken_stderr in (Unwritable(), None):
+            with self.subTest(stderr=broken_stderr):
+                self.rl._RUNNING.clear()
+                for fake in fakes:
+                    self.rl._RUNNING[id(fake)] = fake
+                ended = []
+                try:
+                    with patch.object(
+                            self.rl, 'kill_job',
+                            side_effect=lambda proc, log=None:
+                            ended.append(proc.pid)), \
+                         patch.object(self.rl.os, '_exit',
+                                      side_effect=SystemExit) as exit_, \
+                         patch.object(self.rl.sys, 'stderr', broken_stderr):
+                        with self.assertRaises(SystemExit):
+                            self.rl._terminate(signal.SIGTERM, None)
+                finally:
+                    # _terminate's real _RUNNING_LOCK is deliberately never
+                    # released (the real process would have exited).
+                    # Release it whatever happened above -- a regressed
+                    # handler raising something other than SystemExit
+                    # included -- or the next sub-iteration's _terminate
+                    # would block forever on its own .acquire() and hang
+                    # the suite instead of failing this test.
+                    if self.rl._RUNNING_LOCK.locked():
+                        self.rl._RUNNING_LOCK.release()
+                self.assertEqual(sorted(ended), sorted(f.pid for f in fakes))
+                exit_.assert_called_once_with(143)
+
+    def test_the_one_child_resets_sigterm_to_default(self):
+        """A job forked while the driver's own handler had SIG_IGN set
+        (mid-_terminate) would otherwise inherit that disposition, and
+        its mu2e would then ignore a graceful SIGTERM entirely, dying
+        only via SIGKILL after the full grace period."""
+        for sig in self.STOP:
+            signal.signal(sig, signal.SIG_IGN)      # restored by setUp
+        seen = {}
+
+        def run_one(index, args):
+            seen.update({sig: signal.getsignal(sig) for sig in self.STOP})
+            return 0
+        with patch.object(self.rl, 'run_one', side_effect=run_one):
+            self.rl.main(['--jobdef', '/x/cnf.tar', '--one', '0'])
+        self.assertEqual(seen, {sig: signal.SIG_DFL for sig in self.STOP})
+
+    def test_sig_ign_is_set_before_the_lock_is_acquired(self):
+        """Pins the ordering IMPORTANT-1's fix depends on: a second
+        SIGTERM must find SIG_IGN already in effect, not race it against
+        the lock acquisition."""
+        seen = {}
+
+        stop = self.STOP
+
+        class FakeLock:
+            def acquire(self):
+                seen.update({sig: signal.getsignal(sig) for sig in stop})
+                return True
+
+            def locked(self):
+                return True
+
+        with patch.object(self.rl, '_RUNNING_LOCK', FakeLock()):
+            with patch.object(self.rl.os, '_exit', side_effect=SystemExit):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        self.rl._terminate(signal.SIGINT, None)
+        self.assertEqual(seen, {sig: signal.SIG_IGN for sig in self.STOP})
+
+    def test_a_job_is_registered_while_it_runs_and_removed_after(self):
+        seen = []
+        locked_during_popen = []
+
+        def popen(argv, **kwargs):
+            # Popen must run under _RUNNING_LOCK (see _run_child): that is
+            # what closes the race window _terminate's SIGTERM pre-pass
+            # depends on.
+            locked_during_popen.append(self.rl._RUNNING_LOCK.locked())
+            proc = SimpleNamespace(pid=2 ** 30, returncode=0)
+            proc.wait = lambda timeout=None: (
+                seen.append(id(proc) in self.rl._RUNNING) or 0)
+            return proc
+        tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+        args = _runlocal_args(jobdef=tar, workdir=_mkdtemp())
+        with patch.object(self.rl.subprocess, 'Popen', side_effect=popen):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.rl.drive(args)
+        self.assertEqual(locked_during_popen, [True])
+        self.assertEqual(seen, [True])
+        self.assertEqual(self.rl._RUNNING, {})
+
+    def _main_seeing_handlers(self):
+        seen = {}
+
+        def drive(args):
+            seen.update({sig: signal.getsignal(sig) for sig in self.STOP})
+            return 0
+        with patch.object(self.rl, 'drive', side_effect=drive), \
+             patch.object(self.rl, 'resolve_jobdef',
+                          side_effect=lambda jobdef, workdir: jobdef):
+            self.rl.main(['--jobdef', '/x/cnf.tar', '--workdir', _mkdtemp()])
+        return seen
+
+    def test_the_driver_installs_the_handler_and_restores_the_old_one(self):
+        before = {}
+        for sig in self.STOP:          # a distinct handler per signal
+            before[sig] = lambda signum, frame: None
+            signal.signal(sig, before[sig])           # restored by setUp
+        seen = self._main_seeing_handlers()
+        self.assertEqual(seen, {sig: self.rl._terminate for sig in self.STOP})
+        for sig in self.STOP:
+            self.assertIs(signal.getsignal(sig), before[sig], sig)
+
+    def test_an_inherited_ignore_of_sigint_or_sighup_is_kept(self):
+        """`nohup runlocal ... &` ignores SIGHUP (and a shell's background
+        job SIGINT) on purpose: the run is meant to outlive the terminal,
+        and a driver that survives orphans nothing."""
+        for sig in (signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, signal.SIG_IGN)        # restored by setUp
+        seen = self._main_seeing_handlers()
+        self.assertIs(seen[signal.SIGTERM], self.rl._terminate)
+        self.assertIs(seen[signal.SIGINT], signal.SIG_IGN)
+        self.assertIs(seen[signal.SIGHUP], signal.SIG_IGN)
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+
+    def test_a_group_already_gone_is_reaped_without_a_log_line(self):
+        """A job that ended after _terminate's SIGTERM pre-pass has no
+        group left: ESRCH on the first signal is not a failure."""
+        waits = []
+        fake = SimpleNamespace(pid=2 ** 30,       # above any pid_max
+                               wait=lambda timeout=None: waits.append(timeout))
+        log = io.StringIO()
+        self.assertIsNone(self.rl.kill_job(fake, log))
+        self.assertEqual(log.getvalue(), '')
+        self.assertEqual(waits, [None])
+
+    def test_any_other_signal_failure_is_still_logged(self):
+        waits = []
+        fake = SimpleNamespace(pid=2 ** 30,
+                               wait=lambda timeout=None: waits.append(timeout))
+        log = io.StringIO()
+        with patch.object(self.rl.os, 'killpg',
+                          side_effect=PermissionError(errno.EPERM, 'no')):
+            self.rl.kill_job(fake, log)
+        self.assertIn('could not signal job group', log.getvalue())
+        self.assertEqual(waits, [None])
+
+
+class TestJson2jobdefOnceLocal(unittest.TestCase):
+    """`json2jobdef --once --local`: the same refusals, build and receipt
+    as --once, then runlocal started detached on this node instead of a
+    jobsub_submit. Returns with the receipt `running`."""
+
+    NAME = 'cnf.alice.CeEndpoint.T1.0'
+
+    def setUp(self):
+        from utils import json2jobdef, run_receipt
+        self.j, self.rr = json2jobdef, run_receipt
+        self.root = _mkdtemp()
+        self.run_dir = os.path.join(self.root, self.NAME)
+        self.cwd = os.getcwd()
+        self.addCleanup(os.chdir, self.cwd)
+        self.calls = {}
+
+    def _config(self, **over):
+        c = {'desc': 'CeEndpoint', 'dsconf': 'T1', 'owner': 'alice',
+             'fcl': 'x.fcl', 'njobs': 3, 'events': 10, 'run': 1,
+             'inloc': 'tape', 'outloc': {'*.art': 'outstage'},
+             'simjob_setup': '/cvmfs/x/setup.sh'}
+        c.update(over)
+        return c
+
+    def _entry(self, config):
+        entry = {'tarball': self.NAME + '.tar', 'njobs': config['njobs'],
+                 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+        if config.get('code'):
+            entry['code'] = config['code']
+        return entry
+
+    def _launch(self, argv, **kwargs):
+        self.calls['argv'] = argv
+        self.calls['kwargs'] = kwargs
+        self.calls['state_at_launch'] = self.rr.read(
+            self.root, self.NAME)['state']
+        return SimpleNamespace(pid=4242)
+
+    def _run(self, config, launch=None, parallel=None):
+        def build(cfg, **kwargs):
+            self.calls['build_kwargs'] = kwargs
+
+        def submit(*args, **kwargs):
+            raise AssertionError('--local must never submit')
+        with patch.object(self.j, 'build_jobdesc', side_effect=self._entry), \
+             patch.object(self.j, 'prodtools_entry_keys',
+                          side_effect=AssertionError('no worker bundle')), \
+             patch('socket.getfqdn', return_value='node.fnal.gov'), \
+             patch.object(self.j.getpass, 'getuser', return_value='alice'):
+            return self.j.submit_once(
+                config, json_path='/j.json', root=self.root, build=build,
+                submit=submit, local=True, parallel=parallel,
+                launch=launch or self._launch)
+
+    def test_local_starts_runlocal_detached_and_records_it(self):
+        receipt = self._run(self._config())
+        summary = os.path.join(self.run_dir, 'summary.json')
+        log = os.path.join(self.run_dir, 'runlocal.log')
+        self.assertEqual(self.calls['state_at_launch'], 'starting')
+        self.assertFalse(self.calls['build_kwargs'].get('pushout'))
+        argv = self.calls['argv']
+        self.assertEqual(argv[0], sys.executable)
+        # -u: the log is a file, so a buffered driver would show no
+        # progress during the run and lose it on SIGKILL or OOM.
+        self.assertEqual(argv[1], '-u')
+        self.assertTrue(argv[2].endswith(os.path.join('utils', 'runlocal.py')))
+        self.assertEqual(argv[3:], [
+            '--jobdef', os.path.join(self.run_dir, self.NAME + '.tar'),
+            '--inloc', 'tape', '--first', '0', '--num', '3',
+            '--parallel', '4', '--workdir', self.run_dir, '--json', summary])
+        kwargs = self.calls['kwargs']
+        self.assertEqual(kwargs['cwd'], self.run_dir)
+        self.assertTrue(kwargs['start_new_session'])
+        self.assertIs(kwargs['stdin'], subprocess.DEVNULL)
+        self.assertEqual(kwargs['stdout'].name, log)
+        self.assertIs(kwargs['stderr'], subprocess.STDOUT)
+        self.assertEqual(receipt['state'], 'running')
+        for key, want in (('executor', 'local'), ('host', 'node.fnal.gov'),
+                          ('pid', 4242), ('summary', summary), ('log', log),
+                          ('njobs', 3), ('parallel', 4)):
+            self.assertEqual(receipt[key], want, key)
+        self.assertIn('started_utc', receipt)
+        self.assertEqual(receipt, self.rr.read(self.root, self.NAME))
+
+    def test_a_code_entry_hands_runlocal_the_tarball(self):
+        """runlocal unpacks it through the same code cache."""
+        config = self._config(code='/x/Code.tar.bz2')
+        del config['simjob_setup']
+        self._run(config)
+        self.assertEqual(self.calls['argv'][-2:], ['--code', '/x/Code.tar.bz2'])
+
+    def test_parallel_is_forwarded(self):
+        receipt = self._run(self._config(), parallel=2)
+        argv = self.calls['argv']
+        self.assertEqual(argv[argv.index('--parallel') + 1], '2')
+        self.assertEqual(receipt['parallel'], 2)
+
+    def test_a_launch_failure_is_recorded_as_failed(self):
+        def broken(argv, **kwargs):
+            raise OSError('no such interpreter')
+        with self.assertRaises(SystemExit):
+            self._run(self._config(), launch=broken)
+        got = self.rr.read(self.root, self.NAME)
+        self.assertEqual(got['state'], 'failed')
+        self.assertIn('no such interpreter', got['error'])
+
+    def test_the_once_refusals_still_apply(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(outloc={'*.art': 'scratch'}))
+        self.assertIn('outstage', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_g4bl_entry_is_refused_before_anything_exists(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(runner='g4bl'))
+        self.assertIn('g4bl', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_windowed_entry_is_refused_before_anything_exists(self):
+        """firstjob offsets indices on the grid (jobdesc.firstjob_of); a
+        local run always starts at 0, so a nonzero firstjob would run the
+        wrong cnf indices -- different seeds, duplicated physics."""
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(firstjob=5))
+        self.assertIn('firstjob', str(ctx.exception))
+        # Nothing is built yet when this refuses: the way out says to
+        # build the cnf first, not to use one that does not exist.
+        self.assertIn('build the cnf with json2jobdef', str(ctx.exception))
+        self.assertIn('runlocal --first 5 --num 3', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_used_name_points_at_a_possibly_running_local_run(self):
+        self._run(self._config())
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config())
+        self.assertIn('runlocal', str(ctx.exception))
+
+    def test_a_real_child_owns_its_session_and_writes_to_the_log(self):
+        """The MCP runner captures stdout/stderr and waits for EOF, so a
+        child holding either would block the tool for the whole run."""
+        def real(argv, **kwargs):
+            self.calls['proc'] = subprocess.Popen(
+                [sys.executable, '-c',
+                 'import os, sys; print("from the child", os.getsid(0)); '
+                 'sys.stdout.flush()'], **kwargs)
+            self.addCleanup(self.calls['proc'].wait)
+            return self.calls['proc']
+        receipt = self._run(self._config(), launch=real)
+        proc = self.calls['proc']
+        proc.wait(timeout=30)
+        with open(receipt['log']) as fh:
+            text = fh.read()
+        self.assertIn('from the child', text)
+        self.assertEqual(int(text.split()[-1]), proc.pid)   # its own session
+
+    def test_the_command_line_rules(self):
+        base = ['--json', '/nope.json', '--desc', 'a', '--dsconf', 'b']
+        for extra, want in (
+                (['--local'], '--local requires --once'),
+                (['--once', '--parallel', '2'], '--parallel requires --local'),
+                (['--once', '--local', '--parallel', '0'], 'at least 1'),
+                (['--once', '--local', '--prodtools-dir', '/x'],
+                 '--prodtools-dir')):
+            with self.assertRaises(SystemExit, msg=extra) as ctx:
+                self.j.main(base + extra)
+            self.assertIn(want, str(ctx.exception))
+
+    def test_parallel_above_the_cap_is_refused(self):
+        """Each job is ~2.5 GB on a shared interactive node."""
+        self.assertEqual(self.j.MAX_LOCAL_PARALLEL, 16)
+        base = ['--json', '/nope.json', '--desc', 'a', '--dsconf', 'b',
+                '--once', '--local', '--parallel']
+        with self.assertRaises(SystemExit) as ctx:
+            self.j.main(base + ['17'])
+        self.assertIn('16', str(ctx.exception))
+        self.assertIn('grid', str(ctx.exception))
+        self.assertIn('runlocal', str(ctx.exception))
+        # 16 itself passes the rule and gets as far as reading the json.
+        with patch.object(self.j, 'load_json',
+                          side_effect=RuntimeError('past the rules')):
+            with self.assertRaises(RuntimeError):
+                self.j.main(base + ['16'])
+
+    def test_main_exits_0_when_the_run_is_running(self):
+        """A started local run is success for the CLI, as a submitted
+        grid run is; the RECEIPT line is what the write tool reads."""
+        config = self._config()
+        for state, code in (('running', 0), ('failed', 1)):
+            with self.subTest(state=state):
+                receipt = {'name': self.NAME, 'state': state,
+                           'entry': {'big': 'thing'}}
+                out = io.StringIO()
+                with patch.object(self.j, 'load_json', return_value=[config]), \
+                     patch.object(self.j, 'find_json_entry',
+                                  return_value=dict(config)), \
+                     patch.object(self.j, 'submit_once',
+                                  return_value=receipt) as once, \
+                     patch.object(self.rr, 'runs_root',
+                                  return_value=self.root):
+                    with contextlib.redirect_stdout(out):
+                        with self.assertRaises(SystemExit) as ctx:
+                            self.j.main(['--json', '/j.json',
+                                         '--desc', 'CeEndpoint',
+                                         '--dsconf', 'T1', '--once',
+                                         '--local', '--parallel', '2'])
+                self.assertEqual(ctx.exception.code, code)
+                self.assertEqual(once.call_args[1]['local'], True)
+                self.assertEqual(once.call_args[1]['parallel'], 2)
+                self.assertIn(
+                    'RECEIPT ' + os.path.join(self.root, self.NAME,
+                                              self.rr.RECEIPT),
+                    out.getvalue().splitlines())
+                self.assertNotIn('big', out.getvalue())
+
+
+class TestRunLocalTool(unittest.TestCase):
+    """run_local: `json2jobdef --once --local` through the write server.
+    Self only; returns as soon as runlocal has started."""
+
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        self.tools = tools
+        self.tmp = _mkdtemp()
+        self.simjob_setup = (
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/C/setup.sh')
+        self.json_path = os.path.join(self.tmp, 'entries.json')
+        with open(self.json_path, 'w') as f:
+            json.dump([{'desc': 'D', 'dsconf': 'C',
+                        'simjob_setup': self.simjob_setup, 'fcl': 'x.fcl',
+                        'outloc': {'*.art': 'outstage'}}], f)
+        self.receipt = os.path.join(self.tmp, 'receipt.json')
+        with open(self.receipt, 'w') as f:
+            json.dump({'name': 'cnf.alice.D.C.0', 'state': 'running',
+                       'executor': 'local', 'host': 'node.fnal.gov',
+                       'pid': 4242, 'entry': {'big': 'thing'}}, f)
+
+    def _call(self, cli, **kwargs):
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value=cli) as run:
+            out = self.tools.run_local(self.json_path, 'D', 'C',
+                                       kwargs.pop('run_as', 'self'), **kwargs)
+        return out, run
+
+    def _ok(self):
+        return {'rc': 0, 'stderr': '',
+                'stdout': f'noise\nRECEIPT {self.receipt}\n'}
+
+    def test_runs_json2jobdef_once_local_and_returns_the_receipt(self):
+        out, run = self._call(self._ok())
+        self.assertEqual(run.call_args[0][0], [
+            'bin/json2jobdef', '--json', self.json_path, '--desc', 'D',
+            '--dsconf', 'C', '--once', '--local'])
+        self.assertEqual(run.call_args[0][1], 'self')
+        self.assertEqual(run.call_args[1]['simjob_setup'], self.simjob_setup)
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(out['pid'], 4242)
+        self.assertEqual(out['receipt'], self.receipt)
+        self.assertNotIn('entry', out)
+
+    def test_parallel_is_forwarded(self):
+        _, run = self._call(self._ok(), parallel=2)
+        self.assertEqual(run.call_args[0][0][-2:], ['--parallel', '2'])
+
+    def test_mu2epro_is_refused(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.run_local(self.json_path, 'D', 'C', 'mu2epro')
+        self.assertIn('self', str(ctx.exception))
+        run.assert_not_called()
+
+    def test_a_code_entry_sources_the_unpacked_setup(self):
+        from utils import code_cache
+        root = os.path.join(self.tmp, 'cache')
+        code = _make_code_tarball(os.path.join(self.tmp, 'Code.tar.bz2'))
+        with open(self.json_path, 'w') as f:
+            json.dump([{'desc': 'D', 'dsconf': 'C', 'code': code,
+                        'fcl': 'x.fcl', 'outloc': {'*.art': 'outstage'}}], f)
+        with patch.object(code_cache, 'cache_root', return_value=root):
+            _, run = self._call(self._ok())
+        with open(code, 'rb') as fh:
+            sha = hashlib.sha256(fh.read()).hexdigest()
+        self.assertEqual(run.call_args[1]['simjob_setup'],
+                         os.path.join(root, sha, 'Code', 'setup.sh'))
+
+    def test_a_failure_reports_both_streams(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._call({'rc': 1, 'stdout': 'built nothing',
+                        'stderr': 'a local run may still be going: look '
+                                  'for a runlocal process'})
+        self.assertIn('runlocal process', str(ctx.exception))
+        self.assertIn('built nothing', str(ctx.exception))
+
+    def test_success_without_a_receipt_line_is_an_error_not_a_guess(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._call({'rc': 0, 'stdout': 'all good', 'stderr': ''})
+        self.assertIn('RECEIPT', str(ctx.exception))
+
+    def test_it_is_registered(self):
+        from prodtools_mcp_write import server
+        self.assertIn('run_local', server.TOOL_NAMES)
+
+
+class TestMcpRunStatusLocal(unittest.TestCase):
+    """run_status on a `--once --local` run: runlocal's own summary once
+    it wrote one, else whether its process is still there. Never asks
+    condor, never rewrites the receipt."""
+
+    NAME = 'cnf.alice.CeEndpoint.T1.0'
+
+    def setUp(self):
+        from prodtools_mcp import runtime
+        from prodtools_mcp.tools import runs
+        from utils import run_receipt
+        self.runs, self.rr = runs, run_receipt
+        self.addCleanup(runtime.set_shared, False)
+        self.root = _mkdtemp()
+        self.dir = run_receipt.reserve(self.root, self.NAME,
+                                       {'tarball': self.NAME + '.tar'})
+        self.summary = os.path.join(self.dir, 'summary.json')
+        self.log = os.path.join(self.dir, 'runlocal.log')
+
+    def _running(self):
+        self.rr.update(self.dir, state='running', executor='local',
+                       host='node.fnal.gov', pid=4242, njobs=3, parallel=2,
+                       summary=self.summary, log=self.log)
+
+    def _output(self, index):
+        return os.path.join(self.dir, f'job_{index:06d}',
+                            f'dts.alice.CeEndpoint.T1.001430_{index:08d}.art')
+
+    def _write_summary(self, rcs):
+        jobs = [{'index': i, 'rc': rc, 'timed_out': rc == 124,
+                 'seconds': 1.0,
+                 'dir': os.path.join(self.dir, f'job_{i:06d}'),
+                 'log': os.path.join(self.dir, f'job_{i:06d}', 'stdout.log'),
+                 'outputs': [self._output(i)]}
+                for i, rc in sorted(rcs.items())]
+        with open(self.summary, 'w') as fh:
+            json.dump({'jobdef': 'x', 'workdir': self.dir, 'jobs': jobs,
+                       'ok': sum(1 for j in jobs if j['rc'] == 0),
+                       'failed': [j['index'] for j in jobs if j['rc'] != 0]},
+                      fh)
+
+    def _status(self, alive=True, host='node.fnal.gov'):
+        seen = {}
+
+        def alive_fn(pid, path):
+            seen['alive'] = (pid, path)
+            return alive
+
+        def condor(*args, **kwargs):
+            raise AssertionError('a local run never asks condor')
+        out = self.runs.run_status(
+            self.NAME, user='alice', runs_root=self.root,
+            clusters_fn=condor, codes_fn=condor,
+            alive_fn=alive_fn, host_fn=lambda: host)
+        return out, seen
+
+    def test_a_summary_with_every_job_ok_is_done_with_the_output_paths(self):
+        self._running()
+        self._write_summary({0: 0, 1: 0, 2: 0})
+        out, seen = self._status()
+        self.assertEqual(out['state'], 'done')
+        self.assertEqual(out['executor'], 'local')
+        self.assertEqual(out['jobs'], {'expected': 3, 'ok': 3,
+                                       'failed': [], 'unknown': []})
+        self.assertEqual(out['outputs'][2], [self._output(2)])
+        self.assertNotIn('queue', out)
+        self.assertEqual(seen, {})
+
+    def test_a_failed_or_timed_out_job_is_short_with_its_exit_code(self):
+        self._running()
+        self._write_summary({0: 0, 1: 124, 2: 3})
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'short')
+        self.assertEqual(out['jobs']['failed'], [1, 2])
+        self.assertEqual(out['jobs']['exit_codes'], {1: 124, 2: 3})
+        self.assertEqual(sorted(out['outputs']), [0])
+
+    def test_an_index_missing_from_the_summary_is_unknown(self):
+        self._running()
+        self._write_summary({0: 0, 2: 0})
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertEqual(out['jobs']['unknown'], [1])
+        self.assertIn('summary', out['note'])
+
+    def test_an_unreadable_summary_is_unknown_naming_the_path(self):
+        self._running()
+        with open(self.summary, 'w') as fh:
+            fh.write('{not json')
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn(self.summary, out['note'])
+
+    def test_an_index_outside_njobs_is_unknown_naming_the_index(self):
+        self._running()
+        self._write_summary({0: 0, 1: 0, 2: 0, 3: 0})
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('3', out['note'])
+
+    def test_a_summary_written_as_the_process_exits_is_read_not_failed(self):
+        """runlocal can write its summary and exit between the summary
+        read and the /proc read; `failed` is final to a caller, so the
+        summary is read again first."""
+        self._running()
+
+        def alive_fn(pid, path):
+            self._write_summary({0: 0, 1: 0, 2: 0})   # ...then it exits
+            return False
+        out = self.runs.run_status(
+            self.NAME, user='alice', runs_root=self.root,
+            alive_fn=alive_fn, host_fn=lambda: 'node.fnal.gov')
+        self.assertEqual(out['state'], 'done')
+        self.assertEqual(out['jobs']['ok'], 3)
+        self.assertNotIn('note', out)
+
+    def _malformed(self, text):
+        self._running()
+        with open(self.summary, 'w') as fh:
+            fh.write(text)
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown', text)
+        self.assertIn(self.summary, out['note'])
+        self.assertIn('malformed', out['note'])
+        return out
+
+    def test_a_summary_of_the_wrong_shape_is_unknown_not_an_error(self):
+        job = {'index': 0, 'rc': 0, 'outputs': []}
+        for text in ('[]', '{}', '{"jobs": {}, "ok": 0, "failed": []}',
+                     '{"jobs": [], "failed": []}',
+                     '{"jobs": [], "ok": 0, "failed": 3}',
+                     json.dumps({'jobs': [7], 'ok': 0, 'failed': []}),
+                     json.dumps({'jobs': [{'index': [0], 'rc': 0,
+                                           'outputs': []}],
+                                 'ok': 1, 'failed': []})):
+            with self.subTest(text=text):
+                self._malformed(text)
+        for key in ('index', 'rc', 'outputs'):
+            with self.subTest(missing=key):
+                bad = {k: v for k, v in job.items() if k != key}
+                self._malformed(json.dumps(
+                    {'jobs': [bad], 'ok': 1, 'failed': []}))
+
+    def test_no_summary_and_a_live_process_is_running(self):
+        self._running()
+        out, seen = self._status(alive=True)
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(seen['alive'], (4242, self.summary))
+
+    def test_no_summary_and_no_process_is_failed_pointing_at_the_log(self):
+        self._running()
+        out, _ = self._status(alive=False)
+        self.assertEqual(out['state'], 'failed')
+        self.assertIn('pid 4242', out['note'])
+        self.assertIn(self.log, out['note'])
+
+    def test_no_summary_from_another_host_is_unknown_naming_the_host(self):
+        self._running()
+        out, seen = self._status(host='other.fnal.gov')
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('node.fnal.gov', out['note'])
+        self.assertNotIn('alive', seen)
+
+    def test_a_process_table_that_will_not_say_is_unknown(self):
+        self._running()
+        out, _ = self._status(alive=None)
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('/proc/4242', out['note'])
+
+    def test_a_starting_receipt_is_returned_as_it_is(self):
+        self.rr.update(self.dir, state='starting', executor='local')
+        out, seen = self._status()
+        self.assertEqual(out['state'], 'starting')
+        self.assertEqual(seen, {})
+
+    def test_the_default_liveness_check_reads_the_command_line(self):
+        """kill(pid, 0) would answer for any process that reused the pid;
+        runlocal's command line names this run's summary path."""
+        proc = subprocess.Popen(
+            [sys.executable, '-c',
+             'import time; print("ready", flush=True); time.sleep(60)',
+             '--json', self.summary],
+            stdout=subprocess.PIPE)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.stdout.readline()                 # exec'd: cmdline is final
+        self.assertTrue(self.runs._default_alive_fn(proc.pid, self.summary))
+        self.assertFalse(self.runs._default_alive_fn(
+            proc.pid, self.summary + '.other'))
+        proc.kill()
+        proc.wait()
+        self.assertFalse(self.runs._default_alive_fn(proc.pid, self.summary))
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

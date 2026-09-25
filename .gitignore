@@ -128,3 +128,6 @@ poms_data.db
 # famtree per-dataset reports and listNewDatasets output (generated)
 /*.mu2e.*.md
 /latest_datasets.html
+
+# Local design notes and plans (superpowers skills): not tracked
+docs/superpowers/
