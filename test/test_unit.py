@@ -19918,5 +19918,86 @@ class TestCodeCache(unittest.TestCase):
                          os.path.dirname(run_receipt.runs_root('alice')))
 
 
+class TestCodeEntryPushParams(unittest.TestCase):
+    """A code-tarball entry (`code`, no simjob_setup) builds in the
+    tarball's own environment: submit_once sources the unpacked
+    Code/setup.sh where it would source a Musing's setup.sh (the two are
+    the same script). push_cnf refuses: a production cnf needs its code
+    tarball on a durable path mu2epro can read first."""
+
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        from utils import code_cache
+        self.tools = tools
+        self.tmp = _mkdtemp()
+        self.root = os.path.join(self.tmp, 'cache')
+        patcher = patch.object(code_cache, 'cache_root',
+                               return_value=self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.code = _make_code_tarball(os.path.join(self.tmp, 'Code.tar.bz2'))
+        with open(self.code, 'rb') as fh:
+            self.setup = os.path.join(
+                self.root, hashlib.sha256(fh.read()).hexdigest(),
+                'Code', 'setup.sh')
+        self.json_path = self._write({'code': self.code})
+
+    def _write(self, keys, name='entries.json'):
+        path = os.path.join(self.tmp, name)
+        entry = {'desc': 'D', 'dsconf': 'C', 'fcl': 'x.fcl',
+                 'outloc': {'*.art': 'outstage'}}
+        entry.update(keys)
+        with open(path, 'w') as fh:
+            json.dump([entry], fh)
+        return path
+
+    def test_push_cnf_params_refuse_a_code_entry_and_name_the_way(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.tools._select_push_params(self.json_path, 'D', 'C')
+        self.assertIn('submit_once', str(ctx.exception))
+        self.assertIn('run_local', str(ctx.exception))
+        self.assertFalse(os.path.exists(self.root))     # nothing unpacked
+
+    def test_allow_code_returns_the_unpacked_setup_script(self):
+        setup, desc = self.tools._select_push_params(
+            self.json_path, 'D', 'C', allow_code=True)
+        self.assertEqual(setup, self.setup)
+        self.assertTrue(os.path.isfile(setup))
+        self.assertEqual(desc, 'D')
+
+    def test_an_unusable_tarball_is_refused_naming_the_entry(self):
+        path = self._write(
+            {'code': os.path.join(self.tmp, 'gone.tar.bz2')}, 'gone.json')
+        with self.assertRaises(ValueError) as ctx:
+            self.tools._select_push_params(path, 'D', 'C', allow_code=True)
+        self.assertIn("desc='D'", str(ctx.exception))
+        self.assertIn('does not exist', str(ctx.exception))
+
+    def test_a_musing_entry_is_unchanged(self):
+        musing = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/C/setup.sh'
+        path = self._write({'simjob_setup': musing}, 'musing.json')
+        for allow in (False, True):
+            self.assertEqual(self.tools._select_push_params(
+                path, 'D', 'C', allow_code=allow)[0], musing)
+        self.assertFalse(os.path.exists(self.root))
+
+    def test_submit_once_sources_the_unpacked_setup(self):
+        receipt = os.path.join(self.tmp, 'receipt.json')
+        with open(receipt, 'w') as fh:
+            json.dump({'name': 'cnf.alice.D.C.0', 'state': 'submitted'}, fh)
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stderr': '',
+                                 'stdout': f'RECEIPT {receipt}\n'}) as run:
+            self.tools.submit_once(self.json_path, 'D', 'C', 'self')
+        self.assertEqual(run.call_args[1]['simjob_setup'], self.setup)
+
+    def test_push_cnf_refuses_before_running_anything(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.push_cnf(self.json_path, 'D', 'C', 1000, 'self')
+        self.assertIn('submit_once', str(ctx.exception))
+        run.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -110,7 +110,9 @@ ledger, no recovery, `run_as="self"` only. `run_status(name, user=)` on
 the read-only server is the only thing that can see such a run; neither
 `campaign_status` nor any dataset tool can. `utils/submit.py` enforces
 the line both ways: ledger-tracked if and only if the outputs are
-declared.
+declared. It also takes code-tarball entries (`code`, no `simjob_setup`),
+built in the tarball's own environment (`utils/code_cache.py`);
+`push_cnf` refuses them.
 
 The read-only `prodtools` server still performs NO writes. Keep it that
 way — that claim is why its tools are called without deliberation.

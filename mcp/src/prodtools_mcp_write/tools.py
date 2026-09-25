@@ -32,6 +32,7 @@ instantiation, which this module never does.
 """
 import getpass
 import json as _json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -42,9 +43,10 @@ from utils.config_utils import get_tarball_desc
 from utils.job_common import Mu2eName
 from utils.json2jobdef import determine_job_type, load_json, find_json_entry
 from utils import push_file as _push_file
+from utils import code_cache
 
 
-def _select_push_params(json_path, desc, dsconf):
+def _select_push_params(json_path, desc, dsconf, allow_code=False):
     """Read `json_path` and return `(simjob_setup, tarball_desc)` for
     the entry matching `desc` + `dsconf`, using json2jobdef's own
     loader and selector so this can never disagree with what a real
@@ -66,6 +68,11 @@ def _select_push_params(json_path, desc, dsconf):
     refusal behaviour of `.claude/commands/mu2e-run.md`, which derives
     a command's Musing from the same `simjob_setup` field rather than
     accept one as an argument.
+
+    A code-tarball entry (`code`, no `simjob_setup`) has its Musing
+    INSIDE the tarball: with `allow_code` (submit_once, run_local) the
+    returned setup script is that tarball's unpacked Code/setup.sh (see
+    _code_setup); without it (push_cnf) the entry is refused.
     """
     path = Path(json_path)
     if not path.is_file():
@@ -88,6 +95,8 @@ def _select_push_params(json_path, desc, dsconf):
     # simjob_setup None makes _musing_clause('') a no-op.
     is_g4bl = determine_job_type(entry) == 'g4bl'
     simjob_setup = None if is_g4bl else entry.get('simjob_setup')
+    if not is_g4bl and not simjob_setup and entry.get('code'):
+        simjob_setup = _code_setup(entry, desc, dsconf, json_path, allow_code)
     if not is_g4bl and not simjob_setup:
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
@@ -95,6 +104,35 @@ def _select_push_params(json_path, desc, dsconf):
 
     tarball_desc = get_tarball_desc(entry) or desc
     return simjob_setup, tarball_desc
+
+
+def _code_setup(entry, desc, dsconf, json_path, allow_code):
+    """`Code/setup.sh` of the entry's code tarball, unpacked once into the
+    per-user cache (utils/code_cache).
+
+    A cvmfs Musing's setup.sh and a `muse tarball` Code/setup.sh are the
+    same script (`muse setup $CODE_DIR`, then setup_post.sh), so run_cli
+    sources this exactly as it sources a Musing, and the build sees what
+    the grid worker will: the tarball's own FHiCL and search paths.
+
+    push_cnf refuses (allow_code=False): a production cnf built against a
+    code tarball needs that tarball on a durable path mu2epro can read
+    first, which is a separate decision.
+    """
+    if not allow_code:
+        raise ValueError(
+            f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
+            f"{json_path!r} is a code-tarball entry (`code`, no "
+            f"simjob_setup). Those go through submit_once or run_local "
+            f"only: a production cnf needs its code tarball on a durable "
+            f"path mu2epro can read first.")
+    try:
+        root = code_cache.unpacked(entry['code'])
+    except (ValueError, OSError) as e:
+        raise ValueError(
+            f"entry matching desc={desc!r} dsconf={dsconf!r} in "
+            f"{json_path!r}: cannot use its code tarball: {e}") from e
+    return os.path.join(root, 'Code', 'setup.sh')
 
 
 def _both_streams(result):
@@ -357,6 +395,11 @@ def submit_once(json: str, desc: str, dsconf: str, run_as: str,
 
     `prodtools_dir` ships a checkout's worker code with the jobs, as for
     push_cnf.
+
+    A code-tarball entry (`code`, no `simjob_setup`) builds in the
+    tarball's own environment: it is unpacked once into
+    /exp/mu2e/data/users/<you>/prodtools/code/<sha256>/ and its
+    Code/setup.sh is sourced where a Musing's setup.sh would be.
     """
     if run_as != 'self':
         raise ValueError(
@@ -364,7 +407,8 @@ def submit_once(json: str, desc: str, dsconf: str, run_as: str,
             f"production outputs are declared to SAM, always. Use push_cnf "
             f"+ run_submissions.")
 
-    simjob_setup, _ = _select_push_params(json, desc, dsconf)
+    simjob_setup, _ = _select_push_params(json, desc, dsconf,
+                                          allow_code=True)
     argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
             '--dsconf', dsconf, '--once']
     if prodtools_dir is not None:

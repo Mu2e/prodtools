@@ -161,6 +161,16 @@ call a grid job makes (`bin/push_file`). The basename is the SAM name: a
 six-field Mu2e file name owned by the identity (`mu2e` for mu2epro).
 `location` is tape/disk/scratch. A name already in SAM is refused.
 
+`submit_once(json, desc, dsconf, run_as)` sends one entry to the grid
+once, every output to outstage and nothing to SAM (`json2jobdef
+--once`); the read-only server's `run_status(name, user=)` reports on
+it. It also takes a code-tarball entry (`code`, no `simjob_setup`): the
+tarball is unpacked once into
+`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>/`, and its
+`Code/setup.sh` is sourced where a Musing's `setup.sh` would be. Nothing
+clears that cache: delete a `<sha256>` directory to free it. `push_cnf`
+refuses code-tarball entries.
+
 `push_cnf(..., prodtools_dir=...)` forwards `--prodtools-dir` so a
 checkout can be run before its release lands on cvmfs; it is refused
 for `run_as="mu2epro"` — stricter than json2jobdef's own rule, since
