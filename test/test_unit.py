@@ -20750,6 +20750,21 @@ class TestMcpRunStatusLocal(unittest.TestCase):
         self.assertEqual(out['jobs']['unknown'], [1])
         self.assertIn('summary', out['note'])
 
+    def test_an_unreadable_summary_is_unknown_naming_the_path(self):
+        self._running()
+        with open(self.summary, 'w') as fh:
+            fh.write('{not json')
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn(self.summary, out['note'])
+
+    def test_an_index_outside_njobs_is_unknown_naming_the_index(self):
+        self._running()
+        self._write_summary({0: 0, 1: 0, 2: 0, 3: 0})
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('3', out['note'])
+
     def test_no_summary_and_a_live_process_is_running(self):
         self._running()
         out, seen = self._status(alive=True)

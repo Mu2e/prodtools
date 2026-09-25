@@ -154,6 +154,10 @@ def _local_status(out, receipt, alive_fn, host_fn):
             summary = json.load(fh)
     except FileNotFoundError:
         summary = None
+    except (OSError, ValueError) as exc:
+        out['state'] = 'unknown'
+        out['note'] = f"runlocal's summary {path} cannot be read: {exc}"
+        return out
     if summary is None:
         pid, host = receipt['pid'], receipt.get('host')
         if host != host_fn():
@@ -175,13 +179,20 @@ def _local_status(out, receipt, alive_fn, host_fn):
                            f'summary; see {receipt.get("log")}')
         return out
     seen = {j['index'] for j in summary['jobs']}
+    outside = sorted(i for i in seen if not 0 <= i < njobs)
     summary = dict(summary,
                    unknown=[i for i in range(njobs) if i not in seen])
     failed, unknown = _fill_jobs(out, njobs, summary)
-    if unknown:
+    if unknown or outside:
         out['state'] = 'unknown'
-        out['note'] = (f"runlocal's summary has no record for "
-                       f"{len(unknown)} of {njobs} jobs.")
+        notes = []
+        if unknown:
+            notes.append(f"runlocal's summary has no record for "
+                         f"{len(unknown)} of {njobs} jobs.")
+        if outside:
+            notes.append(f"runlocal's summary lists indices outside "
+                         f"0..{njobs - 1}: {outside[:INDEX_CAP]}")
+        out['note'] = ' '.join(notes)
     else:
         out['state'] = 'short' if failed else 'done'
     return out
