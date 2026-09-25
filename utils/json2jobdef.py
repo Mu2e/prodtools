@@ -930,6 +930,18 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
     if local and determine_job_type(config) == 'g4bl':
         sys.exit("json2jobdef: --local runs art jobs with runlocal; a g4bl "
                  "entry cannot run locally.")
+    if local:
+        try:
+            firstjob = firstjob_of(config)
+        except ValueError as exc:
+            sys.exit(f"json2jobdef: {exc}")
+        if firstjob:
+            sys.exit(
+                f"json2jobdef: --local runs cnf indices 0..njobs-1, but "
+                f"this entry has firstjob={firstjob}. Run that window by "
+                f"hand with `runlocal --first {firstjob} --num "
+                f"{config.get('njobs')}` against the built cnf, or drop "
+                f"firstjob from the entry.")
 
     name = run_receipt.run_name(get_parfile_name(config))
     try:
@@ -1003,7 +1015,8 @@ def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
     from utils.jobdesc import code_of, inloc_of
     from utils.runlocal import DEFAULT_PARALLEL
 
-    parallel = parallel or DEFAULT_PARALLEL
+    if parallel is None:
+        parallel = DEFAULT_PARALLEL
     launch = launch or subprocess.Popen
     run_receipt.update(run_dir, state='starting', executor='local',
                        entry=entry)

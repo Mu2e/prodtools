@@ -20524,6 +20524,15 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
         self.assertIn('g4bl', str(ctx.exception))
         self.assertEqual(os.listdir(self.root), [])
 
+    def test_a_windowed_entry_is_refused_before_anything_exists(self):
+        """firstjob offsets indices on the grid (jobdesc.firstjob_of); a
+        local run always starts at 0, so a nonzero firstjob would run the
+        wrong cnf indices -- different seeds, duplicated physics."""
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(firstjob=5))
+        self.assertIn('firstjob', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
     def test_a_used_name_points_at_a_possibly_running_local_run(self):
         self._run(self._config())
         with self.assertRaises(SystemExit) as ctx:
@@ -20538,6 +20547,7 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
                 [sys.executable, '-c',
                  'import os, sys; print("from the child", os.getsid(0)); '
                  'sys.stdout.flush()'], **kwargs)
+            self.addCleanup(self.calls['proc'].wait)
             return self.calls['proc']
         receipt = self._run(self._config(), launch=real)
         proc = self.calls['proc']
