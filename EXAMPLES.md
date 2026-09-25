@@ -312,7 +312,8 @@ index reads as missing and each tick would recover the whole row,
 forever. Submit it with `json2jobdef --once` (every job in one
 jobsub_submit, a receipt, nothing in SAM), or run it on this node with
 `json2jobdef --once --local`, which starts `runlocal` (section 11)
-detached under the same receipt. Neither pushes anything to SAM.
+detached under the same receipt (`--parallel N` jobs at once, default 4,
+at most 16). Neither pushes anything to SAM.
 
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
@@ -1398,7 +1399,7 @@ Flags: `--jobdef` (required; a path, or a SAM name to fetch once),
 `--json PATH`, `--no-validate` (skip the worker's output read-back,
 section 7), `--code TARBALL` (a `muse tarball` build to run against
 instead of the cnf's own `/cvmfs` setup, unpacked once into
-`<workdir>/code`).
+`<workdir>/code`), `--code-root DIR` (the same, already unpacked).
 
 Job prep is the worker's own `process_jobdef`, so a local run exercises
 the same tarball fetch, inloc handling and `--copy-input` staging the
@@ -1408,9 +1409,14 @@ log and `stdout.log`; the separate directories are required, because
 `process_jobdef` works in cwd and its copy-input branch runs `mkdir
 indir; mv *.art indir/`. A `--code` unpack happens once for the whole
 `runlocal` invocation, before any job starts; each spawned child then
-takes the already-unpacked tree by its own internal `--code-root` flag
-rather than re-extracting several GB per job — that flag is not meant
-to be passed by hand.
+takes the already-unpacked tree by `--code-root` rather than
+re-extracting several GB per job. `--code-root DIR` is also yours to
+pass, instead of `--code`: `DIR` is an already-unpacked tree holding
+`Code/` — prodtools' code cache hands one over
+(`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`, which is how
+`json2jobdef --once --local` runs a code-tarball entry). It is refused
+when empty, when `DIR/Code/setup.sh` is missing, or together with
+`--code`.
 
 `--first`/`--num` are cnf indices directly — `baseSeed = 1 + index` and
 `firstSubRun = index`, with no `firstjob` second index space to confuse
@@ -1436,6 +1442,13 @@ the child orphans it. The job is reported as `rc=124` with
 timed-out job's output files are still listed, but they are whatever
 art had written when it died, so treat them as partial.
 
+Stopping a run: SIGTERM (`kill <pid>`), SIGINT (Ctrl-C) or SIGHUP (the
+terminal closing) to the driver ends every running job's process group
+the same way — SIGTERM, then SIGKILL 10 s later — and the driver exits
+`128+signal` (143, 130, 129) **without** writing the `--json` summary.
+A SIGINT or SIGHUP the driver started with ignored (`nohup`) stays
+ignored.
+
 `--json PATH` writes the machine-readable half of the end-of-run
 summary — note this `--json` is an OUTPUT path, unlike `json2jobdef
 --json`, which reads a config. It says three things the printed table
@@ -1444,8 +1457,8 @@ count), the FAILED indices are **named** (one exit code cannot
 distinguish 7-of-8 from 3-of-8, and a caller measuring a rate must
 divide by the jobs that actually produced output), and it is written
 whatever the exit code. On the reader's side the contract is that a
-MISSING file means `runlocal` died before it could report — never that
-zero jobs ran.
+MISSING file means `runlocal` was stopped or died before it could
+report — never that zero jobs ran.
 
 ### `jobwait`
 

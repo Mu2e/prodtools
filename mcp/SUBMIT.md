@@ -100,6 +100,25 @@ as `<outstage>/<cluster>/<job>/<file>`. A job can only exit 0 after its
 copy landed, so exit codes are the whole answer; `unknown` means the
 grid could not be asked, never that something failed.
 
+To run the same entry on the node you are on instead of the grid, call
+`run_local` with the same arguments and a `dsconf` of its own (a local
+run and a grid run share the name):
+
+    run_local(json="/exp/mu2e/app/users/<user>/my_ceendpoint.json",
+              desc="CeEndpoint", dsconf="MDC2025ax_local1", run_as="self",
+              parallel=4)
+    run_status(name="cnf.<user>.CeEndpoint.MDC2025ax_local1.0", user="<user>")
+
+`run_local` builds the same job package, starts `runlocal` detached and
+returns at once with the same kind of receipt, plus the `host` and `pid`
+it runs under. `run_status` says `running` while it goes, then `done`
+or `short` from runlocal's own summary, and lists each job's files
+under `/exp/mu2e/data/users/<user>/prodtools/runs/<name>/job_NNNNNN/`.
+`kill <pid>` on that host stops it, its jobs included; `run_status`
+then says `failed`. Each job holds about 2.5 GB, so `parallel` is at
+most 16 — and concurrent `run_local` calls add up, since each starts its
+own `runlocal`. Anything bigger belongs on the grid.
+
 What you give up, all of it on purpose: no recovery of failed jobs (make
 a new run under a new `dsconf`), nothing findable through SAM, no
 campaign and no ticks, at most 10000 jobs, never as production. The
@@ -137,7 +156,9 @@ The files are then in `nts.<user>.G4blSmoke.MyTest001.root`.
 - **`json` must be an absolute path.**
 - **A `desc` + `dsconf` pair is used once.** It names the job package in
   SAM, and a SAM name is never reused — not even after a failed attempt.
-  Pick a new `dsconf`. The same holds for `submit_once`, per user.
+  Pick a new `dsconf`. The same holds for `submit_once` and
+  `run_local`, per user and across the two: a local run and a grid run
+  share the name.
 - **The jobs run the CVMFS release, not your clone.** Whatever
   `readlink /cvmfs/mu2e.opensciencegrid.org/bin/prodtools/current` names
   is the worker code, and it has to be **v3.3.4 or newer**: v3.3.3 and

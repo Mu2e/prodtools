@@ -140,8 +140,8 @@ PreToolUse hook, none of which survives being reached over a port.
 
 ## `prodtools-write`
 
-Exposes submission: `push_cnf`, `run_submissions`, `submit_once`, `run_local`, and
-publishing: `push_file`.
+Exposes submission: `push_cnf`, `run_submissions`, `submit_once`,
+`run_local`, and publishing: `push_file`.
 
 A production campaign takes two calls: `push_cnf(..., slice_size=N)`
 builds the cnf, registers it in SAM and creates the campaign, returning
@@ -180,8 +180,10 @@ of entry on this node instead (`json2jobdef --once --local`): it starts
 reads the same way. Outputs stay in
 `/exp/mu2e/data/users/$USER/prodtools/runs/<name>/job_NNNNNN/`, and
 `kill <pid>` (the receipt's `pid`, on its `host`) stops the run, jobs
-included. Delete a code-cache directory only when no local run is still
-using it.
+included. `parallel` is at most 16 (each job holds ~2.5 GB of a shared
+node), and concurrent `run_local` calls add up: each starts its own
+`runlocal`. Delete a code-cache directory only when no local run is
+still using it.
 
 `push_cnf(..., prodtools_dir=...)` forwards `--prodtools-dir` so a
 checkout can be run before its release lands on cvmfs; it is refused
