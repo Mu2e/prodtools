@@ -23,6 +23,7 @@ import hashlib
 import os
 import shutil
 import tarfile
+import tempfile
 
 SETUP = os.path.join('Code', 'setup.sh')
 
@@ -44,11 +45,12 @@ def unpacked(tarball, root=None):
     """The directory holding Code/ for this tarball's content, unpacking
     it on first use. Raises ValueError or OSError; never prints.
 
-    The rename is the commit: the tree is extracted into
-    `<key>.part.<pid>` and renamed into place only once it is complete
-    and has a Code/setup.sh, so a killed unpack leaves a part directory,
-    never half a tree under the real name. A concurrent unpack of the
-    same bytes that renamed first wins; this one then uses its tree.
+    The rename is the commit: the tree is extracted into a unique
+    `<key>.part.*` directory per call and renamed into place only once
+    it is complete and has a Code/setup.sh, so a killed unpack leaves a
+    part directory, never half a tree under the real name. A concurrent
+    unpack of the same bytes that renamed first wins; this one then uses
+    its tree.
     """
     if not isinstance(tarball, str) or not os.path.isabs(tarball):
         raise ValueError(
@@ -60,8 +62,8 @@ def unpacked(tarball, root=None):
     if os.path.isfile(os.path.join(final, SETUP)):
         return final
     os.makedirs(root, exist_ok=True)
-    part = f'{final}.part.{os.getpid()}'
-    shutil.rmtree(part, ignore_errors=True)     # this pid's own leftover
+    part = tempfile.mkdtemp(
+        prefix=os.path.basename(final) + '.part.', dir=root)
     try:
         try:
             with tarfile.open(tarball, 'r:bz2') as tar:

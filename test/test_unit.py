@@ -19891,6 +19891,18 @@ class TestCodeCache(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
         self.assertTrue(os.path.isdir(stale))
 
+    def test_a_concurrent_unpack_in_this_process_is_left_alone(self):
+        """The write server may run two calls at once in one process; a
+        part dir named only by pid would be shared, and one call would
+        delete the other's extract."""
+        busy = os.path.join(self.root, self._sha(self.code) + f'.part.{os.getpid()}')
+        os.makedirs(os.path.join(busy, 'Code'))
+        marker = os.path.join(busy, 'Code', 'in-flight')
+        open(marker, 'w').close()
+        got = self.cc.unpacked(self.code, self.root)
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertTrue(os.path.isfile(marker))
+
     def test_it_never_writes_to_stdout(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
