@@ -36,6 +36,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -244,6 +245,28 @@ def child_env():
             if key != 'MUSE_WORK_DIR'}
 
 
+# The jobs running now, so SIGTERM to the driver can end them too. Each
+# job has its own session (kill_job signals its GROUP), so a signal to
+# the driver never reaches them: without this, `kill <driver pid>` left
+# every running mu2e orphaned and still writing. Keyed by id(): a Popen
+# is hashable but the tests' stand-ins are not.
+_RUNNING = {}
+# Held across each Popen AND its registration, and by the SIGTERM
+# handler until the process exits, so no job can start unseen by it.
+_RUNNING_LOCK = threading.Lock()
+
+
+def _terminate(signum, frame):
+    """SIGTERM to the driver: end every running job's group, then exit
+    128+signum WITHOUT a summary -- a missing summary is how a reader
+    tells a stopped run from a finished one (see write_summary). The lock
+    is never released: the process ends here."""
+    _RUNNING_LOCK.acquire()
+    for proc in list(_RUNNING.values()):
+        kill_job(proc)
+    os._exit(128 + signum)
+
+
 def kill_job(proc, log=None):
     """End a job: SIGTERM its process group, SIGKILL what survives.
 
@@ -292,19 +315,26 @@ def _run_child(index, args, globs):
         log.flush()
         # start_new_session so the job owns its process group (see
         # kill_job); Popen not run(timeout=), which kills only the child.
-        proc = subprocess.Popen(argv, cwd=str(directory), env=child_env(),
-                                stdout=log, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+        with _RUNNING_LOCK:
+            proc = subprocess.Popen(argv, cwd=str(directory),
+                                    env=child_env(), stdout=log,
+                                    stderr=subprocess.STDOUT,
+                                    start_new_session=True)
+            _RUNNING[id(proc)] = proc
         try:
-            # 0 means no limit; None is how Popen.wait spells that.
-            rc = proc.wait(timeout=args.timeout or None)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            log.write(f"\n[local] killed after {args.timeout:g}s "
-                      f"(--timeout), reported as rc={TIMEOUT_RC}\n")
-            log.flush()
-            kill_job(proc, log)
-            rc = TIMEOUT_RC
+            try:
+                # 0 means no limit; None is how Popen.wait spells that.
+                rc = proc.wait(timeout=args.timeout or None)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                log.write(f"\n[local] killed after {args.timeout:g}s "
+                          f"(--timeout), reported as rc={TIMEOUT_RC}\n")
+                log.flush()
+                kill_job(proc, log)
+                rc = TIMEOUT_RC
+        finally:
+            with _RUNNING_LOCK:
+                _RUNNING.pop(id(proc), None)
     elapsed = time.time() - start
     produced = sorted(p.name for g in globs for p in directory.glob(g))
     return JobResult(index, rc, elapsed, directory, produced, timed_out)
@@ -536,7 +566,9 @@ def build_parser():
                              'instead of the cnf\'s /cvmfs setup; unpacked '
                              'once into <workdir>/code')
     parser.add_argument('--code-root', default=None,
-                        help=argparse.SUPPRESS)
+                        help='an already-unpacked code tarball: the '
+                             'directory holding Code/ (prodtools\' code '
+                             'cache hands this over), instead of --code')
     parser.add_argument('--one', type=int,
                         help=argparse.SUPPRESS)  # internal: run a single index
     return parser
@@ -557,6 +589,15 @@ def main(argv=None):
         # Child: cwd is already this job's directory.
         return run_one(args.one, args)
 
+    if args.code and args.code_root:
+        sys.exit("runlocal: give --code or --code-root, not both")
+    if args.code_root:
+        # Absolute: every job runs in its own job_NNNNNN/ directory.
+        args.code_root = str(Path(args.code_root).resolve())
+        if not (Path(args.code_root) / 'Code' / 'setup.sh').is_file():
+            sys.exit(f"runlocal: --code-root {args.code_root} has no "
+                     f"Code/setup.sh")
+
     if args.json:
         # Checked before any job starts — the alternative is losing an
         # hour-long run's summary to a directory typo, uncomputable after.
@@ -573,7 +614,11 @@ def main(argv=None):
     # The module, not bin/runlocal: that wrapper sources the Mu2e
     # environment, which this process already has and children inherit.
     args.entry_point = Path(__file__).resolve()
-    return drive(args)
+    previous = signal.signal(signal.SIGTERM, _terminate)
+    try:
+        return drive(args)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == '__main__':

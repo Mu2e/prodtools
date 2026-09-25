@@ -17349,21 +17349,34 @@ class TestRunLocalDrive(unittest.TestCase):
         self.assertIn('rerun index 1', out)
 
     def test_never_exceeds_the_parallel_limit(self):
+        """The 'work' belongs in wait(), not in the Popen() call: a real
+        Popen returns as soon as the child is forked, and _run_child now
+        holds _RUNNING_LOCK across that call (registering the job before
+        it can be missed by a concurrent SIGTERM) — a fake that instead
+        blocks INSIDE Popen() would be serialized by that lock, which a
+        real (near-instant) Popen never is."""
         import threading
         import time
+        from utils import runlocal
         lock = threading.Lock()
         state = {'now': 0, 'peak': 0}
 
-        def fake(argv, cwd=None, env=None, stdout=None, stderr=None):
-            with lock:
-                state['now'] += 1
-                state['peak'] = max(state['peak'], state['now'])
-            time.sleep(0.05)
-            with lock:
-                state['now'] -= 1
-            return SimpleNamespace(returncode=0)
+        def popen(argv, cwd=None, env=None, stdout=None, stderr=None,
+                 **kwargs):
+            def wait(timeout=None):
+                with lock:
+                    state['now'] += 1
+                    state['peak'] = max(state['peak'], state['now'])
+                time.sleep(0.05)
+                with lock:
+                    state['now'] -= 1
+                return 0
+            return SimpleNamespace(pid=2 ** 30, wait=wait)
 
-        self._drive(self._args(indices=list(range(6)), parallel=2), fake)
+        with patch.object(runlocal.subprocess, 'Popen', popen):
+            with contextlib.redirect_stdout(io.StringIO()):
+                runlocal.drive(self._args(indices=list(range(6)),
+                                          parallel=2))
         self.assertEqual(state['peak'], 2)
 
     def test_a_preset_muse_does_not_reach_the_job(self):
@@ -20084,6 +20097,146 @@ class TestCodeEntryPushParams(unittest.TestCase):
                 self.tools.push_cnf(self.json_path, 'D', 'C', 1000, 'self')
         self.assertIn('submit_once', str(ctx.exception))
         run.assert_not_called()
+
+
+class TestRunLocalCodeRoot(unittest.TestCase):
+    """--code-root is public: prodtools' code cache hands runlocal an
+    already-unpacked tree, so a local run does not unpack it again. Its
+    jobs run in their own directories, so the path is made absolute."""
+
+    def setUp(self):
+        from utils import runlocal
+        self.rl = runlocal
+        self.dir = _mkdtemp()
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+        self.tree = os.path.join(self.dir, 'tree')
+        with tarfile.open(self.code, 'r:bz2') as tar:
+            tar.extractall(self.tree)
+
+    def _main(self, argv):
+        seen = {}
+
+        def drive(args):
+            seen['args'] = args
+            return 0
+        with patch.object(self.rl, 'drive', side_effect=drive), \
+             patch.object(self.rl, 'resolve_jobdef',
+                          side_effect=lambda jobdef, workdir: jobdef), \
+             patch.object(self.rl, 'unpack_code',
+                          side_effect=AssertionError('unpacked again')):
+            rc = self.rl.main(argv)
+        return rc, seen
+
+    def test_a_code_root_reaches_the_jobs_without_an_unpack(self):
+        rc, seen = self._main(['--jobdef', '/x/cnf.tar', '--workdir',
+                               self.dir, '--code-root', self.tree])
+        self.assertEqual(rc, 0)
+        want = os.path.realpath(self.tree)
+        self.assertEqual(seen['args'].code_root, want)
+        argv = self.rl.child_argv(0, seen['args'])
+        self.assertEqual(argv[argv.index('--code-root') + 1], want)
+
+    def test_a_relative_code_root_is_made_absolute(self):
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(self.dir)
+        _, seen = self._main(['--jobdef', '/x/cnf.tar', '--workdir',
+                              self.dir, '--code-root', 'tree'])
+        self.assertTrue(os.path.isabs(seen['args'].code_root))
+        self.assertEqual(seen['args'].code_root, os.path.realpath(self.tree))
+
+    def test_code_and_code_root_together_are_refused(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._main(['--jobdef', '/x/cnf.tar', '--code', self.code,
+                        '--code-root', self.tree])
+        self.assertIn('not both', str(ctx.exception))
+
+    def test_a_code_root_without_code_setup_is_refused(self):
+        empty = os.path.join(self.dir, 'empty')
+        os.makedirs(empty)
+        with self.assertRaises(SystemExit) as ctx:
+            self._main(['--jobdef', '/x/cnf.tar', '--code-root', empty])
+        self.assertIn('Code/setup.sh', str(ctx.exception))
+
+
+class TestRunLocalStop(unittest.TestCase):
+    """SIGTERM to the driver ends its jobs too. Each job runs in its own
+    session (so a timeout can kill its whole group), which also means a
+    signal to the driver alone never reached them: `kill <driver>` left
+    every mu2e orphaned and still writing."""
+
+    def setUp(self):
+        from utils import runlocal
+        self.rl = runlocal
+        self.addCleanup(self._reset)
+
+    def _reset(self):
+        if self.rl._RUNNING_LOCK.locked():
+            self.rl._RUNNING_LOCK.release()
+        self.rl._RUNNING.clear()
+
+    def test_sigterm_ends_a_real_job_in_its_own_session_and_exits_143(self):
+        job = subprocess.Popen(
+            [sys.executable, '-c', 'import time; time.sleep(60)'],
+            start_new_session=True)
+        self.addCleanup(job.wait)
+        self.addCleanup(lambda: job.poll() is None and job.kill())
+        self.rl._RUNNING[id(job)] = job
+        with patch.object(self.rl.os, '_exit',
+                          side_effect=SystemExit) as exit_:
+            with self.assertRaises(SystemExit):
+                self.rl._terminate(signal.SIGTERM, None)
+        exit_.assert_called_once_with(143)
+        self.assertIsNotNone(job.poll())
+
+    def test_every_running_job_is_ended_before_the_exit(self):
+        events = []
+        fakes = [SimpleNamespace(pid=2 ** 30 + i) for i in range(3)]
+        for fake in fakes:
+            self.rl._RUNNING[id(fake)] = fake
+
+        def exit_(code):
+            events.append(('exit', code))
+            raise SystemExit(code)
+        with patch.object(self.rl, 'kill_job',
+                          side_effect=lambda proc: events.append(proc.pid)), \
+             patch.object(self.rl.os, '_exit', side_effect=exit_):
+            with self.assertRaises(SystemExit):
+                self.rl._terminate(signal.SIGTERM, None)
+        self.assertEqual(sorted(events[:3]), [f.pid for f in fakes])
+        self.assertEqual(events[3:], [('exit', 143)])
+
+    def test_a_job_is_registered_while_it_runs_and_removed_after(self):
+        seen = []
+
+        def popen(argv, **kwargs):
+            proc = SimpleNamespace(pid=2 ** 30, returncode=0)
+            proc.wait = lambda timeout=None: (
+                seen.append(id(proc) in self.rl._RUNNING) or 0)
+            return proc
+        tar = _make_tarball(
+            {'owner': 'mu2e', 'dsconf': 'TestConf',
+             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'}}})
+        args = _runlocal_args(jobdef=tar, workdir=_mkdtemp())
+        with patch.object(self.rl.subprocess, 'Popen', side_effect=popen):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.rl.drive(args)
+        self.assertEqual(seen, [True])
+        self.assertEqual(self.rl._RUNNING, {})
+
+    def test_the_driver_installs_the_handler_and_restores_the_old_one(self):
+        before = signal.getsignal(signal.SIGTERM)
+        seen = {}
+
+        def drive(args):
+            seen['handler'] = signal.getsignal(signal.SIGTERM)
+            return 0
+        with patch.object(self.rl, 'drive', side_effect=drive), \
+             patch.object(self.rl, 'resolve_jobdef',
+                          side_effect=lambda jobdef, workdir: jobdef):
+            self.rl.main(['--jobdef', '/x/cnf.tar', '--workdir', _mkdtemp()])
+        self.assertIs(seen['handler'], self.rl._terminate)
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
 
 
 if __name__ == '__main__':
