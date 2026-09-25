@@ -189,7 +189,8 @@ directory, exactly as for a grid run. Then:
    for a code entry. It uses `cwd=<run dir>`, `start_new_session=True`,
    `stdin=DEVNULL`, and stdout and stderr both to `<run dir>/runlocal.log`.
    - **Its own session.** The run outlives `json2jobdef`, `run_cli`'s
-     shell and the MCP call, and `kill -- -<pid>` stops the whole run.
+     shell and the MCP call. `kill <pid>` stops the whole run (see the
+     runlocal changes below).
    - **No inherited pipes.** `run_cli` captures stdout and stderr and
      waits for EOF. A child still holding either pipe would block the
      tool for the whole run.
@@ -208,10 +209,25 @@ refused again (`RunExists`), and `reserve`'s message, which today speaks
 only of `submitting` and `jobsub_q`, gains the local case: look for a
 `runlocal` process whose command line names this run directory.
 
-**runlocal change.** `--code-root` becomes a documented flag: an
-already-unpacked code root (the directory holding `Code/`), as an
-alternative to `--code`. Today the flag is suppressed and used only by
-child jobs. Giving both `--code` and `--code-root` is refused.
+**runlocal changes.**
+
+- `--code-root` becomes a documented flag: an already-unpacked code
+  root (the directory holding `Code/`), as an alternative to `--code`.
+  Today the flag is suppressed and used only by child jobs. Giving both
+  `--code` and `--code-root` is refused. The driver makes the path
+  absolute, because its jobs run in their own directories, and refuses
+  one with no `Code/setup.sh`.
+- **SIGTERM to the driver ends every running job.** Each job runs in its
+  own session so that a timeout can kill its whole process group
+  (`kill_job`). A signal to the driver's group therefore never reaches
+  the jobs: killing runlocal today leaves its mu2e jobs orphaned and
+  still writing. (Found while writing the plan, 2026-09-25; the first
+  draft of this spec said `kill -- -<pid>` stops the run, which is
+  wrong.) The driver keeps the set of running jobs under a lock that is
+  held across each `Popen` and its registration. On SIGTERM it takes the
+  lock, ends each job's group with `kill_job`, and exits 143 without
+  writing a summary: a missing summary is how a reader tells a stopped
+  run from a finished one.
 
 ### 3b. The MCP write tool
 
@@ -267,7 +283,11 @@ no `executor` is a grid run, so existing receipts are unchanged.
 ## Testing
 
 **Unit tests** go in `test/test_unit.py`, run as
-`env -i PATH=/usr/bin:/bin HOME=$HOME /usr/bin/python3 -u test/test_unit.py`.
+`env -i PATH=/usr/bin:/bin HOME=$HOME /usr/bin/python3 -m unittest test.test_unit`.
+Running the file directly (`python3 test/test_unit.py`) silently skips
+the 15 classes defined below its `unittest.main()` call. On 2026-09-25
+that was 87 tests, among them every `submit_once` and `run_status` test.
+PR 1 moves the call to the end of the file.
 The fixtures build small real bzip2 tarballs in the test.
 
 - `code_cache`:
@@ -296,8 +316,12 @@ The fixtures build small real bzip2 tarballs in the test.
   - the `Popen` arguments: `start_new_session`, `stdin=DEVNULL`, and
     stdout to the log file, never the parent's stdout.
 - `runlocal`:
-  - `--code-root` works at driver level, with no unpack;
-  - `--code` together with `--code-root` is refused.
+  - `--code-root` works at driver level, with no unpack, and a relative
+    one is made absolute;
+  - `--code` together with `--code-root` is refused, and so is a code
+    root with no `Code/setup.sh`;
+  - SIGTERM to the driver ends a real job running in its own session,
+    and exits 143.
 - The `run_local` tool: mu2epro is refused, and the argv and the
   `RECEIPT` parsing are covered.
 - `run_status` in the local branch:
@@ -316,8 +340,9 @@ outloc outstage):
 
 1. `run_local` returns, and `run_status` reads `running` and then
    `done`. The `.art` file is at the path it names.
-2. A second run is started and stopped with `kill -- -<pid>`, and
-   `run_status` reads `failed`.
+2. A second, longer run is started and stopped with `kill <pid>`.
+   `run_status` reads `failed`, and no `mu2e` process from that run is
+   left.
 3. The same entry goes through `submit_once`'s environment and
    `json2jobdef` without `--once`, so the cnf is built and nothing is
    submitted. That proves the P1 build path. A 1-job grid submission
@@ -335,7 +360,7 @@ Two PRs to Mu2e/prodtools from oksuzian/prodtools, each squash-merged:
 
 ## Out of scope
 
-- A cancel tool for local runs. `kill -- -<pid>` is documented instead.
+- A cancel tool for local runs. `kill <pid>` is documented instead.
 - Cache eviction.
 - Code entries in `push_cnf` or in campaigns.
 - An event-count override on `run_local`. The entry is the record of
