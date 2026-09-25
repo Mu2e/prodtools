@@ -20570,5 +20570,100 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
             self.assertIn(want, str(ctx.exception))
 
 
+class TestRunLocalTool(unittest.TestCase):
+    """run_local: `json2jobdef --once --local` through the write server.
+    Self only; returns as soon as runlocal has started."""
+
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        self.tools = tools
+        self.tmp = _mkdtemp()
+        self.simjob_setup = (
+            '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/C/setup.sh')
+        self.json_path = os.path.join(self.tmp, 'entries.json')
+        with open(self.json_path, 'w') as f:
+            json.dump([{'desc': 'D', 'dsconf': 'C',
+                        'simjob_setup': self.simjob_setup, 'fcl': 'x.fcl',
+                        'outloc': {'*.art': 'outstage'}}], f)
+        self.receipt = os.path.join(self.tmp, 'receipt.json')
+        with open(self.receipt, 'w') as f:
+            json.dump({'name': 'cnf.alice.D.C.0', 'state': 'running',
+                       'executor': 'local', 'host': 'node.fnal.gov',
+                       'pid': 4242, 'entry': {'big': 'thing'}}, f)
+
+    def _call(self, cli, **kwargs):
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value=cli) as run:
+            out = self.tools.run_local(self.json_path, 'D', 'C',
+                                       kwargs.pop('run_as', 'self'), **kwargs)
+        return out, run
+
+    def _ok(self):
+        return {'rc': 0, 'stderr': '',
+                'stdout': f'noise\nRECEIPT {self.receipt}\n'}
+
+    def test_runs_json2jobdef_once_local_and_returns_the_receipt(self):
+        out, run = self._call(self._ok())
+        self.assertEqual(run.call_args[0][0], [
+            'bin/json2jobdef', '--json', self.json_path, '--desc', 'D',
+            '--dsconf', 'C', '--once', '--local', '--parallel', '4'])
+        self.assertEqual(run.call_args[0][1], 'self')
+        self.assertEqual(run.call_args[1]['simjob_setup'], self.simjob_setup)
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(out['pid'], 4242)
+        self.assertEqual(out['receipt'], self.receipt)
+        self.assertNotIn('entry', out)
+
+    def test_parallel_is_forwarded(self):
+        _, run = self._call(self._ok(), parallel=2)
+        self.assertEqual(run.call_args[0][0][-2:], ['--parallel', '2'])
+
+    def test_mu2epro_is_refused(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.run_local(self.json_path, 'D', 'C', 'mu2epro')
+        self.assertIn('self', str(ctx.exception))
+        run.assert_not_called()
+
+    def test_a_bad_parallel_is_refused(self):
+        for bad in (0, -1, True, '2'):
+            with patch('prodtools_mcp_write.runner.run_cli') as run:
+                with self.assertRaises(ValueError, msg=repr(bad)):
+                    self.tools.run_local(self.json_path, 'D', 'C', 'self',
+                                         parallel=bad)
+            run.assert_not_called()
+
+    def test_a_code_entry_sources_the_unpacked_setup(self):
+        from utils import code_cache
+        root = os.path.join(self.tmp, 'cache')
+        code = _make_code_tarball(os.path.join(self.tmp, 'Code.tar.bz2'))
+        with open(self.json_path, 'w') as f:
+            json.dump([{'desc': 'D', 'dsconf': 'C', 'code': code,
+                        'fcl': 'x.fcl', 'outloc': {'*.art': 'outstage'}}], f)
+        with patch.object(code_cache, 'cache_root', return_value=root):
+            _, run = self._call(self._ok())
+        with open(code, 'rb') as fh:
+            sha = hashlib.sha256(fh.read()).hexdigest()
+        self.assertEqual(run.call_args[1]['simjob_setup'],
+                         os.path.join(root, sha, 'Code', 'setup.sh'))
+
+    def test_a_failure_reports_both_streams(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._call({'rc': 1, 'stdout': 'built nothing',
+                        'stderr': 'a local run may still be going: look '
+                                  'for a runlocal process'})
+        self.assertIn('runlocal process', str(ctx.exception))
+        self.assertIn('built nothing', str(ctx.exception))
+
+    def test_success_without_a_receipt_line_is_an_error_not_a_guess(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._call({'rc': 0, 'stdout': 'all good', 'stderr': ''})
+        self.assertIn('RECEIPT', str(ctx.exception))
+
+    def test_it_is_registered(self):
+        from prodtools_mcp_write import server
+        self.assertIn('run_local', server.TOOL_NAMES)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

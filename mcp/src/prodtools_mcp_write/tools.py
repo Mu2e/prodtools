@@ -420,20 +420,65 @@ def submit_once(json: str, desc: str, dsconf: str, run_as: str,
             f"json2jobdef --once failed (rc={result['rc']}): "
             f"{_both_streams(result)}")
 
+    return _receipt_from(result, 'json2jobdef --once')
+
+
+def _receipt_from(result, what):
+    """The receipt a `json2jobdef --once` run printed the path of, minus
+    its entry (the caller has it), plus that path."""
     paths = [line.split(' ', 1)[1].strip()
              for line in (result.get('stdout') or '').splitlines()
              if line.startswith('RECEIPT ')]
     if len(paths) != 1:
         raise RuntimeError(
-            f"json2jobdef --once exited 0 but printed {len(paths)} RECEIPT "
-            f"lines, so which run this was cannot be told: "
-            f"{_both_streams(result)}")
-    import json as _json
+            f"{what} exited 0 but printed {len(paths)} RECEIPT lines, so "
+            f"which run this was cannot be told: {_both_streams(result)}")
     with open(paths[0]) as fh:
         receipt = _json.load(fh)
     receipt.pop('entry', None)
     receipt['receipt'] = paths[0]
     return receipt
+
+
+def run_local(json: str, desc: str, dsconf: str, run_as: str,
+              parallel: int = 4):
+    """Run one entry's jobs on THIS node with runlocal -- `json2jobdef
+    --once --local`. Returns as soon as runlocal has started; the jobs
+    keep running after the call.
+
+    The same rules as submit_once: every `outloc` value must be
+    "outstage", a desc+dsconf pair is used once per user (a local run and
+    a grid run share the name), run_as="self" only. A code-tarball entry
+    (`code`, no `simjob_setup`) runs against its tarball, unpacked once
+    into /exp/mu2e/data/users/<you>/prodtools/code/<sha256>/.
+
+    Outputs stay in the run directory,
+    /exp/mu2e/data/users/<you>/prodtools/runs/<name>/job_NNNNNN/. Ask the
+    read-only server's run_status(name=..., user=...) how it went.
+    `kill <pid>` (the receipt's pid, on its host) stops the run, jobs
+    included.
+
+    Returns the receipt: `name`, `state` ("running"), `host`, `pid`,
+    `njobs`, `parallel`, `summary`, `log`.
+    """
+    if run_as != 'self':
+        raise ValueError(
+            f"run_local is run_as=\"self\" only, got {run_as!r}: it runs "
+            f"the jobs on this node, as you.")
+    if (not isinstance(parallel, int) or isinstance(parallel, bool)
+            or parallel < 1):
+        raise ValueError(f"parallel must be an int >= 1, got {parallel!r}")
+    simjob_setup, _ = _select_push_params(json, desc, dsconf,
+                                          allow_code=True)
+    argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
+            '--dsconf', dsconf, '--once', '--local',
+            '--parallel', str(parallel)]
+    result = runner.run_cli(argv, run_as, simjob_setup=simjob_setup)
+    if result['rc'] != 0:
+        raise RuntimeError(
+            f"json2jobdef --once --local failed (rc={result['rc']}): "
+            f"{_both_streams(result)}")
+    return _receipt_from(result, 'json2jobdef --once --local')
 
 
 def run_submissions(run_as: str, campaign_id: Optional[int] = None,

@@ -140,7 +140,7 @@ PreToolUse hook, none of which survives being reached over a port.
 
 ## `prodtools-write`
 
-Exposes submission: `push_cnf`, `run_submissions`, `submit_once`, and
+Exposes submission: `push_cnf`, `run_submissions`, `submit_once`, `run_local`, and
 publishing: `push_file`.
 
 A production campaign takes two calls: `push_cnf(..., slice_size=N)`
@@ -173,6 +173,15 @@ clears that cache. To free an entry nothing is using, first `mv` its
 `rm -rf` in place can leave `Code/setup.sh` behind, which still counts
 as a hit. A `<sha256>.part.*` directory is what a killed unpack leaves;
 it can be deleted. `push_cnf` refuses code-tarball entries.
+
+`run_local(json, desc, dsconf, run_as, parallel=4)` runs the same kind
+of entry on this node instead (`json2jobdef --once --local`): it starts
+`runlocal` detached and returns at once, with a receipt `run_status`
+reads the same way. Outputs stay in
+`/exp/mu2e/data/users/$USER/prodtools/runs/<name>/job_NNNNNN/`, and
+`kill <pid>` (the receipt's `pid`, on its `host`) stops the run, jobs
+included. Delete a code-cache directory only when no local run is still
+using it.
 
 `push_cnf(..., prodtools_dir=...)` forwards `--prodtools-dir` so a
 checkout can be run before its release lands on cvmfs; it is refused

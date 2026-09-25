@@ -112,7 +112,9 @@ the read-only server is the only thing that can see such a run; neither
 the line both ways: ledger-tracked if and only if the outputs are
 declared. It also takes code-tarball entries (`code`, no `simjob_setup`),
 built in the tarball's own environment (`utils/code_cache.py`);
-`push_cnf` refuses them.
+`push_cnf` refuses them. A fourth, `run_local`, runs such an entry on
+this node instead: `runlocal` started detached under the same receipt;
+`kill <pid>` stops it, jobs included.
 
 The read-only `prodtools` server still performs NO writes. Keep it that
 way — that claim is why its tools are called without deliberation.
