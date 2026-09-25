@@ -70,7 +70,7 @@ def resolve_cap(flag_value):
 # names so every caller/test reading them off this module keeps working.
 from utils.queue_state import (_jobsub_table_states,  # noqa: F401
                                cluster_queue_state, live_clusters,
-                               queue_owner)
+                               queue_owner, report_jobsub_q_failure)
 
 
 def verify_row(row, sam_lister=files_in_dataset):
@@ -587,12 +587,14 @@ def total_queued(user=None, runner=subprocess.run):
     fixed 'mu2epro' here throttled a self run against PRODUCTION's
     footprint: the caller's own jobs never counted toward their cap,
     and a busy production farm could block a self top-up outright."""
-    res = runner(['jobsub_q', '--user', user or queue_owner()],
-                 capture_output=True, text=True)
+    cmd = ['jobsub_q', '--user', user or queue_owner()]
+    res = runner(cmd, capture_output=True, text=True)
     if res.returncode != 0:
+        report_jobsub_q_failure(cmd, res)
         return None
     states = _jobsub_table_states(res.stdout)
     if states is None:
+        report_jobsub_q_failure(cmd, res)
         return None
     return sum(1 for s in states if s in ('I', 'R'))
 
