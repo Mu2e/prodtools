@@ -20408,5 +20408,157 @@ class TestRunLocalStop(unittest.TestCase):
         self.assertIs(signal.getsignal(signal.SIGTERM), before)
 
 
+class TestJson2jobdefOnceLocal(unittest.TestCase):
+    """`json2jobdef --once --local`: the same refusals, build and receipt
+    as --once, then runlocal started detached on this node instead of a
+    jobsub_submit. Returns with the receipt `running`."""
+
+    NAME = 'cnf.alice.CeEndpoint.T1.0'
+
+    def setUp(self):
+        from utils import json2jobdef, run_receipt
+        self.j, self.rr = json2jobdef, run_receipt
+        self.root = _mkdtemp()
+        self.run_dir = os.path.join(self.root, self.NAME)
+        self.cwd = os.getcwd()
+        self.addCleanup(os.chdir, self.cwd)
+        self.calls = {}
+
+    def _config(self, **over):
+        c = {'desc': 'CeEndpoint', 'dsconf': 'T1', 'owner': 'alice',
+             'fcl': 'x.fcl', 'njobs': 3, 'events': 10, 'run': 1,
+             'inloc': 'tape', 'outloc': {'*.art': 'outstage'},
+             'simjob_setup': '/cvmfs/x/setup.sh'}
+        c.update(over)
+        return c
+
+    def _entry(self, config):
+        entry = {'tarball': self.NAME + '.tar', 'njobs': config['njobs'],
+                 'inloc': 'tape',
+                 'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+        if config.get('code'):
+            entry['code'] = config['code']
+        return entry
+
+    def _launch(self, argv, **kwargs):
+        self.calls['argv'] = argv
+        self.calls['kwargs'] = kwargs
+        self.calls['state_at_launch'] = self.rr.read(
+            self.root, self.NAME)['state']
+        return SimpleNamespace(pid=4242)
+
+    def _run(self, config, launch=None, parallel=None):
+        def build(cfg, **kwargs):
+            self.calls['build_kwargs'] = kwargs
+
+        def submit(*args, **kwargs):
+            raise AssertionError('--local must never submit')
+        with patch.object(self.j, 'build_jobdesc', side_effect=self._entry), \
+             patch.object(self.j, 'prodtools_entry_keys',
+                          side_effect=AssertionError('no worker bundle')), \
+             patch('utils.code_cache.unpacked', return_value='/cache/abc'), \
+             patch('socket.getfqdn', return_value='node.fnal.gov'), \
+             patch.object(self.j.getpass, 'getuser', return_value='alice'):
+            return self.j.submit_once(
+                config, json_path='/j.json', root=self.root, build=build,
+                submit=submit, local=True, parallel=parallel,
+                launch=launch or self._launch)
+
+    def test_local_starts_runlocal_detached_and_records_it(self):
+        receipt = self._run(self._config())
+        summary = os.path.join(self.run_dir, 'summary.json')
+        log = os.path.join(self.run_dir, 'runlocal.log')
+        self.assertEqual(self.calls['state_at_launch'], 'starting')
+        self.assertFalse(self.calls['build_kwargs'].get('pushout'))
+        argv = self.calls['argv']
+        self.assertEqual(argv[0], sys.executable)
+        self.assertTrue(argv[1].endswith(os.path.join('utils', 'runlocal.py')))
+        self.assertEqual(argv[2:], [
+            '--jobdef', os.path.join(self.run_dir, self.NAME + '.tar'),
+            '--inloc', 'tape', '--first', '0', '--num', '3',
+            '--parallel', '4', '--workdir', self.run_dir, '--json', summary])
+        kwargs = self.calls['kwargs']
+        self.assertEqual(kwargs['cwd'], self.run_dir)
+        self.assertTrue(kwargs['start_new_session'])
+        self.assertIs(kwargs['stdin'], subprocess.DEVNULL)
+        self.assertEqual(kwargs['stdout'].name, log)
+        self.assertIs(kwargs['stderr'], subprocess.STDOUT)
+        self.assertEqual(receipt['state'], 'running')
+        for key, want in (('executor', 'local'), ('host', 'node.fnal.gov'),
+                          ('pid', 4242), ('summary', summary), ('log', log),
+                          ('njobs', 3), ('parallel', 4)):
+            self.assertEqual(receipt[key], want, key)
+        self.assertIn('started_utc', receipt)
+        self.assertEqual(receipt, self.rr.read(self.root, self.NAME))
+
+    def test_a_code_entry_hands_runlocal_the_cached_code_root(self):
+        config = self._config(code='/x/Code.tar.bz2')
+        del config['simjob_setup']
+        self._run(config)
+        self.assertEqual(self.calls['argv'][-2:], ['--code-root', '/cache/abc'])
+
+    def test_parallel_is_forwarded(self):
+        receipt = self._run(self._config(), parallel=2)
+        argv = self.calls['argv']
+        self.assertEqual(argv[argv.index('--parallel') + 1], '2')
+        self.assertEqual(receipt['parallel'], 2)
+
+    def test_a_launch_failure_is_recorded_as_failed(self):
+        def broken(argv, **kwargs):
+            raise OSError('no such interpreter')
+        with self.assertRaises(SystemExit):
+            self._run(self._config(), launch=broken)
+        got = self.rr.read(self.root, self.NAME)
+        self.assertEqual(got['state'], 'failed')
+        self.assertIn('no such interpreter', got['error'])
+
+    def test_the_once_refusals_still_apply(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(outloc={'*.art': 'scratch'}))
+        self.assertIn('outstage', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_g4bl_entry_is_refused_before_anything_exists(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(runner='g4bl'))
+        self.assertIn('g4bl', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_used_name_points_at_a_possibly_running_local_run(self):
+        self._run(self._config())
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config())
+        self.assertIn('runlocal', str(ctx.exception))
+
+    def test_a_real_child_owns_its_session_and_writes_to_the_log(self):
+        """The MCP runner captures stdout/stderr and waits for EOF, so a
+        child holding either would block the tool for the whole run."""
+        def real(argv, **kwargs):
+            self.calls['proc'] = subprocess.Popen(
+                [sys.executable, '-c',
+                 'import os, sys; print("from the child", os.getsid(0)); '
+                 'sys.stdout.flush()'], **kwargs)
+            return self.calls['proc']
+        receipt = self._run(self._config(), launch=real)
+        proc = self.calls['proc']
+        proc.wait(timeout=30)
+        with open(receipt['log']) as fh:
+            text = fh.read()
+        self.assertIn('from the child', text)
+        self.assertEqual(int(text.split()[-1]), proc.pid)   # its own session
+
+    def test_the_command_line_rules(self):
+        base = ['--json', '/nope.json', '--desc', 'a', '--dsconf', 'b']
+        for extra, want in (
+                (['--local'], '--local requires --once'),
+                (['--once', '--parallel', '2'], '--parallel requires --local'),
+                (['--once', '--local', '--parallel', '0'], 'at least 1'),
+                (['--once', '--local', '--prodtools-dir', '/x'],
+                 '--prodtools-dir')):
+            with self.assertRaises(SystemExit, msg=extra) as ctx:
+                self.j.main(base + extra)
+            self.assertIn(want, str(ctx.exception))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

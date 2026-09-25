@@ -774,6 +774,15 @@ def main(argv=None):
                         'write a receipt. Nothing reaches SAM, no ledger, '
                         'no recovery; every outloc must be "outstage"; '
                         'never as mu2epro. Excludes --prod/--enqueue.')
+    p.add_argument('--local', action='store_true',
+                   help='With --once: run the jobs on THIS node with '
+                        'runlocal instead of submitting them. Returns once '
+                        'runlocal has started, detached; the receipt says '
+                        'where, and run_status reports. Excludes '
+                        '--prodtools-dir.')
+    p.add_argument('--parallel', type=int, default=None,
+                   help='With --local: jobs at once (default 4, as '
+                        'runlocal -j).')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
                         'Auto-increments tarball version.')
@@ -797,6 +806,17 @@ def main(argv=None):
         if args.index is None and not (args.desc and args.dsconf):
             sys.exit("json2jobdef: --once submits ONE entry: give --desc "
                      "AND --dsconf, or --index")
+
+    if args.local and not args.once:
+        sys.exit("json2jobdef: --local requires --once")
+    if args.parallel is not None and not args.local:
+        sys.exit("json2jobdef: --parallel requires --local")
+    if args.parallel is not None and args.parallel < 1:
+        sys.exit("json2jobdef: --parallel must be at least 1")
+    if args.local and args.prodtools_dir is not None:
+        sys.exit("json2jobdef: --local runs this checkout's runlocal on "
+                 "this node; --prodtools-dir names worker code for grid "
+                 "jobs, so it has no meaning here")
 
     if args.enqueue and not args.prod:
         sys.exit("json2jobdef: --enqueue requires --prod (a campaign "
@@ -833,7 +853,8 @@ def main(argv=None):
         config['_event_count_positive'] = args.event_count_positive
         if args.once:
             receipt = submit_once(config, json_path=args.json,
-                                  prodtools_dir=args.prodtools_dir)
+                                  prodtools_dir=args.prodtools_dir,
+                                  local=args.local, parallel=args.parallel)
             from utils import run_receipt
             print(json.dumps({k: v for k, v in receipt.items()
                               if k != 'entry'}, indent=2))
@@ -842,7 +863,8 @@ def main(argv=None):
             print('RECEIPT ' + os.path.join(
                 run_receipt.runs_root(), receipt['name'],
                 run_receipt.RECEIPT))
-            sys.exit(0 if receipt['state'] == 'submitted' else 1)
+            sys.exit(0 if receipt['state'] in ('submitted', 'running')
+                     else 1)
         process_single_entry(
             config,
             pushout=args.pushout,
@@ -859,7 +881,8 @@ ONCE_MAX_JOBS = 10000   # one `jobsub_submit -N` takes no more
 
 
 def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
-                build=None, submit=None):
+                build=None, submit=None, local=False, parallel=None,
+                launch=None):
     """`--once`: build the cnf locally, submit every job in one go to
     outstage, and leave a receipt (utils/run_receipt). Returns the receipt.
 
@@ -868,8 +891,14 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
     ledger and no recovery either -- the ledger verifies against SAM, and
     this declares nothing (submit._check_tracking holds that line).
 
+    `local` (`--once --local`): the same refusals, build and receipt, but
+    the jobs run on THIS node with runlocal, started detached
+    (_start_local), instead of one jobsub_submit. One entry shape serves
+    both executors, and a desc+dsconf pair is used once across them.
+
     Every refusal that can be made from the entry alone is made before
-    anything exists on disk. `build` and `submit` are seams for the tests.
+    anything exists on disk. `build`, `submit` and `launch` (runlocal's
+    Popen) are seams for the tests.
     """
     from utils import run_receipt
     from utils import jobsub_argv
@@ -898,6 +927,9 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
         sys.exit(f"json2jobdef: --once submits everything in one "
                  f"jobsub_submit, which takes at most {ONCE_MAX_JOBS} jobs; "
                  f"this entry has njobs={config['njobs']}.")
+    if local and determine_job_type(config) == 'g4bl':
+        sys.exit("json2jobdef: --local runs art jobs with runlocal; a g4bl "
+                 "entry cannot run locally.")
 
     name = run_receipt.run_name(get_parfile_name(config))
     try:
@@ -913,14 +945,20 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
         os.chdir(run_dir)               # the cnf is built into the cwd
         build(config, pushout=False, enqueue=False, no_cleanup=False)
         entry = build_jobdesc(config)
-        entry.update(prodtools_entry_keys(
-            resolve_prodtools_dir(prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
-            user=user))
+        if not local:
+            # The worker code travels with grid jobs only.
+            entry.update(prodtools_entry_keys(
+                resolve_prodtools_dir(
+                    prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
+                user=user))
         njobs = njobs_of(entry)
         if njobs is None or njobs < 1 or njobs > ONCE_MAX_JOBS:
             raise ValueError(
                 f"--once needs between 1 and {ONCE_MAX_JOBS} jobs, the "
                 f"built cnf has njobs={njobs}")
+        if local:
+            return _start_local(run_dir, entry, njobs, parallel=parallel,
+                                launch=launch)
         # 'submitting' only from here: the one state that means "the grid
         # may have accepted a cluster this receipt does not name".
         run_receipt.update(run_dir, state='submitting', entry=entry)
@@ -940,6 +978,56 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
         outstage=jobsub_argv.outstage_for(entry['tarball'], user),
         prodtools_dir=entry.get('prodtools_dir'),
         submitted_utc=run_receipt._now())
+
+
+LOCAL_SUMMARY = 'summary.json'
+LOCAL_LOG = 'runlocal.log'
+
+
+def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
+    """`--once --local`: start runlocal on the cnf built in `run_dir`,
+    detached, and return the receipt `running` without waiting.
+
+    Its own session (start_new_session): the run outlives this process,
+    the MCP runner's shell and the MCP call; `kill <pid>` stops it, jobs
+    included (runlocal's SIGTERM handler). No inherited pipes: the MCP
+    runner captures stdout/stderr and waits for EOF, so a child holding
+    either would block the tool for the whole run -- stdin is /dev/null
+    and both outputs go to the log. The environment is inherited (ops +
+    the entry's Musing or tarball); each job re-sources the setup itself
+    with MUSE_WORK_DIR removed (runlocal.child_env).
+    """
+    import socket
+    import subprocess
+    from utils import code_cache, run_receipt
+    from utils.jobdesc import code_of, inloc_of
+    from utils.runlocal import DEFAULT_PARALLEL
+
+    parallel = parallel or DEFAULT_PARALLEL
+    launch = launch or subprocess.Popen
+    run_receipt.update(run_dir, state='starting', executor='local',
+                       entry=entry)
+    summary = os.path.join(run_dir, LOCAL_SUMMARY)
+    log = os.path.join(run_dir, LOCAL_LOG)
+    argv = [sys.executable,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'runlocal.py'),
+            '--jobdef', os.path.join(run_dir, entry['tarball']),
+            '--inloc', inloc_of(entry),
+            '--first', '0', '--num', str(njobs),
+            '--parallel', str(parallel),
+            '--workdir', run_dir,
+            '--json', summary]
+    if code_of(entry):
+        argv += ['--code-root', code_cache.unpacked(code_of(entry))]
+    with open(log, 'w') as fh:
+        proc = launch(argv, cwd=run_dir, stdin=subprocess.DEVNULL,
+                      stdout=fh, stderr=subprocess.STDOUT,
+                      start_new_session=True)
+    return run_receipt.update(
+        run_dir, state='running', host=socket.getfqdn(), pid=proc.pid,
+        started_utc=run_receipt._now(), summary=summary, log=log,
+        njobs=njobs, parallel=parallel)
 
 
 def _build_job_args(config):

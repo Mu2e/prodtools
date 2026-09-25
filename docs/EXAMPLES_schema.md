@@ -394,7 +394,10 @@ reading the code:
   undeclared parents). An outstage entry CANNOT be enqueued as a
   campaign: verify_row is fail-closed against SAM, so with nothing
   declared every index reads as missing and each tick would recover the
-  whole row forever. Build it and submit it by hand.
+  whole row forever. Submit it with `json2jobdef --once` (every job in one
+  jobsub_submit, a receipt, nothing in SAM), or run it on this node with
+  `json2jobdef --once --local` (runlocal started detached, the same
+  receipt); `run_status` on the read-only MCP server reports on either.
 - `runlocal` runs cnf jobs on the current node, several at a time, and
   pushes NOTHING: no pushOutput, no SAM declare, no manifest. It shares
   the worker's own prep (`runmu2e.process_jobdef`), so a local run

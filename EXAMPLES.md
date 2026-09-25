@@ -309,8 +309,10 @@ otherwise name parents SAM has never heard of.
 An outstage entry **cannot be enqueued as a campaign**: campaign
 verification is fail-closed against SAM, so with nothing declared every
 index reads as missing and each tick would recover the whole row,
-forever. Build it and submit it by hand — or run it on this node with
-`runlocal` (section 11), which pushes nothing at all.
+forever. Submit it with `json2jobdef --once` (every job in one
+jobsub_submit, a receipt, nothing in SAM), or run it on this node with
+`json2jobdef --once --local`, which starts `runlocal` (section 11)
+detached under the same receipt. Neither pushes anything to SAM.
 
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
