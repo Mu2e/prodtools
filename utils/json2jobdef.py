@@ -781,8 +781,8 @@ def main(argv=None):
                         'where, and run_status reports. Excludes '
                         '--prodtools-dir.')
     p.add_argument('--parallel', type=int, default=None,
-                   help='With --local: jobs at once (default 4, as '
-                        'runlocal -j).')
+                   help=f'With --local: jobs at once (default 4, as '
+                        f'runlocal -j; at most {MAX_LOCAL_PARALLEL}).')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
                         'Auto-increments tarball version.')
@@ -813,6 +813,13 @@ def main(argv=None):
         sys.exit("json2jobdef: --parallel requires --local")
     if args.parallel is not None and args.parallel < 1:
         sys.exit("json2jobdef: --parallel must be at least 1")
+    if args.parallel is not None and args.parallel > MAX_LOCAL_PARALLEL:
+        from utils.runlocal import GB_PER_JOB
+        sys.exit(f"json2jobdef: --local runs at most {MAX_LOCAL_PARALLEL} "
+                 f"jobs at once, got --parallel {args.parallel}: each "
+                 f"holds ~{GB_PER_JOB:g} GB on a shared interactive node. "
+                 f"A larger run belongs on the grid (--once without "
+                 f"--local), or on runlocal directly.")
     if args.local and args.prodtools_dir is not None:
         sys.exit("json2jobdef: --local runs this checkout's runlocal on "
                  "this node; --prodtools-dir names worker code for grid "
@@ -939,9 +946,9 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
             sys.exit(
                 f"json2jobdef: --local runs cnf indices 0..njobs-1, but "
                 f"this entry has firstjob={firstjob}. Run that window by "
-                f"hand with `runlocal --first {firstjob} --num "
-                f"{config.get('njobs')}` against the built cnf, or drop "
-                f"firstjob from the entry.")
+                f"hand: build the cnf with json2jobdef, then run "
+                f"`runlocal --first {firstjob} --num {config.get('njobs')}` "
+                f"on it; or drop firstjob from the entry.")
 
     name = run_receipt.run_name(get_parfile_name(config))
     try:
@@ -994,6 +1001,10 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
 
 LOCAL_SUMMARY = 'summary.json'
 LOCAL_LOG = 'runlocal.log'
+# Jobs at once for --once --local: each is ~2.5 GB (runlocal.GB_PER_JOB)
+# on a shared interactive node, and every run_local call starts its own
+# runlocal, so concurrent runs add up. Larger runs go to the grid.
+MAX_LOCAL_PARALLEL = 16
 
 
 def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
@@ -1022,7 +1033,9 @@ def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
                        entry=entry)
     summary = os.path.join(run_dir, LOCAL_SUMMARY)
     log = os.path.join(run_dir, LOCAL_LOG)
-    argv = [sys.executable,
+    # -u: stdout is the log FILE, so a buffered driver would show no
+    # progress during the run and lose it to SIGKILL or the OOM killer.
+    argv = [sys.executable, '-u',
             os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          'runlocal.py'),
             '--jobdef', os.path.join(run_dir, entry['tarball']),

@@ -20547,8 +20547,11 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
         self.assertFalse(self.calls['build_kwargs'].get('pushout'))
         argv = self.calls['argv']
         self.assertEqual(argv[0], sys.executable)
-        self.assertTrue(argv[1].endswith(os.path.join('utils', 'runlocal.py')))
-        self.assertEqual(argv[2:], [
+        # -u: the log is a file, so a buffered driver would show no
+        # progress during the run and lose it on SIGKILL or OOM.
+        self.assertEqual(argv[1], '-u')
+        self.assertTrue(argv[2].endswith(os.path.join('utils', 'runlocal.py')))
+        self.assertEqual(argv[3:], [
             '--jobdef', os.path.join(self.run_dir, self.NAME + '.tar'),
             '--inloc', 'tape', '--first', '0', '--num', '3',
             '--parallel', '4', '--workdir', self.run_dir, '--json', summary])
@@ -20606,6 +20609,10 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self._run(self._config(firstjob=5))
         self.assertIn('firstjob', str(ctx.exception))
+        # Nothing is built yet when this refuses: the way out says to
+        # build the cnf first, not to use one that does not exist.
+        self.assertIn('build the cnf with json2jobdef', str(ctx.exception))
+        self.assertIn('runlocal --first 5 --num 3', str(ctx.exception))
         self.assertEqual(os.listdir(self.root), [])
 
     def test_a_used_name_points_at_a_possibly_running_local_run(self):
@@ -20643,6 +20650,53 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=extra) as ctx:
                 self.j.main(base + extra)
             self.assertIn(want, str(ctx.exception))
+
+    def test_parallel_above_the_cap_is_refused(self):
+        """Each job is ~2.5 GB on a shared interactive node."""
+        self.assertEqual(self.j.MAX_LOCAL_PARALLEL, 16)
+        base = ['--json', '/nope.json', '--desc', 'a', '--dsconf', 'b',
+                '--once', '--local', '--parallel']
+        with self.assertRaises(SystemExit) as ctx:
+            self.j.main(base + ['17'])
+        self.assertIn('16', str(ctx.exception))
+        self.assertIn('grid', str(ctx.exception))
+        self.assertIn('runlocal', str(ctx.exception))
+        # 16 itself passes the rule and gets as far as reading the json.
+        with patch.object(self.j, 'load_json',
+                          side_effect=RuntimeError('past the rules')):
+            with self.assertRaises(RuntimeError):
+                self.j.main(base + ['16'])
+
+    def test_main_exits_0_when_the_run_is_running(self):
+        """A started local run is success for the CLI, as a submitted
+        grid run is; the RECEIPT line is what the write tool reads."""
+        config = self._config()
+        for state, code in (('running', 0), ('failed', 1)):
+            with self.subTest(state=state):
+                receipt = {'name': self.NAME, 'state': state,
+                           'entry': {'big': 'thing'}}
+                out = io.StringIO()
+                with patch.object(self.j, 'load_json', return_value=[config]), \
+                     patch.object(self.j, 'find_json_entry',
+                                  return_value=dict(config)), \
+                     patch.object(self.j, 'submit_once',
+                                  return_value=receipt) as once, \
+                     patch.object(self.rr, 'runs_root',
+                                  return_value=self.root):
+                    with contextlib.redirect_stdout(out):
+                        with self.assertRaises(SystemExit) as ctx:
+                            self.j.main(['--json', '/j.json',
+                                         '--desc', 'CeEndpoint',
+                                         '--dsconf', 'T1', '--once',
+                                         '--local', '--parallel', '2'])
+                self.assertEqual(ctx.exception.code, code)
+                self.assertEqual(once.call_args[1]['local'], True)
+                self.assertEqual(once.call_args[1]['parallel'], 2)
+                self.assertIn(
+                    'RECEIPT ' + os.path.join(self.root, self.NAME,
+                                              self.rr.RECEIPT),
+                    out.getvalue().splitlines())
+                self.assertNotIn('big', out.getvalue())
 
 
 class TestRunLocalTool(unittest.TestCase):
