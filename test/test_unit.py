@@ -18784,9 +18784,6 @@ class TestReadBackValidation(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn('BAD', out.getvalue())
 
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
-
 
 class TestInferDatasetLocationImports(unittest.TestCase):
     """The function body imports SAMError lazily; it must execute under the
@@ -19810,3 +19807,7 @@ class TestLocalityAuthFailureIsNotMissing(unittest.TestCase):
         self.assertIn('token is valid', probs[0].detail)
         self.assertIn('klist', probs[0].detail)
         self.assertNotIn('absent', probs[0].detail)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
