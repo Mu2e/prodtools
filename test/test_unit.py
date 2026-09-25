@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import importlib.machinery
@@ -19807,6 +19808,102 @@ class TestLocalityAuthFailureIsNotMissing(unittest.TestCase):
         self.assertIn('token is valid', probs[0].detail)
         self.assertIn('klist', probs[0].detail)
         self.assertNotIn('absent', probs[0].detail)
+
+
+class TestCodeCache(unittest.TestCase):
+    """utils/code_cache: one unpack per tarball CONTENT, shared by every
+    cnf build and local run of it. Silent, because the write MCP server
+    calls it in-process and its stdout carries the protocol."""
+
+    def setUp(self):
+        from utils import code_cache
+        self.cc = code_cache
+        self.dir = _mkdtemp()
+        self.root = os.path.join(self.dir, 'cache')
+        self.code = _make_code_tarball(os.path.join(self.dir, 'Code.tar.bz2'))
+
+    @staticmethod
+    def _sha(path):
+        with open(path, 'rb') as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+    def test_a_miss_unpacks_under_the_content_hash(self):
+        got = self.cc.unpacked(self.code, self.root)
+        self.assertEqual(got, os.path.join(self.root, self._sha(self.code)))
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertTrue(os.path.isfile(
+            os.path.join(got, 'Code', 'lib', 'libFake.so')))
+
+    def test_a_hit_does_not_open_the_tarball_again(self):
+        first = self.cc.unpacked(self.code, self.root)
+        with patch.object(self.cc.tarfile, 'open',
+                          side_effect=AssertionError('re-extracted')):
+            self.assertEqual(self.cc.unpacked(self.code, self.root), first)
+
+    def test_the_key_is_the_content_not_the_file_name(self):
+        other = os.path.join(self.dir, 'Renamed.tar.bz2')
+        shutil.copy(self.code, other)
+        self.assertEqual(self.cc.unpacked(self.code, self.root),
+                         self.cc.unpacked(other, self.root))
+        self.assertEqual(len(os.listdir(self.root)), 1)
+
+    def test_no_code_setup_is_refused_and_leaves_nothing(self):
+        bad = _make_code_tarball(os.path.join(self.dir, 'NoSetup.tar.bz2'),
+                                 with_setup=False)
+        with self.assertRaises(ValueError) as ctx:
+            self.cc.unpacked(bad, self.root)
+        self.assertIn('Code/setup.sh', str(ctx.exception))
+        self.assertIn('muse tarball', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_tarball_that_is_not_bzip2_is_refused_and_leaves_nothing(self):
+        bad = _make_code_tarball(os.path.join(self.dir, 'Plain.tar'),
+                                 bzip2=False)
+        with self.assertRaises(ValueError) as ctx:
+            self.cc.unpacked(bad, self.root)
+        self.assertIn('bzip2', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_relative_and_missing_paths_are_refused(self):
+        for bad in ('Code.tar.bz2',
+                    os.path.join(self.dir, 'nope.tar.bz2'),
+                    None):
+            with self.assertRaises(ValueError, msg=bad):
+                self.cc.unpacked(bad, self.root)
+        self.assertFalse(os.path.exists(self.root))
+
+    def test_a_lost_rename_race_returns_the_winners_tree(self):
+        """Two builds of one new tarball at once (autoresearch starts
+        several stages together): the loser uses the winner's tree and
+        leaves no part directory behind."""
+        def racing(src, dst):
+            shutil.copytree(src, dst)          # the other process won
+            raise OSError(39, 'Directory not empty', dst)
+        with patch.object(self.cc.os, 'rename', side_effect=racing):
+            got = self.cc.unpacked(self.code, self.root)
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertEqual(os.listdir(self.root), [os.path.basename(got)])
+
+    def test_a_stale_part_dir_from_a_killed_unpack_is_left_alone(self):
+        stale = os.path.join(self.root, self._sha(self.code) + '.part.99999')
+        os.makedirs(os.path.join(stale, 'Code'))
+        got = self.cc.unpacked(self.code, self.root)
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+        self.assertTrue(os.path.isdir(stale))
+
+    def test_it_never_writes_to_stdout(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.cc.unpacked(self.code, self.root)
+            self.cc.unpacked(self.code, self.root)
+        self.assertEqual(out.getvalue(), '')
+
+    def test_the_default_root_sits_next_to_runs(self):
+        from utils import run_receipt
+        self.assertEqual(self.cc.cache_root('alice'),
+                         '/exp/mu2e/data/users/alice/prodtools/code')
+        self.assertEqual(os.path.dirname(self.cc.cache_root('alice')),
+                         os.path.dirname(run_receipt.runs_root('alice')))
 
 
 if __name__ == '__main__':
