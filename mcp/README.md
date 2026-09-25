@@ -168,8 +168,11 @@ it. It also takes a code-tarball entry (`code`, no `simjob_setup`): the
 tarball is unpacked once into
 `/exp/mu2e/data/users/$USER/prodtools/code/<sha256>/`, and its
 `Code/setup.sh` is sourced where a Musing's `setup.sh` would be. Nothing
-clears that cache: delete a `<sha256>` directory to free it. `push_cnf`
-refuses code-tarball entries.
+clears that cache. To free an entry nothing is using, first `mv` its
+`<sha256>` directory aside, then delete the moved copy: an interrupted
+`rm -rf` in place can leave `Code/setup.sh` behind, which still counts
+as a hit. A `<sha256>.part.*` directory is what a killed unpack leaves;
+it can be deleted. `push_cnf` refuses code-tarball entries.
 
 `push_cnf(..., prodtools_dir=...)` forwards `--prodtools-dir` so a
 checkout can be run before its release lands on cvmfs; it is refused

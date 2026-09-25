@@ -12264,7 +12264,7 @@ class TestPushCnfTool(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             self.tools.push_cnf(json=path, desc='D', dsconf='C',
                                 slice_size=500, run_as='self')
-        self.assertIn('simjob_setup', str(ctx.exception))
+        self.assertIn('neither simjob_setup nor code', str(ctx.exception))
 
     def test_find_json_entry_ambiguity_becomes_valueerror_not_systemexit(self):
         # find_json_entry sys.exit()s on 0 or >1 matches — fine for a
@@ -19812,7 +19812,7 @@ class TestLocalityAuthFailureIsNotMissing(unittest.TestCase):
 
 class TestCodeCache(unittest.TestCase):
     """utils/code_cache: one unpack per tarball CONTENT, shared by every
-    cnf build and local run of it. Silent, because the write MCP server
+    cnf build of it. Silent, because the write MCP server
     calls it in-process and its stdout carries the protocol."""
 
     def setUp(self):
@@ -19910,6 +19910,80 @@ class TestCodeCache(unittest.TestCase):
             self.cc.unpacked(self.code, self.root)
         self.assertEqual(out.getvalue(), '')
 
+    def _spy_extractall(self):
+        """Record each TarFile.extractall call's keyword arguments and
+        do the real extraction (warnings silenced: the no-filter case
+        warns on a backported 3.9)."""
+        calls = []
+        real = tarfile.TarFile.extractall
+
+        def spy(tar, path='.', *args, **kwargs):
+            calls.append(kwargs)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                return real(tar, path, *args, **kwargs)
+        return calls, patch.object(tarfile.TarFile, 'extractall', spy)
+
+    @unittest.skipUnless(hasattr(tarfile, 'tar_filter'),
+                         'this interpreter has no extraction filters')
+    def test_the_tar_filter_is_pinned_where_filters_exist(self):
+        """'tar', not the interpreter's default: 3.14 defaults to 'data',
+        which would refuse the absolute or symlink members a muse
+        tarball may carry."""
+        calls, spy = self._spy_extractall()
+        with spy:
+            self.cc.unpacked(self.code, self.root)
+        self.assertEqual(calls, [{'filter': 'tar'}])
+
+    def test_no_filter_is_passed_where_filters_do_not_exist(self):
+        calls, spy = self._spy_extractall()
+        bare = SimpleNamespace(open=tarfile.open, ReadError=tarfile.ReadError)
+        with spy, patch.object(self.cc, 'tarfile', bare):
+            got = self.cc.unpacked(self.code, self.root)
+        self.assertEqual(calls, [{}])
+        self.assertTrue(os.path.isfile(os.path.join(got, 'Code', 'setup.sh')))
+
+    def _tarball_with(self, name, member):
+        path = os.path.join(self.dir, name)
+        with tarfile.open(path, 'w:bz2') as tar:
+            setup = tarfile.TarInfo('Code/setup.sh')
+            setup.size = 2
+            tar.addfile(setup, io.BytesIO(b'x\n'))
+            tar.addfile(member)
+        return path
+
+    def test_the_absolute_backing_symlink_survives(self):
+        """Every muse tarball carries Code/backing -> /cvmfs/...; the
+        'data' filter would refuse it."""
+        link = tarfile.TarInfo('Code/backing')
+        link.type = tarfile.SYMTYPE
+        link.linkname = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/X'
+        got = self.cc.unpacked(
+            self._tarball_with('Backing.tar.bz2', link), self.root)
+        self.assertEqual(os.readlink(os.path.join(got, 'Code', 'backing')),
+                         link.linkname)
+
+    @unittest.skipUnless(hasattr(tarfile, 'tar_filter'),
+                         'this interpreter has no extraction filters')
+    def test_a_member_the_filter_refuses_is_a_valueerror(self):
+        """The contract is ValueError or OSError: the write server's
+        callers catch those, not tarfile's FilterError."""
+        escape = tarfile.TarInfo('../escape')
+        with self.assertRaises(ValueError) as ctx:
+            self.cc.unpacked(
+                self._tarball_with('Escape.tar.bz2', escape), self.root)
+        self.assertIn('cannot be unpacked', str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'escape')))
+
+    def test_unpacking_raises_no_warning(self):
+        import warnings
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter('always')
+            self.cc.unpacked(self.code, self.root)
+        self.assertEqual([str(w.message) for w in seen], [])
+
     def test_the_default_root_sits_next_to_runs(self):
         from utils import run_receipt
         self.assertEqual(self.cc.cache_root('alice'),
@@ -19955,7 +20029,7 @@ class TestCodeEntryPushParams(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             self.tools._select_push_params(self.json_path, 'D', 'C')
         self.assertIn('submit_once', str(ctx.exception))
-        self.assertIn('run_local', str(ctx.exception))
+        self.assertNotIn('run_local', str(ctx.exception))
         self.assertFalse(os.path.exists(self.root))     # nothing unpacked
 
     def test_allow_code_returns_the_unpacked_setup_script(self):
@@ -19990,6 +20064,19 @@ class TestCodeEntryPushParams(unittest.TestCase):
                                  'stdout': f'RECEIPT {receipt}\n'}) as run:
             self.tools.submit_once(self.json_path, 'D', 'C', 'self')
         self.assertEqual(run.call_args[1]['simjob_setup'], self.setup)
+
+    def test_an_entry_with_neither_setup_nor_code_says_so(self):
+        """submit_once reaches the same refusal as push_cnf, so it must
+        not speak only of simjob_setup."""
+        path = self._write({}, 'neither.json')
+        for allow in (False, True):
+            with self.assertRaises(ValueError, msg=allow) as ctx:
+                self.tools._select_push_params(
+                    path, 'D', 'C', allow_code=allow)
+            self.assertIn('neither simjob_setup nor code',
+                          str(ctx.exception))
+            self.assertTrue(str(ctx.exception).startswith('push_cnf: '))
+        self.assertFalse(os.path.exists(self.root))
 
     def test_push_cnf_refuses_before_running_anything(self):
         with patch('prodtools_mcp_write.runner.run_cli') as run:

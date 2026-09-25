@@ -70,8 +70,8 @@ def _select_push_params(json_path, desc, dsconf, allow_code=False):
     accept one as an argument.
 
     A code-tarball entry (`code`, no `simjob_setup`) has its Musing
-    INSIDE the tarball: with `allow_code` (submit_once, run_local) the
-    returned setup script is that tarball's unpacked Code/setup.sh (see
+    INSIDE the tarball: with `allow_code` (submit_once) the returned
+    setup script is that tarball's unpacked Code/setup.sh (see
     _code_setup); without it (push_cnf) the entry is refused.
     """
     path = Path(json_path)
@@ -100,7 +100,8 @@ def _select_push_params(json_path, desc, dsconf, allow_code=False):
     if not is_g4bl and not simjob_setup:
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
-            f"{json_path!r} has no simjob_setup field")
+            f"{json_path!r} has neither simjob_setup nor code: it names "
+            f"no Musing and no code tarball to build against")
 
     tarball_desc = get_tarball_desc(entry) or desc
     return simjob_setup, tarball_desc
@@ -123,9 +124,9 @@ def _code_setup(entry, desc, dsconf, json_path, allow_code):
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
             f"{json_path!r} is a code-tarball entry (`code`, no "
-            f"simjob_setup). Those go through submit_once or run_local "
-            f"only: a production cnf needs its code tarball on a durable "
-            f"path mu2epro can read first.")
+            f"simjob_setup). Those go through submit_once only: a "
+            f"production cnf needs its code tarball on a durable path "
+            f"mu2epro can read first.")
     try:
         root = code_cache.unpacked(entry['code'])
     except (ValueError, OSError) as e:

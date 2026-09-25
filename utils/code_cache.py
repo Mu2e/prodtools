@@ -4,18 +4,19 @@
 A code-tarball entry (`code` set, no `simjob_setup`) has no Musing to
 source: its environment is the tarball's own `Code/setup.sh`, the same
 script the grid worker sources from $INPUT_TAR_DIR_LOCAL. Building its
-cnf, or running it locally, needs the tarball unpacked somewhere. This
-unpacks each tarball ONCE, under a directory named for the sha256 of its
-bytes, so every build and local run of the same content shares one
-tree, and a tarball rebuilt in place gets a new one.
+cnf needs the tarball unpacked somewhere. This unpacks each tarball
+ONCE, under a directory named for the sha256 of its bytes, so every
+build of the same content shares one tree, and a tarball rebuilt in
+place gets a new one.
 
 Pure stdlib and SILENT: the write MCP server calls it in-process, and
 that server's stdout carries the MCP protocol. runlocal.unpack_code
 prints progress and sys.exit()s, which is right for a CLI and fatal
 there.
 
-Nothing evicts entries. Delete a <sha256> directory to free it; that is
-safe while no local run is using it (run_status says which are running).
+Nothing evicts entries. To free one nothing is using, mv its <sha256>
+directory aside and delete that: an rm -rf interrupted in place can
+leave Code/setup.sh, which still counts as a hit.
 """
 
 import getpass
@@ -67,11 +68,22 @@ def unpacked(tarball, root=None):
     try:
         try:
             with tarfile.open(tarball, 'r:bz2') as tar:
-                tar.extractall(part)
+                # Pinned, not left to the interpreter: RHEL's 3.9 backport
+                # warns, 3.12 trusts fully, 3.14 defaults to 'data'. 'tar',
+                # not 'data': every muse tarball carries Code/backing, a
+                # symlink to its /cvmfs release, and 'data' refuses a link
+                # to an absolute path. As trusted as before, just explicit.
+                if hasattr(tarfile, 'tar_filter'):
+                    tar.extractall(part, filter='tar')
+                else:
+                    tar.extractall(part)
         except tarfile.ReadError as exc:
             raise ValueError(
                 f'code tarball {tarball} is not a bzip2 tar file '
                 f'({exc}): build it with `muse tarball`') from exc
+        except tarfile.TarError as exc:     # a member the filter refuses
+            raise ValueError(
+                f'code tarball {tarball} cannot be unpacked: {exc}') from exc
         if not os.path.isfile(os.path.join(part, SETUP)):
             raise ValueError(
                 f'code tarball {tarball} has no Code/setup.sh: build it '
