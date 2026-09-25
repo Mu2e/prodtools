@@ -20665,5 +20665,142 @@ class TestRunLocalTool(unittest.TestCase):
         self.assertIn('run_local', server.TOOL_NAMES)
 
 
+class TestMcpRunStatusLocal(unittest.TestCase):
+    """run_status on a `--once --local` run: runlocal's own summary once
+    it wrote one, else whether its process is still there. Never asks
+    condor, never rewrites the receipt."""
+
+    NAME = 'cnf.alice.CeEndpoint.T1.0'
+
+    def setUp(self):
+        from prodtools_mcp import runtime
+        from prodtools_mcp.tools import runs
+        from utils import run_receipt
+        self.runs, self.rr = runs, run_receipt
+        self.addCleanup(runtime.set_shared, False)
+        self.root = _mkdtemp()
+        self.dir = run_receipt.reserve(self.root, self.NAME,
+                                       {'tarball': self.NAME + '.tar'})
+        self.summary = os.path.join(self.dir, 'summary.json')
+        self.log = os.path.join(self.dir, 'runlocal.log')
+
+    def _running(self):
+        self.rr.update(self.dir, state='running', executor='local',
+                       host='node.fnal.gov', pid=4242, njobs=3, parallel=2,
+                       summary=self.summary, log=self.log)
+
+    def _output(self, index):
+        return os.path.join(self.dir, f'job_{index:06d}',
+                            f'dts.alice.CeEndpoint.T1.001430_{index:08d}.art')
+
+    def _write_summary(self, rcs):
+        jobs = [{'index': i, 'rc': rc, 'timed_out': rc == 124,
+                 'seconds': 1.0,
+                 'dir': os.path.join(self.dir, f'job_{i:06d}'),
+                 'log': os.path.join(self.dir, f'job_{i:06d}', 'stdout.log'),
+                 'outputs': [self._output(i)]}
+                for i, rc in sorted(rcs.items())]
+        with open(self.summary, 'w') as fh:
+            json.dump({'jobdef': 'x', 'workdir': self.dir, 'jobs': jobs,
+                       'ok': sum(1 for j in jobs if j['rc'] == 0),
+                       'failed': [j['index'] for j in jobs if j['rc'] != 0]},
+                      fh)
+
+    def _status(self, alive=True, host='node.fnal.gov'):
+        seen = {}
+
+        def alive_fn(pid, path):
+            seen['alive'] = (pid, path)
+            return alive
+
+        def condor(*args, **kwargs):
+            raise AssertionError('a local run never asks condor')
+        out = self.runs.run_status(
+            self.NAME, user='alice', runs_root=self.root,
+            clusters_fn=condor, codes_fn=condor,
+            alive_fn=alive_fn, host_fn=lambda: host)
+        return out, seen
+
+    def test_a_summary_with_every_job_ok_is_done_with_the_output_paths(self):
+        self._running()
+        self._write_summary({0: 0, 1: 0, 2: 0})
+        out, seen = self._status()
+        self.assertEqual(out['state'], 'done')
+        self.assertEqual(out['executor'], 'local')
+        self.assertEqual(out['jobs'], {'expected': 3, 'ok': 3,
+                                       'failed': [], 'unknown': []})
+        self.assertEqual(out['outputs'][2], [self._output(2)])
+        self.assertNotIn('queue', out)
+        self.assertEqual(seen, {})
+
+    def test_a_failed_or_timed_out_job_is_short_with_its_exit_code(self):
+        self._running()
+        self._write_summary({0: 0, 1: 124, 2: 3})
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'short')
+        self.assertEqual(out['jobs']['failed'], [1, 2])
+        self.assertEqual(out['jobs']['exit_codes'], {1: 124, 2: 3})
+        self.assertEqual(sorted(out['outputs']), [0])
+
+    def test_an_index_missing_from_the_summary_is_unknown(self):
+        self._running()
+        self._write_summary({0: 0, 2: 0})
+        out, _ = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertEqual(out['jobs']['unknown'], [1])
+        self.assertIn('summary', out['note'])
+
+    def test_no_summary_and_a_live_process_is_running(self):
+        self._running()
+        out, seen = self._status(alive=True)
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(seen['alive'], (4242, self.summary))
+
+    def test_no_summary_and_no_process_is_failed_pointing_at_the_log(self):
+        self._running()
+        out, _ = self._status(alive=False)
+        self.assertEqual(out['state'], 'failed')
+        self.assertIn('pid 4242', out['note'])
+        self.assertIn(self.log, out['note'])
+
+    def test_no_summary_from_another_host_is_unknown_naming_the_host(self):
+        self._running()
+        out, seen = self._status(host='other.fnal.gov')
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('node.fnal.gov', out['note'])
+        self.assertNotIn('alive', seen)
+
+    def test_a_process_table_that_will_not_say_is_unknown(self):
+        self._running()
+        out, _ = self._status(alive=None)
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('/proc/4242', out['note'])
+
+    def test_a_starting_receipt_is_returned_as_it_is(self):
+        self.rr.update(self.dir, state='starting', executor='local')
+        out, seen = self._status()
+        self.assertEqual(out['state'], 'starting')
+        self.assertEqual(seen, {})
+
+    def test_the_default_liveness_check_reads_the_command_line(self):
+        """kill(pid, 0) would answer for any process that reused the pid;
+        runlocal's command line names this run's summary path."""
+        proc = subprocess.Popen(
+            [sys.executable, '-c',
+             'import time; print("ready", flush=True); time.sleep(60)',
+             '--json', self.summary],
+            stdout=subprocess.PIPE)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        proc.stdout.readline()                 # exec'd: cmdline is final
+        self.assertTrue(self.runs._default_alive_fn(proc.pid, self.summary))
+        self.assertFalse(self.runs._default_alive_fn(
+            proc.pid, self.summary + '.other'))
+        proc.kill()
+        proc.wait()
+        self.assertFalse(self.runs._default_alive_fn(proc.pid, self.summary))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

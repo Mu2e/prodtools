@@ -35,7 +35,7 @@ WHAT IT ANSWERS:
 - "How big is this dataset?"  -> dataset_details(dataset="dig.mu2e...art")
 - "Where did this come from?" -> trace_provenance(name="...", direction="up")
 - "Does SAM know this file?"  -> locate_file(name="cnf.mu2e....0.tar")
-- "How did my --once run go?" -> run_status(name="cnf.<login>....0", user="<login>")
+- "How did my --once / run_local run go?" -> run_status(name="cnf.<login>....0", user="<login>")
 - "Where are its files?"      -> dataset_files(dataset="nts....root", location="scratch")
 
 READING THE RESULTS:
@@ -248,16 +248,19 @@ def create_mcp_server():
     def dataset_details(dataset: str) -> dict:
         return TOOL_FUNCTIONS['dataset_details'](dataset=dataset)
 
-    @mcp.tool(description='How a one-shot outstage run (json2jobdef '
-                          '--once / submit_once) went: its receipt, the '
-                          'live queue, and after the cluster left the '
-                          'queue the per-job exit codes and the output '
-                          'paths on outstage. Such a run has no ledger '
-                          'row and nothing in SAM, so no other tool sees '
-                          'it. name is the cnf name without ".tar". Say '
-                          'whose run: user="<login>", or mine=true on '
-                          'your own stdio server. state="unknown" is '
-                          'never a failure and never a success.')
+    @mcp.tool(description='How a one-shot run went: json2jobdef --once / '
+                          'submit_once on the grid, or --once --local / '
+                          'run_local on one node. Its receipt; for a grid '
+                          'run the live queue, and once the cluster left '
+                          'the queue the per-job exit codes and the output '
+                          'paths on outstage; for a local run runlocal\'s '
+                          'own summary, or whether it is still running. '
+                          'Such a run has no ledger row and nothing in '
+                          'SAM, so no other tool sees it. name is the cnf '
+                          'name without ".tar". Say whose run: '
+                          'user="<login>", or mine=true on your own stdio '
+                          'server. state="unknown" is never a failure and '
+                          'never a success.')
     def run_status(name: str, mine: bool = False,
                    user: Optional[str] = None) -> dict:
         return TOOL_FUNCTIONS['run_status'](name=name, mine=mine, user=user)
