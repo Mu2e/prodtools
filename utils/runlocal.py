@@ -245,15 +245,18 @@ def child_env():
             if key != 'MUSE_WORK_DIR'}
 
 
-# The jobs running now, so SIGTERM to the driver can end them too. Each
-# job has its own session (kill_job signals its GROUP), so a signal to
-# the driver never reaches them: without this, `kill <driver pid>` left
-# every running mu2e orphaned and still writing. Keyed by id(): a Popen
-# is hashable but the tests' stand-ins are not.
+# The jobs running now, so a stop signal to the driver can end them too.
+# Each job has its own session (kill_job signals its GROUP), so a signal
+# to the driver never reaches them: without this, `kill <driver pid>`,
+# Ctrl-C or a closed terminal left every running mu2e orphaned and still
+# writing. Keyed by id(): a Popen is hashable but the tests' stand-ins
+# are not.
 _RUNNING = {}
-# Held across each Popen AND its registration, and by the SIGTERM
-# handler until the process exits, so no job can start unseen by it.
+# Held across each Popen AND its registration, and by the stop handler
+# until the process exits, so no job can start unseen by it.
 _RUNNING_LOCK = threading.Lock()
+# `kill <pid>`, Ctrl-C, and the terminal going away: each runs _terminate.
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
 
 def _note(text):
@@ -281,18 +284,20 @@ class _SafeLog:
 
 
 def _terminate(signum, frame):
-    """SIGTERM to the driver: end every running job's group, then exit
-    128+signum WITHOUT a summary -- a missing summary is how a reader
-    tells a stopped run from a finished one (see write_summary). The lock
-    is never released: the process ends here.
+    """A stop signal (STOP_SIGNALS) to the driver: end every running
+    job's group, then exit 128+signum WITHOUT a summary -- a missing
+    summary is how a reader tells a stopped run from a finished one (see
+    write_summary). The lock is never released: the process ends here.
 
-    Ignores SIGTERM first: `_RUNNING_LOCK` is a plain (non-reentrant)
-    Lock, and CPython delivers a second SIGTERM by calling this same
-    handler again, reentrantly, on the main thread -- even mid-handler.
-    Without this, a second signal would re-enter `.acquire()` on a lock
-    this same call already holds and deadlock forever.
+    Ignores every stop signal first: `_RUNNING_LOCK` is a plain
+    (non-reentrant) Lock, and CPython delivers a second signal by calling
+    this same handler again, reentrantly, on the main thread -- even
+    mid-handler. Without this, a second signal (another `kill`, a Ctrl-C
+    after a SIGTERM) would re-enter `.acquire()` on a lock this same call
+    already holds and deadlock forever.
     """
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
     try:
         _RUNNING_LOCK.acquire()
         procs = list(_RUNNING.values())
@@ -308,7 +313,11 @@ def _terminate(signum, frame):
                     os.killpg(proc.pid, signal.SIGTERM)
                 except OSError:
                     pass
-        _note(f"[local] SIGTERM: ending {len(procs)} running job(s)\n")
+        try:
+            name = signal.Signals(signum).name
+        except Exception:
+            name = f'signal {signum}'
+        _note(f"[local] {name}: ending {len(procs)} running job(s)\n")
         log = _SafeLog()
         for proc in procs:
             try:
@@ -323,9 +332,9 @@ def _terminate(signum, frame):
             pass
     finally:
         # os._exit drops buffered output otherwise, and the detached
-        # launcher (a later task) sends this process's stdout to a log
-        # file, so the flush above matters even though nothing reads it
-        # here.
+        # launcher (json2jobdef --once --local) sends this process's
+        # output to a log file, so the flush above matters even though
+        # nothing reads it here.
         os._exit(128 + signum)
 
 
@@ -375,7 +384,12 @@ def kill_job(proc, log=None):
         try:
             os.killpg(proc.pid, sig)
         except OSError as exc:
-            if log:
+            # No such group on the FIRST signal: the job is already gone
+            # (it ended after _terminate's pre-pass, or right at its
+            # timeout). Nothing failed; reap its launcher below, quietly.
+            gone = (sig == signal.SIGTERM
+                    and isinstance(exc, ProcessLookupError))
+            if log and not gone:
                 log.write(f"[local] could not signal job group: {exc}\n")
             break
         try:
@@ -685,12 +699,14 @@ def main(argv=None):
         sys.exit("runlocal: --timeout must be 0 (no limit) or positive")
 
     if args.one is not None:
-        # Child: cwd is already this job's directory. Reset SIGTERM to
-        # the default: a job forked while the driver's own handler had
-        # SIG_IGN set (mid-_terminate) would otherwise inherit that
-        # disposition, and its mu2e would then ignore a graceful SIGTERM
-        # entirely, dying only via SIGKILL after the full grace period.
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        # Child: cwd is already this job's directory. Reset the stop
+        # signals to the default: a job forked while the driver's own
+        # handler had SIG_IGN set (mid-_terminate) would otherwise inherit
+        # that disposition (SIG_IGN survives exec), and its mu2e would
+        # then ignore a graceful SIGTERM entirely, dying only via SIGKILL
+        # after the full grace period.
+        for sig in STOP_SIGNALS:
+            signal.signal(sig, signal.SIG_DFL)
         return run_one(args.one, args)
 
     if args.code and args.code_root is not None:
@@ -722,11 +738,19 @@ def main(argv=None):
     # The module, not bin/runlocal: that wrapper sources the Mu2e
     # environment, which this process already has and children inherit.
     args.entry_point = Path(__file__).resolve()
-    previous = signal.signal(signal.SIGTERM, _terminate)
+    previous = {}
+    for sig in STOP_SIGNALS:
+        if sig != signal.SIGTERM and signal.getsignal(sig) == signal.SIG_IGN:
+            # `nohup runlocal ... &` (or a shell's background job) ignores
+            # these on purpose: the run is meant to outlive the terminal,
+            # and a driver that survives orphans nothing.
+            continue
+        previous[sig] = signal.signal(sig, _terminate)
     try:
         return drive(args)
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == '__main__':

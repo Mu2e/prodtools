@@ -20182,19 +20182,22 @@ class TestRunLocalCodeRoot(unittest.TestCase):
 
 
 class TestRunLocalStop(unittest.TestCase):
-    """SIGTERM to the driver ends its jobs too. Each job runs in its own
-    session (so a timeout can kill its whole group), which also means a
-    signal to the driver alone never reached them: `kill <driver>` left
-    every mu2e orphaned and still writing."""
+    """SIGTERM (or Ctrl-C's SIGINT, or a hangup's SIGHUP) to the driver
+    ends its jobs too. Each job runs in its own session (so a timeout can
+    kill its whole group), which also means a signal to the driver alone
+    never reached them: `kill <driver>` left every mu2e orphaned and
+    still writing."""
+
+    STOP = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
     def setUp(self):
         from utils import runlocal
         self.rl = runlocal
         self.addCleanup(self._reset)
-        # `_terminate` sets SIG_IGN in THIS process (the test runner);
-        # restore whatever was in effect before this test ran.
-        self.addCleanup(signal.signal, signal.SIGTERM,
-                        signal.getsignal(signal.SIGTERM))
+        # `_terminate` sets SIG_IGN in THIS process (the test runner) for
+        # every stop signal; restore whatever was in effect before.
+        for sig in self.STOP:
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
 
     def _reset(self):
         if self.rl._RUNNING_LOCK.locked():
@@ -20244,7 +20247,31 @@ class TestRunLocalStop(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     self.rl._terminate(signal.SIGTERM, None)
-        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+        for sig in self.STOP:
+            self.assertIs(signal.getsignal(sig), signal.SIG_IGN, sig)
+
+    def test_sigint_and_sighup_stop_too_exiting_128_plus_the_signal(self):
+        for sig, code in ((signal.SIGINT, 130), (signal.SIGHUP, 129)):
+            with self.subTest(sig=sig):
+                fake = SimpleNamespace(pid=2 ** 30)
+                self.rl._RUNNING.clear()
+                self.rl._RUNNING[id(fake)] = fake
+                ended = []
+                try:
+                    with patch.object(
+                            self.rl, 'kill_job',
+                            side_effect=lambda proc, log=None:
+                            ended.append(proc.pid)), \
+                         patch.object(self.rl.os, '_exit',
+                                      side_effect=SystemExit) as exit_:
+                        with contextlib.redirect_stderr(io.StringIO()):
+                            with self.assertRaises(SystemExit):
+                                self.rl._terminate(sig, None)
+                finally:
+                    if self.rl._RUNNING_LOCK.locked():
+                        self.rl._RUNNING_LOCK.release()
+                self.assertEqual(ended, [fake.pid])
+                exit_.assert_called_once_with(code)
 
     def test_one_failing_job_does_not_stop_the_rest(self):
         fakes = [SimpleNamespace(pid=2 ** 30 + i) for i in range(2)]
@@ -20313,22 +20340,26 @@ class TestRunLocalStop(unittest.TestCase):
                 for fake in fakes:
                     self.rl._RUNNING[id(fake)] = fake
                 ended = []
-                with patch.object(
-                        self.rl, 'kill_job',
-                        side_effect=lambda proc, log=None:
-                        ended.append(proc.pid)), \
-                     patch.object(self.rl.os, '_exit',
-                                  side_effect=SystemExit) as exit_, \
-                     patch.object(self.rl.sys, 'stderr', broken_stderr):
-                    with self.assertRaises(SystemExit):
-                        self.rl._terminate(signal.SIGTERM, None)
-                # _terminate's real _RUNNING_LOCK is deliberately never
-                # released (the real process would have exited); release
-                # it now, BEFORE any assertion below that could fail and
-                # (under subTest) skip past this line -- otherwise the
-                # next sub-iteration's _terminate call deadlocks forever
-                # on its own .acquire().
-                self.rl._RUNNING_LOCK.release()
+                try:
+                    with patch.object(
+                            self.rl, 'kill_job',
+                            side_effect=lambda proc, log=None:
+                            ended.append(proc.pid)), \
+                         patch.object(self.rl.os, '_exit',
+                                      side_effect=SystemExit) as exit_, \
+                         patch.object(self.rl.sys, 'stderr', broken_stderr):
+                        with self.assertRaises(SystemExit):
+                            self.rl._terminate(signal.SIGTERM, None)
+                finally:
+                    # _terminate's real _RUNNING_LOCK is deliberately never
+                    # released (the real process would have exited).
+                    # Release it whatever happened above -- a regressed
+                    # handler raising something other than SystemExit
+                    # included -- or the next sub-iteration's _terminate
+                    # would block forever on its own .acquire() and hang
+                    # the suite instead of failing this test.
+                    if self.rl._RUNNING_LOCK.locked():
+                        self.rl._RUNNING_LOCK.release()
                 self.assertEqual(sorted(ended), sorted(f.pid for f in fakes))
                 exit_.assert_called_once_with(143)
 
@@ -20337,16 +20368,16 @@ class TestRunLocalStop(unittest.TestCase):
         (mid-_terminate) would otherwise inherit that disposition, and
         its mu2e would then ignore a graceful SIGTERM entirely, dying
         only via SIGKILL after the full grace period."""
-        before = signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        self.addCleanup(signal.signal, signal.SIGTERM, before)
+        for sig in self.STOP:
+            signal.signal(sig, signal.SIG_IGN)      # restored by setUp
         seen = {}
 
         def run_one(index, args):
-            seen['handler'] = signal.getsignal(signal.SIGTERM)
+            seen.update({sig: signal.getsignal(sig) for sig in self.STOP})
             return 0
         with patch.object(self.rl, 'run_one', side_effect=run_one):
             self.rl.main(['--jobdef', '/x/cnf.tar', '--one', '0'])
-        self.assertIs(seen['handler'], signal.SIG_DFL)
+        self.assertEqual(seen, {sig: signal.SIG_DFL for sig in self.STOP})
 
     def test_sig_ign_is_set_before_the_lock_is_acquired(self):
         """Pins the ordering IMPORTANT-1's fix depends on: a second
@@ -20354,9 +20385,11 @@ class TestRunLocalStop(unittest.TestCase):
         the lock acquisition."""
         seen = {}
 
+        stop = self.STOP
+
         class FakeLock:
             def acquire(self):
-                seen['disposition'] = signal.getsignal(signal.SIGTERM)
+                seen.update({sig: signal.getsignal(sig) for sig in stop})
                 return True
 
             def locked(self):
@@ -20366,8 +20399,8 @@ class TestRunLocalStop(unittest.TestCase):
             with patch.object(self.rl.os, '_exit', side_effect=SystemExit):
                 with contextlib.redirect_stderr(io.StringIO()):
                     with self.assertRaises(SystemExit):
-                        self.rl._terminate(signal.SIGTERM, None)
-        self.assertIs(seen['disposition'], signal.SIG_IGN)
+                        self.rl._terminate(signal.SIGINT, None)
+        self.assertEqual(seen, {sig: signal.SIG_IGN for sig in self.STOP})
 
     def test_a_job_is_registered_while_it_runs_and_removed_after(self):
         seen = []
@@ -20393,19 +20426,61 @@ class TestRunLocalStop(unittest.TestCase):
         self.assertEqual(seen, [True])
         self.assertEqual(self.rl._RUNNING, {})
 
-    def test_the_driver_installs_the_handler_and_restores_the_old_one(self):
-        before = signal.getsignal(signal.SIGTERM)
+    def _main_seeing_handlers(self):
         seen = {}
 
         def drive(args):
-            seen['handler'] = signal.getsignal(signal.SIGTERM)
+            seen.update({sig: signal.getsignal(sig) for sig in self.STOP})
             return 0
         with patch.object(self.rl, 'drive', side_effect=drive), \
              patch.object(self.rl, 'resolve_jobdef',
                           side_effect=lambda jobdef, workdir: jobdef):
             self.rl.main(['--jobdef', '/x/cnf.tar', '--workdir', _mkdtemp()])
-        self.assertIs(seen['handler'], self.rl._terminate)
-        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+        return seen
+
+    def test_the_driver_installs_the_handler_and_restores_the_old_one(self):
+        before = {}
+        for sig in self.STOP:          # a distinct handler per signal
+            before[sig] = lambda signum, frame: None
+            signal.signal(sig, before[sig])           # restored by setUp
+        seen = self._main_seeing_handlers()
+        self.assertEqual(seen, {sig: self.rl._terminate for sig in self.STOP})
+        for sig in self.STOP:
+            self.assertIs(signal.getsignal(sig), before[sig], sig)
+
+    def test_an_inherited_ignore_of_sigint_or_sighup_is_kept(self):
+        """`nohup runlocal ... &` ignores SIGHUP (and a shell's background
+        job SIGINT) on purpose: the run is meant to outlive the terminal,
+        and a driver that survives orphans nothing."""
+        for sig in (signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, signal.SIG_IGN)        # restored by setUp
+        seen = self._main_seeing_handlers()
+        self.assertIs(seen[signal.SIGTERM], self.rl._terminate)
+        self.assertIs(seen[signal.SIGINT], signal.SIG_IGN)
+        self.assertIs(seen[signal.SIGHUP], signal.SIG_IGN)
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+
+    def test_a_group_already_gone_is_reaped_without_a_log_line(self):
+        """A job that ended after _terminate's SIGTERM pre-pass has no
+        group left: ESRCH on the first signal is not a failure."""
+        waits = []
+        fake = SimpleNamespace(pid=2 ** 30,       # above any pid_max
+                               wait=lambda timeout=None: waits.append(timeout))
+        log = io.StringIO()
+        self.assertIsNone(self.rl.kill_job(fake, log))
+        self.assertEqual(log.getvalue(), '')
+        self.assertEqual(waits, [None])
+
+    def test_any_other_signal_failure_is_still_logged(self):
+        waits = []
+        fake = SimpleNamespace(pid=2 ** 30,
+                               wait=lambda timeout=None: waits.append(timeout))
+        log = io.StringIO()
+        with patch.object(self.rl.os, 'killpg',
+                          side_effect=PermissionError(errno.EPERM, 'no')):
+            self.rl.kill_job(fake, log)
+        self.assertIn('could not signal job group', log.getvalue())
+        self.assertEqual(waits, [None])
 
 
 class TestJson2jobdefOnceLocal(unittest.TestCase):
