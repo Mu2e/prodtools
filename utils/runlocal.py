@@ -260,11 +260,71 @@ def _terminate(signum, frame):
     """SIGTERM to the driver: end every running job's group, then exit
     128+signum WITHOUT a summary -- a missing summary is how a reader
     tells a stopped run from a finished one (see write_summary). The lock
-    is never released: the process ends here."""
-    _RUNNING_LOCK.acquire()
-    for proc in list(_RUNNING.values()):
-        kill_job(proc)
-    os._exit(128 + signum)
+    is never released: the process ends here.
+
+    Ignores SIGTERM first: `_RUNNING_LOCK` is a plain (non-reentrant)
+    Lock, and CPython delivers a second SIGTERM by calling this same
+    handler again, reentrantly, on the main thread -- even mid-handler.
+    Without this, a second signal would re-enter `.acquire()` on a lock
+    this same call already holds and deadlock forever.
+    """
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    try:
+        _RUNNING_LOCK.acquire()
+        procs = list(_RUNNING.values())
+        sys.stderr.write(f"[local] SIGTERM: ending {len(procs)} running "
+                         f"job(s)\n")
+        # SIGTERM every group up front so their grace periods overlap,
+        # instead of paying KILL_GRACE_SECONDS once per job serially;
+        # kill_job repeats the signal below and reports failures.
+        for proc in procs:
+            if proc.pid is not None and proc.pid > 1:
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except OSError:
+                    pass
+        for proc in procs:
+            try:
+                kill_job(proc, sys.stderr)
+            except Exception as exc:
+                sys.stderr.write(f"[local] could not end job group "
+                                 f"{proc.pid}: {exc}\n")
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+    finally:
+        # os._exit drops buffered output otherwise, and the detached
+        # launcher (a later task) sends this process's stdout to a log
+        # file, so the flush above matters even though nothing reads it
+        # here.
+        os._exit(128 + signum)
+
+
+def _group_gone(pgid, timeout):
+    """Whether process group `pgid` has no members left.
+
+    Polls `os.killpg(pgid, 0)` (a null signal — this is a liveness probe,
+    not a kill) every 0.1s for up to `timeout` seconds. The job's
+    LAUNCHER (the `--one` python child) being reaped is not enough proof:
+    mu2e is a grandchild in the SAME group and can outlive it — finishing
+    an event, or wedged — with the launcher already gone and nothing
+    left in-process to notice.
+    """
+    deadline = time.time() + timeout
+    while True:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            # Some other failure probing the group (e.g. permission) —
+            # cannot confirm it is gone, so don't claim it is.
+            return False
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.1)
 
 
 def kill_job(proc, log=None):
@@ -273,7 +333,10 @@ def kill_job(proc, log=None):
     The GROUP, not the process: `mu2e` is a grandchild (the direct child
     re-execs this module), so signalling only the direct child would
     leave a wedged mu2e with nothing left to reap it. `start_new_session`
-    in the launcher makes the child's pid its group id.
+    in the launcher makes the child's pid its group id. Reaping the
+    launcher (`proc.wait()` returning) is not proof the group is empty
+    either — see `_group_gone` — so each signal is followed by a poll,
+    not just a wait.
     """
     if proc.pid is None or proc.pid <= 1:
         # killpg(0) signals the CALLER's process group — this driver and
@@ -290,9 +353,18 @@ def kill_job(proc, log=None):
             break
         try:
             proc.wait(timeout=KILL_GRACE_SECONDS)
-            return
         except subprocess.TimeoutExpired:
             continue
+        if _group_gone(proc.pid, KILL_GRACE_SECONDS):
+            return
+        # Launcher reaped but a grandchild (mu2e) survived SIGTERM —
+        # fall through to the SIGKILL pass.
+    else:
+        # Only reached if the loop ran to completion (no OSError break):
+        # SIGKILL was sent and still something in the group survived it.
+        if log:
+            log.write(f"[local] job group {proc.pid} still has processes "
+                      f"after SIGKILL\n")
     # Reap whatever is left, so the driver never exits over a zombie.
     proc.wait()
 
@@ -589,9 +661,11 @@ def main(argv=None):
         # Child: cwd is already this job's directory.
         return run_one(args.one, args)
 
-    if args.code and args.code_root:
+    if args.code and args.code_root is not None:
         sys.exit("runlocal: give --code or --code-root, not both")
-    if args.code_root:
+    if args.code_root is not None:
+        # `is not None`, not truthiness: an empty --code-root must still
+        # be checked (and refused) below, not silently ignored.
         # Absolute: every job runs in its own job_NNNNNN/ directory.
         args.code_root = str(Path(args.code_root).resolve())
         if not (Path(args.code_root) / 'Code' / 'setup.sh').is_file():

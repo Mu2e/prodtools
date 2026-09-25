@@ -17448,6 +17448,14 @@ class TestRunLocalTimeout(unittest.TestCase):
         killers = []
 
         def killpg(pid, sig):
+            # sig=0 is kill_job's/`_group_gone`'s liveness PROBE, not a
+            # kill: this fake's "job" dies as soon as it has actually
+            # been signalled, so the probe reports it gone right away
+            # instead of polling for the real KILL_GRACE_SECONDS.
+            if sig == 0:
+                if any(p == pid for p, _ in self.killed):
+                    raise ProcessLookupError
+                return
             killers.append((pid, sig))
             self.killed.append((pid, sig))
         with patch.object(runlocal.subprocess, 'Popen', popen):
@@ -20158,6 +20166,13 @@ class TestRunLocalCodeRoot(unittest.TestCase):
             self._main(['--jobdef', '/x/cnf.tar', '--code-root', empty])
         self.assertIn('Code/setup.sh', str(ctx.exception))
 
+    def test_an_empty_code_root_is_refused(self):
+        """'' is falsy but not None: a truthiness check would silently
+        ignore it instead of refusing it."""
+        with self.assertRaises(SystemExit) as ctx:
+            self._main(['--jobdef', '/x/cnf.tar', '--code-root', ''])
+        self.assertIn('Code/setup.sh', str(ctx.exception))
+
 
 class TestRunLocalStop(unittest.TestCase):
     """SIGTERM to the driver ends its jobs too. Each job runs in its own
@@ -20169,6 +20184,10 @@ class TestRunLocalStop(unittest.TestCase):
         from utils import runlocal
         self.rl = runlocal
         self.addCleanup(self._reset)
+        # `_terminate` sets SIG_IGN in THIS process (the test runner);
+        # restore whatever was in effect before this test ran.
+        self.addCleanup(signal.signal, signal.SIGTERM,
+                        signal.getsignal(signal.SIGTERM))
 
     def _reset(self):
         if self.rl._RUNNING_LOCK.locked():
@@ -20184,8 +20203,9 @@ class TestRunLocalStop(unittest.TestCase):
         self.rl._RUNNING[id(job)] = job
         with patch.object(self.rl.os, '_exit',
                           side_effect=SystemExit) as exit_:
-            with self.assertRaises(SystemExit):
-                self.rl._terminate(signal.SIGTERM, None)
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
         exit_.assert_called_once_with(143)
         self.assertIsNotNone(job.poll())
 
@@ -20198,18 +20218,76 @@ class TestRunLocalStop(unittest.TestCase):
         def exit_(code):
             events.append(('exit', code))
             raise SystemExit(code)
-        with patch.object(self.rl, 'kill_job',
-                          side_effect=lambda proc: events.append(proc.pid)), \
+        with patch.object(
+                self.rl, 'kill_job',
+                side_effect=lambda proc, log=None: events.append(proc.pid)), \
              patch.object(self.rl.os, '_exit', side_effect=exit_):
-            with self.assertRaises(SystemExit):
-                self.rl._terminate(signal.SIGTERM, None)
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
         self.assertEqual(sorted(events[:3]), [f.pid for f in fakes])
         self.assertEqual(events[3:], [('exit', 143)])
 
+    def test_a_second_sigterm_is_ignored_while_the_first_is_handled(self):
+        """CPython re-enters a Python signal handler on a second delivery,
+        on the same (main) thread, even mid-handler -- the non-reentrant
+        `_RUNNING_LOCK` would then deadlock on its second `.acquire()`.
+        `_terminate` heads this off by going SIG_IGN immediately."""
+        with patch.object(self.rl.os, '_exit', side_effect=SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+
+    def test_one_failing_job_does_not_stop_the_rest(self):
+        fakes = [SimpleNamespace(pid=2 ** 30 + i) for i in range(2)]
+        for fake in fakes:
+            self.rl._RUNNING[id(fake)] = fake
+        ended = []
+
+        def kill_job(proc, log=None):
+            if proc.pid == fakes[0].pid:
+                raise RuntimeError('boom')
+            ended.append(proc.pid)
+
+        buf = io.StringIO()
+        with patch.object(self.rl, 'kill_job', side_effect=kill_job), \
+             patch.object(self.rl.os, '_exit',
+                          side_effect=SystemExit) as exit_:
+            with contextlib.redirect_stderr(buf):
+                with self.assertRaises(SystemExit):
+                    self.rl._terminate(signal.SIGTERM, None)
+        self.assertEqual(ended, [fakes[1].pid])
+        exit_.assert_called_once_with(143)
+        self.assertIn(str(fakes[0].pid), buf.getvalue())
+
+    def test_a_grandchild_that_ignores_sigterm_is_killed_with_its_group(self):
+        """kill_job must reap the whole GROUP, not just the launcher: this
+        child backgrounds a grandchild that ignores SIGTERM (mimicking a
+        wedged mu2e outliving its launcher), which the launcher-only
+        `proc.wait()` used to treat as done."""
+        with patch.object(self.rl, 'KILL_GRACE_SECONDS', 1):
+            job = subprocess.Popen(
+                ['sh', '-c',
+                 '(trap "" TERM; echo ready; exec sleep 60) & sleep 60'],
+                stdout=subprocess.PIPE, start_new_session=True)
+            self.addCleanup(job.stdout.close)
+            self.addCleanup(job.wait)
+            self.addCleanup(lambda: job.poll() is None and job.kill())
+            self.assertEqual(job.stdout.readline().strip(), b'ready')
+            self.rl.kill_job(job)
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(job.pid, 0)
+
     def test_a_job_is_registered_while_it_runs_and_removed_after(self):
         seen = []
+        locked_during_popen = []
 
         def popen(argv, **kwargs):
+            # Popen must run under _RUNNING_LOCK (see _run_child): that is
+            # what closes the race window _terminate's SIGTERM pre-pass
+            # depends on.
+            locked_during_popen.append(self.rl._RUNNING_LOCK.locked())
             proc = SimpleNamespace(pid=2 ** 30, returncode=0)
             proc.wait = lambda timeout=None: (
                 seen.append(id(proc) in self.rl._RUNNING) or 0)
@@ -20221,6 +20299,7 @@ class TestRunLocalStop(unittest.TestCase):
         with patch.object(self.rl.subprocess, 'Popen', side_effect=popen):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.rl.drive(args)
+        self.assertEqual(locked_during_popen, [True])
         self.assertEqual(seen, [True])
         self.assertEqual(self.rl._RUNNING, {})
 
