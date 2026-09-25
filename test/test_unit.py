@@ -6374,6 +6374,79 @@ class TestSubmissionLog(unittest.TestCase):
         self.assertIn('boom', r['raw_output'])
 
 
+class TestJobsubQFailureReported(unittest.TestCase):
+    """A `jobsub_q --user` query that is not trusted says WHY on stdout.
+
+    The tick used to log only "jobsub_q --user failed": both probes
+    captured stderr and threw it away, so an intermittent failure
+    (2026-09-24/25, four production ticks) left no evidence at all.
+    The fail-closed results are unchanged; only the reason is printed.
+    """
+
+    @staticmethod
+    def _run(stdout='', stderr='', rc=0):
+        return lambda *a, **k: MagicMock(returncode=rc, stdout=stdout,
+                                         stderr=stderr)
+
+    def _out(self, fn):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = fn()
+        return result, buf.getvalue()
+
+    def test_total_queued_prints_rc_and_stderr(self):
+        from utils.submissions import total_queued
+        n, out = self._out(lambda: total_queued(runner=self._run(
+            stderr='noise\nError: schedd jobsub03 did not respond\n',
+            rc=1)))
+        self.assertIsNone(n)
+        self.assertIn('exit 1', out)
+        self.assertIn('Error: schedd jobsub03 did not respond', out)
+
+    def test_live_clusters_prints_rc_and_stderr(self):
+        from utils.queue_state import live_clusters
+        clusters, out = self._out(lambda: live_clusters(runner=self._run(
+            stderr='Error: token expired\n', rc=2)))
+        self.assertIsNone(clusters)
+        self.assertIn('exit 2', out)
+        self.assertIn('Error: token expired', out)
+
+    def test_untrusted_table_prints_what_came_back(self):
+        from utils.queue_state import live_clusters
+        clusters, out = self._out(lambda: live_clusters(
+            runner=self._run(stdout='No jobs found\n')))
+        self.assertIsNone(clusters)
+        self.assertIn('not a jobsub_q table', out)
+        self.assertIn('No jobs found', out)
+
+    def test_unlaunchable_prints_the_oserror(self):
+        from utils.queue_state import live_clusters
+        def boom(*a, **k):
+            raise FileNotFoundError('jobsub_q')
+        clusters, out = self._out(lambda: live_clusters(runner=boom))
+        self.assertIsNone(clusters)
+        self.assertIn('jobsub_q', out)
+        self.assertIn('could not run', out)
+
+    def test_long_output_is_bounded(self):
+        from utils.queue_state import live_clusters
+        err = ''.join(f'line {i} ' + 'x' * 500 + '\n' for i in range(50))
+        _, out = self._out(lambda: live_clusters(
+            runner=self._run(stderr=err, rc=1)))
+        self.assertIn('line 49', out)           # the tail is kept
+        self.assertNotIn('line 0 ', out)        # the head is dropped
+        self.assertLess(len(out), 5000)
+
+    def test_trusted_table_prints_nothing(self):
+        from utils.queue_state import live_clusters
+        T = TestRecoverCap
+        table = T._HDR + '\n' + T._SUM + '\n'
+        clusters, out = self._out(lambda: live_clusters(
+            runner=self._run(stdout=table)))
+        self.assertEqual(clusters, {})
+        self.assertEqual(out, '')
+
+
 class TestRecoverCap(unittest.TestCase):
     """Cap resolution + queue counting for the top-up phase."""
 

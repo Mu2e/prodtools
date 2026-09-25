@@ -24,6 +24,48 @@ _JOBID_RE = re.compile(r'^\d+\.\d+@\S+$')
 _KNOWN_STATES = frozenset('IRHCXS<>')
 _SKIP_PREFIXES = ('JOBSUBJOBID', 'Attempting to ', 'Storing bearer token')
 
+# How much of jobsub_q's own output to repeat when a query is not trusted:
+# the last lines carry the error, and a tick log must stay readable.
+_REPORT_TAIL_LINES = 8
+_REPORT_LINE_CHARS = 300
+
+
+def _output_tail(text):
+    """Last _REPORT_TAIL_LINES non-blank lines of `text`, each cut to
+    _REPORT_LINE_CHARS characters, indented for the tick log."""
+    lines = [ln.rstrip() for ln in (text or '').splitlines() if ln.strip()]
+    return '\n'.join('    ' + ln[:_REPORT_LINE_CHARS]
+                     for ln in lines[-_REPORT_TAIL_LINES:])
+
+
+def report_jobsub_q_failure(cmd, res=None, error=None):
+    """Print why a `jobsub_q` query was not trusted.
+
+    The callers stay fail-closed (they return None); this only says why.
+    Until 2026-09-25 both probes captured stderr and dropped it, so a
+    production tick logged "jobsub_q --user failed" with no evidence.
+    `res` is the CompletedProcess, `error` an exception that stopped the
+    command from running at all; stdout, where the tick log goes.
+    """
+    what = ' '.join(cmd)
+    if error is not None:
+        print(f"{what}: could not run: {error}", flush=True)
+        return
+    # getattr: an injected runner may hand back a bare namespace with
+    # only returncode and stdout (the tests' fakes do).
+    stdout = getattr(res, 'stdout', '')
+    stderr = getattr(res, 'stderr', '')
+    if res.returncode != 0:
+        tail = _output_tail(stderr) or _output_tail(stdout)
+        print(f"{what}: exit {res.returncode}"
+              + (f"; its output ends:\n{tail}" if tail else
+                 "; it printed nothing"), flush=True)
+    else:
+        tail = _output_tail(stdout) or _output_tail(stderr)
+        print(f"{what}: exit 0 but not a jobsub_q table"
+              + (f"; its output ends:\n{tail}" if tail else
+                 "; it printed nothing"), flush=True)
+
 
 def _jobsub_table_states(stdout):
     """One-letter condor states from jobsub_q's default table, or None if
@@ -100,14 +142,20 @@ def live_clusters(user=None, runner=subprocess.run):
     `user` defaults to the submitting identity (queue_owner), NOT a
     fixed 'mu2epro' — the wrong account turns fail-closed into
     unconditional 'drained'."""
+    cmd = ['jobsub_q', '--user', user or queue_owner()]
     try:
-        res = runner(['jobsub_q', '--user', user or queue_owner()],
-                     capture_output=True, text=True)
-    except OSError:
-        return None      # jobsub_q missing/unlaunchable → fail-closed
-    if res.returncode != 0:
+        res = runner(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        # jobsub_q missing/unlaunchable → fail-closed
+        report_jobsub_q_failure(cmd, error=exc)
         return None
-    return _jobsub_table_cluster_states(res.stdout)
+    if res.returncode != 0:
+        report_jobsub_q_failure(cmd, res)
+        return None
+    clusters = _jobsub_table_cluster_states(res.stdout)
+    if clusters is None:
+        report_jobsub_q_failure(cmd, res)
+    return clusters
 
 
 def cluster_queue_state(cluster_id, clusters):
