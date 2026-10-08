@@ -26,17 +26,17 @@ resolves to when run as mu2epro, so no `--db` flag is needed here):
   human has confirmed are genuinely missing outside the normal
   `submissions run` cadence.
 - `run [--campaign ID]` — one tick of the recovery pass + campaign
-  top-up (the same thing the hourly cron does). `--campaign ID`
-  restricts top-up to one campaign (the recovery pass still runs over
-  every active row); omit it to tick everything, matching cron
-  behaviour. Use this to force a tick out-of-band, e.g. right after
-  fixing an `inloc` that was pausing a campaign.
+  top-up. `--campaign ID` restricts top-up to one campaign (the
+  recovery pass still runs over every active row). A routine tick goes
+  through `run_submissions(campaign_id=ID, run_as="mu2epro",
+  confirm=true)` on the `prodtools-write` MCP server instead; use this
+  CLI form only when that server is unavailable and the user asks.
 
 For a **new** production campaign (including a firstjob-window
 statistics expansion — set `firstjob`/`njobs` in the JSON config),
-use `/mu2epro-run json2jobdef --prod --enqueue --slice-size N` instead
-of this skill: it builds the cnf, pushes it to SAM, and registers the
-campaign in the ledger in one command. There is no map file anywhere
+use `push_cnf(..., slice_size=N, run_as="mu2epro", confirm=true)` on the
+`prodtools-write` MCP server instead of this skill: it builds the cnf, pushes it to SAM,
+and registers the campaign in the production ledger in one call. There is no map file anywhere
 in this workflow, so there is nothing to hand off to a separate submit
 step for that case. Reach for `/mu2epro-submit` only once a campaign
 already exists and you need to touch its ledger rows by hand.

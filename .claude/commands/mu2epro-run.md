@@ -10,8 +10,12 @@ Switches to the `mu2epro` account via `ksu`, sources the Mu2e
 environment, configures a Musing release (SimJob, AnalysisMDC2025,
 etc.), and runs the command in a fresh `/tmp` workdir (because
 `mu2epro` typically cannot write into the user's repo). Use this when
-the command needs to run as the production account — e.g. `--pushout`
-or `--prod` for SAM registration.
+the command needs to run as the production account.
+
+A new production campaign is `push_cnf(..., slice_size=N, run_as="mu2epro", confirm=true)` on the
+`prodtools-write` MCP server, not this command; a tick is
+`run_submissions(campaign_id=ID, run_as="mu2epro", confirm=true)` on
+the same server.
 
 ## Usage
 
@@ -33,8 +37,6 @@ through unchanged.
 
 ```
 /mu2epro-run json2jobdef --json data/Run1B/stage1.json --index 0 --verbose
-/mu2epro-run MDC2025af json2jobdef --json data/mdc2025/mix.json --dsconf MDC2025af_best_v1_1 --prod --enqueue --slice-size 1000
-/mu2epro-run AnalysisMDC2025/v02_00_00 json2jobdef --json data/mdc2025/evntuple.json --desc evnt --dsconf MDC2025-003 --prod --enqueue
 ```
 
 ## Instructions
@@ -70,8 +72,8 @@ You are given `$ARGUMENTS`. Follow these steps:
    ledger. A bare `--prod` with no `--enqueue` would push the cnf and
    register nothing, so it is refused up front.
 
-   **Known limitation, bulk `--dsconf X --prod --enqueue` (no `--desc`,
-   line 36 above):** this processes every matching entry in one loop,
+   **Known limitation, bulk `--dsconf X --prod --enqueue` (no
+   `--desc`):** this processes every matching entry in one loop,
    and a failure partway through (e.g. entry 7 of 22) leaves campaigns
    registered for the entries before it and nothing for the rest — the
    bulk run as a whole is not resumable. Re-running the identical
@@ -154,8 +156,7 @@ You are given `$ARGUMENTS`. Follow these steps:
   requires (else `condor_vault_storer` fails / wrong submitter). `/mu2epro-submit`
   bakes in that env fix plus dry-run + jobsub_q verification. New
   campaigns (including firstjob-window statistics expansions) go
-  through `json2jobdef --prod --enqueue` here instead — there is no
-  separate submit step.
+  through `push_cnf` on the `prodtools-write` MCP server.
 - `ksu` requires that `oksuzian@FNAL.GOV` is listed in
   `~mu2epro/.k5users` for `/bin/bash`. If auth fails, report the error
   verbatim — do not retry automatically.

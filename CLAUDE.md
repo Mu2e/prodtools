@@ -29,21 +29,21 @@ before proceeding.
   debugging, dry runs, and any command that does not register outputs
   in production SAM.
 - `/mu2epro-run` — run as the `mu2epro` account (via `ksu`) in a
-  `/tmp` workdir. Required for production runs — anything with
-  `--pushout` or `--prod`, or that registers artifacts in SAM as the
-  production account. The skill warns before executing such flags and
-  asks for explicit confirmation.
+  `/tmp` workdir, for production commands other than pushes and ticks.
+  The skill warns before executing `--pushout`/`--prod` and asks for
+  explicit confirmation.
 
-Production campaigns are created in one command:
-`json2jobdef --prod --enqueue --slice-size N` builds the cnf, pushes it
-to SAM, and registers the campaign in the submission ledger. A wrong
+Production campaigns are created with one call to the `prodtools-write`
+MCP server (below): `push_cnf(..., slice_size=N, run_as="mu2epro",
+confirm=true)` builds the cnf, pushes it to SAM, and registers the
+campaign in the production ledger. A wrong
 setting on a live campaign is fixed with
 `submissions set-entry <ID> <key> <value> [--include-open-rows]` — the
 flag is what reaches recoveries.
 
 Campaigns do NOT advance on their own — no cron is installed. Each
-slice, verification and recovery needs a manual `submissions run`
-as mu2epro. A row stays `active` while ANY of its jobs is still in
+slice, verification and recovery needs a tick:
+`run_submissions(campaign_id=ID, run_as="mu2epro", confirm=true)`. A row stays `active` while ANY of its jobs is still in
 the queue, held included, so a tick fired before the cluster drains
 recovers nothing.
 
@@ -61,7 +61,8 @@ discovery as typed tools (`campaign_status`, `list_campaigns`,
 for status questions — it returns structured JSON and costs less
 context.
 
-It performs **no writes**. Submission remains `/mu2epro-submit`.
+It performs **no writes**. Submission goes through the separate
+`prodtools-write` server described below.
 
 A queue or outputs block with `state: "unknown"` has **no count keys**.
 Never read a missing count as zero: the query failed and the campaign
