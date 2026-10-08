@@ -25,8 +25,8 @@ INSTRUCTIONS = """
 Read-only MCP server for Mu2e prodtools production state.
 
 This server performs NO writes: it cannot submit jobs, create or delete
-SAM definitions, or modify the submission ledger. Submission remains the
-/mu2epro-submit path.
+SAM definitions, or modify the submission ledger. Submission goes
+through the separate prodtools-write server (push_cnf, run_submissions).
 
 WHAT IT ANSWERS:
 - "How is <campaign> doing?"  -> campaign_status(campaign="MDC2025au")

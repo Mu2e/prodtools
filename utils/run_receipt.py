@@ -17,9 +17,10 @@ Pure stdlib, no Mu2e environment: the read-only MCP server imports it.
 """
 
 import datetime
-import getpass
 import json
 import os
+
+from utils import account
 
 RECEIPT = 'receipt.json'
 
@@ -34,7 +35,7 @@ class RunNotFound(Exception):
 
 def runs_root(user=None):
     """Next to the personal ledger (submission_ledger.ledger_for)."""
-    return f'/exp/mu2e/data/users/{user or getpass.getuser()}/prodtools/runs'
+    return f'/exp/mu2e/data/users/{user or account.current_account()}/prodtools/runs'
 
 
 def run_name(tarball):

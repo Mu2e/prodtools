@@ -16,7 +16,6 @@ surfaced when missing, never silently mkdir'd — a typo must fail, not
 create a stray DB. A DERIVED path from ledger_for() IS created by
 ensure_ledger_dir(), since it cannot be a typo.
 """
-import getpass
 import json
 import os
 import sqlite3
@@ -24,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import pathname2url
 
+from utils import account
 from utils.jobdesc import ENTRY_VALUE_KEYS, validate_entry_value
 
 # Entry keys `submissions set-entry` may edit on a live campaign.
@@ -51,7 +51,7 @@ def ledger_for(user=None):
     the split needed no migration and leaves the production cron
     untouched.
     """
-    return (f'/exp/mu2e/data/users/{user or getpass.getuser()}'
+    return (f'/exp/mu2e/data/users/{user or account.current_account()}'
             f'/prodtools/submissions.db')
 
 

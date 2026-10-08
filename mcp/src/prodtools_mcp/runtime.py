@@ -2,8 +2,8 @@
 
 The difference is a property of the transport, decided once in main():
 
-- stdio is one client in the caller's own account, so getpass.getuser()
-  IS the caller and `mine` means what it says.
+- stdio is one client in the caller's own account, so
+  account.current_account() IS the caller and `mine` means what it says.
 - streamable-http is an endpoint several people reach. The process user
   is then the HOST, not the reader, and `mine` would hand every reader
   the host's ledger and the host's queue. An empty answer from the

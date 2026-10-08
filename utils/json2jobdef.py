@@ -17,9 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import argparse
 import json
 import shutil
-import getpass
 import tarfile
 from pathlib import Path
+from utils import account
 from utils.prod_utils import *
 from utils.mixing_utils import *
 from utils.config_utils import cnf_name, get_tarball_desc, prepare_fields_for_job, normalize_input_data
@@ -914,7 +914,7 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
 
     build = build or process_single_entry
     submit = submit or submit_entry
-    user = getpass.getuser()
+    user = account.current_account()
     config['owner'] = config.get('owner', default_owner())
     if user == 'mu2epro' or config['owner'] == 'mu2e':
         sys.exit("json2jobdef: --once is for personal runs only. "
@@ -1292,7 +1292,7 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         try:
             entry.update(prodtools_entry_keys(
                 resolve_prodtools_dir(prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
-                user=getpass.getuser()))
+                user=account.current_account()))
         except ValueError as e:
             sys.exit(f"json2jobdef: {e}")
         print(f"Campaign will run prodtools from {entry['prodtools_dir']}")
