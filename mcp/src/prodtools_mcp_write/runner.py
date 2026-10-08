@@ -67,8 +67,9 @@ ALLOWED_ENTRY_POINTS = frozenset({
 # failure mode, not a style choice:
 #   - mktemp INSIDE ksu: a caller-owned workdir makes
 #     condor_vault_storer fail
-#   - USER/LOGNAME/HOME: ksu does not reset them, so getpass.getuser()
-#     would return the caller and pick the wrong tarball and role
+#   - USER/LOGNAME/HOME: ksu does not reset them. prodtools itself now
+#     reads the effective uid (utils/account.py), but tools outside
+#     prodtools in the submit chain may still read the environment
 #   - XDG_RUNTIME_DIR: the caller's /run/user/<uid> is not writable by
 #     mu2epro
 #   - unset MUSE_WORK_DIR only: unsetting MUSE_* breaks the muse shell

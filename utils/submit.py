@@ -17,7 +17,6 @@ Plans:
 """
 
 import fnmatch
-import getpass
 import json
 import os
 import re
@@ -32,6 +31,7 @@ from typing import NamedTuple, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils import account
 from utils.prod_utils import _fetch_file_local
 from utils.job_common import (Mu2eName, log_storage_location,
                               expected_outputs_for, sha256_file)
@@ -259,7 +259,7 @@ def _log_submission(firstjob, jobset, result, options, files=None):
                     if absolute else "indices: none")
     block = '\n'.join([
         f"=== {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
-        f"user={getpass.getuser()} status={result['status']}",
+        f"user={account.current_account()} status={result['status']}",
         f"origin={options.origin} tarball={result['tarball']}",
         idx_line,
         f"cluster={result['cluster_id']} "
@@ -798,7 +798,7 @@ def submit_entry(entry, idx, options):
         input_datasets=input_datasets,
         files=files,
     )
-    ops_path = Path('/tmp') / f'ops-{getpass.getuser()}-{desc}-{os.getpid()}.json'
+    ops_path = Path('/tmp') / f'ops-{account.current_account()}-{desc}-{os.getpid()}.json'
     ops_path.write_text(json.dumps(ops, indent=2) + '\n')
     print(f"Wrote ops JSON: {ops_path}")
 
@@ -806,7 +806,7 @@ def submit_entry(entry, idx, options):
 
     # submitter is the effective UNIX user; role auto-defaults to
     # Production for mu2epro per jobsub_argv.role_for_user.
-    submitter = getpass.getuser()
+    submitter = account.current_account()
     # Token scopes for direct-mode pushOutput (CB1):
     #   - per data output: /mu2e/<area>/datasets/<owner-class>-<tier>/<tier>/<owner>
     #   - per log: same scheme with tier=log. Production logs go to

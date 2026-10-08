@@ -20,19 +20,20 @@ interrupted in place can leave Code/setup.sh, which still counts as a
 hit.
 """
 
-import getpass
 import hashlib
 import os
 import shutil
 import tarfile
 import tempfile
 
+from utils import account
+
 SETUP = os.path.join('Code', 'setup.sh')
 
 
 def cache_root(user=None):
     """Next to runs/ (run_receipt.runs_root)."""
-    return f'/exp/mu2e/data/users/{user or getpass.getuser()}/prodtools/code'
+    return f'/exp/mu2e/data/users/{user or account.current_account()}/prodtools/code'
 
 
 def _sha256(path):

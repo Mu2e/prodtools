@@ -15,10 +15,11 @@ C completed, X removed, S suspended). Drained/unknown id -> header +
 use the same shape with the node name in OWNER.
 """
 
-import getpass
 import os
 import re
 import subprocess
+
+from utils import account
 
 _JOBID_RE = re.compile(r'^\d+\.\d+@\S+$')
 _KNOWN_STATES = frozenset('IRHCXS<>')
@@ -113,9 +114,9 @@ def queue_owner():
     """Whose grid queue this process's rows live in.
 
     The submitting identity, not a fixed account: `submissions run` as
-    yourself submits as you; under ksu, USER=mu2epro is exported before
-    running, so production still reads mu2epro's queue. Same
-    generalization as submission_ledger.ledger_for.
+    yourself submits as you; under `ksu mu2epro` the effective uid is
+    mu2epro, so production reads mu2epro's queue whatever $USER says.
+    Same resolution as submission_ledger.ledger_for (utils/account.py).
 
     Was hardcoded to 'mu2epro'. Bug (found 2026-08-09): a self-run tick
     then queried mu2epro's queue, missed its own live cluster, read that
@@ -123,7 +124,7 @@ def queue_owner():
     the fail-closed drain signal only works when asked about the right
     account.
     """
-    return os.environ.get('USER') or getpass.getuser()
+    return account.current_account()
 
 
 def live_clusters(user=None, runner=subprocess.run):

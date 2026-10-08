@@ -8,10 +8,9 @@ exceed the client's timeout.
 from prodtools_mcp import condor, ledger_ro, runtime
 from prodtools_mcp.adapters import ToolError
 
-import getpass
 import re
 
-from utils import submission_ledger
+from utils import account, submission_ledger
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
@@ -25,8 +24,8 @@ def _resolve_identity(mine, user=None):
     """(ledger path, condor owner) for one call.
 
     ONE resolution feeds BOTH axes. `ledger_for()` with no argument uses
-    getpass.getuser() internally, so asking it for the path and asking
-    getpass for the queue owner cannot disagree. Reaching for
+    account.current_account() internally, so asking it for the path and
+    asking account for the queue owner cannot disagree. Reaching for
     os.environ['USER'] on one side only is exactly how the ledger and the
     queue come to report different accounts — the failure 171517f fixed
     on the write side.
@@ -64,7 +63,7 @@ def _resolve_identity(mine, user=None):
             'would resolve to the account running the server, not '
             'yours. Pass user="<your login>" instead, or run your own '
             'stdio server.')
-    return submission_ledger.ledger_for(), getpass.getuser()
+    return submission_ledger.ledger_for(), account.current_account()
 
 
 def queue_block(cluster_ids, clusters, owner=condor.OWNER, reason=None):

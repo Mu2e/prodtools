@@ -6504,10 +6504,10 @@ class TestRecoverCap(unittest.TestCase):
             self._row('4.0@jobsub02.fnal.gov', '|-WORKER_12', 'H'),
             self._row('5.0@jobsub02.fnal.gov', 'mu2epro', 'X'),
         ]) + '\n'
-        # USER pinned: the query follows the SUBMITTING identity now
-        # (see queue_owner), and the ksu block exports USER=mu2epro, so
+        # Account pinned: the query follows the SUBMITTING identity now
+        # (see queue_owner); under ksu the effective uid is mu2epro, so
         # this is what production still asks for.
-        with patch.dict(os.environ, {'USER': 'mu2epro'}):
+        with patch('utils.account.current_account', return_value='mu2epro'):
             n = total_queued(runner=self._runner(table))
         self.assertEqual(n, 3)              # held / removed excluded
         self.assertEqual(self.cmd, ['jobsub_q', '--user', 'mu2epro'])
@@ -7596,14 +7596,14 @@ class TestRecoverLoop(unittest.TestCase):
             seen.append(cmd)
             return types.SimpleNamespace(returncode=0, stdout='')
 
-        with mock.patch.dict(os.environ, {'USER': 'someuser'}):
+        with mock.patch('utils.account.current_account', return_value='someuser'):
             subs.live_clusters(runner=fake_run)
             subs.total_queued(runner=fake_run)
         for cmd in seen:
             self.assertEqual(cmd[cmd.index('--user') + 1], 'someuser')
-        # Under ksu the block exports USER=mu2epro, so production is
+        # Under ksu the effective uid is mu2epro, so production is
         # unchanged by this generalization.
-        with mock.patch.dict(os.environ, {'USER': 'mu2epro'}):
+        with mock.patch('utils.account.current_account', return_value='mu2epro'):
             self.assertEqual(subs.queue_owner(), 'mu2epro')
 
     def test_explicit_user_still_wins(self):
@@ -7615,7 +7615,7 @@ class TestRecoverLoop(unittest.TestCase):
             seen.append(cmd)
             return types.SimpleNamespace(returncode=0, stdout='')
 
-        with mock.patch.dict(os.environ, {'USER': 'someuser'}):
+        with mock.patch('utils.account.current_account', return_value='someuser'):
             subs.live_clusters(user='mu2epro', runner=fake_run)
         self.assertEqual(seen[0][seen[0].index('--user') + 1], 'mu2epro')
 
@@ -7721,10 +7721,10 @@ class TestRecoverLoop(unittest.TestCase):
                 row('9.1@jobsub01.fnal.gov', 'mu2epro', 'I'),
                 row('12.0@jobsub02.fnal.gov', '|-WORKER_3', 'H'),
             ]) + '\n')
-        # USER pinned: the query follows the SUBMITTING identity now
-        # (see queue_owner); the ksu block exports USER=mu2epro, so
+        # Account pinned: the query follows the SUBMITTING identity now
+        # (see queue_owner); under ksu the effective uid is mu2epro, so
         # production still asks for exactly this.
-        with patch.dict(os.environ, {'USER': 'mu2epro'}):
+        with patch('utils.account.current_account', return_value='mu2epro'):
             self.assertEqual(recover.live_clusters(runner=run),
                              {'9': ['R', 'I'], '12': ['H']})
         self.assertEqual(cmd['argv'], ['jobsub_q', '--user', 'mu2epro'])
@@ -10210,7 +10210,7 @@ class TestMcpReadIdentity(unittest.TestCase):
         self.assertEqual(owner, self.condor.OWNER)
 
     def test_mine_resolves_the_ledger_to_the_calling_account(self):
-        with patch('getpass.getuser', return_value='alice'):
+        with patch('utils.account.current_account', return_value='alice'):
             db, owner = self.status._resolve_identity(True)
         self.assertEqual(db,
                          '/exp/mu2e/data/users/alice/prodtools/submissions.db')
@@ -10218,16 +10218,16 @@ class TestMcpReadIdentity(unittest.TestCase):
 
     def test_ledger_and_queue_cannot_name_different_accounts(self):
         # The whole point of one resolution. If a later edit reads
-        # os.environ['USER'] on one side and getpass on the other, these
+        # os.environ['USER'] on one side and account on the other, these
         # two diverge and this test says so.
-        with patch('getpass.getuser', return_value='bob'):
+        with patch('utils.account.current_account', return_value='bob'):
             db, owner = self.status._resolve_identity(True)
         self.assertIn('/users/%s/' % owner, db)
 
     def test_resolution_creates_nothing_on_disk(self):
         # A read-only server has no first run. resolve_db() in the CLI
         # mkdirs a derived path; this must not.
-        with patch('getpass.getuser', return_value='nobody_qqq'):
+        with patch('utils.account.current_account', return_value='nobody_qqq'):
             db, _ = self.status._resolve_identity(True)
         self.assertFalse(os.path.exists(os.path.dirname(db)))
         self.assertFalse(os.path.exists(db))
@@ -10321,7 +10321,7 @@ class TestMcpReadIdentity(unittest.TestCase):
                          self.condor.OWNER)
 
     def test_mine_true_threads_the_caller_into_both_axes(self):
-        # Patches the ACCOUNT (getpass + ledger_for), not the resolver:
+        # Patches the ACCOUNT (current_account + ledger_for), not the resolver:
         # a mock that just hands back (db, 'alice') would still pass if
         # `mine` were silently dropped before reaching _resolve_identity,
         # or if the queue call reverted to condor.OWNER. Both axes must
@@ -10335,7 +10335,7 @@ class TestMcpReadIdentity(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
-            with patch('getpass.getuser', return_value='alice'), \
+            with patch('utils.account.current_account', return_value='alice'), \
                  patch.object(submission_ledger, 'ledger_for',
                               return_value=db):
                 result = self.status.campaign_status(
@@ -10372,7 +10372,7 @@ class TestMcpReadIdentity(unittest.TestCase):
         from utils import submission_ledger
         with tempfile.TemporaryDirectory() as td:
             db = TestMcpCampaignStatus()._make_db(td)
-            with patch('getpass.getuser', return_value='alice'), \
+            with patch('utils.account.current_account', return_value='alice'), \
                  patch.object(submission_ledger, 'ledger_for',
                               return_value=db):
                 result = self.status.list_campaigns(mine=True)
@@ -14236,10 +14236,23 @@ class TestLedgerPathResolution(unittest.TestCase):
             '/exp/mu2e/data/users/alice/prodtools/submissions.db')
 
     def test_ledger_for_defaults_to_current_account(self):
-        with patch('getpass.getuser', return_value='bob'):
+        with patch('utils.account.current_account', return_value='bob'):
             self.assertEqual(
                 self.sl.ledger_for(),
                 '/exp/mu2e/data/users/bob/prodtools/submissions.db')
+
+    def test_ledger_for_ignores_the_environment(self):
+        # Regression 2026-09-30: `ksu mu2epro` keeps the caller's
+        # USER/LOGNAME, getpass.getuser() read them, and a production
+        # --enqueue went to the caller's ledger. The account is the
+        # effective uid, whatever the environment claims.
+        import pwd
+        me = pwd.getpwuid(os.geteuid()).pw_name
+        with patch.dict(os.environ, {'USER': 'not_' + me,
+                                     'LOGNAME': 'not_' + me}):
+            self.assertEqual(
+                self.sl.ledger_for(),
+                '/exp/mu2e/data/users/%s/prodtools/submissions.db' % me)
 
     def test_default_db_still_means_production(self):
         # Readers (ledger_ro, the read-only MCP, listNewDatasets,
@@ -14298,7 +14311,7 @@ class TestSubmissionsDbResolution(unittest.TestCase):
         # directory-creation tests below) — patched here to a passthrough
         # since this test is only about which PATH wins, not filesystem
         # side effects under the real /exp/mu2e/data/users/bob.
-        with patch('getpass.getuser', return_value='bob'), \
+        with patch('utils.account.current_account', return_value='bob'), \
              patch.object(self.sl, 'ensure_ledger_dir', side_effect=lambda p: p):
             self.assertEqual(
                 self.submissions.resolve_db(self._opts('status', mine=True)),
@@ -14309,7 +14322,7 @@ class TestSubmissionsDbResolution(unittest.TestCase):
         # mutating verb defaulting there is never useful. For mu2epro the
         # two paths are identical. ensure_ledger_dir patched for the same
         # reason as test_status_mine_selects_personal.
-        with patch('getpass.getuser', return_value='bob'), \
+        with patch('utils.account.current_account', return_value='bob'), \
              patch.object(self.sl, 'ensure_ledger_dir', side_effect=lambda p: p):
             for verb in ('run', 'pause', 'resume', 'cancel', 'complete',
                          'set-slice', 'set-memory', 'reconcile'):
@@ -14319,7 +14332,7 @@ class TestSubmissionsDbResolution(unittest.TestCase):
                     f'verb {verb}')
 
     def test_mutating_default_is_production_for_mu2epro(self):
-        with patch('getpass.getuser', return_value='mu2epro'), \
+        with patch('utils.account.current_account', return_value='mu2epro'), \
              patch.object(self.sl, 'ensure_ledger_dir', side_effect=lambda p: p):
             self.assertEqual(self.submissions.resolve_db(self._opts('run')),
                              self.sl.PRODUCTION_DB)
@@ -18932,7 +18945,7 @@ class TestPushFileTool(unittest.TestCase):
               confirm=False, cli=None):
         cli = cli if cli is not None else {'rc': 0, 'stdout': 'pushed', 'stderr': ''}
         with patch('prodtools_mcp_write.runner.run_cli', return_value=cli) as run, \
-             patch('prodtools_mcp_write.tools.getpass.getuser', return_value='u'), \
+             patch('utils.account.current_account', return_value='u'), \
              patch('prodtools_mcp_write.tools._self_workdir', return_value=self.work):
             self.last_run = run
             out = self.tools.push_file(
@@ -19054,7 +19067,7 @@ class TestMcpUserParameter(unittest.TestCase):
         self.assertEqual(owner, 'alice')
 
     def test_user_wins_over_mine(self):
-        with patch('getpass.getuser', return_value='bob'):
+        with patch('utils.account.current_account', return_value='bob'):
             db, owner = self.status._resolve_identity(True, user='alice')
         self.assertEqual(owner, 'alice')
         self.assertIn('/users/alice/', db)
@@ -19073,7 +19086,7 @@ class TestMcpUserParameter(unittest.TestCase):
         self.assertIn('user=', ctx.exception.remedy)
 
     def test_mine_without_user_still_works_over_stdio(self):
-        with patch('getpass.getuser', return_value='bob'):
+        with patch('utils.account.current_account', return_value='bob'):
             db, owner = self.status._resolve_identity(True)
         self.assertEqual(owner, 'bob')
         self.assertIn('/users/bob/', db)
@@ -19452,7 +19465,7 @@ class TestJson2jobdefOnce(unittest.TestCase):
                           return_value=FAKE_PRODTOOLS_DIR), \
              patch.object(self.j, 'prodtools_entry_keys',
                           return_value={'prodtools_dir': FAKE_PRODTOOLS_DIR}), \
-             patch.object(self.j.getpass, 'getuser', return_value='alice'):
+             patch.object(self.j.account, 'current_account', return_value='alice'):
             return self.j.submit_once(config, json_path='/j.json',
                                       root=self.root, build=build,
                                       submit=submit)
@@ -20482,7 +20495,7 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
              patch.object(self.j, 'prodtools_entry_keys',
                           side_effect=AssertionError('no worker bundle')), \
              patch('socket.getfqdn', return_value='node.fnal.gov'), \
-             patch.object(self.j.getpass, 'getuser', return_value='alice'):
+             patch.object(self.j.account, 'current_account', return_value='alice'):
             return self.j.submit_once(
                 config, json_path='/j.json', root=self.root, build=build,
                 submit=submit, local=True, parallel=parallel,

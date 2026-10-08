@@ -30,7 +30,6 @@ Nothing imported here performs any I/O (SAM query, subprocess, network)
 at import time or during entry selection -- only at model
 instantiation, which this module never does.
 """
-import getpass
 import json as _json
 import os
 import shutil
@@ -43,7 +42,7 @@ from utils.config_utils import get_tarball_desc
 from utils.job_common import Mu2eName
 from utils.json2jobdef import determine_job_type, load_json, find_json_entry
 from utils import push_file as _push_file
-from utils import code_cache
+from utils import account, code_cache
 
 
 def _select_push_params(json_path, desc, dsconf, allow_code=False):
@@ -589,7 +588,7 @@ def push_file(path: str, location: str, parents: List[str], run_as: str,
     runner.require_confirmed(run_as, confirm)
     if not isinstance(parents, list) or not all(isinstance(x, str) and x for x in parents):
         raise ValueError(f"parents must be a list of SAM file names, got {parents!r}")
-    owner = 'mu2e' if run_as == 'mu2epro' else getpass.getuser()
+    owner = 'mu2e' if run_as == 'mu2epro' else account.current_account()
     name = _push_file.validate(path, location, parents, owner=owner)
     argv = ['bin/push_file', '--file', str(Path(path).resolve()), '--location', location]
     for parent in parents:
