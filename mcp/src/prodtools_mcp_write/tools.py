@@ -69,9 +69,10 @@ def _select_push_params(json_path, desc, dsconf, allow_code=False):
     accept one as an argument.
 
     A code-tarball entry (`code`, no `simjob_setup`) has its Musing
-    INSIDE the tarball: with `allow_code` (submit_once, run_local) the
-    returned setup script is that tarball's unpacked Code/setup.sh (see
-    _code_setup); without it (push_cnf) the entry is refused.
+    INSIDE the tarball: with `allow_code` (submit_once, run_local,
+    push_cnf for run_as="self") the returned setup script is that
+    tarball's unpacked Code/setup.sh (see _code_setup); without it
+    (push_cnf for mu2epro) the entry is refused.
     """
     path = Path(json_path)
     if not path.is_file():
@@ -115,17 +116,19 @@ def _code_setup(entry, desc, dsconf, json_path, allow_code):
     sources this exactly as it sources a Musing, and the build sees what
     the grid worker will: the tarball's own FHiCL and search paths.
 
-    push_cnf refuses (allow_code=False): a production cnf built against a
-    code tarball needs that tarball on a durable path mu2epro can read
-    first, which is a separate decision.
+    push_cnf refuses for mu2epro (allow_code=False): a production cnf
+    built against a code tarball needs that tarball on a durable path
+    mu2epro can read first, which is a separate decision. A personal
+    campaign (run_as="self") only needs it to stay where the entry says.
     """
     if not allow_code:
         raise ValueError(
             f"push_cnf: entry matching desc={desc!r} dsconf={dsconf!r} in "
             f"{json_path!r} is a code-tarball entry (`code`, no "
-            f"simjob_setup). Those go through submit_once or run_local "
-            f"only: a production cnf needs its code tarball on a durable "
-            f"path mu2epro can read first.")
+            f"simjob_setup). For mu2epro those go through submit_once or "
+            f"run_local only: a production cnf needs its code tarball on a "
+            f"durable path mu2epro can read first. push_cnf takes them "
+            f"with run_as='self'.")
     try:
         root = code_cache.unpacked(entry['code'])
     except (ValueError, OSError) as e:
@@ -203,6 +206,12 @@ def push_cnf(json: str, desc: str, dsconf: str, slice_size: int,
     `prodtools_dir` forwards `--prodtools-dir` (self only): the
     checkout's `bin/` and `utils/` are tarred and shipped to every job,
     digest-pinned.
+
+    A code-tarball entry (`code`, no simjob_setup) is built in the
+    tarball's own environment, as submit_once does, for run_as="self"
+    only. Keep the tarball where the entry says for the campaign's
+    lifetime: every later submit re-hashes it. mu2epro is refused until
+    production code tarballs have a durable home.
     """
     runner.require_confirmed(run_as, confirm)
 
@@ -228,7 +237,8 @@ def push_cnf(json: str, desc: str, dsconf: str, slice_size: int,
         raise ValueError("prodtools_dir is a dev opt-in; mu2epro campaigns run a "
                          "cvmfs release only (omit prodtools_dir)")
 
-    simjob_setup, tarball_desc = _select_push_params(json, desc, dsconf)
+    simjob_setup, tarball_desc = _select_push_params(
+        json, desc, dsconf, allow_code=(run_as == 'self'))
 
     db = _ledger_path_for(run_as)
     try:

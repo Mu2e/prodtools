@@ -100,13 +100,13 @@ When regenerating, read in this order:
    side). For a local smoke run without touching the grid, `bin/runlocal
    --code <tarball>` unpacks the build once per content into prodtools'
    code cache (`/exp/mu2e/data/users/$USER/prodtools/code/<sha256>`),
-   and every job reuses that tree instead of re-extracting it. A
-   code-mode campaign
-   cannot be built through the MCP `push_cnf` tool — it requires
-   `simjob_setup` and rejects an entry carrying `code` — so use the
-   `json2jobdef --prod --enqueue` CLI path for those campaigns instead,
-   with `code` set in the JSON entry (`json2jobdef` has no `--code`
-   flag of its own; it passes the entry's value down to `jobdef`).
+   and every job reuses that tree instead of re-extracting it. The MCP
+   `push_cnf` tool builds a code-mode campaign for `run_as="self"` only,
+   in the tarball's own environment; for mu2epro it refuses an entry
+   carrying `code`, so a production code-mode campaign goes through the
+   `json2jobdef --prod --enqueue` CLI path, with `code` set in the JSON
+   entry (`json2jobdef` has no `--code` flag of its own; it passes the
+   entry's value down to `jobdef`).
    **Campaign-wide defaults (`common.json`)** — a campaign directory
    may hold a `common.json` beside its stage configs; `json2jobdef`
    applies it to every entry the listed stage files contribute.

@@ -113,7 +113,8 @@ the read-only server is the only thing that can see such a run; neither
 the line both ways: ledger-tracked if and only if the outputs are
 declared. It also takes code-tarball entries (`code`, no `simjob_setup`),
 built in the tarball's own environment (`utils/code_cache.py`);
-`push_cnf` refuses them. A fourth, `run_local`, runs an entry (Musing or
+`push_cnf` takes them for `run_as="self"` and refuses them for mu2epro.
+A fourth, `run_local`, runs an entry (Musing or
 code tarball) on this node instead: `runlocal` started detached under
 the same receipt; `kill <pid>` stops it, jobs included.
 

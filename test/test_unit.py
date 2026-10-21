@@ -19990,8 +19990,9 @@ class TestCodeEntryPushParams(unittest.TestCase):
     """A code-tarball entry (`code`, no simjob_setup) builds in the
     tarball's own environment: submit_once sources the unpacked
     Code/setup.sh where it would source a Musing's setup.sh (the two are
-    the same script). push_cnf refuses: a production cnf needs its code
-    tarball on a durable path mu2epro can read first."""
+    the same script). push_cnf does the same for run_as='self' and
+    refuses for mu2epro: a production cnf needs its code tarball on a
+    durable path mu2epro can read first."""
 
     def setUp(self):
         from prodtools_mcp_write import tools
@@ -20072,12 +20073,35 @@ class TestCodeEntryPushParams(unittest.TestCase):
             self.assertTrue(str(ctx.exception).startswith('push_cnf: '))
         self.assertFalse(os.path.exists(self.root))
 
-    def test_push_cnf_refuses_before_running_anything(self):
+    def test_push_cnf_refuses_a_mu2epro_code_entry_before_running_anything(self):
         with patch('prodtools_mcp_write.runner.run_cli') as run:
             with self.assertRaises(ValueError) as ctx:
-                self.tools.push_cnf(self.json_path, 'D', 'C', 1000, 'self')
+                self.tools.push_cnf(self.json_path, 'D', 'C', 1000,
+                                    'mu2epro', confirm=True)
         self.assertIn('submit_once', str(ctx.exception))
+        self.assertIn("run_as='self'", str(ctx.exception))
         run.assert_not_called()
+        self.assertFalse(os.path.exists(self.root))     # nothing unpacked
+
+    def test_push_cnf_self_builds_a_code_entry_in_the_tarballs_environment(self):
+        """A personal campaign only needs the tarball to stay where the
+        entry says, which is the owner's own business: push_cnf builds it
+        against the unpacked Code/setup.sh, as submit_once does."""
+        camp = {'id': 7, 'tarball': 'cnf.alice.D.C.0.tar', 'state': 'active',
+                'entry': {'njobs': 3,
+                          'outputs': [{'dataset': 'sim.alice.D.C.art'}]}}
+        with patch('prodtools_mcp_write.runner.run_cli',
+                   return_value={'rc': 0, 'stdout': '', 'stderr': ''}) as run, \
+             patch('prodtools_mcp_write.tools._ledger_path_for',
+                   return_value='/db'), \
+             patch('prodtools_mcp_write.tools._all_campaigns',
+                   side_effect=[[], [camp]]):
+            out = self.tools.push_cnf(self.json_path, 'D', 'C', 1000, 'self')
+        self.assertEqual(out['campaign_id'], 7)
+        self.assertEqual(run.call_args[1]['simjob_setup'], self.setup)
+        argv = run.call_args[0][0]
+        self.assertIn('--prod', argv)
+        self.assertIn('--enqueue', argv)
 
 
 class TestRunLocalCodeUsesTheCache(unittest.TestCase):

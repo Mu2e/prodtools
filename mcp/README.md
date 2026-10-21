@@ -172,7 +172,9 @@ clears that cache. To free an entry nothing is using, first `mv` its
 `<sha256>` directory aside, then delete the moved copy: an interrupted
 `rm -rf` in place can leave `Code/setup.sh` behind, which still counts
 as a hit. A `<sha256>.part.*` directory is what a killed unpack leaves;
-it can be deleted. `push_cnf` refuses code-tarball entries.
+it can be deleted. `push_cnf` takes code-tarball entries for
+`run_as="self"` (keep the tarball where the entry says: every later
+submit re-hashes it) and refuses them for mu2epro.
 
 `run_local(json, desc, dsconf, run_as, parallel=None)` runs the same kind
 of entry on this node instead (`json2jobdef --once --local`): it starts
