@@ -184,7 +184,7 @@ _ENQUEUE_RECOVERY = (
 
 def push_cnf(json: str, desc: str, dsconf: str, slice_size: int,
              run_as: str, confirm: bool = False,
-             prodtools_dir: Optional[str] = None):
+             prodtools_dir: Optional[str] = None, extend: bool = False):
     """Build a cnf tarball, register it in SAM, and create its campaign
     -- one call, mirroring `json2jobdef --prod --enqueue`.
 
@@ -212,8 +212,21 @@ def push_cnf(json: str, desc: str, dsconf: str, slice_size: int,
     only. Keep the tarball where the entry says for the campaign's
     lifetime: every later submit re-hashes it. mu2epro is refused until
     production code tarballs have a durable home.
+
+    `extend=True` forwards `--extend`: the cnf lists only the inputs
+    that are not yet parents of the entry's output dataset, and its
+    version is bumped (`.0.tar` -> `.1.tar`), so a rerun of the files a
+    finished campaign missed gets a new cnf name and new campaign. The
+    exclusion reads the output dataset under the pushing identity's
+    owner, which is why it is only meaningful for that identity's own
+    outputs.
     """
     runner.require_confirmed(run_as, confirm)
+
+    # A non-bool here would be the MCP layer handing over a string
+    # ("false" is truthy); refuse it rather than guess.
+    if not isinstance(extend, bool):
+        raise ValueError(f"extend must be a bool, got {extend!r}")
 
     # Checked HERE, not left to create_campaign: that runs inside the
     # CLI, after the irreversible SAM push, so a bad slice_size would
@@ -258,6 +271,8 @@ def push_cnf(json: str, desc: str, dsconf: str, slice_size: int,
             '--slice-size', str(slice_size)]
     if prodtools_dir is not None:
         argv += ['--prodtools-dir', prodtools_dir]
+    if extend:
+        argv.append('--extend')
     result = runner.run_cli(argv, run_as, simjob_setup=simjob_setup)
     if result['rc'] != 0:
         raise RuntimeError(

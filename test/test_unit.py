@@ -2078,6 +2078,47 @@ class TestGetOutputDatasetNames(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_tfileservice_output_is_a_dataset(self):
+        """An EventNtuple job writes its nts through TFileService, not an
+        output module. Missing it made `--extend` refuse every ntuple
+        entry ("could not determine output dataset names")."""
+        from utils.jobdef import get_output_dataset_names
+        import subprocess as sp
+
+        def mock_fhicl_get(path, cmd, key=''):
+            if cmd == '--names-in' and key == 'outputs':
+                raise sp.CalledProcessError(1, 'fhicl-get')
+            if cmd == '--atom-as' and key == 'services.TFileService.fileName':
+                return 'nts.owner.{desc}.version.sequencer.root'
+            return ''
+
+        with patch('utils.jobdef._run_fhicl_get', side_effect=mock_fhicl_get), \
+             patch('utils.prod_utils.write_fcl_template'), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'):
+            result = get_output_dataset_names(self._cfg())
+
+        self.assertEqual(result, ['nts.mu2e.TestDesc.TC.root'])
+
+    def test_tfileservice_dev_null_is_not_a_dataset(self):
+        from utils.jobdef import get_output_dataset_names
+        import subprocess as sp
+
+        def mock_fhicl_get(path, cmd, key=''):
+            if cmd == '--names-in' and key == 'outputs':
+                raise sp.CalledProcessError(1, 'fhicl-get')
+            if cmd == '--atom-as' and key == 'services.TFileService.fileName':
+                return '/dev/null'
+            return ''
+
+        with patch('utils.jobdef._run_fhicl_get', side_effect=mock_fhicl_get), \
+             patch('utils.prod_utils.write_fcl_template'), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'):
+            result = get_output_dataset_names(self._cfg())
+
+        self.assertEqual(result, [])
+
 
 # ---------------------------------------------------------------------------
 # 22. validate_jobdesc — three-way mode detection (runmu2e.py)
@@ -5078,6 +5119,42 @@ class TestTerminalPushError(unittest.TestCase):
         self.assertEqual(len(calls), 3)
 
 
+class TestRunNeverReadsCallerStdin(unittest.TestCase):
+    """prod_utils.run must not hand its own stdin to the command.
+
+    OfflineOps pushOutput starts with an unconditional debug block that
+    runs `cat $BEARER_TOKEN_FILE`. getToken writes the token file but does
+    not export that variable, so from an interactive shell the argument
+    vanishes and `cat` waits on the terminal forever: `json2jobdef --prod`
+    hung at that line for a user (2026-10-27). Grid workers are spared
+    only because jobsub sets the variable.
+    """
+
+    def test_stdin_reader_finishes_while_caller_stdin_stays_open(self):
+        repo = Path(__file__).resolve().parent.parent
+        env = {k: v for k, v in os.environ.items()
+               if k != 'BEARER_TOKEN_FILE'}
+        # A fresh interpreter has no samweb_client; stub it as this suite does.
+        child = subprocess.Popen(
+            [sys.executable, '-c',
+             'import sys; from unittest.mock import MagicMock; '
+             'sys.modules["samweb_client"] = MagicMock(); '
+             'from utils.prod_utils import run; '
+             'run("cat $BEARER_TOKEN_FILE", shell=True)'],
+            cwd=repo, env=env, stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            # The pipe's write end stays open, like an idle terminal.
+            rc = child.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+            self.fail("run() passed its stdin through: `cat` with no "
+                      "argument blocked on it")
+        finally:
+            child.stdin.close()
+        self.assertEqual(rc, 0, child.stderr.read())
+        child.stderr.close()
 
 
 class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
@@ -12028,7 +12105,7 @@ class TestPushCnfTool(unittest.TestCase):
 
     def _push(self, before, after, *, json_path=None, desc='D', dsconf='C',
               slice_size=500, run_as='self', confirm=False, cli=None,
-              prodtools_dir=None):
+              prodtools_dir=None, extend=False):
         """push_cnf with the ledger faked.
 
         `before`/`after` are what _all_campaigns returns either side of
@@ -12046,7 +12123,7 @@ class TestPushCnfTool(unittest.TestCase):
             out = self.tools.push_cnf(
                 json=json_path or self.json_path, desc=desc, dsconf=dsconf,
                 slice_size=slice_size, run_as=run_as, confirm=confirm,
-                prodtools_dir=prodtools_dir)
+                prodtools_dir=prodtools_dir, extend=extend)
         self.last_run = run
         return out
 
@@ -12103,6 +12180,25 @@ class TestPushCnfTool(unittest.TestCase):
         # takes no Musing argument, so a caller can never pass one that
         # disagrees with the entry.
         self.assertEqual(kwargs.get('simjob_setup'), self.simjob_setup)
+
+    def test_extend_is_forwarded_only_when_asked(self):
+        self._push([], [self._camp(7)])
+        self.assertNotIn('--extend', self.last_run.call_args[0][0])
+        self._push([], [self._camp(8)], extend=True)
+        self.assertIn('--extend', self.last_run.call_args[0][0])
+
+    def test_non_bool_extend_refused_before_running_anything(self):
+        """MCP can hand over an untyped value as a string, and "false"
+        is truthy: guessing would extend a push the caller did not
+        ask to extend."""
+        for bad in ('false', 'true', 1, None):
+            with self.subTest(extend=bad):
+                with patch('prodtools_mcp_write.runner.run_cli') as run:
+                    with self.assertRaises(ValueError):
+                        self.tools.push_cnf(
+                            json=self.json_path, desc='D', dsconf='C',
+                            slice_size=500, run_as='self', extend=bad)
+                run.assert_not_called()
 
     def test_result_is_read_from_the_ledger_not_stdout(self):
         noisy = 'Enqueued campaign 999: cnf.mu2e.WRONG.C.0.tar'

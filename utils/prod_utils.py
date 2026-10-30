@@ -52,7 +52,12 @@ def run(cmd, shell=False, retries=0, retry_delay=60):
         # streams `mu2e -c` output running to hundreds of thousands of
         # lines — the failure reason is always near the end.
         tail = collections.deque(maxlen=RUN_TAIL_LINES)
-        process = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE,
+        # stdin=DEVNULL: nothing run here is interactive, and an inherited
+        # terminal hangs pushOutput, whose debug block runs
+        # `cat $BEARER_TOKEN_FILE` — getToken never exports that variable,
+        # so off the grid `cat` gets no argument and waits on the keyboard.
+        process = subprocess.Popen(cmd, shell=shell, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in iter(process.stdout.readline, ''):
             text = line.rstrip()

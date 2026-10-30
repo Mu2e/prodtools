@@ -1012,5 +1012,164 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "_comment": "Conversion electrons from the mu- stops of a study stopping target (Offline PR #2065). The geometry must be the same study file the stops were made in. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down): 54% of events kept, 0.18 s per event, VmHWM 2.29 GB.",
+        "desc": "CeEndpoint",
+        "dsconf": "MDC2025ba_st49hole9to41",
+        "fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st49hole9to41.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Conversion electrons from the mu- stops of a study stopping target (Offline PR #2065). The geometry must be the same study file the stops were made in. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down): 54% of events kept, 0.18 s per event, VmHWM 2.29 GB.",
+        "desc": "CeEndpoint",
+        "dsconf": "MDC2025ba_st37plus6up6dn",
+        "fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st37plus6up6dn.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Conversion electrons from the mu- stops of a study stopping target (Offline PR #2065). The geometry must be the same study file the stops were made in. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down): 54% of events kept, 0.18 s per event, VmHWM 2.29 GB.",
+        "desc": "CeEndpoint",
+        "dsconf": "MDC2025ba_st49hole1to5",
+        "fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st49hole1to5.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "DIO tail above 95 MeV from the mu- stops of a study stopping target (Offline PR #2065). The geometry must be the same study file the stops were made in. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down): 51% of events kept, 0.10 s per event.",
+        "desc": "DIOtail95",
+        "dsconf": "MDC2025ba_st49hole9to41",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st49hole9to41.art": 1
+        },
+        "events": 4000,
+        "njobs": 5000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 95,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "physics.filters.GenFilter.maxr_min": 320,
+            "physics.filters.GenFilter.maxr_max": 500,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail95.version.sequencer.art"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "DIO tail above 95 MeV from the mu- stops of a study stopping target (Offline PR #2065). The geometry must be the same study file the stops were made in. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down): 51% of events kept, 0.10 s per event.",
+        "desc": "DIOtail95",
+        "dsconf": "MDC2025ba_st37plus6up6dn",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st37plus6up6dn.art": 1
+        },
+        "events": 4000,
+        "njobs": 5000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 95,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "physics.filters.GenFilter.maxr_min": 320,
+            "physics.filters.GenFilter.maxr_max": 500,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail95.version.sequencer.art"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "DIO tail above 95 MeV from the mu- stops of a study stopping target (Offline PR #2065). The geometry must be the same study file the stops were made in. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down): 51% of events kept, 0.10 s per event.",
+        "desc": "DIOtail95",
+        "dsconf": "MDC2025ba_st49hole1to5",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st49hole1to5.art": 1
+        },
+        "events": 4000,
+        "njobs": 5000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 95,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "physics.filters.GenFilter.maxr_min": 320,
+            "physics.filters.GenFilter.maxr_max": 500,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail95.version.sequencer.art"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
     }
 ]
