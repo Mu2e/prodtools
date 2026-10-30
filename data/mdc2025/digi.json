@@ -169,5 +169,80 @@
         "inloc": "tape",
         "outloc": {"*.art": "tape"},
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025as/setup.sh"
+    },
+    {
+        "_comment": "On-spill digitization, no pileup, of the CeEndpoint and DIOtail95 samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB).",
+        "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.CeEndpoint.MDC2025ba_st49hole9to41.art": 10
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ba_st49hole9to41.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "On-spill digitization, no pileup, of the CeEndpoint and DIOtail95 samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB).",
+        "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.CeEndpoint.MDC2025ba_st37plus6up6dn.art": 10
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ba_st37plus6up6dn.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "On-spill digitization, no pileup, of the CeEndpoint and DIOtail95 samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB).",
+        "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.CeEndpoint.MDC2025ba_st49hole1to5.art": 10
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ba_st49hole1to5.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
     }
 ]

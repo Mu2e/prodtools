@@ -202,5 +202,137 @@
             "*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_02/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of a study stopping target sample (Offline PR #2065). AnalysisMDC2025 v02_02_04 is backed by MDC2025ay, which lacks the study geometry files; tested 2026-10-29 that it reads these MDC2025ba mcs files and that the ntuple is identical (all 394 leaves and histograms) with the release default, geom_run1_a.txt or the study geometry, so no geometry override is set. One mcs file per job; about 40 kB per event. SkipEvent TrackQuality (added 2026-10-29): AnalysisMDC2025 v02_02_04 lacks ArtAnalysis PR #12, so a track with no active hits gives TrkQual an inf feature and XGBoost throws; 99 of the first 1200 jobs (.0 cnfs) died on it. Skipping only that event was tested: the crashing file finished with 1 of 19,663 events skipped, and a non-crashing file gives identical ntuples with and without the option. The .1 cnfs are built with --extend so they run only the inputs without an ntuple.",
+        "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeEndpointOnSpill.MDC2025ba_st49hole9to41_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of a study stopping target sample (Offline PR #2065). AnalysisMDC2025 v02_02_04 is backed by MDC2025ay, which lacks the study geometry files; tested 2026-10-29 that it reads these MDC2025ba mcs files and that the ntuple is identical (all 394 leaves and histograms) with the release default, geom_run1_a.txt or the study geometry, so no geometry override is set. One mcs file per job; about 40 kB per event. SkipEvent TrackQuality (added 2026-10-29): AnalysisMDC2025 v02_02_04 lacks ArtAnalysis PR #12, so a track with no active hits gives TrkQual an inf feature and XGBoost throws; 99 of the first 1200 jobs (.0 cnfs) died on it. Skipping only that event was tested: the crashing file finished with 1 of 19,663 events skipped, and a non-crashing file gives identical ntuples with and without the option. The .1 cnfs are built with --extend so they run only the inputs without an ntuple.",
+        "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeEndpointOnSpill.MDC2025ba_st37plus6up6dn_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of a study stopping target sample (Offline PR #2065). AnalysisMDC2025 v02_02_04 is backed by MDC2025ay, which lacks the study geometry files; tested 2026-10-29 that it reads these MDC2025ba mcs files and that the ntuple is identical (all 394 leaves and histograms) with the release default, geom_run1_a.txt or the study geometry, so no geometry override is set. One mcs file per job; about 40 kB per event. SkipEvent TrackQuality (added 2026-10-29): AnalysisMDC2025 v02_02_04 lacks ArtAnalysis PR #12, so a track with no active hits gives TrkQual an inf feature and XGBoost throws; 99 of the first 1200 jobs (.0 cnfs) died on it. Skipping only that event was tested: the crashing file finished with 1 of 19,663 events skipped, and a non-crashing file gives identical ntuples with and without the option. The .1 cnfs are built with --extend so they run only the inputs without an ntuple.",
+        "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeEndpointOnSpill.MDC2025ba_st49hole1to5_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of a study stopping target sample (Offline PR #2065). AnalysisMDC2025 v02_02_04 is backed by MDC2025ay, which lacks the study geometry files; tested 2026-10-29 that it reads these MDC2025ba mcs files and that the ntuple is identical (all 394 leaves and histograms) with the release default, geom_run1_a.txt or the study geometry, so no geometry override is set. One mcs file per job; about 40 kB per event. SkipEvent TrackQuality (added 2026-10-29): AnalysisMDC2025 v02_02_04 lacks ArtAnalysis PR #12, so a track with no active hits gives TrkQual an inf feature and XGBoost throws; 99 of the first 1200 jobs (.0 cnfs) died on it. Skipping only that event was tested: the crashing file finished with 1 of 19,663 events skipped, and a non-crashing file gives identical ntuples with and without the option. The .1 cnfs are built with --extend so they run only the inputs without an ntuple.",
+        "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.DIOtail95OnSpill.MDC2025ba_st49hole9to41_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of a study stopping target sample (Offline PR #2065). AnalysisMDC2025 v02_02_04 is backed by MDC2025ay, which lacks the study geometry files; tested 2026-10-29 that it reads these MDC2025ba mcs files and that the ntuple is identical (all 394 leaves and histograms) with the release default, geom_run1_a.txt or the study geometry, so no geometry override is set. One mcs file per job; about 40 kB per event. SkipEvent TrackQuality (added 2026-10-29): AnalysisMDC2025 v02_02_04 lacks ArtAnalysis PR #12, so a track with no active hits gives TrkQual an inf feature and XGBoost throws; 99 of the first 1200 jobs (.0 cnfs) died on it. Skipping only that event was tested: the crashing file finished with 1 of 19,663 events skipped, and a non-crashing file gives identical ntuples with and without the option. The .1 cnfs are built with --extend so they run only the inputs without an ntuple.",
+        "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.DIOtail95OnSpill.MDC2025ba_st37plus6up6dn_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of a study stopping target sample (Offline PR #2065). AnalysisMDC2025 v02_02_04 is backed by MDC2025ay, which lacks the study geometry files; tested 2026-10-29 that it reads these MDC2025ba mcs files and that the ntuple is identical (all 394 leaves and histograms) with the release default, geom_run1_a.txt or the study geometry, so no geometry override is set. One mcs file per job; about 40 kB per event. SkipEvent TrackQuality (added 2026-10-29): AnalysisMDC2025 v02_02_04 lacks ArtAnalysis PR #12, so a track with no active hits gives TrkQual an inf feature and XGBoost throws; 99 of the first 1200 jobs (.0 cnfs) died on it. Skipping only that event was tested: the crashing file finished with 1 of 19,663 events skipped, and a non-crashing file gives identical ntuples with and without the option. The .1 cnfs are built with --extend so they run only the inputs without an ntuple.",
+        "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.DIOtail95OnSpill.MDC2025ba_st49hole1to5_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
     }
 ]

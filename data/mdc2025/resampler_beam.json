@@ -390,5 +390,95 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ar/setup.sh",
         "owner": "mu2e",
         "sequential_aux": true
+    },
+    {
+        "_comment": "mu- stops in a study stopping target (Offline PR #2065, Mu2eG4/geom/studies). The Run 1A beam pool is resampled through the new geometry with only the target-stop path and no prescale; MuonStopSelector then makes MuminusStopsCat for CeEndpoint/DIOtail95. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down, 10,000 draws): 0.586 stops per draw, 21 ms per draw, VmHWM 2.13 GB, 2.2 kB per stop; 100 x 100,000 draws = about 5.9M stops, about 36 min and 130 MB per job.",
+        "desc": "TargetStops",
+        "dsconf": "MDC2025ba_st49hole9to41",
+        "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "physics.trigger_paths": [
+                "targetStopPath"
+            ],
+            "physics.outPath": [
+                "TargetStopOutput"
+            ],
+            "physics.filters.TargetStopPrescaleFilter.nPrescale": 1
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {
+            "sim.mu2e.MuBeamCat.MDC2025ab.art": 1
+        },
+        "njobs": 100,
+        "events": 100000,
+        "run": 1430,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "_comment": "mu- stops in a study stopping target (Offline PR #2065, Mu2eG4/geom/studies). The Run 1A beam pool is resampled through the new geometry with only the target-stop path and no prescale; MuonStopSelector then makes MuminusStopsCat for CeEndpoint/DIOtail95. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down, 10,000 draws): 0.586 stops per draw, 21 ms per draw, VmHWM 2.13 GB, 2.2 kB per stop; 100 x 100,000 draws = about 5.9M stops, about 36 min and 130 MB per job.",
+        "desc": "TargetStops",
+        "dsconf": "MDC2025ba_st37plus6up6dn",
+        "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "physics.trigger_paths": [
+                "targetStopPath"
+            ],
+            "physics.outPath": [
+                "TargetStopOutput"
+            ],
+            "physics.filters.TargetStopPrescaleFilter.nPrescale": 1
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {
+            "sim.mu2e.MuBeamCat.MDC2025ab.art": 1
+        },
+        "njobs": 100,
+        "events": 100000,
+        "run": 1430,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "_comment": "mu- stops in a study stopping target (Offline PR #2065, Mu2eG4/geom/studies). The Run 1A beam pool is resampled through the new geometry with only the target-stop path and no prescale; MuonStopSelector then makes MuminusStopsCat for CeEndpoint/DIOtail95. Smoke 2026-10-26 at MDC2025ba (37foils_plus-6-up-6-down, 10,000 draws): 0.586 stops per draw, 21 ms per draw, VmHWM 2.13 GB, 2.2 kB per stop; 100 x 100,000 draws = about 5.9M stops, about 36 min and 130 MB per job.",
+        "desc": "TargetStops",
+        "dsconf": "MDC2025ba_st49hole1to5",
+        "fcl": "Production/JobConfig/pileup/MuBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "physics.trigger_paths": [
+                "targetStopPath"
+            ],
+            "physics.outPath": [
+                "TargetStopOutput"
+            ],
+            "physics.filters.TargetStopPrescaleFilter.nPrescale": 1
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {
+            "sim.mu2e.MuBeamCat.MDC2025ab.art": 1
+        },
+        "njobs": 100,
+        "events": 100000,
+        "run": 1430,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
     }
 ]

@@ -180,5 +180,41 @@
 		],
 		"outloc": [{"*.art": "tape"}],
 		"simjob_setup": ["/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025av/setup.sh"]
+	},
+	{
+		"_comment": "mu- / mu+ split of the study-target stops (resampler_beam.json TargetStops MDC2025ba_*). Reads TargetStops directly, 10 files per job, so each target gives 10 MuminusStopsCat files of about 1.3 GB instead of one 13 GB file read by all CeEndpoint/DIOtail95 jobs. Outputs stay on disk because those resamplers read them next. Smoke 2026-10-26: 5861 stops gave 5818 mu- and 43 mu+.",
+		"desc": "MuonStopSelector",
+		"dsconf": "MDC2025ba_st49hole9to41",
+		"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",
+		"input_data": {"sim.mu2e.TargetStops.MDC2025ba_st49hole9to41.art": 10},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+	},
+	{
+		"_comment": "mu- / mu+ split of the study-target stops (resampler_beam.json TargetStops MDC2025ba_*). Reads TargetStops directly, 10 files per job, so each target gives 10 MuminusStopsCat files of about 1.3 GB instead of one 13 GB file read by all CeEndpoint/DIOtail95 jobs. Outputs stay on disk because those resamplers read them next. Smoke 2026-10-26: 5861 stops gave 5818 mu- and 43 mu+.",
+		"desc": "MuonStopSelector",
+		"dsconf": "MDC2025ba_st37plus6up6dn",
+		"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",
+		"input_data": {"sim.mu2e.TargetStops.MDC2025ba_st37plus6up6dn.art": 10},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+	},
+	{
+		"_comment": "mu- / mu+ split of the study-target stops (resampler_beam.json TargetStops MDC2025ba_*). Reads TargetStops directly, 10 files per job, so each target gives 10 MuminusStopsCat files of about 1.3 GB instead of one 13 GB file read by all CeEndpoint/DIOtail95 jobs. Outputs stay on disk because those resamplers read them next. Smoke 2026-10-26: 5861 stops gave 5818 mu- and 43 mu+.",
+		"desc": "MuonStopSelector",
+		"dsconf": "MDC2025ba_st49hole1to5",
+		"fcl": "Production/JobConfig/pileup/MuonStopSelector.fcl",
+		"input_data": {"sim.mu2e.TargetStops.MDC2025ba_st49hole1to5.art": 10},
+		"inloc": "disk",
+		"outloc": {
+			"*.art": "disk"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
 	}
 ]

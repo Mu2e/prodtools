@@ -320,5 +320,137 @@
             "inloc": "tape",
             "outloc": {"*.art": "tape"},
             "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ax/setup.sh"
-        }
+        },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of a study stopping target sample (Offline PR #2065). The geometry is the same study file the sample was simulated and digitized in. One dig file per job: about 27k CE or 20k DIO events; smoke 2026-10-26: 0.11 s per event, VmHWM 0.97 GB.",
+        "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeEndpointOnSpill.MDC2025ba_st49hole9to41_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of a study stopping target sample (Offline PR #2065). The geometry is the same study file the sample was simulated and digitized in. One dig file per job: about 27k CE or 20k DIO events; smoke 2026-10-26: 0.11 s per event, VmHWM 0.97 GB.",
+        "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeEndpointOnSpill.MDC2025ba_st37plus6up6dn_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of a study stopping target sample (Offline PR #2065). The geometry is the same study file the sample was simulated and digitized in. One dig file per job: about 27k CE or 20k DIO events; smoke 2026-10-26: 0.11 s per event, VmHWM 0.97 GB.",
+        "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeEndpointOnSpill.MDC2025ba_st49hole1to5_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of a study stopping target sample (Offline PR #2065). The geometry is the same study file the sample was simulated and digitized in. One dig file per job: about 27k CE or 20k DIO events; smoke 2026-10-26: 0.11 s per event, VmHWM 0.97 GB.",
+        "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.DIOtail95OnSpill.MDC2025ba_st49hole9to41_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of a study stopping target sample (Offline PR #2065). The geometry is the same study file the sample was simulated and digitized in. One dig file per job: about 27k CE or 20k DIO events; smoke 2026-10-26: 0.11 s per event, VmHWM 0.97 GB.",
+        "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.DIOtail95OnSpill.MDC2025ba_st37plus6up6dn_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of a study stopping target sample (Offline PR #2065). The geometry is the same study file the sample was simulated and digitized in. One dig file per job: about 27k CE or 20k DIO events; smoke 2026-10-26: 0.11 s per event, VmHWM 0.97 GB.",
+        "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.DIOtail95OnSpill.MDC2025ba_st49hole1to5_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    }
 ]
