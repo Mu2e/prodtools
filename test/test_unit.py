@@ -12105,7 +12105,7 @@ class TestPushCnfTool(unittest.TestCase):
 
     def _push(self, before, after, *, json_path=None, desc='D', dsconf='C',
               slice_size=500, run_as='self', confirm=False, cli=None,
-              prodtools_dir=None):
+              prodtools_dir=None, extend=False):
         """push_cnf with the ledger faked.
 
         `before`/`after` are what _all_campaigns returns either side of
@@ -12123,7 +12123,7 @@ class TestPushCnfTool(unittest.TestCase):
             out = self.tools.push_cnf(
                 json=json_path or self.json_path, desc=desc, dsconf=dsconf,
                 slice_size=slice_size, run_as=run_as, confirm=confirm,
-                prodtools_dir=prodtools_dir)
+                prodtools_dir=prodtools_dir, extend=extend)
         self.last_run = run
         return out
 
@@ -12180,6 +12180,25 @@ class TestPushCnfTool(unittest.TestCase):
         # takes no Musing argument, so a caller can never pass one that
         # disagrees with the entry.
         self.assertEqual(kwargs.get('simjob_setup'), self.simjob_setup)
+
+    def test_extend_is_forwarded_only_when_asked(self):
+        self._push([], [self._camp(7)])
+        self.assertNotIn('--extend', self.last_run.call_args[0][0])
+        self._push([], [self._camp(8)], extend=True)
+        self.assertIn('--extend', self.last_run.call_args[0][0])
+
+    def test_non_bool_extend_refused_before_running_anything(self):
+        """MCP can hand over an untyped value as a string, and "false"
+        is truthy: guessing would extend a push the caller did not
+        ask to extend."""
+        for bad in ('false', 'true', 1, None):
+            with self.subTest(extend=bad):
+                with patch('prodtools_mcp_write.runner.run_cli') as run:
+                    with self.assertRaises(ValueError):
+                        self.tools.push_cnf(
+                            json=self.json_path, desc='D', dsconf='C',
+                            slice_size=500, run_as='self', extend=bad)
+                run.assert_not_called()
 
     def test_result_is_read_from_the_ledger_not_stdout(self):
         noisy = 'Enqueued campaign 999: cnf.mu2e.WRONG.C.0.tar'
