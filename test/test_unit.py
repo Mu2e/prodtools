@@ -5078,6 +5078,42 @@ class TestTerminalPushError(unittest.TestCase):
         self.assertEqual(len(calls), 3)
 
 
+class TestRunNeverReadsCallerStdin(unittest.TestCase):
+    """prod_utils.run must not hand its own stdin to the command.
+
+    OfflineOps pushOutput starts with an unconditional debug block that
+    runs `cat $BEARER_TOKEN_FILE`. getToken writes the token file but does
+    not export that variable, so from an interactive shell the argument
+    vanishes and `cat` waits on the terminal forever: `json2jobdef --prod`
+    hung at that line for a user (2026-10-27). Grid workers are spared
+    only because jobsub sets the variable.
+    """
+
+    def test_stdin_reader_finishes_while_caller_stdin_stays_open(self):
+        repo = Path(__file__).resolve().parent.parent
+        env = {k: v for k, v in os.environ.items()
+               if k != 'BEARER_TOKEN_FILE'}
+        # A fresh interpreter has no samweb_client; stub it as this suite does.
+        child = subprocess.Popen(
+            [sys.executable, '-c',
+             'import sys; from unittest.mock import MagicMock; '
+             'sys.modules["samweb_client"] = MagicMock(); '
+             'from utils.prod_utils import run; '
+             'run("cat $BEARER_TOKEN_FILE", shell=True)'],
+            cwd=repo, env=env, stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            # The pipe's write end stays open, like an idle terminal.
+            rc = child.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+            self.fail("run() passed its stdin through: `cat` with no "
+                      "argument blocked on it")
+        finally:
+            child.stdin.close()
+        self.assertEqual(rc, 0, child.stderr.read())
+        child.stderr.close()
 
 
 class TestStorageScopeCoversPhysicalPath(unittest.TestCase):
