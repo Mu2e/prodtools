@@ -2078,6 +2078,47 @@ class TestGetOutputDatasetNames(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_tfileservice_output_is_a_dataset(self):
+        """An EventNtuple job writes its nts through TFileService, not an
+        output module. Missing it made `--extend` refuse every ntuple
+        entry ("could not determine output dataset names")."""
+        from utils.jobdef import get_output_dataset_names
+        import subprocess as sp
+
+        def mock_fhicl_get(path, cmd, key=''):
+            if cmd == '--names-in' and key == 'outputs':
+                raise sp.CalledProcessError(1, 'fhicl-get')
+            if cmd == '--atom-as' and key == 'services.TFileService.fileName':
+                return 'nts.owner.{desc}.version.sequencer.root'
+            return ''
+
+        with patch('utils.jobdef._run_fhicl_get', side_effect=mock_fhicl_get), \
+             patch('utils.prod_utils.write_fcl_template'), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'):
+            result = get_output_dataset_names(self._cfg())
+
+        self.assertEqual(result, ['nts.mu2e.TestDesc.TC.root'])
+
+    def test_tfileservice_dev_null_is_not_a_dataset(self):
+        from utils.jobdef import get_output_dataset_names
+        import subprocess as sp
+
+        def mock_fhicl_get(path, cmd, key=''):
+            if cmd == '--names-in' and key == 'outputs':
+                raise sp.CalledProcessError(1, 'fhicl-get')
+            if cmd == '--atom-as' and key == 'services.TFileService.fileName':
+                return '/dev/null'
+            return ''
+
+        with patch('utils.jobdef._run_fhicl_get', side_effect=mock_fhicl_get), \
+             patch('utils.prod_utils.write_fcl_template'), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink'):
+            result = get_output_dataset_names(self._cfg())
+
+        self.assertEqual(result, [])
+
 
 # ---------------------------------------------------------------------------
 # 22. validate_jobdesc — three-way mode detection (runmu2e.py)

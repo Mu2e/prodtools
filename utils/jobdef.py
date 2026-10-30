@@ -572,6 +572,20 @@ def get_output_dataset_names(config: Dict) -> List[str]:
                 continue
             if n.is_file:
                 datasets.append(str(n.dataset))
+        # EventNtuple writes through TFileService, not an output module
+        # (same key the tbs outfiles read above).
+        try:
+            pattern = _get_fcl_value(template_path,
+                                     'services.TFileService.fileName').strip()
+        except subprocess.CalledProcessError:
+            pattern = ''
+        if pattern and pattern != '/dev/null':
+            try:
+                n = Mu2eName.parse(_replace_placeholders(pattern, config))
+            except ValueError:
+                n = None
+            if n is not None and n.is_file:
+                datasets.append(str(n.dataset))
     finally:
         if os.path.exists(template_path):
             os.unlink(template_path)
