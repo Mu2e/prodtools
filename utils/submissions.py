@@ -70,7 +70,8 @@ def resolve_cap(flag_value):
 # names so every caller/test reading them off this module keeps working.
 from utils.queue_state import (_jobsub_table_states,  # noqa: F401
                                cluster_queue_state, live_clusters,
-                               queue_owner, report_jobsub_q_failure)
+                               queue_owner, report_jobsub_q_failure,
+                               schedd_cluster_state, schedd_of)
 
 
 def verify_row(row, sam_lister=files_in_dataset):
@@ -1142,10 +1143,16 @@ def manage_campaign(db_path, camp_id, action, note=None, close_rows=False):
 
 def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
                 queue_state_fn=cluster_queue_state, verify_fn=None,
-                resubmit_fn=None):
+                resubmit_fn=None, confirm_fn=schedd_cluster_state):
     """Drive one ledger row through the gate/verify/act sequence.
     `clusters` is the per-tick live_clusters() snapshot the drain-check
     reads (None → the snapshot failed → every row skips as queue-error).
+
+    A cluster missing from that snapshot is only a drain CANDIDATE: the
+    table silently drops a schedd that did not answer, which on
+    2026-11-02 resubmitted 906 in-flight files. confirm_fn asks the
+    row's own schedd (from jobsub_id) and only its 'drained' lets the
+    row be verified; anything else is acted on as that state.
 
     verify_fn/resubmit_fn default per row kind: file-keyed (draining)
     rows verify via verify_files_row and recover via resubmit_files;
@@ -1168,6 +1175,14 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
               f"drain-check; update the row manually")
         return 'queue-error'
     state = queue_state_fn(row['cluster_id'], clusters)
+    if (state == 'drained' and clusters is not None
+            and str(row['cluster_id']) not in clusters):
+        schedd = schedd_of(row.get('jobsub_id'))
+        state = confirm_fn(row['cluster_id'], schedd)
+        if state in ('running', 'held'):
+            print(f"row {rid}: cluster {row['cluster_id']} is missing from "
+                  f"jobsub_q --user but {schedd} still holds it — that "
+                  f"table missed the schedd")
     if state == 'running':
         print(f"row {rid}: jobs still in queue — skip")
         return 'running'
@@ -1176,7 +1191,8 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
               f"decision needed (release or rm); loop will not act")
         return 'held'
     if state == 'error':
-        print(f"row {rid}: jobsub_q --user failed — skip (fail-closed)")
+        print(f"row {rid}: queue state could not be established — skip "
+              f"(fail-closed)")
         return 'queue-error'
     try:
         missing, partial = verify_fn(row)

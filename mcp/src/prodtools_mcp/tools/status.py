@@ -11,6 +11,7 @@ from prodtools_mcp.adapters import ToolError
 import re
 
 from utils import account, submission_ledger
+from utils.queue_state import schedd_of
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
@@ -272,6 +273,19 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
     return {'state': 'known', 'datasets': datasets}
 
 
+def _unseen_schedds(rows, clusters):
+    """Schedds holding an OPEN row's cluster that the snapshot never
+    asked, sorted. A snapshot that does not say which schedds it covers
+    (a plain dict) cannot be checked and yields none; a None snapshot is
+    queue_block's own 'unknown'."""
+    covered = getattr(clusters, 'schedds', None)
+    if covered is None:
+        return []
+    held_by = {schedd_of(r.get('jobsub_id')) for r in rows
+               if r.get('state') == 'active'}
+    return sorted(s for s in held_by if s and s.lower() not in covered)
+
+
 def _default_clusters_fn(owner=None):
     """condor.query_owner_jobs(), the MCP server's own path — direct
     ClassAd queries, independent of utils.submissions.live_clusters()
@@ -417,8 +431,17 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
             rec['rows'] = _row_counts(camp_rows)
             cluster_ids = [r['cluster_id'] for r in camp_rows
                            if r['cluster_id']]
-            rec['queue'] = queue_block(cluster_ids, clusters, owner,
-                                       reason=queue_reason)
+            unseen = _unseen_schedds(camp_rows, clusters)
+            if unseen:
+                rec['queue'] = queue_block(
+                    cluster_ids, None, owner,
+                    reason=(f"open rows have clusters on "
+                            f"{', '.join(unseen)}, which did not answer "
+                            f"the queue query (not advertised by the "
+                            f"collector), so their jobs were not counted"))
+            else:
+                rec['queue'] = queue_block(cluster_ids, clusters, owner,
+                                           reason=queue_reason)
         if want_outputs:
             rec['outputs'] = _outputs_block(
                 camp['entry'], njobs, camp['cursor'],

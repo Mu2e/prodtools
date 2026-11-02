@@ -109,15 +109,28 @@ def _schedd_label(sd):
     return get('Name', sd) if get else sd
 
 
+class OwnerJobs(dict):
+    """{cluster_id: [job dicts]} plus `schedds`: the lower-cased names of
+    every schedd that was asked and answered. A cluster on a schedd
+    outside that set was never looked for, so its absence proves
+    nothing — the collector stops advertising a schedd that is not
+    answering (jobsub02 for a while on 2026-11-02), and a query that
+    only reaches the advertised ones cannot see that schedd's jobs."""
+
+    def __init__(self, *args, schedds=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.schedds = frozenset(str(s).lower() for s in schedds)
+
+
 def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
                      schedds_fn=_locate_jobsub_schedds,
                      query_fn=_query_schedd):
     """((clusters, reason)) for every idle/running/held job `owner` has
     across the pool's jobsub* schedds.
 
-    `clusters` is {cluster_id: [{'JobStatus', 'HoldReasonCode',
-    'HoldReason'}, ...]} on success, or None when the result cannot be
-    trusted. `reason` is None on success, else human-readable text
+    `clusters` is an OwnerJobs {cluster_id: [{'JobStatus',
+    'HoldReasonCode', 'HoldReason'}, ...]} on success, naming the
+    schedds it covers, or None when the result cannot be trusted. `reason` is None on success, else human-readable text
     naming what actually failed.
 
     `clusters is None` is the ONLY signal a caller may branch on. The
@@ -152,7 +165,7 @@ def query_owner_jobs(owner=OWNER, timeout=QUERY_TIMEOUT_S,
     if not schedds:
         return None, 'the collector advertised no jobsub schedds'
 
-    clusters = {}
+    clusters = OwnerJobs(schedds=[_schedd_label(sd) for sd in schedds])
     errors = []
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=len(schedds))
