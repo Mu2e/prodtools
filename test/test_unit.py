@@ -9642,6 +9642,15 @@ class TestMcpCondor(unittest.TestCase):
                                                    query_fn=query)
         self.assertEqual(len(clusters['1']), 2)
 
+    def test_query_owner_jobs_names_the_schedds_it_covered(self):
+        from prodtools_mcp import condor
+        clusters, reason = condor.query_owner_jobs(
+            schedds_fn=lambda: ['Sched-A', 'sched-b'],
+            query_fn=lambda sd, owner: [])
+        self.assertIsNone(reason)
+        self.assertEqual(clusters, {})
+        self.assertEqual(clusters.schedds, {'sched-a', 'sched-b'})
+
     def test_schedd_discovery_failure_is_unknown(self):
         from prodtools_mcp import condor
 
@@ -10010,6 +10019,41 @@ class TestMcpCampaignStatus(unittest.TestCase):
         out = camp['outputs']['datasets'][0]
         self.assertEqual(out['produced'], 412)
         self.assertEqual(out['expected_at_completion'], 4000)
+
+    def test_open_row_on_an_unasked_schedd_makes_the_queue_unknown(self):
+        """2026-11-02: the collector stopped advertising jobsub02, the
+        query reached only the other schedds, and campaign_status said
+        'known' while jobsub02's clusters ran unseen. The fixture's open
+        row sits on 'sched'; a snapshot covering only 'other' must not
+        report a count."""
+        from prodtools_mcp import condor
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=lambda owner: (
+                    condor.OwnerJobs(schedds=['other']), None))
+        queue = result['campaigns'][0]['queue']
+        self.assertEqual(queue['state'], 'unknown')
+        self.assertNotIn('running', queue)
+        self.assertIn('sched', queue['reason'])
+
+    def test_open_row_on_an_asked_schedd_counts_normally(self):
+        from prodtools_mcp import condor
+        from prodtools_mcp.tools import status
+        running_job = {'JobStatus': 2, 'HoldReasonCode': None,
+                       'HoldReason': None}
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=lambda owner: (
+                    condor.OwnerJobs({'29308498': [running_job]},
+                                     schedds=['SCHED', 'other']), None))
+        queue = result['campaigns'][0]['queue']
+        self.assertEqual(queue['state'], 'known')
+        self.assertEqual(queue['running'], 1)
 
     def test_outputs_report_submitted_alongside_njobs(self):
         """Every direct campaign is sliced. njobs alone under-reports a
@@ -19753,6 +19797,30 @@ class TestMcpRunStatus(unittest.TestCase):
                                    clusters_fn=clusters_fn,
                                    codes_fn=codes_fn, job_pars_fn=FakePars)
         return out, seen
+
+    def test_a_run_on_a_schedd_the_query_never_asked_is_unknown(self):
+        # Review of #83: a snapshot that reached only other schedds read
+        # this cluster as gone and the run as finished (queue 'known',
+        # zero jobs). The receipt's jobid names jobsub01.
+        from prodtools_mcp import condor
+        self._submitted()
+        out, seen = self._status(
+            clusters=condor.OwnerJobs(schedds=['jobsub02.fnal.gov']))
+        self.assertEqual(out['state'], 'unknown')
+        self.assertEqual(out['queue']['state'], 'unknown')
+        self.assertNotIn('running', out['queue'])
+        self.assertIn('jobsub01.fnal.gov', out['queue']['reason'])
+        self.assertNotIn('history', seen)
+
+    def test_a_run_on_an_asked_schedd_reads_its_queue(self):
+        from prodtools_mcp import condor
+        self._submitted()
+        running = {'JobStatus': 2, 'HoldReasonCode': None,
+                   'HoldReason': None}
+        out, _ = self._status(clusters=condor.OwnerJobs(
+            {'42': [running]}, schedds=['JobSub01.fnal.gov']))
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(out['queue']['running'], 1)
 
     def test_a_run_that_was_never_submitted_reports_its_receipt_state(self):
         self.rr.update(self.dir, state='failed', error='pre-flight FAILED')

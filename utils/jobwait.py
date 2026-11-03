@@ -35,7 +35,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import OUTPUT_TIERS
 from utils.jobquery import Mu2eJobPars
-from utils.queue_state import cluster_queue_state, live_clusters
+from utils.queue_state import (cluster_queue_state, live_clusters,
+                               schedd_cluster_state, schedd_of)
 
 # One jobsub_q snapshot per this many seconds while the cluster runs.
 # 300 s against 30-120 min stages notices completion "immediately" on
@@ -68,13 +69,26 @@ def wait_for_drain(cluster, jobid, poll_s, runner=subprocess.run,
     is also waited out, visibly — the operator resolves holds, not this
     tool.
 
-    A cluster absent from the very first snapshot classifies `drained`
-    and falls straight through to history: a mistyped cluster id then
-    yields all-`unknown` and a nonzero exit — visibly wrong, never a hang.
+    A cluster absent from the snapshot is confirmed with its own schedd
+    (schedd_cluster_state): the jobsub_q table silently drops a schedd
+    that did not answer, so absence alone is not proof. A mistyped
+    cluster id on a real schedd confirms `drained` and falls through to
+    history, which yields all-`unknown` and a nonzero exit — visibly
+    wrong, never a hang. A bare id names no schedd to ask; it keeps the
+    unconfirmed reading and says so.
     """
+    schedd = schedd_of(jobid)
     while True:
         clusters = live_clusters(runner=runner)
         state = cluster_queue_state(cluster, clusters)
+        if (state == 'drained' and clusters is not None
+                and str(cluster) not in clusters):
+            if schedd:
+                state = schedd_cluster_state(cluster, schedd, runner=runner)
+            else:
+                log(f"[jobwait] cluster {jobid}: absent from jobsub_q "
+                    f"--user and no schedd to confirm with — reading it "
+                    f"as drained, unconfirmed")
         log(f"[jobwait] cluster {jobid}: {state}")
         if state == 'drained':
             return

@@ -87,19 +87,42 @@ def _q_table(*rows):
     return '\n'.join(lines) + '\n'
 
 
+def _condor_q_reply(schedd, idle=0, running=0, held=0):
+    """condor_q's default reply from `schedd` for one cluster, shaped
+    like the 2026-11-02 capture: schedd line, column header, query total
+    and the whole-schedd total that proves the schedd answered."""
+    total = idle + running + held
+    return '\n'.join([
+        '', '', f'-- Schedd: {schedd} : <131.225.161.93:9615?... @ 11/02/26 11:20:22',
+        'OWNER BATCH_NAME      SUBMITTED   DONE   RUN    IDLE   HOLD  TOTAL JOB_IDS',
+        '',
+        f'Total for query: {total} jobs; 0 completed, 0 removed, {idle} idle, '
+        f'{running} running, {held} held, 0 suspended ',
+        'Total for all users: 5720 jobs; 0 completed, 0 removed, 1770 idle, '
+        '3847 running, 103 held, 0 suspended', '']) + '\n'
+
+
 class FakeGrid:
-    """Injected `runner`: scripted jobsub_q replies + one history reply.
+    """Injected `runner`: scripted jobsub_q replies, condor_q drain
+    confirmations, and one history reply.
 
     Each element of `q_replies` is (returncode, stdout); they are
     consumed one per call, and running past the script is a test bug
-    worth crashing on (IndexError) rather than looping forever.
+    worth crashing on (IndexError) rather than looping forever. A
+    condor_q confirmation pops `condor_q_replies` the same way, or, when
+    none are scripted, answers "nothing left" from the schedd it was
+    asked.
     """
 
-    def __init__(self, q_replies, history_rc=0, history_stdout=''):
+    def __init__(self, q_replies, history_rc=0, history_stdout='',
+                 condor_q_replies=None):
         self.q_replies = list(q_replies)
         self.history_rc = history_rc
         self.history_stdout = history_stdout
+        self.condor_q_replies = (None if condor_q_replies is None
+                                 else list(condor_q_replies))
         self.q_calls = 0
+        self.condor_q_cmds = []
         self.history_cmds = []
 
     def __call__(self, cmd, capture_output=True, text=True):
@@ -107,6 +130,13 @@ class FakeGrid:
             self.q_calls += 1
             rc, out = self.q_replies.pop(0)
             return SimpleNamespace(returncode=rc, stdout=out, stderr='')
+        if cmd[0] == 'condor_q':
+            self.condor_q_cmds.append(cmd)
+            if self.condor_q_replies is None:
+                out = _condor_q_reply(cmd[cmd.index('-name') + 1])
+            else:
+                out = self.condor_q_replies.pop(0)
+            return SimpleNamespace(returncode=0, stdout=out, stderr='')
         if cmd[0] == 'condor_history':
             self.history_cmds.append(cmd)
             return SimpleNamespace(returncode=self.history_rc,
@@ -173,12 +203,43 @@ class TestWaitForDrain(unittest.TestCase):
         self.assertEqual(sleeps, [])
 
     def test_absent_from_first_snapshot_returns_immediately(self):
-        # Mistyped cluster / drained-before-first-poll: fall through to
-        # history (whose empty answer becomes `unknown`), never hang.
+        # Mistyped cluster / drained-before-first-poll: its schedd
+        # confirms nothing is left, so fall through to history (whose
+        # empty answer becomes `unknown`), never hang.
         grid = FakeGrid([(0, _q_table(('999', 'R')))])
         sleeps = self._wait(grid)
         self.assertEqual(grid.q_calls, 1)
         self.assertEqual(sleeps, [])
+        self.assertEqual(grid.condor_q_cmds,
+                         [['condor_q', '-name', 's', '777']])
+
+    def test_absent_but_schedd_still_holds_it_keeps_waiting(self):
+        # 2026-11-02: jobsub_q --user left out a schedd that did not
+        # answer, with exit 0. The cluster's own schedd still had jobs.
+        grid = FakeGrid([(0, _q_table()), (0, _q_table())],
+                        condor_q_replies=[_condor_q_reply('s', running=5),
+                                          _condor_q_reply('s')])
+        sleeps = self._wait(grid)
+        self.assertEqual(grid.q_calls, 2)
+        self.assertEqual(sleeps, [300])
+
+    def test_unknown_schedd_reply_never_drains(self):
+        # The jobsub_lite condor_q exits 0 for a schedd the collector
+        # does not know, with nothing on stdout: 'error', poll again.
+        grid = FakeGrid([(0, _q_table()), (0, _q_table())],
+                        condor_q_replies=['', _condor_q_reply('s')])
+        sleeps = self._wait(grid)
+        self.assertEqual(len(sleeps), 1)
+
+    def test_bare_cluster_id_is_not_confirmed(self):
+        # No schedd to ask: the unconfirmed reading stands (and is
+        # logged), so a bare id still cannot hang.
+        grid = FakeGrid([(0, _q_table())])
+        sleeps = []
+        wait_for_drain('777', '777', 300, runner=grid,
+                       sleeper=sleeps.append, log=QUIET)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(grid.condor_q_cmds, [])
 
 
 class TestCollectExitCodes(unittest.TestCase):
