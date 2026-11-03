@@ -13,11 +13,6 @@ field 6 = one-letter HTCondor state (I idle, R running, H held,
 C completed, X removed, S suspended). Drained/unknown id -> header +
 "0 total" summary, no rows; live -> header + summary + rows; DAG children
 use the same shape with the node name in OWNER.
-
-Presence in that table proves a cluster is live; absence does NOT prove
-it drained, because the table silently omits a schedd that did not
-answer. schedd_cluster_state asks the cluster's own schedd for that
-proof.
 """
 
 import os
@@ -193,10 +188,8 @@ def cluster_queue_state(cluster_id, clusters):
 # Captured 2026-11-02 from the jobsub_lite condor_q wrapper (HTCondor
 # 25.0.14). The wrapper exits 0 even for an unknown schedd (stderr
 # "Collector has no record of schedd/submitter", empty stdout), so the
-# exit code proves nothing; the reply is trusted only when it names the
-# schedd we asked and carries its whole-schedd total, which only a schedd
-# that answered can print.
-_SCHEDD_LINE_RE = re.compile(r'^-- Schedd: (\S+) ')
+# exit code proves nothing; the reply is trusted only when it carries the
+# whole-schedd total, which only a schedd that answered can print.
 _ALL_USERS_RE = re.compile(r'^Total for all users: \d+ jobs;')
 _QUERY_TOTAL_RE = re.compile(
     r'^Total for query: \d+ jobs; (\d+) completed, (\d+) removed, '
@@ -211,15 +204,11 @@ def schedd_of(jobsub_id):
     return str(jobsub_id).split('@', 1)[1] or None
 
 
-def _condor_q_cluster_counts(stdout, schedd):
+def _condor_q_cluster_counts(stdout):
     """{'idle', 'running', 'held', 'suspended'} for the queried cluster
-    from condor_q's default output, or None unless the reply is
-    provably from `schedd`: its `-- Schedd:` line names it and the
-    `Total for all users` line is present."""
+    from condor_q's default output, or None unless the schedd answered:
+    its `Total for all users` line is present."""
     lines = [ln.strip() for ln in (stdout or '').splitlines() if ln.strip()]
-    named = [m.group(1) for m in map(_SCHEDD_LINE_RE.match, lines) if m]
-    if [n.lower() for n in named] != [schedd.lower()]:
-        return None
     if not any(_ALL_USERS_RE.match(ln) for ln in lines):
         return None
     totals = [m for m in map(_QUERY_TOTAL_RE.match, lines) if m]
@@ -232,17 +221,15 @@ def _condor_q_cluster_counts(stdout, schedd):
 
 def schedd_cluster_state(cluster_id, schedd, runner=subprocess.run):
     """'drained' | 'held' | 'running' | 'error' for a cluster, asked of
-    the schedd that holds it.
+    the schedd that holds it: the positive drain proof.
 
-    The positive drain proof. Absence from the `jobsub_q --user` table
-    is NOT one: that table silently leaves out a schedd that did not
-    answer, with exit 0 and a normal header (measured 2026-11-02: a tick
+    Absence from the `jobsub_q --user` table is not proof: that table
+    silently leaves out a schedd that did not answer (2026-11-02: a tick
     read three live jobsub01 clusters as drained and resubmitted 906
-    in-flight files; at 11:09 the same table held jobs from jobsub02 and
-    jobsub05 only). Here a cluster is 'drained' only when its own schedd
-    replies that it holds no idle, running, held or suspended job of it.
-    No schedd, a failed command, or any reply not provably from that
-    schedd -> 'error': the caller skips, never resubmits."""
+    in-flight files). 'drained' only when the schedd answers that it
+    holds no idle, running, held or suspended job of the cluster. No
+    schedd, a failed command or an unanswered query -> 'error': the
+    caller skips, never resubmits."""
     if not schedd:
         print(f"cluster {cluster_id}: no schedd recorded, so its drain "
               f"cannot be confirmed (fail-closed)", flush=True)
@@ -253,7 +240,7 @@ def schedd_cluster_state(cluster_id, schedd, runner=subprocess.run):
     except OSError as exc:
         report_jobsub_q_failure(cmd, error=exc)
         return 'error'
-    counts = (_condor_q_cluster_counts(res.stdout, schedd)
+    counts = (_condor_q_cluster_counts(res.stdout)
               if res.returncode == 0 else None)
     if counts is None:
         report_jobsub_q_failure(

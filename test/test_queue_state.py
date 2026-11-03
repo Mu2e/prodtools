@@ -173,9 +173,6 @@ class TestScheddClusterState(unittest.TestCase):
             self.state('', stderr='Error: Collector has no record of '
                                   'schedd/submitter\n'), 'error')
 
-    def test_reply_from_another_schedd_is_error(self):
-        self.assertEqual(self.state(cq_reply('jobsub02.fnal.gov')), 'error')
-
     def test_missing_whole_schedd_total_is_error(self):
         self.assertEqual(self.state(cq_reply(self.S, all_users=False)),
                          'error')

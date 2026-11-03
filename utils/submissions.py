@@ -1148,11 +1148,9 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
     `clusters` is the per-tick live_clusters() snapshot the drain-check
     reads (None → the snapshot failed → every row skips as queue-error).
 
-    A cluster missing from that snapshot is only a drain CANDIDATE: the
-    table silently drops a schedd that did not answer, which on
-    2026-11-02 resubmitted 906 in-flight files. confirm_fn asks the
-    row's own schedd (from jobsub_id) and only its 'drained' lets the
-    row be verified; anything else is acted on as that state.
+    A cluster missing from that snapshot is only a drain candidate (the
+    table silently drops a schedd that did not answer): confirm_fn asks
+    the row's own schedd, from jobsub_id, and its answer is the state.
 
     verify_fn/resubmit_fn default per row kind: file-keyed (draining)
     rows verify via verify_files_row and recover via resubmit_files;
@@ -1183,6 +1181,17 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
             print(f"row {rid}: cluster {row['cluster_id']} is missing from "
                   f"jobsub_q --user but {schedd} still holds it — that "
                   f"table missed the schedd")
+        elif state == 'error':
+            # Neither `reconcile` (failed/submitting rows only) nor any
+            # other verb closes an ACTIVE row, so say what clears it.
+            print(f"row {rid}: cluster {row['cluster_id']} is missing from "
+                  f"jobsub_q --user and {schedd or 'no recorded schedd'} "
+                  f"did not confirm it left the queue — skip (fail-closed). "
+                  f"A passing failure clears on a later tick. A row whose "
+                  f"schedd is retired or not recorded has no CLI exit: "
+                  f"check its jobs are gone, then close the row in the "
+                  f"ledger by hand.")
+            return 'queue-error'
     if state == 'running':
         print(f"row {rid}: jobs still in queue — skip")
         return 'running'
@@ -1191,8 +1200,7 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
               f"decision needed (release or rm); loop will not act")
         return 'held'
     if state == 'error':
-        print(f"row {rid}: queue state could not be established — skip "
-              f"(fail-closed)")
+        print(f"row {rid}: jobsub_q --user failed — skip (fail-closed)")
         return 'queue-error'
     try:
         missing, partial = verify_fn(row)
