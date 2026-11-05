@@ -5,7 +5,10 @@ Read-only: reports problems, never remediates. Blocks (exit 2) when any
 input is unreadable so a slice of jobs is not launched to die in bulk.
 """
 import argparse
+import importlib.machinery
+import json
 import os
+import subprocess
 import sys
 import tarfile
 import time
@@ -14,7 +17,8 @@ from dataclasses import dataclass
 
 # Run as a script (bin/check_inputs execs `python3 utils/check_inputs.py`,
 # putting utils/ on sys.path, not the repo root). Matches submit.py/submissions.py.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
 
 from utils.jobquery import Mu2eJobPars
 from utils.job_common import Mu2eName, sha256_file
@@ -216,21 +220,37 @@ def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
     return 'MISSING'
 
 
-def _default_locality(mdh_loc, filenames):
-    """{filename: state} via the mdh Python API, one lookup per file.
+def _mdh_client():
+    """A fresh mdh.MdhClient. The single `import mdh` in prodtools."""
+    import mdh
+    return mdh.MdhClient()
+
+
+def _locality_in_process(mdh_loc, filenames):
+    """{filename: state} via the mdh Python API in THIS interpreter, one
+    lookup per file. Correct only when this interpreter is the one mdh is
+    installed for; _default_locality decides that.
 
     Uses `mdh.MdhClient.query_dcache` rather than shelling out to
     `mdh query-dcache`: the CLI aborts at the FIRST file absent from the
     queried area, so one persistent-resident file in a tape dataset
     truncated the output and forced a fail-closed ERROR for every file —
     including thousands already confirmed ONLINE_AND_NEARLINE.
+
+    Catches BaseException, not Exception: loading mdh under a Python it
+    was not built for panics in the cryptography Rust binding, and
+    pyo3_runtime.PanicException derives from BaseException directly.
+    Ctrl-C and sys.exit still propagate.
     """
     filenames = list(filenames)
     try:
-        import mdh
-        client = mdh.MdhClient()
-    except Exception:
-        return {f: 'ERROR' for f in filenames}   # fail closed
+        client = _mdh_client()
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as e:
+        why = (f'ERROR: cannot load mdh under Python '
+               f'{sys.version.split()[0]}: {type(e).__name__}: {e}')
+        return {f: why for f in filenames}       # fail closed
 
     result = {}
     with ThreadPoolExecutor(max_workers=_LOCALITY_WORKERS) as pool:
@@ -240,9 +260,125 @@ def _default_locality(mdh_loc, filenames):
             f = futures[fut]
             try:
                 result[f] = fut.result()
-            except Exception:
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException:
                 result[f] = 'ERROR'
     return result
+
+
+# How far above mdh's own directory to look for its env's bin/python3:
+# <view>/python/mdh.py needs 2 levels, a package under
+# <prefix>/lib/python3.X/site-packages/mdh/ needs 5.
+_OWNER_SEARCH_DEPTH = 6
+
+
+def _mdh_python(search_path=None):
+    """(interpreter, reason): the Python that mdh is installed for.
+
+    mdh is LOCATED, never imported: PathFinder searches the module path
+    (sys.path by default), ignores sys.modules and runs no module code,
+    so this is safe from any Python. The interpreter is the nearest
+    `bin/python3` above mdh's file; in the ops env mdh is
+    `<view>/python/mdh.py`, giving `<view>/bin/python3`.
+
+    Returns (None, reason) when mdh is not on the path, or no
+    bin/python3 sits above it.
+    """
+    spec = importlib.machinery.PathFinder.find_spec('mdh', search_path)
+    if spec is None or not spec.origin:
+        return None, ('mdh is not on the Python path; set up the ops '
+                      'env first (`muse setup ops`)')
+    d = os.path.dirname(os.path.abspath(spec.origin))
+    for _ in range(_OWNER_SEARCH_DEPTH):
+        py = os.path.join(d, 'bin', 'python3')
+        if os.access(py, os.X_OK):
+            return py, ''
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None, f'no bin/python3 above {spec.origin}'
+
+
+def _is_this_interpreter(python):
+    return os.path.realpath(python) == os.path.realpath(sys.executable)
+
+
+# The child imports this module by path, so it needs nothing on its own
+# sys.path beyond what mdh needs.
+_CHILD = ("import sys\n"
+          "sys.path.insert(0, sys.argv[1])\n"
+          "from utils.check_inputs import _locality_child_main\n"
+          "_locality_child_main(sys.argv[2])\n")
+
+
+def _locality_child_main(mdh_loc):
+    """Child side of _locality_in_child: filenames as JSON on stdin, the
+    {filename: state} map as JSON on stdout. Everything else written to
+    stdout (mdh prints) is sent to stderr, so it cannot corrupt the
+    answer."""
+    answer_to = sys.stdout
+    sys.stdout = sys.stderr
+    filenames = json.load(sys.stdin)
+    json.dump(_locality_in_process(mdh_loc, filenames), answer_to)
+    answer_to.flush()
+
+
+def _locality_in_child(python, mdh_loc, filenames, runner=subprocess.run):
+    """{filename: state} from _locality_in_process run under `python`.
+
+    Fails closed: a child that cannot start, exits non-zero, answers
+    with something other than a JSON object, or leaves a file out turns
+    each affected file into an `ERROR: <reason>` state. The environment
+    is inherited, so the child finds mdh where the parent did.
+    """
+    filenames = list(filenames)
+
+    def every(why):
+        return {f: f'ERROR: {why}' for f in filenames}
+
+    try:
+        proc = runner([python, '-c', _CHILD, _REPO_ROOT, mdh_loc],
+                      input=json.dumps(filenames),
+                      capture_output=True, text=True)
+    except OSError as e:
+        return every(f'cannot run {python}: {e}')
+    if proc.returncode != 0:
+        lines = [l for l in (proc.stderr or '').splitlines() if l.strip()]
+        tail = lines[-1].strip() if lines else '(no stderr)'
+        return every(f'mdh lookup under {python} exited '
+                     f'{proc.returncode}: {tail}')
+    try:
+        answer = json.loads(proc.stdout)
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict):
+        return every(f'unreadable answer from the mdh lookup under {python}')
+    missing = f'ERROR: no answer for this file from the mdh lookup under {python}'
+    return {f: answer[f] if isinstance(answer.get(f), str) else missing
+            for f in filenames}
+
+
+def _default_locality(mdh_loc, filenames):
+    """{filename: state}, looked up by mdh in the Python mdh is installed
+    for.
+
+    json2jobdef --prod runs inside a Musing, and its Python need not be
+    the ops env's. mdh comes from the ops env (Python 3.12 since ops-020),
+    while every Musing on spack envset p106 or older runs Python 3.10, and
+    `import mdh` there panics in the cryptography binding. So the lookup
+    runs in this process only when this IS mdh's Python (bin/submissions,
+    bin/check_inputs: the ops env alone), and in a child under mdh's
+    Python otherwise. Same lookup either way; nothing is degraded.
+    """
+    filenames = list(filenames)
+    python, why = _mdh_python()
+    if python is None:
+        return {f: f'ERROR: {why}' for f in filenames}
+    if _is_this_interpreter(python):
+        return _locality_in_process(mdh_loc, filenames)
+    return _locality_in_child(python, mdh_loc, filenames)
 
 
 def check_tape(dataset, files, locality, dataset_location):

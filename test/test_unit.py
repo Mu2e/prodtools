@@ -8560,7 +8560,8 @@ class TestDefaultLocalityParsing(unittest.TestCase):
         fake = types.ModuleType("mdh")
         fake.MdhClient = self._client(by_loc, fail_times)
         with patch.dict(sys.modules, {"mdh": fake}):
-            return check_inputs._default_locality("tape", files or [self.F1, self.F2])
+            return check_inputs._locality_in_process(
+                "tape", files or [self.F1, self.F2])
 
     def test_all_found_on_tape(self):
         out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE", self.F2: "NEARLINE"}})
@@ -8599,8 +8600,146 @@ class TestDefaultLocalityParsing(unittest.TestCase):
     def test_unimportable_mdh_fails_closed(self):
         from utils import check_inputs
         with patch.dict(sys.modules, {"mdh": None}):
-            out = check_inputs._default_locality("tape", [self.F1])
-        self.assertEqual(out, {self.F1: "ERROR"})
+            out = check_inputs._locality_in_process("tape", [self.F1])
+        self.assertTrue(out[self.F1].startswith("ERROR"), out)
+
+
+class _Panic(BaseException):
+    """Stands in for pyo3_runtime.PanicException: a BaseException, so an
+    `except Exception` lets it through."""
+
+
+class TestLocalityRunsUnderMdhOwnPython(unittest.TestCase):
+    """The mdh locality lookup runs in the Python that mdh is installed
+    for, never in whatever Python the caller happens to be.
+
+    json2jobdef --prod runs inside the Musing's Python. For every Musing
+    on spack envset p106 or older that is Python 3.10, while mdh comes
+    from the ops env, built for 3.12. `import mdh` pulls in metacat ->
+    PyJWT -> the cryptography Rust binding, which panics under 3.10
+    (pyo3_runtime.PanicException, a BaseException) and killed the push
+    AFTER the cnf was registered: cnf.mu2e.CosmicSignalOffSpill-reco.
+    MDC2025au_best_v1_1.0.tar, 2026-11-04.
+    """
+
+    F1 = "dts.mu2e.Prim.CampA.001430_00000000.art"
+    F2 = "dts.mu2e.Prim.CampA.001430_00000001.art"
+
+    FAKE_MDH = (
+        "print('mdh noise on stdout')\n"
+        "class MdhClient:\n"
+        "    def query_dcache(self, filename, location='tape'):\n"
+        "        if location == 'tape' and filename.endswith('00000000.art'):\n"
+        "            return {'fileLocality': 'ONLINE_AND_NEARLINE'}\n"
+        "        raise RuntimeError('File not found in dCache: /pnfs/' + filename)\n"
+    )
+
+    def _view(self, mdh_source):
+        """An ops-like view: <view>/python/mdh.py and <view>/bin/python3,
+        the latter a wrapper around this interpreter. A wrapper, not a
+        symlink, so its realpath differs from sys.executable and the
+        lookup really crosses a process boundary."""
+        view = os.path.join(_mkdtemp(), 'view')
+        os.makedirs(os.path.join(view, 'python'))
+        os.makedirs(os.path.join(view, 'bin'))
+        with open(os.path.join(view, 'python', 'mdh.py'), 'w') as fh:
+            fh.write(mdh_source)
+        py = os.path.join(view, 'bin', 'python3')
+        with open(py, 'w') as fh:
+            fh.write(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
+        os.chmod(py, 0o755)
+        return view, py
+
+    def test_owner_python_is_the_nearest_bin_python3_above_mdh(self):
+        from utils.check_inputs import _mdh_python
+        view, py = self._view("raise SystemExit('must never be executed')\n")
+        owner, why = _mdh_python([os.path.join(view, 'python')])
+        self.assertEqual(owner, py, why)
+
+    def test_mdh_not_on_the_path_fails_closed_with_a_reason(self):
+        from utils import check_inputs
+        owner, why = check_inputs._mdh_python([_mkdtemp()])
+        self.assertIsNone(owner)
+        self.assertIn('mdh', why)
+        with patch.object(check_inputs, '_mdh_python',
+                          return_value=(None, why)):
+            out = check_inputs._default_locality('tape', [self.F1])
+        self.assertTrue(out[self.F1].startswith('ERROR:'), out)
+        self.assertIn('mdh', out[self.F1])
+
+    def test_same_interpreter_queries_in_process(self):
+        from utils import check_inputs
+        with patch.object(check_inputs, '_mdh_python',
+                          return_value=(sys.executable, '')), \
+             patch.object(check_inputs, '_locality_in_process',
+                          return_value={self.F1: 'ONLINE'}) as inproc, \
+             patch.object(check_inputs, '_locality_in_child') as child:
+            out = check_inputs._default_locality('tape', [self.F1])
+        self.assertEqual(out, {self.F1: 'ONLINE'})
+        inproc.assert_called_once_with('tape', [self.F1])
+        child.assert_not_called()
+
+    def test_other_interpreter_runs_the_lookup_in_mdh_own_python(self):
+        from utils import check_inputs
+        view, py = self._view(self.FAKE_MDH)
+        with patch.object(check_inputs, '_mdh_python',
+                          return_value=(py, '')), \
+             patch.dict(os.environ,
+                        {'PYTHONPATH': os.path.join(view, 'python')}), \
+             patch.object(check_inputs, '_locality_in_process') as inproc:
+            out = check_inputs._default_locality('tape', [self.F1, self.F2])
+        inproc.assert_not_called()
+        self.assertEqual(out, {self.F1: 'ONLINE_AND_NEARLINE',
+                               self.F2: 'MISSING'})
+
+    def test_a_crash_in_mdh_own_python_fails_closed_with_its_reason(self):
+        from utils import check_inputs
+        view, py = self._view(
+            "class PanicException(BaseException): pass\n"
+            "raise PanicException('Python API call failed')\n")
+        with patch.object(check_inputs, '_mdh_python',
+                          return_value=(py, '')), \
+             patch.dict(os.environ,
+                        {'PYTHONPATH': os.path.join(view, 'python')}):
+            out = check_inputs._default_locality('tape', [self.F1, self.F2])
+        for f in (self.F1, self.F2):
+            self.assertTrue(out[f].startswith('ERROR:'), out)
+            self.assertIn('PanicException', out[f])
+
+    def test_a_child_answer_missing_a_file_fails_that_file_closed(self):
+        from utils import check_inputs
+        done = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({self.F1: 'ONLINE'}), stderr='')
+        out = check_inputs._locality_in_child(
+            '/x/bin/python3', 'tape', [self.F1, self.F2],
+            runner=lambda *a, **k: done)
+        self.assertEqual(out[self.F1], 'ONLINE')
+        self.assertTrue(out[self.F2].startswith('ERROR:'), out)
+
+    def test_unparseable_child_output_fails_closed(self):
+        from utils import check_inputs
+        done = subprocess.CompletedProcess([], 0, stdout='not json', stderr='')
+        out = check_inputs._locality_in_child(
+            '/x/bin/python3', 'tape', [self.F1],
+            runner=lambda *a, **k: done)
+        self.assertTrue(out[self.F1].startswith('ERROR:'), out)
+
+    def test_a_panic_loading_mdh_in_process_fails_closed(self):
+        # The original crash, in-process: a BaseException from the
+        # import must become a fail-closed ERROR, not escape the gate.
+        from utils import check_inputs
+        with patch.object(check_inputs, '_mdh_client',
+                          side_effect=_Panic('Python API call failed')):
+            out = check_inputs._locality_in_process('tape', [self.F1])
+        self.assertTrue(out[self.F1].startswith('ERROR:'), out)
+        self.assertIn('_Panic', out[self.F1])
+
+    def test_ctrl_c_is_not_swallowed(self):
+        from utils import check_inputs
+        with patch.object(check_inputs, '_mdh_client',
+                          side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                check_inputs._locality_in_process('tape', [self.F1])
 
 
 class TestCheckInputs(unittest.TestCase):
