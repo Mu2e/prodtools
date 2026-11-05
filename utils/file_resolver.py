@@ -26,8 +26,9 @@ from .jobdesc import dir_inloc_path, is_dir_inloc
 # xrootd door prefixes: fcl read URLs use `xroot://`, gfal-stat uses
 # `root://`. Both predate this module; kept as-is — worker fcl output
 # must stay byte-identical.
-XROOT_READ_PREFIX = 'xroot://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/'
-XROOT_STAT_PREFIX = 'root://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/'
+DCACHE_HOST = 'fndcadoor.fnal.gov'
+XROOT_READ_PREFIX = f'xroot://{DCACHE_HOST}//pnfs/fnal.gov/usr/'
+XROOT_STAT_PREFIX = f'root://{DCACHE_HOST}//pnfs/fnal.gov/usr/'
 
 # SAM location records may carry a trailing "(2290@fm4794l8)" suffix.
 # Compiled once — url() runs per file in the worker inner loop.
@@ -54,6 +55,12 @@ def stash_write_root() -> str:
 def resilient_root() -> str:
     """Resilient dCache root (write and direct-read on interactive nodes)."""
     return os.environ.get("MU2E_RESILIENT", "/pnfs/mu2e/resilient")
+
+
+def dcache_namespace_api() -> str:
+    """dCache REST namespace endpoint (file metadata and locality)."""
+    return os.environ.get(
+        "MU2E_DCACHE_API", f"https://{DCACHE_HOST}:3880/api/v1/namespace")
 
 
 # ---------------------------------------------------------------------------

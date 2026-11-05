@@ -25,7 +25,10 @@ from utils.job_common import Mu2eName, sha256_file
 from utils.jobdesc import code_of, dir_inloc_path, is_dir_inloc
 from utils.file_resolver import DISK_LOCS as _DISK_LOCS
 from utils.file_resolver import SAM_LOC_TO_MDH as _LOC_TO_MDH
-from utils.file_resolver import resilient_path, infer_dataset_location, file_path_at
+from utils.file_resolver import (resilient_path, infer_dataset_location,
+                                 file_path_at, dcache_namespace_api)
+from utils.jobsub_argv import jobsub_token_file
+from utils import account
 # NB: utils.samweb_wrapper (-> samweb_client) is imported lazily inside
 # check_inputs, so `--help` and unit tests can load this module without
 # the Mu2e environment on PATH.
@@ -186,25 +189,26 @@ _QUERY_TIMEOUT = 60       # seconds per HTTPS request
 # The one RuntimeError text from query_dcache that means 404.
 _NOT_FOUND_TEXT = 'File not found in dCache'
 
-_DCACHE_API = 'https://fndcadoor.fnal.gov:3880/api/v1/namespace'
 _GRID_CA_DIR = '/etc/grid-security/certificates'
 _TOKEN_TMP = '/tmp'
 
 
-def _bearer_token(env=None, uid=None):
+def _bearer_token(env=None, uid=None, user=None):
     """The caller's bearer token, read where it already is; never fetched
-    or renewed. WLCG discovery order, then jobsub's Production-role file
-    (the only token under the mu2epro ksu wrapper, whose XDG_RUNTIME_DIR
-    is empty). Raises RuntimeError naming every place looked."""
+    or renewed. WLCG discovery order, then the file jobsub uses for this
+    account's role (the only token under the mu2epro ksu wrapper, whose
+    XDG_RUNTIME_DIR is empty). Raises RuntimeError naming every place
+    looked."""
     env = os.environ if env is None else env
     uid = os.getuid() if uid is None else uid
+    user = account.current_account() if user is None else user
     if env.get('BEARER_TOKEN', '').strip():
         return env['BEARER_TOKEN'].strip()
     files = [env.get('BEARER_TOKEN_FILE')]
     if env.get('XDG_RUNTIME_DIR'):
         files.append(os.path.join(env['XDG_RUNTIME_DIR'], f'bt_u{uid}'))
     files += [os.path.join(_TOKEN_TMP, f'bt_u{uid}'),
-              os.path.join(_TOKEN_TMP, f'bt_token_mu2e_production_{uid}')]
+              jobsub_token_file(user, uid, env)]
     files = [f for f in files if f]
     for path in files:
         try:
@@ -234,7 +238,7 @@ class _DcacheClient:
         if not path.startswith('/pnfs/'):
             raise RuntimeError(f'no dCache path for {filename} at {location!r}')
         req = urllib.request.Request(
-            f'{_DCACHE_API}{path[len("/pnfs"):]}?locality=true',
+            f'{dcache_namespace_api()}{path[len("/pnfs"):]}?locality=true',
             headers={'Authorization': f'Bearer {self._token}'})
         try:
             with self._urlopen(req, context=self._ssl,

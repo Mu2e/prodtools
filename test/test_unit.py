@@ -8642,6 +8642,13 @@ class TestDcacheLocalityQuery(unittest.TestCase):
                          + path[len('/pnfs'):] + '?locality=true')
         self.assertEqual(seen[0].get_header('Authorization'), 'Bearer tok123')
 
+    def test_the_api_address_follows_MU2E_DCACHE_API(self):
+        c, seen = self._client({'fileLocality': 'ONLINE'})
+        with patch.dict(os.environ, {'MU2E_DCACHE_API': 'https://door.example:1/ns'}):
+            c.query_dcache(self.F, location='tape')
+        self.assertTrue(seen[0].full_url.startswith(
+            'https://door.example:1/ns/mu2e/tape/'), seen[0].full_url)
+
     def test_a_404_is_the_not_found_runtime_error(self):
         from utils.check_inputs import _NOT_FOUND_TEXT
         c, _ = self._client(404)
@@ -8674,7 +8681,8 @@ class TestDcacheLocalityQuery(unittest.TestCase):
 
 
 class TestBearerTokenLookup(unittest.TestCase):
-    """WLCG discovery order, then jobsub's Production-role file. Reads only."""
+    """WLCG discovery order, then the file jobsub uses for this account's
+    role (mu2epro only). Reads only."""
 
     def setUp(self):
         self.tmp = _mkdtemp()
@@ -8686,10 +8694,11 @@ class TestBearerTokenLookup(unittest.TestCase):
         with open(path, 'w') as fh:
             fh.write(value + '\n')
 
-    def _lookup(self, env):
+    def _lookup(self, env, user='mu2epro'):
         from utils import check_inputs
+        env = dict(env, TMPDIR=self.tmp)
         with patch.object(check_inputs, '_TOKEN_TMP', self.tmp):
-            return check_inputs._bearer_token(env=env, uid=self.uid)
+            return check_inputs._bearer_token(env=env, uid=self.uid, user=user)
 
     def test_bearer_token_variable_wins(self):
         self.assertEqual(self._lookup({'BEARER_TOKEN': ' abc \n'}), 'abc')
@@ -8702,7 +8711,7 @@ class TestBearerTokenLookup(unittest.TestCase):
                                        'XDG_RUNTIME_DIR': self.xdg}),
                          'from-file')
 
-    def test_then_xdg_then_tmp_then_production_file(self):
+    def test_then_xdg_then_tmp_then_jobsub_production_file(self):
         prod = os.path.join(self.tmp, f'bt_token_mu2e_production_{self.uid}')
         self._tok(prod, 'from-prod')
         self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-prod')
@@ -8711,6 +8720,12 @@ class TestBearerTokenLookup(unittest.TestCase):
         self._tok(os.path.join(self.xdg, f'bt_u{self.uid}'), 'from-xdg')
         self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-xdg')
 
+    def test_other_accounts_never_read_the_production_file(self):
+        self._tok(os.path.join(self.tmp, f'bt_token_mu2e_production_{self.uid}'), 'p')
+        with self.assertRaises(RuntimeError) as cm:
+            self._lookup({'XDG_RUNTIME_DIR': self.xdg}, user='oksuzian')
+        self.assertNotIn('production', str(cm.exception))
+
     def test_no_token_anywhere_names_every_place_looked(self):
         with self.assertRaises(RuntimeError) as cm:
             self._lookup({'XDG_RUNTIME_DIR': self.xdg})
@@ -8718,6 +8733,41 @@ class TestBearerTokenLookup(unittest.TestCase):
         self.assertIn('token', msg)
         self.assertIn(os.path.join(self.xdg, f'bt_u{self.uid}'), msg)
         self.assertIn(f'bt_token_mu2e_production_{self.uid}', msg)
+
+
+class TestJobsubTokenFileAndDcacheAddress(unittest.TestCase):
+    """The two site values the locality query needs, each named once."""
+
+    def test_jobsub_token_file_follows_jobsubs_own_naming(self):
+        # jobsub_lite cred_token.getToken: $TMPDIR (default /tmp)/
+        # bt_token_<group>_<role>_<uid>; the production file on disk
+        # is lower-case: /tmp/bt_token_mu2e_production_44592.
+        from utils.jobsub_argv import jobsub_token_file
+        self.assertEqual(jobsub_token_file('mu2epro', 44592, env={}),
+                         '/tmp/bt_token_mu2e_production_44592')
+        self.assertEqual(jobsub_token_file('mu2epro', 7, env={'TMPDIR': '/x'}),
+                         '/x/bt_token_mu2e_production_7')
+
+    def test_no_jobsub_token_file_for_a_default_role_account(self):
+        from utils.jobsub_argv import jobsub_token_file
+        self.assertIsNone(jobsub_token_file('oksuzian', 11549, env={}))
+
+    def test_dcache_address_default_and_override(self):
+        from utils import file_resolver as fr
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('MU2E_DCACHE_API', None)
+            self.assertEqual(fr.dcache_namespace_api(),
+                             'https://fndcadoor.fnal.gov:3880/api/v1/namespace')
+        with patch.dict(os.environ, {'MU2E_DCACHE_API': 'https://d:1/ns'}):
+            self.assertEqual(fr.dcache_namespace_api(), 'https://d:1/ns')
+
+    def test_xroot_prefixes_are_unchanged(self):
+        # Worker fcl output must stay byte-identical.
+        from utils import file_resolver as fr
+        self.assertEqual(fr.XROOT_READ_PREFIX,
+                         'xroot://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/')
+        self.assertEqual(fr.XROOT_STAT_PREFIX,
+                         'root://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/')
 
 
 class TestCheckInputs(unittest.TestCase):
