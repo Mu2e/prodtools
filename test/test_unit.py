@@ -8526,7 +8526,7 @@ class TestCheckTape(unittest.TestCase):
 
 
 class TestDefaultLocalityParsing(unittest.TestCase):
-    """_default_locality queries mdh per file via the Python API.
+    """_default_locality queries dCache per file (_DcacheClient).
 
     The `mdh query-dcache` CLI aborts at the FIRST file absent from the
     queried area, so one persistent-resident file in a tape dataset
@@ -8557,11 +8557,9 @@ class TestDefaultLocalityParsing(unittest.TestCase):
 
     def _run(self, by_loc, files=None, fail_times=0):
         from utils import check_inputs
-        fake = types.ModuleType("mdh")
-        fake.MdhClient = self._client(by_loc, fail_times)
-        with patch.dict(sys.modules, {"mdh": fake}):
-            return check_inputs._locality_in_process(
-                "tape", files or [self.F1, self.F2])
+        fake = self._client(by_loc, fail_times)()
+        with patch.object(check_inputs, "_dcache_client", return_value=fake):
+            return check_inputs._default_locality("tape", files or [self.F1, self.F2])
 
     def test_all_found_on_tape(self):
         out = self._run({"tape": {self.F1: "ONLINE_AND_NEARLINE", self.F2: "NEARLINE"}})
@@ -8597,149 +8595,129 @@ class TestDefaultLocalityParsing(unittest.TestCase):
                         files=[self.F1], fail_times=99)
         self.assertEqual(out, {self.F1: "ERROR"})
 
-    def test_unimportable_mdh_fails_closed(self):
+    def test_no_token_fails_closed_with_the_reason(self):
         from utils import check_inputs
-        with patch.dict(sys.modules, {"mdh": None}):
-            out = check_inputs._locality_in_process("tape", [self.F1])
-        self.assertTrue(out[self.F1].startswith("ERROR"), out)
+        with patch.object(check_inputs, "_dcache_client",
+                          side_effect=RuntimeError("no bearer token found")):
+            out = check_inputs._default_locality("tape", [self.F1])
+        self.assertEqual(out, {self.F1: "ERROR: no bearer token found"})
 
 
-class _Panic(BaseException):
-    """Stands in for pyo3_runtime.PanicException: a BaseException, so an
-    `except Exception` lets it through."""
+class TestDcacheLocalityQuery(unittest.TestCase):
+    """dCache REST locality query, no mdh: `import mdh` panicked under a
+    Python 3.10 Musing and killed json2jobdef --prod after the cnf was
+    registered (CosmicSignalOffSpill-reco.MDC2025au_best_v1_1.0, 2026-11-04)."""
 
+    F = "dts.mu2e.Prim.CampA.001430_00000000.art"
 
-class TestLocalityRunsUnderMdhOwnPython(unittest.TestCase):
-    """The mdh locality lookup runs in the Python that mdh is installed
-    for, never in whatever Python the caller happens to be.
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
 
-    json2jobdef --prod runs inside the Musing's Python. For every Musing
-    on spack envset p106 or older that is Python 3.10, while mdh comes
-    from the ops env, built for 3.12. `import mdh` pulls in metacat ->
-    PyJWT -> the cryptography Rust binding, which panics under 3.10
-    (pyo3_runtime.PanicException, a BaseException) and killed the push
-    AFTER the cnf was registered: cnf.mu2e.CosmicSignalOffSpill-reco.
-    MDC2025au_best_v1_1.0.tar, 2026-11-04.
-    """
+        def __exit__(self, *a):
+            return False
 
-    F1 = "dts.mu2e.Prim.CampA.001430_00000000.art"
-    F2 = "dts.mu2e.Prim.CampA.001430_00000001.art"
-
-    FAKE_MDH = (
-        "print('mdh noise on stdout')\n"
-        "class MdhClient:\n"
-        "    def query_dcache(self, filename, location='tape'):\n"
-        "        if location == 'tape' and filename.endswith('00000000.art'):\n"
-        "            return {'fileLocality': 'ONLINE_AND_NEARLINE'}\n"
-        "        raise RuntimeError('File not found in dCache: /pnfs/' + filename)\n"
-    )
-
-    def _view(self, mdh_source):
-        """An ops-like view: <view>/python/mdh.py and <view>/bin/python3,
-        the latter a wrapper around this interpreter. A wrapper, not a
-        symlink, so its realpath differs from sys.executable and the
-        lookup really crosses a process boundary."""
-        view = os.path.join(_mkdtemp(), 'view')
-        os.makedirs(os.path.join(view, 'python'))
-        os.makedirs(os.path.join(view, 'bin'))
-        with open(os.path.join(view, 'python', 'mdh.py'), 'w') as fh:
-            fh.write(mdh_source)
-        py = os.path.join(view, 'bin', 'python3')
-        with open(py, 'w') as fh:
-            fh.write(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
-        os.chmod(py, 0o755)
-        return view, py
-
-    def test_owner_python_is_the_nearest_bin_python3_above_mdh(self):
-        from utils.check_inputs import _mdh_python
-        view, py = self._view("raise SystemExit('must never be executed')\n")
-        owner, why = _mdh_python([os.path.join(view, 'python')])
-        self.assertEqual(owner, py, why)
-
-    def test_mdh_not_on_the_path_fails_closed_with_a_reason(self):
+    def _client(self, answer):
+        """A _DcacheClient whose urlopen records the request and returns
+        `answer`: a dict (HTTP 200 JSON) or an int (that HTTP error)."""
         from utils import check_inputs
-        owner, why = check_inputs._mdh_python([_mkdtemp()])
-        self.assertIsNone(owner)
-        self.assertIn('mdh', why)
-        with patch.object(check_inputs, '_mdh_python',
-                          return_value=(None, why)):
-            out = check_inputs._default_locality('tape', [self.F1])
-        self.assertTrue(out[self.F1].startswith('ERROR:'), out)
-        self.assertIn('mdh', out[self.F1])
+        import urllib.error
+        seen = []
 
-    def test_same_interpreter_queries_in_process(self):
-        from utils import check_inputs
-        with patch.object(check_inputs, '_mdh_python',
-                          return_value=(sys.executable, '')), \
-             patch.object(check_inputs, '_locality_in_process',
-                          return_value={self.F1: 'ONLINE'}) as inproc, \
-             patch.object(check_inputs, '_locality_in_child') as child:
-            out = check_inputs._default_locality('tape', [self.F1])
-        self.assertEqual(out, {self.F1: 'ONLINE'})
-        inproc.assert_called_once_with('tape', [self.F1])
-        child.assert_not_called()
+        def urlopen(req, context=None, timeout=None):
+            seen.append(req)
+            if isinstance(answer, int):
+                raise urllib.error.HTTPError(req.full_url, answer, 'x', {}, None)
+            return self.Resp(json.dumps(answer).encode())
+        return check_inputs._DcacheClient('tok123', urlopen=urlopen), seen
 
-    def test_other_interpreter_runs_the_lookup_in_mdh_own_python(self):
-        from utils import check_inputs
-        view, py = self._view(self.FAKE_MDH)
-        with patch.object(check_inputs, '_mdh_python',
-                          return_value=(py, '')), \
-             patch.dict(os.environ,
-                        {'PYTHONPATH': os.path.join(view, 'python')}), \
-             patch.object(check_inputs, '_locality_in_process') as inproc:
-            out = check_inputs._default_locality('tape', [self.F1, self.F2])
-        inproc.assert_not_called()
-        self.assertEqual(out, {self.F1: 'ONLINE_AND_NEARLINE',
-                               self.F2: 'MISSING'})
+    def test_asks_the_namespace_api_for_the_file_path_with_the_token(self):
+        from utils.file_resolver import file_path_at
+        c, seen = self._client({'fileLocality': 'NEARLINE'})
+        self.assertEqual(c.query_dcache(self.F, location='tape'),
+                         {'fileLocality': 'NEARLINE'})
+        path = file_path_at(self.F, 'tape')
+        self.assertEqual(seen[0].full_url,
+                         'https://fndcadoor.fnal.gov:3880/api/v1/namespace'
+                         + path[len('/pnfs'):] + '?locality=true')
+        self.assertEqual(seen[0].get_header('Authorization'), 'Bearer tok123')
 
-    def test_a_crash_in_mdh_own_python_fails_closed_with_its_reason(self):
-        from utils import check_inputs
-        view, py = self._view(
-            "class PanicException(BaseException): pass\n"
-            "raise PanicException('Python API call failed')\n")
-        with patch.object(check_inputs, '_mdh_python',
-                          return_value=(py, '')), \
-             patch.dict(os.environ,
-                        {'PYTHONPATH': os.path.join(view, 'python')}):
-            out = check_inputs._default_locality('tape', [self.F1, self.F2])
-        for f in (self.F1, self.F2):
-            self.assertTrue(out[f].startswith('ERROR:'), out)
-            self.assertIn('PanicException', out[f])
+    def test_a_404_is_the_not_found_runtime_error(self):
+        from utils.check_inputs import _NOT_FOUND_TEXT
+        c, _ = self._client(404)
+        with self.assertRaises(RuntimeError) as cm:
+            c.query_dcache(self.F, location='disk')
+        self.assertIn(_NOT_FOUND_TEXT, str(cm.exception))
 
-    def test_a_child_answer_missing_a_file_fails_that_file_closed(self):
-        from utils import check_inputs
-        done = subprocess.CompletedProcess(
-            [], 0, stdout=json.dumps({self.F1: 'ONLINE'}), stderr='')
-        out = check_inputs._locality_in_child(
-            '/x/bin/python3', 'tape', [self.F1, self.F2],
-            runner=lambda *a, **k: done)
-        self.assertEqual(out[self.F1], 'ONLINE')
-        self.assertTrue(out[self.F2].startswith('ERROR:'), out)
+    def test_a_refused_token_is_a_runtime_error_naming_the_token(self):
+        # RuntimeError, so _file_locality fails closed at once with the
+        # reason, and check_tape adds its token hint.
+        for code in (401, 403):
+            c, _ = self._client(code)
+            with self.assertRaises(RuntimeError) as cm:
+                c.query_dcache(self.F, location='tape')
+            self.assertIn('token', str(cm.exception))
+            self.assertNotIn('not found', str(cm.exception))
 
-    def test_unparseable_child_output_fails_closed(self):
-        from utils import check_inputs
-        done = subprocess.CompletedProcess([], 0, stdout='not json', stderr='')
-        out = check_inputs._locality_in_child(
-            '/x/bin/python3', 'tape', [self.F1],
-            runner=lambda *a, **k: done)
-        self.assertTrue(out[self.F1].startswith('ERROR:'), out)
+    def test_a_server_error_is_retryable_not_a_runtime_error(self):
+        c, _ = self._client(503)
+        with self.assertRaises(Exception) as cm:
+            c.query_dcache(self.F, location='tape')
+        self.assertNotIsInstance(cm.exception, RuntimeError)
 
-    def test_a_panic_loading_mdh_in_process_fails_closed(self):
-        # The original crash, in-process: a BaseException from the
-        # import must become a fail-closed ERROR, not escape the gate.
-        from utils import check_inputs
-        with patch.object(check_inputs, '_mdh_client',
-                          side_effect=_Panic('Python API call failed')):
-            out = check_inputs._locality_in_process('tape', [self.F1])
-        self.assertTrue(out[self.F1].startswith('ERROR:'), out)
-        self.assertIn('_Panic', out[self.F1])
 
-    def test_ctrl_c_is_not_swallowed(self):
+    def test_never_imports_mdh(self):
         from utils import check_inputs
-        with patch.object(check_inputs, '_mdh_client',
-                          side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                check_inputs._locality_in_process('tape', [self.F1])
+        with patch.dict(sys.modules, {'mdh': None}), \
+             patch.object(check_inputs, '_bearer_token', return_value='t'):
+            check_inputs._dcache_client()      # an import of mdh would raise
+
+
+class TestBearerTokenLookup(unittest.TestCase):
+    """WLCG discovery order, then jobsub's Production-role file. Reads only."""
+
+    def setUp(self):
+        self.tmp = _mkdtemp()
+        self.xdg = os.path.join(self.tmp, 'xdg')
+        os.makedirs(self.xdg)
+        self.uid = 4242
+
+    def _tok(self, path, value):
+        with open(path, 'w') as fh:
+            fh.write(value + '\n')
+
+    def _lookup(self, env):
+        from utils import check_inputs
+        with patch.object(check_inputs, '_TOKEN_TMP', self.tmp):
+            return check_inputs._bearer_token(env=env, uid=self.uid)
+
+    def test_bearer_token_variable_wins(self):
+        self.assertEqual(self._lookup({'BEARER_TOKEN': ' abc \n'}), 'abc')
+
+    def test_then_bearer_token_file(self):
+        f = os.path.join(self.tmp, 'mine')
+        self._tok(f, 'from-file')
+        self._tok(os.path.join(self.xdg, f'bt_u{self.uid}'), 'from-xdg')
+        self.assertEqual(self._lookup({'BEARER_TOKEN_FILE': f,
+                                       'XDG_RUNTIME_DIR': self.xdg}),
+                         'from-file')
+
+    def test_then_xdg_then_tmp_then_production_file(self):
+        prod = os.path.join(self.tmp, f'bt_token_mu2e_production_{self.uid}')
+        self._tok(prod, 'from-prod')
+        self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-prod')
+        self._tok(os.path.join(self.tmp, f'bt_u{self.uid}'), 'from-tmp')
+        self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-tmp')
+        self._tok(os.path.join(self.xdg, f'bt_u{self.uid}'), 'from-xdg')
+        self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-xdg')
+
+    def test_no_token_anywhere_names_every_place_looked(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._lookup({'XDG_RUNTIME_DIR': self.xdg})
+        msg = str(cm.exception)
+        self.assertIn('token', msg)
+        self.assertIn(os.path.join(self.xdg, f'bt_u{self.uid}'), msg)
+        self.assertIn(f'bt_token_mu2e_production_{self.uid}', msg)
 
 
 class TestCheckInputs(unittest.TestCase):
