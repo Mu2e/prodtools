@@ -216,5 +216,23 @@
 			"*.art": "disk"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
-	}
+	},
+    {
+        "_comment": "mu- / mu+ split of the Run 1A COL5 stops (resampler_beam.json PolyStops MDC2025bb), same as Run 1B's Run1Bap selector: 50 PolyStops files per job gives 2 MuminusPolyStopsCat files of about 370 MB. Smoke 2026-11-03 on the 10k-draw test output: 341 stops gave 335 mu- and 6 mu+. Push only after PolyStops.MDC2025bb is complete.",
+        "desc": "PolyMuonStopSelector",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/pileup/PolyMuonStopSelector.fcl",
+        "input_data": {
+            "sim.mu2e.PolyStops.MDC2025bb.art": 50
+        },
+        "fcl_overrides": {
+            "outputs.muminusout.fastCloning": false,
+            "outputs.muplusout.fastCloning": false
+        },
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    }
 ]
