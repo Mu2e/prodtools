@@ -452,5 +452,199 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of the standard-target CeEndpoint and DIOtail95 MDC2025ba samples (digi.json), the baseline for the study targets above. Same settings as those entries; geometry geom_run1_a.txt, as in the CE/DIO and digitization stages. One dig file per job.",
+        "dsconf": "MDC2025ba_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeEndpointOnSpill.MDC2025ba_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of the standard-target CeEndpoint and DIOtail95 MDC2025ba samples (digi.json), the baseline for the study targets above. Same settings as those entries; geometry geom_run1_a.txt, as in the CE/DIO and digitization stages. One dig file per job.",
+        "dsconf": "MDC2025ba_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.DIOtail95OnSpill.MDC2025ba_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the MDC2025bb Extracted cosmics (digi.json), Extracted geometry v06. At MDC2025bb recoMC/Extracted.fcl keeps track-less events (KLFilter disabled, the real decision recorded as KLPath) and saves CRV strongback material crossings. One dig file per job.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "CosmicCRYExtracted",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
+        "input_data": {
+            "dig.mu2e.CosmicCRYExtracted.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the all-events stream (-All) of the MDC2025bb Extracted digitization. recoMC/ExtractedAllEvents.fcl (Production#591) is recoMC/Extracted.fcl with SelectReco.SaveAllCrvDigis (Offline#2078): every CRV digi and pulse is kept with its truth, so delayed CRV hits such as decay electrons survive. One dig file per job.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "CosmicCRYExtracted-All",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/ExtractedAllEvents.fcl",
+        "input_data": {
+            "dig.mu2e.CosmicCRYExtracted-All.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of the CeMLeadingLog sample of a stopping target (digi.json), in the same geometry the sample was simulated and digitized in, with the same settings as the CeEndpoint and DIOtail95 reco entries of that target. One dig file per job.",
+        "dsconf": "MDC2025ba_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeMLeadingLogOnSpill.MDC2025ba_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of the CeMLeadingLog sample of a stopping target (digi.json), in the same geometry the sample was simulated and digitized in, with the same settings as the CeEndpoint and DIOtail95 reco entries of that target. One dig file per job.",
+        "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeMLeadingLogOnSpill.MDC2025ba_st49hole9to41_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of the CeMLeadingLog sample of a stopping target (digi.json), in the same geometry the sample was simulated and digitized in, with the same settings as the CeEndpoint and DIOtail95 reco entries of that target. One dig file per job.",
+        "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeMLeadingLogOnSpill.MDC2025ba_st37plus6up6dn_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the unmixed on-spill digitization of the CeMLeadingLog sample of a stopping target (digi.json), in the same geometry the sample was simulated and digitized in, with the same settings as the CeEndpoint and DIOtail95 reco entries of that target. One dig file per job.",
+        "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CeMLeadingLogOnSpill.MDC2025ba_st49hole1to5_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Off-spill cosmics reco at MDC2025au for Sophie Middleton (group DM 2026-10-19/20: 'the main thing is getting the OffSpill Cosmics in MDC2025au'). Same as templates/MDC2025/reco.json CosmicSignalOffSpill, with the an digis as input (the only CosmicSignalOffSpill dig set). Replaces the ar reco (mcs ...MDC2025ar_best_v1_1). Smoke 2026-11-04 (500 events of the first dig): 0.14 s/event, VmHWM 1.2 GB, 329 of 500 events kept; LH 241 kB/event, CH 14 kB/event, so a full file (about 117k events) writes about 28 GB LH + 1.6 GB CH, over the 30GB disk default (ar's LH files average 26 GB), hence 60GB. About 4.6 h per job.",
+        "desc": "CosmicSignalOffSpill",
+        "dsconf": "MDC2025au_best_v1_1",
+        "tarball_append": "-reco",
+        "disk": "60GB",
+        "fcl": "Production/JobConfig/recoMC/OffSpill.fcl",
+        "input_data": {
+            "dig.mu2e.CosmicSignalOffSpill.MDC2025an_best_v1_1.art": 1
+        },
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}-LH.version.sequencer.art",
+            "outputs.CentralHelixOutput.fileName": "mcs.owner.{desc}-CH.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_1"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh"
     }
 ]
