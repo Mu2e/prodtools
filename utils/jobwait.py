@@ -35,8 +35,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.job_common import OUTPUT_TIERS
 from utils.jobquery import Mu2eJobPars
-from utils.queue_state import (cluster_queue_state, live_clusters,
-                               schedd_cluster_state, schedd_of)
+from utils.queue_state import (cluster_queue_state, confirmed_queue_state,
+                               live_clusters, schedd_of)
 
 # One jobsub_q snapshot per this many seconds while the cluster runs.
 # 300 s against 30-120 min stages notices completion "immediately" on
@@ -78,17 +78,14 @@ def wait_for_drain(cluster, jobid, poll_s, runner=subprocess.run,
     unconfirmed reading and says so.
     """
     schedd = schedd_of(jobid)
+    if not schedd:
+        log(f"[jobwait] cluster {jobid}: no schedd to confirm with, so "
+            f"absence from jobsub_q --user is read as drained, unconfirmed")
     while True:
         clusters = live_clusters(runner=runner)
-        state = cluster_queue_state(cluster, clusters)
-        if (state == 'drained' and clusters is not None
-                and str(cluster) not in clusters):
-            if schedd:
-                state = schedd_cluster_state(cluster, schedd, runner=runner)
-            else:
-                log(f"[jobwait] cluster {jobid}: absent from jobsub_q "
-                    f"--user and no schedd to confirm with — reading it "
-                    f"as drained, unconfirmed")
+        state = (confirmed_queue_state(cluster, clusters, schedd,
+                                       runner=runner) if schedd
+                 else cluster_queue_state(cluster, clusters))
         log(f"[jobwait] cluster {jobid}: {state}")
         if state == 'drained':
             return
