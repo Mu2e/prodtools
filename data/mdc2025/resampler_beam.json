@@ -510,5 +510,112 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
         "owner": "mu2e",
         "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A COL5 poly pion stops for Michael MacKenzie's request (DM 2026-11-06: external RPC only, Physical, C and H). Resamples PiBeamCat.Run1Bah (scored at TS3) and keeps only polyStopPath, like the PolyStops muon entry. First stage of PiPolyStops -> PhysicalPolyPionStops -> RPCExternalPhysicalPoly{C,H}. Smoke 2026-11-07, 20k draws: 443 poly pi stops (2.2%), 34 ms/draw, VmHWM 2.1 GB, 2 kB/stop; so ~4.8 h and ~11k stops per job, ~5.5M stops in total.",
+        "desc": "PiPolyStops",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/pileup/PiBeamResampler.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.trigger_paths": [
+                "polyStopPath"
+            ],
+            "physics.outPath": [
+                "PolyPiStopOutput"
+            ]
+        },
+        "resampler_name": "beamResampler",
+        "input_data": {
+            "sim.mu2e.PiBeamCat.Run1Bah.art": 1
+        },
+        "njobs": 500,
+        "events": 500000,
+        "run": 1430,
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Physical (accept-reject on the pion lifetime) version of the Run 1A PiPolyStops, as PhysicalPionStops.Run1Bap: early gate tmin 0 with acceptRejectMax 1.0 so the prompt region is not clipped; fastCloning off. Local chained smoke 2026-11-07 on the stage-1 smoke output, 100k draws: 919 accepted (0.92%), 0.26 ms/draw, 0.8 GB; so ~22 min and ~46k physical stops per job.",
+        "desc": "PhysicalPolyPionStops",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/beam/PhysicalPolyPionStops.fcl",
+        "fcl_overrides": {
+            "physics.filters.StopSelection.cuts.tmin": 0,
+            "physics.filters.StopSelection.acceptRejectMax": 1.0,
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "outputs.PionOutput.fastCloning": false
+        },
+        "resampler_name": "StopResampler",
+        "input_data": {
+            "sim.mu2e.PiPolyStops.MDC2025bb.art": 1
+        },
+        "njobs": 500,
+        "events": 5000000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A external RPC on COL5 poly, carbon captures, physical pion time distribution, as RPCExternalPhysical.Run1Bap. Local chained smoke 2026-11-07, 20k draws: 11 pass (5.5e-4), ~12 ms/draw, VmHWM 2.2 GB; so ~3.4 h and ~550 events per job, ~550k in total.",
+        "desc": "RPCExternalPhysicalPolyC",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/RPCExternalPhysicalPolyC.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0,
+            "physics.filters.StopSelector.cuts.tmin": 0
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {
+            "sim.mu2e.PhysicalPolyPionStops.MDC2025bb.art": 1
+        },
+        "njobs": 1000,
+        "events": 1000000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A external RPC on COL5 poly, hydrogen captures, physical pion time distribution, as RPCExternalPhysical.Run1Bap. Local chained smoke 2026-11-07, 20k draws: 22 pass (1.1e-3), ~15 ms/draw, VmHWM 2.2 GB; so ~4 h and ~1.1k events per job, ~1.1M in total.",
+        "desc": "RPCExternalPhysicalPolyH",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/RPCExternalPhysicalPolyH.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0,
+            "physics.filters.StopSelector.cuts.tmin": 0
+        },
+        "resampler_name": "TargetPiStopResampler",
+        "input_data": {
+            "sim.mu2e.PhysicalPolyPionStops.MDC2025bb.art": 1
+        },
+        "njobs": 1000,
+        "events": 1000000,
+        "run": 1430,
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "sequential_aux": true
     }
 ]
