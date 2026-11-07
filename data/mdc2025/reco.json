@@ -646,5 +646,45 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025au/setup.sh"
+    },
+    {
+        "_comment": "Reco of the Run 1A Mix1BB of the MDC2025bb high-energy muon-capture protons (mix.json, campaign 184), Michael MacKenzie's request. Same release, conditions and geometry as the mix (bb default, no geometry override). 50 dig files per job (about 155 events per file): 4 jobs. Smoke 2026-11-06, 300 events: 0.10 s/event CPU, VmHWM 1.1 GB, every event written, 140 kB/event, so about 1.1 GB per job. Push only after the dig dataset is complete (200 files) and has its SAM definition (samDD), or the input check fails with 'unknown storage location N/A'.",
+        "desc": "MuCapProtonTailMix1BB",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.MuCapProtonTailMix1BB.MDC2025bb_best_v1_5.art": 50
+        },
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Reco of the Run 1A Mix1BB of the MDC2025bb calo-pointed muon-capture neutrons (mix.json, campaign 185), Michael MacKenzie's request. Same settings as the MuCapProtonTailMix1BB reco. 50 dig files per job (about 105 events per file): 20 jobs. Smoke 2026-11-06, 1000 events: 0.064 s/event CPU, VmHWM 1.1 GB, every event written, 53 kB/event, so about 280 MB per job. Push only after the dig dataset is complete (1000 files) and has its SAM definition.",
+        "desc": "MuCapNeutronTailCaloMix1BB",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.MuCapNeutronTailCaloMix1BB.MDC2025bb_best_v1_5.art": 50
+        },
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
     }
 ]

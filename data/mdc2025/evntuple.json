@@ -536,5 +536,43 @@
             "nts.*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "Ntuples of the Run 1A mixed MuCap proton-tail reco (reco.json MuCapProtonTailMix1BB MDC2025bb_best_v1_5, campaign 188: 4 mcs files, 30,884 events), Michael MacKenzie's request. from_mcs-mixed.fcl at AnalysisMDC2025 v02_03_01 (TrkQual fix). One mcs file per job.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "MuCapProtonTailMix1BB",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "input_data": {
+            "mcs.mu2e.MuCapProtonTailMix1BB.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.MuCapProtonTailMix1BB.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "Ntuples of the Run 1A mixed MuCap calo-pointed neutron reco (campaign 189: 20 mcs files, 105,231 events). Same settings as the MuCapProtonTailMix1BB ntuples.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "MuCapNeutronTailCaloMix1BB",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "input_data": {
+            "mcs.mu2e.MuCapNeutronTailCaloMix1BB.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.MuCapNeutronTailCaloMix1BB.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     }
 ]
