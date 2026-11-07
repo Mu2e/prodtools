@@ -334,5 +334,245 @@
             "*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of the standard-target CeEndpoint and DIOtail95 MDC2025ba samples (reco.json), the baseline for the study targets above. Same settings as those entries: AnalysisMDC2025 v02_02_04, no geometry override (geom_run1_a.txt is the release default), one mcs file per job, and SkipEvent TrackQuality until a release with ArtAnalysis PR #12.",
+        "dsconf": "MDC2025ba_best_v1_5",
+        "desc": "CeEndpointOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeEndpointOnSpill.MDC2025ba_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of the standard-target CeEndpoint and DIOtail95 MDC2025ba samples (reco.json), the baseline for the study targets above. Same settings as those entries: AnalysisMDC2025 v02_02_04, no geometry override (geom_run1_a.txt is the release default), one mcs file per job, and SkipEvent TrackQuality until a release with ArtAnalysis PR #12.",
+        "dsconf": "MDC2025ba_best_v1_5",
+        "desc": "DIOtail95OnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.DIOtail95OnSpill.MDC2025ba_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of the CeMLeadingLog sample of a stopping target (reco.json). Same settings as the CeEndpoint and DIOtail95 ntuple entries of that target: AnalysisMDC2025 v02_02_04, no geometry override, one mcs file per job, and SkipEvent TrackQuality until a release with ArtAnalysis PR #12.",
+        "dsconf": "MDC2025ba_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeMLeadingLogOnSpill.MDC2025ba_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of the CeMLeadingLog sample of a stopping target (reco.json). Same settings as the CeEndpoint and DIOtail95 ntuple entries of that target: AnalysisMDC2025 v02_02_04, no geometry override, one mcs file per job, and SkipEvent TrackQuality until a release with ArtAnalysis PR #12.",
+        "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeMLeadingLogOnSpill.MDC2025ba_st49hole9to41_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of the CeMLeadingLog sample of a stopping target (reco.json). Same settings as the CeEndpoint and DIOtail95 ntuple entries of that target: AnalysisMDC2025 v02_02_04, no geometry override, one mcs file per job, and SkipEvent TrackQuality until a release with ArtAnalysis PR #12.",
+        "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeMLeadingLogOnSpill.MDC2025ba_st37plus6up6dn_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "EventNtuple of the unmixed on-spill reco of the CeMLeadingLog sample of a stopping target (reco.json). Same settings as the CeEndpoint and DIOtail95 ntuple entries of that target: AnalysisMDC2025 v02_02_04, no geometry override, one mcs file per job, and SkipEvent TrackQuality until a release with ArtAnalysis PR #12.",
+        "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
+        "desc": "CeMLeadingLogOnSpill",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "input_data": {
+            "mcs.mu2e.CeMLeadingLogOnSpill.MDC2025ba_st49hole1to5_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root",
+            "services.scheduler.SkipEvent": [
+                "TrackQuality"
+            ]
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_02_04/setup.sh"
+    },
+    {
+        "_comment": "Generic draining EventNtuple of the MDC2025bb Extracted reco, both streams (CosmicCRYExtracted and CosmicCRYExtracted-All, reco.json): one mcs file per job, output desc and sequencer taken from the input, so ntupling starts as reco files land. AnalysisMDC2025 v02_03_01 is backed on SimJob MDC2025bb, so the ntuple builds the same Extracted geometry v06 and CRV table as the reco. The extracted path (PathExt) runs no TrackQuality. tarball_append keeps the plain evnt.MDC2025bb_best_v1_5 cnf name free for a non-Extracted generic.",
+        "desc": "evnt",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "tarball_append": "-Extracted",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicCRYExtracted%.MDC2025bb_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-extracted.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "Ntuples of the MDC2025au off-spill cosmics reco (reco.json CosmicSignalOffSpill MDC2025au_best_v1_1), LoopHelix flavour: from_mcs-mockdata.fcl. Named after the reco dsconf, like the ar off-spill ntuples. AnalysisMDC2025 v02_03_01 (TrkQual fix).",
+        "desc": "CosmicSignalOffSpill-LH",
+        "dsconf": "MDC2025au_best_v1_1",
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "input_data": {
+            "mcs.mu2e.CosmicSignalOffSpill-LH.MDC2025au_best_v1_1.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "CentralHelix flavour of the same: from_mcs-OffSpill.fcl (FitType CentralHelix, PathOff).",
+        "desc": "CosmicSignalOffSpill-CH",
+        "dsconf": "MDC2025au_best_v1_1",
+        "fcl": "EventNtuple/fcl/from_mcs-OffSpill.fcl",
+        "input_data": {
+            "mcs.mu2e.CosmicSignalOffSpill-CH.MDC2025au_best_v1_1.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "Re-ntuple of the MDC2025bb Extracted ALL-EVENTS stream with CRV pulses (from_mcs-extracted_withCrvPulses.fcl: crv.fillPulses, keepUnclusteredPulses, T1/EX/T2/M truth planes). Campaign 175 ran from_mcs-extracted.fcl on both streams, so its -All ntuples carry no CRV pulses, which the Extracted CRV note needs. -All only (the triggered stream keeps no unclustered CRV content). dsconf -001 because nts.mu2e.CosmicCRYExtracted-All.MDC2025bb_best_v1_5.root already exists.",
+        "desc": "evnt",
+        "dsconf": "MDC2025bb_best_v1_5-001",
+        "tarball_append": "-Extracted",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicCRYExtracted-All.MDC2025bb_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-extracted_withCrvPulses.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "Ntuples of the Run 1A mixed MuCap proton-tail reco (reco.json MuCapProtonTailMix1BB MDC2025bb_best_v1_5, campaign 188: 4 mcs files, 30,884 events), Michael MacKenzie's request. from_mcs-mixed.fcl at AnalysisMDC2025 v02_03_01 (TrkQual fix). One mcs file per job.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "MuCapProtonTailMix1BB",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "input_data": {
+            "mcs.mu2e.MuCapProtonTailMix1BB.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.MuCapProtonTailMix1BB.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "Ntuples of the Run 1A mixed MuCap calo-pointed neutron reco (campaign 189: 20 mcs files, 105,231 events). Same settings as the MuCapProtonTailMix1BB ntuples.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "MuCapNeutronTailCaloMix1BB",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "input_data": {
+            "mcs.mu2e.MuCapNeutronTailCaloMix1BB.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.MuCapNeutronTailCaloMix1BB.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     }
 ]

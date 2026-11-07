@@ -186,9 +186,7 @@
 				{"dig.mu2e.PolyFlatGammaCaloMix1BB.Run1Baq_best_v1_5.art": 1},
 
 				{"dig.mu2e.RPCExternalMix1BB.Run1Bap_best_v1_5-000.art": 1},
-				{"dig.mu2e.RPCInternalMix1BB.Run1Bap_best_v1_5-000.art": 1},
-
-				{"dig.mu2e.MuCap1809keVCalo.Run1Bah_best_v1_4-000.art": 1}
+				{"dig.mu2e.RPCInternalMix1BB.Run1Bap_best_v1_5-000.art": 1}
 			],
 			"fcl_overrides": {
 				"services.DbService.purpose": "Sim_best",
@@ -243,6 +241,43 @@
 			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
 			"input_data": [
 				{"dig.mu2e.NoPrimaryMix1BB.Run1Bav_best_v1_5-003.art": 1}
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_5",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aw/setup.sh"
+		},
+		{
+			"dsconf": "Run1Baw_best_v1_5",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.MuCap1809keVCalo.Run1Baw_best_v1_5.art": 1}
+			],
+			"fcl_overrides": {
+				"services.DbService.purpose": "Sim_best",
+				"services.DbService.version": "v1_5",
+				"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
+				"services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
+				"outputs.KinematicLineOutput.fileName": "mcs.mu2e.{desc}-KL.version.sequencer.art"
+			},
+			"inloc": "tape",
+			"outloc": {"*.art": "tape"},
+			"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025aw/setup.sh"
+		},
+		{
+			"_comment": "Reco of the mixed 1.8 MeV line (mix.json MuCap1809keVCaloMix1BB, campaign 183, every event kept: 1000 files, 2.26M events, 373 GB). Same settings as the unmixed MuCap1809keVCalo reco above. 20 dig files per job (about 45k events): 50 jobs. Smoke 2026-11-07, 300 events: 0.023 s/event CPU, VmHWM 0.99 GB, every event written, 73 kB/event KL output, so about 17 min and 3.3 GB per job, about 165 GB in total. The -KL output matches draining ntuple campaign 170 (Run1B-013), so the ntuples follow automatically.",
+			"dsconf": "Run1Baw_best_v1_5",
+			"tarball_append": "-reco",
+			"fcl": "Production/JobConfig/recoMC/NoFieldRun1B.fcl",
+			"input_data": [
+				{"dig.mu2e.MuCap1809keVCaloMix1BB.Run1Baw_best_v1_5.art": 20}
 			],
 			"fcl_overrides": {
 				"services.DbService.purpose": "Sim_best",

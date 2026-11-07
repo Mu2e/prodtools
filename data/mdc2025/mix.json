@@ -107,5 +107,102 @@
         "outputs.Output.fileName": "dig.mu2e.{desc}.{dsconf}.sequence.art"
       }
     ]
-  }
+  },
+    {
+        "_comment": "Run 1A Mix1BB of the MDC2025bb high-energy muon-capture protons and calo-pointed neutrons (primary_muon.json), Michael MacKenzie's request. Standard Run 1A pileup and Mix.fcl event selection (signal triggers plus Triggerable LH/TwoTrack/Calo; TriggerableCalo accepts 2212 and 2112 above 68 MeV), chosen by the user 2026-11-03 over keep-all (about 5.6 TB). Smoke on local bb primaries: protons keep 2 of 450 events, neutrons 8 of 627; about 0.25 s per event, VmHWM 1.1 GB. One dts per job. Push only after both primary datasets are complete.",
+        "input_data": [
+            {
+                "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 1
+            },
+            {
+                "dts.mu2e.MuCapNeutronTailCalo.MDC2025bb.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025bb_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+            }
+        ]
+    },
+    {
+        "_comment": "Run 1A Mix1BB of the MDC2025bb COL5 calo-aimed flat gamma (primary_muon.json PolyFlatGammaCalo, campaign 193), Michael MacKenzie's request, following Run 1B (PolyFlatGammaCaloMix1BB.Run1Baq/aw). Same pileup, conditions and standard Mix.fcl selection as the MuCapProtonTail/MuCapNeutronTailCalo mix above. One dts per job (about 63k events). Push only after the dts dataset is complete and has its SAM definition; it must finish before the ~2026-12-06 resilient purge.",
+        "input_data": [
+            {
+                "dts.mu2e.PolyFlatGammaCalo.MDC2025bb.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025bb_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+            }
+        ]
+    }
 ]

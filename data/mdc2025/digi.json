@@ -171,7 +171,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025as/setup.sh"
     },
     {
-        "_comment": "On-spill digitization, no pileup, of the CeEndpoint and DIOtail95 samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB).",
+        "_comment": "On-spill digitization, no pileup, of the CeEndpoint, DIOtail95 and CeMLeadingLog samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or CeMLeadingLog, or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB). CeMLeadingLog added 2026-10-30.",
         "dsconf": "MDC2025ba_st49hole9to41_best_v1_5",
         "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
         "input_data": [
@@ -180,6 +180,9 @@
             },
             {
                 "dts.mu2e.DIOtail95.MDC2025ba_st49hole9to41.art": 10
+            },
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ba_st49hole9to41.art": 10
             }
         ],
         "fcl_overrides": {
@@ -196,7 +199,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
     },
     {
-        "_comment": "On-spill digitization, no pileup, of the CeEndpoint and DIOtail95 samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB).",
+        "_comment": "On-spill digitization, no pileup, of the CeEndpoint, DIOtail95 and CeMLeadingLog samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or CeMLeadingLog, or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB). CeMLeadingLog added 2026-10-30.",
         "dsconf": "MDC2025ba_st37plus6up6dn_best_v1_5",
         "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
         "input_data": [
@@ -205,6 +208,9 @@
             },
             {
                 "dts.mu2e.DIOtail95.MDC2025ba_st37plus6up6dn.art": 10
+            },
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ba_st37plus6up6dn.art": 10
             }
         ],
         "fcl_overrides": {
@@ -221,7 +227,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
     },
     {
-        "_comment": "On-spill digitization, no pileup, of the CeEndpoint and DIOtail95 samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB).",
+        "_comment": "On-spill digitization, no pileup, of the CeEndpoint, DIOtail95 and CeMLeadingLog samples made in a study stopping target (Offline PR #2065). The geometry is the same study file the samples were simulated in. 10 dts files per job: about 27k CE or CeMLeadingLog, or 20k DIO events, 20-30 min at about 0.06 s per event (smoke 2026-10-26, VmHWM 1.04 GB). CeMLeadingLog added 2026-10-30.",
         "dsconf": "MDC2025ba_st49hole1to5_best_v1_5",
         "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
         "input_data": [
@@ -230,6 +236,9 @@
             },
             {
                 "dts.mu2e.DIOtail95.MDC2025ba_st49hole1to5.art": 10
+            },
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ba_st49hole1to5.art": 10
             }
         ],
         "fcl_overrides": {
@@ -244,5 +253,53 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "On-spill digitization, no pileup, of the standard-target CeEndpoint, DIOtail95 and CeMLeadingLog MDC2025ba samples (primary_muon.json), the baseline for the study targets above. Same settings as those entries; geometry geom_run1_a.txt, as in the CE/DIO stage. CeMLeadingLog added 2026-10-30.",
+        "dsconf": "MDC2025ba_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.CeEndpoint.MDC2025ba.art": 10
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ba.art": 10
+            },
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ba.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh"
+    },
+    {
+        "_comment": "Digitization of the Extracted cosmics remade at MDC2025bb (stage1.json), in the Extracted geometry v06 that Extracted.fcl takes from geom_common_extracted.txt. ExtractedAllEvents.fcl (Production#591) writes two streams in one pass: Output, the triggered events as in Extracted.fcl (about 15%), and AllOutput (-All), every event with the trigger decisions kept, so events with hits only in the CRV are not lost. 8 dts per job, as in the MDC2025au round (20000 dts to 2500 jobs, about 200k events each).",
+        "desc": "CosmicCRYExtracted",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/ExtractedAllEvents.fcl",
+        "input_data": {
+            "dts.mu2e.CosmicCRYExtracted.MDC2025bb.art": 8
+        },
+        "fcl_overrides": {
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+            "outputs.AllOutput.fileName": "dig.owner.{desc}-All.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
     }
 ]

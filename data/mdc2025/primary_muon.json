@@ -1171,5 +1171,256 @@
             "*.art": "tape"
         },
         "sequential_aux": true
+    },
+    {
+        "_comment": "Standard-target baseline for the study targets above (MDC2025ba_st*): the same CE settings, standard geometry geom_run1_a.txt, and the standard Run 1A stop pool MuminusStopsCat.MDC2025ac (from TargetStops.MDC2025ac: 4e9 draws, prescale 1000, 1.44M stops). The stop pool predates StageNormalization; MDC2025ba's TargetStopResampler read it without error in the 2026-10-29 MuStopPileup no-IPA runs. Its only copy is on tape.",
+        "desc": "CeEndpoint",
+        "dsconf": "MDC2025ba",
+        "fcl": "Production/JobConfig/primary/CeEndpoint.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Standard-target baseline for the study targets above (MDC2025ba_st*): the same DIOtail95 settings, standard geometry geom_run1_a.txt, and the standard Run 1A stop pool MuminusStopsCat.MDC2025ac. 2000 jobs, the size the study DIO campaigns were capped at.",
+        "desc": "DIOtail95",
+        "dsconf": "MDC2025ba",
+        "fcl": "Production/JobConfig/primary/DIOtail.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 4000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "physics.producers.generate.decayProducts.spectrum.elow": 95,
+            "physics.producers.generate.decayProducts.spectrum.ehi": 1000,
+            "physics.filters.GenFilter.maxr_min": 320,
+            "physics.filters.GenFilter.maxr_max": 500,
+            "outputs.PrimaryOutput.fileName": "dts.owner.DIOtail95.version.sequencer.art"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Leading-log (radiative) CE from the same mu- stops, geometry and field as the CeEndpoint MDC2025ba_st49hole9to41 entry above; only the generator differs (CeMLeadingLog.fcl).",
+        "desc": "CeMLeadingLog",
+        "dsconf": "MDC2025ba_st49hole9to41",
+        "fcl": "Production/JobConfig/primary/CeMLeadingLog.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st49hole9to41.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-9-41mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Leading-log (radiative) CE from the same mu- stops, geometry and field as the CeEndpoint MDC2025ba_st37plus6up6dn entry above; only the generator differs (CeMLeadingLog.fcl).",
+        "desc": "CeMLeadingLog",
+        "dsconf": "MDC2025ba_st37plus6up6dn",
+        "fcl": "Production/JobConfig/primary/CeMLeadingLog.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st37plus6up6dn.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_37foils_plus-6-up-6-down.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Leading-log (radiative) CE from the same mu- stops, geometry and field as the CeEndpoint MDC2025ba_st49hole1to5 entry above; only the generator differs (CeMLeadingLog.fcl).",
+        "desc": "CeMLeadingLog",
+        "dsconf": "MDC2025ba_st49hole1to5",
+        "fcl": "Production/JobConfig/primary/CeMLeadingLog.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ba_st49hole1to5.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/studies/geom_run1_a_stoppingTarget_49foils_hole-r-1-5mm.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "disk",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Leading-log (radiative) CE from the same mu- stops, geometry and field as the CeEndpoint MDC2025ba entry above; only the generator differs (CeMLeadingLog.fcl).",
+        "desc": "CeMLeadingLog",
+        "dsconf": "MDC2025ba",
+        "fcl": "Production/JobConfig/primary/CeMLeadingLog.fcl",
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 5000,
+        "njobs": 2000,
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt"
+        },
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ba/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A high-energy muon-capture protons for Michael MacKenzie's request (2026-10): stops from MuminusStopsCat.MDC2025ac with the geom_run1_a override all Run1A primaries carry; filter keeps the defaults except MinimumSumCaloStepE 20 (matches Run 1B). Smoke at MDC2025bb 2026-11-03: 2.25% pass, VmHWM 2527 MB (above the 2500MB default, hence 3000MB). Sizing matches Run 1B: 200 x 500k draws. Output on disk: it is the one-file-per-job input of the Mix1BB entry in mix.json.",
+        "desc": "MuCapProtonTail",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/MuCapProtonTail.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE": 20
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 500000,
+        "njobs": 200,
+        "run": 1430,
+        "memory": "3000MB",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A calo-pointed muon-capture neutrons, same setup and request as MuCapProtonTail above. Smoke at MDC2025bb 2026-11-03: 6.3% pass (627 of 10k draws), VmHWM 2540 MB, so 3000MB like the proton entry (user decision). Sizing matches Run 1B: 1000 x 125k draws.",
+        "desc": "MuCapNeutronTailCalo",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/MuCapNeutronTailCalo.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE": 20
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 125000,
+        "njobs": 1000,
+        "run": 1430,
+        "memory": "3000MB",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A COL5 flat gamma (carbon RMC in the calorimeter) for Michael MacKenzie's request (DM 2026-11-06: flat gamma plus calo-aimed only). Resamples the Run 1A COL5 mu- stops (MuminusPolyStopsCat.MDC2025bb, 335k stops, campaign 179) through geom_run1_a, the default Run 1A field. Same filter and sizing as Run 1B's PolyFlatGamma.Run1Bap: 1000 x 1M draws. Smoke at MDC2025bb 2026-11-07, 20k draws: 8 pass (4e-4, Run 1B 8e-4), about 10 ms per draw, VmHWM 2.26 GB; so about 2.8 h and 400 events per job, about 400k events in total.",
+        "desc": "PolyFlatGamma",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/PolyFlatGamma.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE": 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusPolyStopsCat.MDC2025bb.art": 1
+        },
+        "events": 1000000,
+        "njobs": 1000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Calorimeter-aimed version of the Run 1A COL5 flat gamma above. Same settings; sizing as Run 1B's PolyFlatGammaCalo.Run1Baq: 200 x 500k draws. Smoke at MDC2025bb 2026-11-07, 20k draws: 2511 pass (12.6%), about 18 ms per draw, VmHWM 2.27 GB, 6.2 kB per event; so about 2.5 h, 63k events and 390 MB per job, about 12.6M events and 78 GB in total.",
+        "desc": "PolyFlatGammaCalo",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/PolyFlatGammaCalo.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE": 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusPolyStopsCat.MDC2025bb.art": 1
+        },
+        "events": 500000,
+        "njobs": 200,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
 ]

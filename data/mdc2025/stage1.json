@@ -16,6 +16,23 @@
 	"owner": "mu2e"
     },
     {
+	"_comment": "POT remade on the Stickman production target, the target built and installed for Run 1 (DocDB 56440). The MDC2025ac round above used geom_run1_a.txt, which builds the Inconel Hayman_v2_2 target; its SimJob (Offline v10_47_00) has no Stickman geometry. geom_run1_a_stickman.txt also uses protonAbsorber_cylindrical_v05 instead of v04. Same sizing as the MDC2025ac round.",
+	"desc": "POT_Run1_a",
+	"dsconf": "MDC2025bb",
+	"fcl": "Production/JobConfig/beam/POT.fcl",
+	"fcl_overrides": {
+		"services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a_stickman.txt"
+	},
+	"njobs": 20000,
+	"events": 5000,
+	"run": 1430,
+	"outloc": {
+		"*.art": "disk"
+	},
+	"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+	"owner": "mu2e"
+    },
+    {
 	"desc": "CosmicDSStopsCRY",	
 	"dsconf": "MDC2025ab",
 	"fcl": "Production/JobConfig/cosmic/S1DSStopsCRY.fcl",
@@ -69,6 +86,20 @@
 			"*.art": "tape"
 		},
 		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025as/setup.sh",
+		"owner": "mu2e"
+	},
+    {
+		"_comment": "Extracted cosmics remade at MDC2025bb (Offline v13_43_00), which switched the Extracted geometry to geom_common_extracted_v06.txt: tracker about 1236 mm upstream at its commissioning position, calorimeter 245 mm upstream. Earlier dts cannot be redigitized in this geometry. Same sizing as the MDC2025as round.",
+		"desc": "ExtractedCRY",
+		"dsconf": "MDC2025bb",
+		"fcl": "Production/JobConfig/cosmic/ExtractedCRY.fcl",
+		"njobs": 20000,
+		"events": 500000,
+		"run": 1400,
+		"outloc": {
+			"*.art": "tape"
+		},
+		"simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
 		"owner": "mu2e"
 	},
     {

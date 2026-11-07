@@ -823,7 +823,10 @@
         "physics.producers.CaloShowerROMaker.digitizationEnd": "1650",
         "physics.producers.CaloDigiMaker.digitizationEnd": "1650",
         "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
-        "#include": "Production/JobConfig/digitize/OnSpill_run1b_epilog.fcl",
+        "#include": [
+          "Production/JobConfig/digitize/OnSpill_run1b_epilog.fcl",
+          "Production/JobConfig/mixing/NoPrimary.fcl"
+        ],
         "physics.producers.PBISim.extendedMean": "5.92e6",
         "physics.producers.PBISim.cutMax": "35.5e6",
         "physics.filters.NeutralsFlashMixer.mu2e.simStageEfficiencyTags": [],
