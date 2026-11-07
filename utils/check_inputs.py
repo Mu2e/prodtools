@@ -5,10 +5,14 @@ Read-only: reports problems, never remediates. Blocks (exit 2) when any
 input is unreadable so a slice of jobs is not launched to die in bulk.
 """
 import argparse
+import json
 import os
+import ssl
 import sys
 import tarfile
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
@@ -21,7 +25,10 @@ from utils.job_common import Mu2eName, sha256_file
 from utils.jobdesc import code_of, dir_inloc_path, is_dir_inloc
 from utils.file_resolver import DISK_LOCS as _DISK_LOCS
 from utils.file_resolver import SAM_LOC_TO_MDH as _LOC_TO_MDH
-from utils.file_resolver import resilient_path, infer_dataset_location
+from utils.file_resolver import (resilient_path, infer_dataset_location,
+                                 file_path_at, dcache_namespace_api)
+from utils.jobsub_argv import jobsub_token_file
+from utils import account
 # NB: utils.samweb_wrapper (-> samweb_client) is imported lazily inside
 # check_inputs, so `--help` and unit tests can load this module without
 # the Mu2e environment on PATH.
@@ -170,16 +177,84 @@ def check_dir(files, dir_path, file_size):
 
 _LOCALITY_TOKENS = ('ONLINE', 'NEARLINE', 'ONLINE_AND_NEARLINE')
 
-# Files are looked up one at a time (mdh.query_dcache is per-file), so a
+# Files are looked up one at a time (the REST call is per-file), so a
 # dataset spread over several areas resolves correctly. Threads hide the
 # per-file HTTPS round-trip; the calls are independent reads.
 _LOCALITY_WORKERS = 16
 _QUERY_ATTEMPTS = 3       # transport retries per area (not for 404s)
 _QUERY_BACKOFF = 0.5      # seconds, multiplied by attempt number
+_QUERY_TIMEOUT = 60       # seconds per HTTPS request
 
 
-# The one RuntimeError text from mdh.query_dcache that means 404.
+# The one RuntimeError text from query_dcache that means 404.
 _NOT_FOUND_TEXT = 'File not found in dCache'
+
+_GRID_CA_DIR = '/etc/grid-security/certificates'
+_TOKEN_TMP = '/tmp'
+
+
+def _bearer_token(env=None, uid=None, user=None):
+    """The caller's bearer token, read where it already is; never fetched
+    or renewed. WLCG discovery order, then the file jobsub uses for this
+    account's role (the only token under the mu2epro ksu wrapper, whose
+    XDG_RUNTIME_DIR is empty). Raises RuntimeError naming every place
+    looked."""
+    env = os.environ if env is None else env
+    uid = os.getuid() if uid is None else uid
+    user = account.current_account() if user is None else user
+    if env.get('BEARER_TOKEN', '').strip():
+        return env['BEARER_TOKEN'].strip()
+    files = [env.get('BEARER_TOKEN_FILE')]
+    if env.get('XDG_RUNTIME_DIR'):
+        files.append(os.path.join(env['XDG_RUNTIME_DIR'], f'bt_u{uid}'))
+    files += [os.path.join(_TOKEN_TMP, f'bt_u{uid}'),
+              jobsub_token_file(user, uid, env)]
+    files = [f for f in files if f]
+    for path in files:
+        try:
+            with open(path) as fh:
+                token = fh.read().strip()
+        except OSError:
+            continue
+        if token:
+            return token
+    raise RuntimeError('no bearer token found for the dCache locality '
+                       'query; looked in $BEARER_TOKEN and '
+                       + ', '.join(files))
+
+
+class _DcacheClient:
+    """The request `mdh.query_dcache` makes, stdlib only. Importing mdh
+    panics under the Python 3.10 Musings (p106 and older): its metacat
+    import loads a cryptography binding built for the ops env's 3.12."""
+
+    def __init__(self, token, urlopen=urllib.request.urlopen):
+        self._token = token
+        self._urlopen = urlopen
+        self._ssl = ssl.create_default_context(capath=_GRID_CA_DIR)
+
+    def query_dcache(self, filename, location='tape'):
+        path = file_path_at(filename, location)
+        if not path.startswith('/pnfs/'):
+            raise RuntimeError(f'no dCache path for {filename} at {location!r}')
+        req = urllib.request.Request(
+            f'{dcache_namespace_api()}{path[len("/pnfs"):]}?locality=true',
+            headers={'Authorization': f'Bearer {self._token}'})
+        try:
+            with self._urlopen(req, context=self._ssl,
+                               timeout=_QUERY_TIMEOUT) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise RuntimeError(f'{_NOT_FOUND_TEXT}: {path}') from None
+            if e.code in (401, 403):
+                raise RuntimeError(f'dCache refused the bearer token '
+                                   f'(HTTP {e.code})') from None
+            raise    # 5xx etc.: an OSError, so _file_locality retries it
+
+
+def _dcache_client():
+    return _DcacheClient(_bearer_token())
 
 
 def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
@@ -200,11 +275,10 @@ def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
             except RuntimeError as e:
                 if _NOT_FOUND_TEXT in str(e):
                     break         # 404 in this area — try the next area
-                # mdh raises RuntimeError for everything, an auth failure
-                # included ("Error checking if token is valid" with no
-                # kerberos ticket). That is not a 404: reading it as one
-                # reported an ONLINE file as absent. Fail closed, and
-                # carry the reason — no other area will answer either.
+                # Any other RuntimeError is an auth failure (a refused
+                # token), not a 404: reading it as one once reported an
+                # ONLINE file as absent. Fail closed, and carry the
+                # reason — no other area will answer either.
                 return f'ERROR: {e}'
             except Exception:
                 if attempt + 1 == attempts:
@@ -217,20 +291,19 @@ def _file_locality(client, mdh_loc, filename, attempts=_QUERY_ATTEMPTS):
 
 
 def _default_locality(mdh_loc, filenames):
-    """{filename: state} via the mdh Python API, one lookup per file.
+    """{filename: state} from dCache's REST API, one lookup per file.
 
-    Uses `mdh.MdhClient.query_dcache` rather than shelling out to
-    `mdh query-dcache`: the CLI aborts at the FIRST file absent from the
-    queried area, so one persistent-resident file in a tape dataset
-    truncated the output and forced a fail-closed ERROR for every file —
-    including thousands already confirmed ONLINE_AND_NEARLINE.
+    Per-file because the `mdh query-dcache` CLI aborts at the FIRST file
+    absent from the queried area, so one persistent-resident file in a
+    tape dataset truncated the output and forced a fail-closed ERROR for
+    every file — including thousands already confirmed
+    ONLINE_AND_NEARLINE.
     """
     filenames = list(filenames)
     try:
-        import mdh
-        client = mdh.MdhClient()
-    except Exception:
-        return {f: 'ERROR' for f in filenames}   # fail closed
+        client = _dcache_client()
+    except RuntimeError as e:
+        return {f: f'ERROR: {e}' for f in filenames}   # fail closed
 
     result = {}
     with ThreadPoolExecutor(max_workers=_LOCALITY_WORKERS) as pool:

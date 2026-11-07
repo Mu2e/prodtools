@@ -8526,7 +8526,7 @@ class TestCheckTape(unittest.TestCase):
 
 
 class TestDefaultLocalityParsing(unittest.TestCase):
-    """_default_locality queries mdh per file via the Python API.
+    """_default_locality queries dCache per file (_DcacheClient).
 
     The `mdh query-dcache` CLI aborts at the FIRST file absent from the
     queried area, so one persistent-resident file in a tape dataset
@@ -8557,9 +8557,8 @@ class TestDefaultLocalityParsing(unittest.TestCase):
 
     def _run(self, by_loc, files=None, fail_times=0):
         from utils import check_inputs
-        fake = types.ModuleType("mdh")
-        fake.MdhClient = self._client(by_loc, fail_times)
-        with patch.dict(sys.modules, {"mdh": fake}):
+        fake = self._client(by_loc, fail_times)()
+        with patch.object(check_inputs, "_dcache_client", return_value=fake):
             return check_inputs._default_locality("tape", files or [self.F1, self.F2])
 
     def test_all_found_on_tape(self):
@@ -8596,11 +8595,179 @@ class TestDefaultLocalityParsing(unittest.TestCase):
                         files=[self.F1], fail_times=99)
         self.assertEqual(out, {self.F1: "ERROR"})
 
-    def test_unimportable_mdh_fails_closed(self):
+    def test_no_token_fails_closed_with_the_reason(self):
         from utils import check_inputs
-        with patch.dict(sys.modules, {"mdh": None}):
+        with patch.object(check_inputs, "_dcache_client",
+                          side_effect=RuntimeError("no bearer token found")):
             out = check_inputs._default_locality("tape", [self.F1])
-        self.assertEqual(out, {self.F1: "ERROR"})
+        self.assertEqual(out, {self.F1: "ERROR: no bearer token found"})
+
+
+class TestDcacheLocalityQuery(unittest.TestCase):
+    """dCache REST locality query, no mdh: `import mdh` panicked under a
+    Python 3.10 Musing and killed json2jobdef --prod after the cnf was
+    registered (CosmicSignalOffSpill-reco.MDC2025au_best_v1_1.0, 2026-11-04)."""
+
+    F = "dts.mu2e.Prim.CampA.001430_00000000.art"
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _client(self, answer):
+        """A _DcacheClient whose urlopen records the request and returns
+        `answer`: a dict (HTTP 200 JSON) or an int (that HTTP error)."""
+        from utils import check_inputs
+        import urllib.error
+        seen = []
+
+        def urlopen(req, context=None, timeout=None):
+            seen.append(req)
+            if isinstance(answer, int):
+                raise urllib.error.HTTPError(req.full_url, answer, 'x', {}, None)
+            return self.Resp(json.dumps(answer).encode())
+        return check_inputs._DcacheClient('tok123', urlopen=urlopen), seen
+
+    def test_asks_the_namespace_api_for_the_file_path_with_the_token(self):
+        from utils.file_resolver import file_path_at
+        c, seen = self._client({'fileLocality': 'NEARLINE'})
+        self.assertEqual(c.query_dcache(self.F, location='tape'),
+                         {'fileLocality': 'NEARLINE'})
+        path = file_path_at(self.F, 'tape')
+        self.assertEqual(seen[0].full_url,
+                         'https://fndcadoor.fnal.gov:3880/api/v1/namespace'
+                         + path[len('/pnfs'):] + '?locality=true')
+        self.assertEqual(seen[0].get_header('Authorization'), 'Bearer tok123')
+
+    def test_the_api_address_follows_MU2E_DCACHE_API(self):
+        c, seen = self._client({'fileLocality': 'ONLINE'})
+        with patch.dict(os.environ, {'MU2E_DCACHE_API': 'https://door.example:1/ns'}):
+            c.query_dcache(self.F, location='tape')
+        self.assertTrue(seen[0].full_url.startswith(
+            'https://door.example:1/ns/mu2e/tape/'), seen[0].full_url)
+
+    def test_a_404_is_the_not_found_runtime_error(self):
+        from utils.check_inputs import _NOT_FOUND_TEXT
+        c, _ = self._client(404)
+        with self.assertRaises(RuntimeError) as cm:
+            c.query_dcache(self.F, location='disk')
+        self.assertIn(_NOT_FOUND_TEXT, str(cm.exception))
+
+    def test_a_refused_token_is_a_runtime_error_naming_the_token(self):
+        # RuntimeError, so _file_locality fails closed at once with the
+        # reason, and check_tape adds its token hint.
+        for code in (401, 403):
+            c, _ = self._client(code)
+            with self.assertRaises(RuntimeError) as cm:
+                c.query_dcache(self.F, location='tape')
+            self.assertIn('token', str(cm.exception))
+            self.assertNotIn('not found', str(cm.exception))
+
+    def test_a_server_error_is_retryable_not_a_runtime_error(self):
+        c, _ = self._client(503)
+        with self.assertRaises(Exception) as cm:
+            c.query_dcache(self.F, location='tape')
+        self.assertNotIsInstance(cm.exception, RuntimeError)
+
+
+    def test_never_imports_mdh(self):
+        from utils import check_inputs
+        with patch.dict(sys.modules, {'mdh': None}), \
+             patch.object(check_inputs, '_bearer_token', return_value='t'):
+            check_inputs._dcache_client()      # an import of mdh would raise
+
+
+class TestBearerTokenLookup(unittest.TestCase):
+    """WLCG discovery order, then the file jobsub uses for this account's
+    role (mu2epro only). Reads only."""
+
+    def setUp(self):
+        self.tmp = _mkdtemp()
+        self.xdg = os.path.join(self.tmp, 'xdg')
+        os.makedirs(self.xdg)
+        self.uid = 4242
+
+    def _tok(self, path, value):
+        with open(path, 'w') as fh:
+            fh.write(value + '\n')
+
+    def _lookup(self, env, user='mu2epro'):
+        from utils import check_inputs
+        env = dict(env, TMPDIR=self.tmp)
+        with patch.object(check_inputs, '_TOKEN_TMP', self.tmp):
+            return check_inputs._bearer_token(env=env, uid=self.uid, user=user)
+
+    def test_bearer_token_variable_wins(self):
+        self.assertEqual(self._lookup({'BEARER_TOKEN': ' abc \n'}), 'abc')
+
+    def test_then_bearer_token_file(self):
+        f = os.path.join(self.tmp, 'mine')
+        self._tok(f, 'from-file')
+        self._tok(os.path.join(self.xdg, f'bt_u{self.uid}'), 'from-xdg')
+        self.assertEqual(self._lookup({'BEARER_TOKEN_FILE': f,
+                                       'XDG_RUNTIME_DIR': self.xdg}),
+                         'from-file')
+
+    def test_then_xdg_then_tmp_then_jobsub_production_file(self):
+        prod = os.path.join(self.tmp, f'bt_token_mu2e_production_{self.uid}')
+        self._tok(prod, 'from-prod')
+        self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-prod')
+        self._tok(os.path.join(self.tmp, f'bt_u{self.uid}'), 'from-tmp')
+        self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-tmp')
+        self._tok(os.path.join(self.xdg, f'bt_u{self.uid}'), 'from-xdg')
+        self.assertEqual(self._lookup({'XDG_RUNTIME_DIR': self.xdg}), 'from-xdg')
+
+    def test_other_accounts_never_read_the_production_file(self):
+        self._tok(os.path.join(self.tmp, f'bt_token_mu2e_production_{self.uid}'), 'p')
+        with self.assertRaises(RuntimeError) as cm:
+            self._lookup({'XDG_RUNTIME_DIR': self.xdg}, user='oksuzian')
+        self.assertNotIn('production', str(cm.exception))
+
+    def test_no_token_anywhere_names_every_place_looked(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._lookup({'XDG_RUNTIME_DIR': self.xdg})
+        msg = str(cm.exception)
+        self.assertIn('token', msg)
+        self.assertIn(os.path.join(self.xdg, f'bt_u{self.uid}'), msg)
+        self.assertIn(f'bt_token_mu2e_production_{self.uid}', msg)
+
+
+class TestJobsubTokenFileAndDcacheAddress(unittest.TestCase):
+    """The two site values the locality query needs, each named once."""
+
+    def test_jobsub_token_file_follows_jobsubs_own_naming(self):
+        # jobsub_lite cred_token.getToken: $TMPDIR (default /tmp)/
+        # bt_token_<group>_<role>_<uid>; the production file on disk
+        # is lower-case: /tmp/bt_token_mu2e_production_44592.
+        from utils.jobsub_argv import jobsub_token_file
+        self.assertEqual(jobsub_token_file('mu2epro', 44592, env={}),
+                         '/tmp/bt_token_mu2e_production_44592')
+        self.assertEqual(jobsub_token_file('mu2epro', 7, env={'TMPDIR': '/x'}),
+                         '/x/bt_token_mu2e_production_7')
+
+    def test_no_jobsub_token_file_for_a_default_role_account(self):
+        from utils.jobsub_argv import jobsub_token_file
+        self.assertIsNone(jobsub_token_file('oksuzian', 11549, env={}))
+
+    def test_dcache_address_default_and_override(self):
+        from utils import file_resolver as fr
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('MU2E_DCACHE_API', None)
+            self.assertEqual(fr.dcache_namespace_api(),
+                             'https://fndcadoor.fnal.gov:3880/api/v1/namespace')
+        with patch.dict(os.environ, {'MU2E_DCACHE_API': 'https://d:1/ns'}):
+            self.assertEqual(fr.dcache_namespace_api(), 'https://d:1/ns')
+
+    def test_xroot_prefixes_are_unchanged(self):
+        # Worker fcl output must stay byte-identical.
+        from utils import file_resolver as fr
+        self.assertEqual(fr.XROOT_READ_PREFIX,
+                         'xroot://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/')
+        self.assertEqual(fr.XROOT_STAT_PREFIX,
+                         'root://fndcadoor.fnal.gov//pnfs/fnal.gov/usr/')
 
 
 class TestCheckInputs(unittest.TestCase):

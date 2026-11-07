@@ -41,6 +41,18 @@ def role_for_user(user):
     return "Production" if user == "mu2epro" else None
 
 
+def jobsub_token_file(user, uid, env=os.environ):
+    """The bearer-token file jobsub_lite uses when `user` submits, or None
+    when `user` submits with jobsub's default role. jobsub_lite's rule
+    (cred_token.getToken): $TMPDIR (default /tmp)/bt_token_<group>_<role>_<uid>;
+    the role is lower-case on disk (/tmp/bt_token_mu2e_production_44592)."""
+    role = role_for_user(user)
+    if role is None:
+        return None
+    return os.path.join(env.get('TMPDIR') or '/tmp',
+                        f'bt_token_{DEFAULT_GROUP}_{role.lower()}_{uid}')
+
+
 def default_wftop(role):
     """Outstage wftop default: persistent for Production, scratch otherwise.
     Mirrors the Perl `mu2ejobsub:294-298` logic."""
