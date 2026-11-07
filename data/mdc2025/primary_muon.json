@@ -1370,5 +1370,57 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A COL5 flat gamma (carbon RMC in the calorimeter) for Michael MacKenzie's request (DM 2026-11-06: flat gamma plus calo-aimed only). Resamples the Run 1A COL5 mu- stops (MuminusPolyStopsCat.MDC2025bb, 335k stops, campaign 179) through geom_run1_a, the default Run 1A field. Same filter and sizing as Run 1B's PolyFlatGamma.Run1Bap: 1000 x 1M draws. Smoke at MDC2025bb 2026-11-07, 20k draws: 8 pass (4e-4, Run 1B 8e-4), about 10 ms per draw, VmHWM 2.26 GB; so about 2.8 h and 400 events per job, about 400k events in total.",
+        "desc": "PolyFlatGamma",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/PolyFlatGamma.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE": 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusPolyStopsCat.MDC2025bb.art": 1
+        },
+        "events": 1000000,
+        "njobs": 1000,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Calorimeter-aimed version of the Run 1A COL5 flat gamma above. Same settings; sizing as Run 1B's PolyFlatGammaCalo.Run1Baq: 200 x 500k draws. Smoke at MDC2025bb 2026-11-07, 20k draws: 2511 pass (12.6%), about 18 ms per draw, VmHWM 2.27 GB, 6.2 kB per event; so about 2.5 h, 63k events and 390 MB per job, about 12.6M events and 78 GB in total.",
+        "desc": "PolyFlatGammaCalo",
+        "dsconf": "MDC2025bb",
+        "fcl": "Production/JobConfig/primary/PolyFlatGammaCalo.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "physics.filters.PrimaryFilter.StrawGasSteps": [],
+            "physics.filters.PrimaryFilter.MinimumSumCaloStepE": 20,
+            "physics.filters.PrimaryFilter.MinimumPartMom": 0
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusPolyStopsCat.MDC2025bb.art": 1
+        },
+        "events": 500000,
+        "njobs": 200,
+        "run": 1430,
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "disk"
+        },
+        "sequential_aux": true
     }
 ]
