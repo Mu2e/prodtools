@@ -70,7 +70,8 @@ def resolve_cap(flag_value):
 # names so every caller/test reading them off this module keeps working.
 from utils.queue_state import (_jobsub_table_states,  # noqa: F401
                                cluster_queue_state, live_clusters,
-                               queue_owner, report_jobsub_q_failure)
+                               queue_owner, report_jobsub_q_failure,
+                               schedd_cluster_state, schedd_of)
 
 
 def verify_row(row, sam_lister=files_in_dataset):
@@ -1142,10 +1143,14 @@ def manage_campaign(db_path, camp_id, action, note=None, close_rows=False):
 
 def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
                 queue_state_fn=cluster_queue_state, verify_fn=None,
-                resubmit_fn=None):
+                resubmit_fn=None, confirm_fn=schedd_cluster_state):
     """Drive one ledger row through the gate/verify/act sequence.
     `clusters` is the per-tick live_clusters() snapshot the drain-check
     reads (None → the snapshot failed → every row skips as queue-error).
+
+    A cluster missing from that snapshot is only a drain candidate (the
+    table silently drops a schedd that did not answer): confirm_fn asks
+    the row's own schedd, from jobsub_id, and its answer is the state.
 
     verify_fn/resubmit_fn default per row kind: file-keyed (draining)
     rows verify via verify_files_row and recover via resubmit_files;
@@ -1168,6 +1173,25 @@ def process_row(row, db_path, max_attempts, clusters=None, dry_run=False,
               f"drain-check; update the row manually")
         return 'queue-error'
     state = queue_state_fn(row['cluster_id'], clusters)
+    if (state == 'drained' and clusters is not None
+            and str(row['cluster_id']) not in clusters):
+        schedd = schedd_of(row.get('jobsub_id'))
+        state = confirm_fn(row['cluster_id'], schedd)
+        if state in ('running', 'held'):
+            print(f"row {rid}: cluster {row['cluster_id']} is missing from "
+                  f"jobsub_q --user but {schedd} still holds it — that "
+                  f"table missed the schedd")
+        elif state == 'error':
+            # Neither `reconcile` (failed/submitting rows only) nor any
+            # other verb closes an ACTIVE row, so say what clears it.
+            print(f"row {rid}: cluster {row['cluster_id']} is missing from "
+                  f"jobsub_q --user and {schedd or 'no recorded schedd'} "
+                  f"did not confirm it left the queue — skip (fail-closed). "
+                  f"A passing failure clears on a later tick. A row whose "
+                  f"schedd is retired or not recorded has no CLI exit: "
+                  f"check its jobs are gone, then close the row in the "
+                  f"ledger by hand.")
+            return 'queue-error'
     if state == 'running':
         print(f"row {rid}: jobs still in queue — skip")
         return 'running'

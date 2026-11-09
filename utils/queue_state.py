@@ -39,14 +39,16 @@ def _output_tail(text):
                      for ln in lines[-_REPORT_TAIL_LINES:])
 
 
-def report_jobsub_q_failure(cmd, res=None, error=None):
-    """Print why a `jobsub_q` query was not trusted.
+def report_jobsub_q_failure(cmd, res=None, error=None,
+                            expected='a jobsub_q table'):
+    """Print why a `jobsub_q` (or `condor_q`) query was not trusted.
 
     The callers stay fail-closed (they return None); this only says why.
     Until 2026-09-25 both probes captured stderr and dropped it, so a
     production tick logged "jobsub_q --user failed" with no evidence.
     `res` is the CompletedProcess, `error` an exception that stopped the
     command from running at all; stdout, where the tick log goes.
+    `expected` names what an exit-0 reply should have been.
     """
     what = ' '.join(cmd)
     if error is not None:
@@ -63,7 +65,7 @@ def report_jobsub_q_failure(cmd, res=None, error=None):
                  "; it printed nothing"), flush=True)
     else:
         tail = _output_tail(stdout) or _output_tail(stderr)
-        print(f"{what}: exit 0 but not a jobsub_q table"
+        print(f"{what}: exit 0 but not {expected}"
               + (f"; its output ends:\n{tail}" if tail else
                  "; it printed nothing"), flush=True)
 
@@ -164,7 +166,11 @@ def cluster_queue_state(cluster_id, clusters):
     live_clusters() snapshot. Fail-closed: None snapshot -> 'error',
     never drained. Absent from snapshot, or only terminal (C/X) rows ->
     'drained'. Any idle/running/transfer/suspended job -> 'running'; all
-    non-terminal jobs held -> 'held' (human decides)."""
+    non-terminal jobs held -> 'held' (human decides).
+
+    'drained' for an ABSENT cluster is only a candidate: the table can
+    miss a whole schedd. Callers that act on it confirm with
+    schedd_cluster_state first."""
     if clusters is None:
         return 'error'
     states = clusters.get(str(cluster_id))
@@ -176,3 +182,72 @@ def cluster_queue_state(cluster_id, clusters):
     if any(s != 'H' for s in active):
         return 'running'
     return 'held'
+
+
+# condor_q's default (batch) output, asked of ONE schedd for ONE cluster.
+# Captured 2026-11-02 from the jobsub_lite condor_q wrapper (HTCondor
+# 25.0.14). The wrapper exits 0 even for an unknown schedd (stderr
+# "Collector has no record of schedd/submitter", empty stdout), so the
+# exit code proves nothing; the reply is trusted only when it carries the
+# whole-schedd total, which only a schedd that answered can print.
+_ALL_USERS_RE = re.compile(r'^Total for all users: \d+ jobs;')
+_QUERY_TOTAL_RE = re.compile(
+    r'^Total for query: \d+ jobs; (\d+) completed, (\d+) removed, '
+    r'(\d+) idle, (\d+) running, (\d+) held, (\d+) suspended')
+
+
+def schedd_of(jobsub_id):
+    """`'87390804.0@jobsub01.fnal.gov'` -> `'jobsub01.fnal.gov'`; None when
+    the id names no schedd (a legacy row, or a bare cluster id)."""
+    if not jobsub_id or '@' not in str(jobsub_id):
+        return None
+    return str(jobsub_id).split('@', 1)[1] or None
+
+
+def _condor_q_cluster_counts(stdout):
+    """{'idle', 'running', 'held', 'suspended'} for the queried cluster
+    from condor_q's default output, or None unless the schedd answered:
+    its `Total for all users` line is present."""
+    lines = [ln.strip() for ln in (stdout or '').splitlines() if ln.strip()]
+    if not any(_ALL_USERS_RE.match(ln) for ln in lines):
+        return None
+    totals = [m for m in map(_QUERY_TOTAL_RE.match, lines) if m]
+    if len(totals) != 1:
+        return None
+    _, _, idle, running, held, suspended = (int(g) for g in totals[0].groups())
+    return {'idle': idle, 'running': running, 'held': held,
+            'suspended': suspended}
+
+
+def schedd_cluster_state(cluster_id, schedd, runner=subprocess.run):
+    """'drained' | 'held' | 'running' | 'error' for a cluster, asked of
+    the schedd that holds it: the positive drain proof.
+
+    Absence from the `jobsub_q --user` table is not proof: that table
+    silently leaves out a schedd that did not answer (2026-11-02: a tick
+    read three live jobsub01 clusters as drained and resubmitted 906
+    in-flight files). 'drained' only when the schedd answers that it
+    holds no idle, running, held or suspended job of the cluster. No
+    schedd, a failed command or an unanswered query -> 'error': the
+    caller skips, never resubmits."""
+    if not schedd:
+        print(f"cluster {cluster_id}: no schedd recorded, so its drain "
+              f"cannot be confirmed (fail-closed)", flush=True)
+        return 'error'
+    cmd = ['condor_q', '-name', schedd, str(cluster_id)]
+    try:
+        res = runner(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        report_jobsub_q_failure(cmd, error=exc)
+        return 'error'
+    counts = (_condor_q_cluster_counts(res.stdout)
+              if res.returncode == 0 else None)
+    if counts is None:
+        report_jobsub_q_failure(
+            cmd, res, expected=f"a condor_q reply from {schedd}")
+        return 'error'
+    if counts['idle'] or counts['running'] or counts['suspended']:
+        return 'running'
+    if counts['held']:
+        return 'held'
+    return 'drained'

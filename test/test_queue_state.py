@@ -10,8 +10,11 @@ projection of the cluster parser, pinned here.
 Table shape mirrors the captured 2026-07-21 jobsub_lite DEFAULT table
 (same fixture shape as test_unit.py's queue tests).
 """
+import contextlib
+import io
 import os
 import sys
+import types
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -90,6 +93,107 @@ class TestFlatProjection(unittest.TestCase):
 
     def test_empty_table_is_empty_list(self):
         self.assertEqual(qs._jobsub_table_states(table()), [])
+
+
+# condor_q's default reply for one cluster, as captured 2026-11-02 from
+# the jobsub_lite wrapper (HTCondor 25.0.14). The wrapper exits 0 for an
+# unknown schedd too, printing only to stderr.
+def cq_reply(schedd, idle=0, running=0, held=0, all_users=True):
+    total = idle + running + held
+    lines = ['', '',
+             f'-- Schedd: {schedd} : <131.225.161.135:9615?... '
+             f'@ 11/02/26 11:20:22',
+             'OWNER   BATCH_NAME      SUBMITTED   DONE   RUN    IDLE  '
+             'TOTAL JOB_IDS',
+             '',
+             f'Total for query: {total} jobs; 0 completed, 0 removed, '
+             f'{idle} idle, {running} running, {held} held, 0 suspended ']
+    if all_users:
+        lines.append('Total for all users: 4700 jobs; 0 completed, '
+                     '0 removed, 2718 idle, 1574 running, 408 held, '
+                     '0 suspended')
+    return '\n'.join(lines) + '\n'
+
+
+def runner_for(stdout, rc=0, stderr='', seen=None):
+    def run(cmd, capture_output=True, text=True):
+        if seen is not None:
+            seen.append(cmd)
+        return types.SimpleNamespace(returncode=rc, stdout=stdout,
+                                     stderr=stderr)
+    return run
+
+
+class TestScheddOf(unittest.TestCase):
+    def test_full_jobsub_id(self):
+        self.assertEqual(qs.schedd_of('87390804.0@jobsub01.fnal.gov'),
+                         'jobsub01.fnal.gov')
+
+    def test_no_schedd(self):
+        for jid in (None, '', '87390804', '87390804.0@'):
+            self.assertIsNone(qs.schedd_of(jid))
+
+
+class TestScheddClusterState(unittest.TestCase):
+    """The positive drain proof: only the cluster's own schedd, provably
+    answering, can call it drained (2026-11-02 incident)."""
+
+    S = 'jobsub01.fnal.gov'
+
+    def state(self, stdout, rc=0, stderr='', schedd=S):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return qs.schedd_cluster_state(
+                '87390804', schedd, runner=runner_for(stdout, rc, stderr))
+
+    def test_asks_the_named_schedd_for_the_cluster(self):
+        seen = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            qs.schedd_cluster_state('87390804', self.S,
+                                    runner=runner_for(cq_reply(self.S),
+                                                      seen=seen))
+        self.assertEqual(seen, [['condor_q', '-name', self.S, '87390804']])
+
+    def test_nothing_left_is_drained(self):
+        self.assertEqual(self.state(cq_reply(self.S)), 'drained')
+
+    def test_running_or_idle_is_running(self):
+        self.assertEqual(self.state(cq_reply(self.S, running=21)), 'running')
+        self.assertEqual(self.state(cq_reply(self.S, idle=3)), 'running')
+
+    def test_running_wins_over_held(self):
+        self.assertEqual(self.state(cq_reply(self.S, running=1, held=2)),
+                         'running')
+
+    def test_only_held_is_held(self):
+        self.assertEqual(self.state(cq_reply(self.S, held=2)), 'held')
+
+    def test_unknown_schedd_exit_zero_is_error(self):
+        # The captured reply for a schedd the collector does not know.
+        self.assertEqual(
+            self.state('', stderr='Error: Collector has no record of '
+                                  'schedd/submitter\n'), 'error')
+
+    def test_missing_whole_schedd_total_is_error(self):
+        self.assertEqual(self.state(cq_reply(self.S, all_users=False)),
+                         'error')
+
+    def test_nonzero_exit_is_error_even_with_a_good_reply(self):
+        self.assertEqual(self.state(cq_reply(self.S), rc=1), 'error')
+
+    def test_command_that_cannot_run_is_error(self):
+        def boom(cmd, **kw):
+            raise FileNotFoundError('condor_q')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(
+                qs.schedd_cluster_state('1', self.S, runner=boom), 'error')
+
+    def test_no_schedd_is_error_without_asking(self):
+        seen = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            state = qs.schedd_cluster_state(
+                '1', None, runner=runner_for(cq_reply(self.S), seen=seen))
+        self.assertEqual(state, 'error')
+        self.assertEqual(seen, [])
 
 
 if __name__ == '__main__':

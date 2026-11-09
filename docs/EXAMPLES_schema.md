@@ -444,7 +444,10 @@ reading the code:
   a cron-fed slice, or a `submissions resubmit`) is recorded in the
   submission ledger (default
   `/exp/mu2e/data/users/mu2epro/prodtools/submissions.db`,
-  env `MU2E_SUBMISSION_DB`); `submissions run` drain-checks via jobsub_q,
+  env `MU2E_SUBMISSION_DB`); `submissions run` drain-checks via jobsub_q
+  (a cluster missing from the `jobsub_q --user` table counts as drained
+  only once `condor_q -name <its schedd>` confirms nothing is left: the
+  table silently omits a schedd that did not answer),
   verifies outputs against SAM, and resubmits only missing indices
   (attempt cap, then `exhausted` for a human). Legacy POMS-launched
   entries are never in the ledger — a POMS-launched job (or one
