@@ -1279,15 +1279,14 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
 
     parfile_name = get_parfile_name(config)
 
-    if pushout:
-        _pushout_to_sam(parfile_name, config['owner'])
-
-    # AFTER pushout, always: enqueue_entry resolves the tarball from SAM
-    # and check_inputs reads it, so a campaign created before the push
-    # would be broken from birth.
+    # Every enqueue check runs on the LOCAL cnf BEFORE the push: the push
+    # cannot be undone and a cnf name is never reused, so a check failing
+    # after it leaves a registered cnf with no campaign. The campaign is
+    # created only after the push, so it never names a cnf SAM lacks.
     if enqueue:
         from types import SimpleNamespace
-        from utils.submit import enqueue_entry, _resolve_ledger_db
+        from utils.submit import (enqueue_entry, preflight_entry,
+                                  _resolve_ledger_db)
         entry = build_jobdesc(config)
         try:
             entry.update(prodtools_entry_keys(
@@ -1300,11 +1299,18 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
             print(f"  dev checkout: {entry['prodtools_tar']} "
                   f"(sha256 {entry['prodtools_ref']['sha256'][:12]}) ships "
                   f"to every job")
+        snap = preflight_entry(entry)
+
+    if pushout:
+        _pushout_to_sam(parfile_name, config['owner'])
+
+    if enqueue:
         enqueue_entry(
             entry,
             ledger_db=_resolve_ledger_db(SimpleNamespace(ledger_db=None)),
             slice_size=slice_size,
-            provenance=_provenance(json_path, config))
+            provenance=_provenance(json_path, config),
+            snap=snap)
 
     if no_cleanup:
         print("Temporary files kept (--no-cleanup specified)")

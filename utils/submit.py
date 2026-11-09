@@ -435,20 +435,14 @@ def _check_tracking(entry, options):
             f"once with `json2jobdef --once`.")
 
 
-def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
-                  resources=None, provenance=None):
-    """Register ONE entry as a sliced-submission campaign (cursor 0);
-    submit nothing. Returns the new campaign id, or None under dry_run.
+def preflight_entry(entry, resources=None):
+    """Every enqueue check, on the LOCAL cnf; returns the entry snapshot.
 
-    Single owner of the enqueue preflight (`json2jobdef --enqueue` is the
-    only caller), so a campaign is never created for a tarball with
-    unreadable inputs. Nothing has been submitted when this fails, so
-    operator-reachable errors exit with a ONE-LINE message, never a
-    traceback (sys.exit kept deliberately — both callers are CLIs, so
-    inheriting exit codes is correct).
-
-    `provenance` is free-text recorded as the campaign's origin; nothing
-    dispatches from it, only the MCP status tools echo it back.
+    Nothing here writes anywhere, so `json2jobdef --prod --enqueue` runs
+    it BEFORE the cnf is pushed to SAM: the push cannot be undone and a
+    cnf name is never reused, so a check failing after it would leave a
+    registered cnf with no campaign. Operator-reachable failures exit
+    with a ONE-LINE message, never a traceback (both callers are CLIs).
     """
     resources = resources or {}
     _validate_entry_values(entry)
@@ -459,9 +453,15 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
         sys.exit(f"json2jobdef: {e}")
     _refuse_outstage_campaign(entry)
     if is_draining(entry):
-        return _enqueue_draining(entry, ledger_db=ledger_db,
-                                 slice_size=slice_size, dry_run=dry_run,
-                                 resources=resources, provenance=provenance)
+        err = _validate_draining_entry(entry)
+        if err:
+            sys.exit(f"json2jobdef: {err}")
+        tarball_path = _ensure_local_tarball(tarball_of(entry))
+        # No check_inputs: a generic cnf bakes no inputs — the tick gates
+        # each batch (residency + settling age) at dispatch. Code
+        # tarball still has to match, though.
+        _gate_code_tarball(entry, tarball_path)
+        return _snapshot_entry(entry, resources)
 
     tarball_path = _ensure_local_tarball(tarball_of(entry))
     ok, problems = check_inputs(str(tarball_path), inloc_of(entry))
@@ -481,40 +481,39 @@ def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
     if njobs < 1:
         sys.exit(f"json2jobdef: entry has njobs={njobs} — "
                  f"a campaign needs a positive job count")
-    snap = _snapshot_entry(entry, resources)
-    if dry_run:
-        print(f"[DRY RUN] would enqueue entry: "
-              f"{tarball_of(entry)} njobs={njobs} "
-              f"slice={slice_size}")
-        return None
-    camp_id = _create_campaign(ledger_db, entry, snap, slice_size, provenance)
-    print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
-          f"njobs={njobs} slice={slice_size} (db {ledger_db})")
-    return camp_id
+    return _snapshot_entry(entry, resources)
 
 
-def _enqueue_draining(entry, *, ledger_db, slice_size, dry_run,
-                      resources, provenance):
-    """Draining-entry tail of enqueue_entry (generic cnf + input_pattern)."""
-    err = _validate_draining_entry(entry)
-    if err:
-        sys.exit(f"json2jobdef: {err}")
-    tarball_path = _ensure_local_tarball(tarball_of(entry))
-    # No check_inputs: a generic cnf bakes no inputs — the tick gates
-    # each batch (residency + settling age) at dispatch. Code
-    # tarball still has to match, though.
-    _gate_code_tarball(entry, tarball_path)
-    snap = _snapshot_entry(entry, resources)
+def enqueue_entry(entry, *, ledger_db, slice_size, dry_run=False,
+                  resources=None, provenance=None, snap=None):
+    """Register ONE entry as a sliced-submission campaign (cursor 0);
+    submit nothing. Returns the new campaign id, or None under dry_run.
+
+    `snap` is preflight_entry's result when the caller already ran it
+    (json2jobdef does, before the push); otherwise it runs here, so a
+    campaign is never created for a cnf that fails a check.
+
+    `provenance` is free-text recorded as the campaign's origin; nothing
+    dispatches from it, only the MCP status tools echo it back.
+    """
+    if snap is None:
+        snap = preflight_entry(entry, resources)
+    if is_draining(entry):
+        what = (f"draining campaign: {tarball_of(entry)} "
+                f"pattern={entry['input_pattern']}")
+    else:
+        what = f"entry: {tarball_of(entry)} njobs={njobs_of(entry)}"
     if dry_run:
-        print(f"[DRY RUN] would enqueue draining campaign: "
-              f"{tarball_of(entry)} "
-              f"pattern={entry['input_pattern']} "
-              f"slice={slice_size}")
+        print(f"[DRY RUN] would enqueue {what} slice={slice_size}")
         return None
     camp_id = _create_campaign(ledger_db, entry, snap, slice_size, provenance)
-    print(f"Enqueued draining campaign {camp_id}: "
-          f"{tarball_of(entry)} pattern={entry['input_pattern']} "
-          f"slice={slice_size} (db {ledger_db})")
+    if is_draining(entry):
+        print(f"Enqueued draining campaign {camp_id}: {tarball_of(entry)} "
+              f"pattern={entry['input_pattern']} slice={slice_size} "
+              f"(db {ledger_db})")
+    else:
+        print(f"Enqueued campaign {camp_id}: {tarball_of(entry)} "
+              f"njobs={njobs_of(entry)} slice={slice_size} (db {ledger_db})")
     return camp_id
 
 
