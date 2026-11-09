@@ -1432,3 +1432,36 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 - 2026-09-15 worker script had the same six.moves trap: cluster 93730445 died at import on both workers. runjob.sh fixed (69b9b90, OfflineOps before muse). Verified with the dev tree shipped: G4blMcpFix.e470313 campaign 10 cluster 29960571, 2/2 outputs, beam file built through beamkit 0.4.0 over MCP. Production untouched (last mu2epro submission 2026-09-03) but any tick before a prodtools cvmfs release with both fixes would fail every job. See [[nersc-iri-feasibility]].
 - 2026-09-17 read-only prodtools MCP gained `--transport streamable-http` (+ `--host`/`--port`/`--allowed-host`, default stdio on 127.0.0.1, port 8008) so collaborators can share one instance with no checkout, plus `user="<login>"` on campaign_status/list_campaigns; `mine=true` is refused over HTTP because there the process account is the host, not the caller. systemd unit in `mcp/deploy/`. Live-verified on 127.0.0.1:8899; 1411 unit tests pass. `prodtools-write` stays stdio. See [[prodtools-mcp-server]].
 - 2026-09-18 prodtools MCP servers migrated to mcp SDK 2.x (`mcp>=2,<3`): FastMCP -> MCPServer, host/port/transport_security moved to run(), sync tools now run in worker threads; found because an unpinned spec made fresh installs resolve to 2.2.0 and fail, and because all eight mu2eaigpvm01 servers run 2.x. Default HTTP port moved 8003 -> 8008 (8003 is arxiv-mcp). Dev venv rebuilt on ops python 3.12; 1412 tests, both --check, stdio smoke and live HTTP verified. See [[prodtools-mcp-server]].
+
+## [2026-10-08] ingest | MC-1 Slurm cluster access and first runlocal smoke
+- New page [[2026-10-08-mc1-slurm-runlocal-smoke]]. Andrew Norman's DAQ Slurm cluster on the MC-1 workers: gateway hop as `mu2eshift`, submit as `mu2ebatch`; cvmfs everywhere, no /pnfs, /exp or shared FS. One ExtractedCRY.MDC2025as job, 10 events, via cvmfs prodtools v3.3.4 `runlocal` under salloc + sbcast on worker-02: rc=0, 143 s, output passed read-back. Open: token for mu2ebatch and an xrootd-input smoke.
+
+## [2026-10-08] update | MC-1 network reachability and CPU benchmark
+- [[2026-10-08-mc1-slurm-runlocal-smoke]]: all 17 workers reach dCache xrootd/WebDAV, conditions DB, sammu2e:8483, htvaultprod, GitHub. Workers 02–16 are Opteron 6320 (2.4× slower per event than a gpvm EPYC on ExtractedCRY), 17–18 Xeon E5-2683 v4 (1.5×). Rough capacity ~100–120 modern cores.
+
+## [2026-10-08] update | MC-1 vs FermiGrid per-event timing
+- [[2026-10-08-mc1-slurm-runlocal-smoke]]: 5000-event ExtractedCRY runs vs 300 sampled FermiGrid production logs of the same dataset. Typical FermiGrid slot 0.0300 s/event mean; MC-1 Xeon ~1.2× slower, Opteron ~1.9× slower (FermiGrid's slowest decile); gpvm 0.8×. Cluster ≈ 150 FermiGrid-slot equivalents, upper bound.
+
+## [2026-10-08] update | MC-1 xrootd input read verified
+- [[2026-10-08-mc1-slurm-runlocal-smoke]]: htgettoken missing on MC-1; a read-only (`--scopes storage.read:/mu2e`) bearer token minted on a gpvm and sbcast to worker-03 let a MuCap1809keVCalo.MDC2025ar resampler job stream its 7 GB input from fndcadoor over xrootd: art exit 0. Token removed afterwards. Open: managed token for mu2ebatch, full-node load test.
+
+## [2026-10-08] update | MC-1 full-node load test
+- [[2026-10-08-mc1-slurm-runlocal-smoke]]: 16 concurrent ExtractedCRY jobs on Opteron worker-04, 16/16 OK; 0.0900 s/event vs 0.0583 alone (1.5×), ~3× a FermiGrid slot. Cluster revised to ~100 FermiGrid-slot equivalents.
+
+## [2026-10-21] ingest | Fcl-only code tarball for a self campaign (TS at 30%)
+- [[2026-10-21-fcl-only-code-tarball-ts30]]: the 30% TS field needs a bfgeom file with `bfield.scaleFactor` (no FHiCL knob), so it ships in a 2.8 KB code tarball of a `.muse` repo backed on cvmfs SimJob MDC2025ay. push_cnf accepts self code entries since Mu2e/prodtools#81. Campaigns 52–54 (dsconf MDC2025ay-001). Build steps in /exp/mu2e/app/users/oksuzian/ts30_musing/README.md.
+
+## [2026-10-21] update | TS-at-30% result
+- [[2026-10-21-fcl-only-code-tarball-ts30]]: μ⁻ at the TS5 exit is 5.24e-4/POT at 100% (validates the two-stage split against DocDB 55033) and 2.0e-7/POT at 30% (2 μ⁻ from 1e7 POT), a ratio of about 3.8e-4.
+
+## [2026-10-21] update | TS field scan 30–100%
+- [[2026-10-21-fcl-only-code-tarball-ts30]]: μ⁻/POT at the TS5 exit, from 2.0e-7 at 30% to 5.2e-4 at 100%. The 50%/100% ratio is 5.3% and the 60%/100% ratio 14%.
+
+## [2026-10-21] ingest | DIF flash dts to digitize
+- [[2026-10-21-dif-flash-dts-to-digitize]]: a beam-flash dts reaches `digitize/OnSpill.fcl` only with a real run number, a fixed DS50 reco field file, FindMCPrimary in the resampler, and blank VD/surface/trajectory tags in compressDigiMCs. The decay-in-flight electrons hit the tracker at 125–550 ns, so they need digitizationStart near 100 ns and an open output selection.
+
+## [2026-10-21] update | DIF prodtools workflow
+- [[2026-10-21-dif-flash-dts-to-digitize]]: four-stage code-tarball workflow (`dif_musing`, `dif.json`) smoke-tested through prodtools v3.3.4. Reco needs the straw-hit windows at 100 ns; VD steps come from `FlashFilter:virtualdetector`; MuBeamCat.Run1Bai must be prestaged first.
+
+## [2026-10-25] update | DIF EventNtuple fit selection
+- [[2026-10-21-dif-flash-dts-to-digitize]]: `trk.pdg` in EventNtuple's merged trk branch is the fitted charge, not the fitter; the DIF workflow now writes separate de/ue/dm/um branches (tarball v2) and the note counts 223 KKDe fits, all truth-matched DIF electrons.

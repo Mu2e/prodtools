@@ -38,6 +38,9 @@
 ### Runs
 <!-- entries added by wiki-ingest -->
 - [[2026-07-11-noprimary-run1ban-001-remake]] — remake NoPrimary.Run1Ban at 100× stats (10B empty frames) as new-name `Run1Ban-001`; new POMS map MDC2025-033; mix.json merge 10→1 for the 200k-ev/file granularity _(2026-07-11)_
+- [[2026-10-08-mc1-slurm-runlocal-smoke]] — MC-1 DAQ Slurm cluster: access via mu2eshift@g2gateway01 → mu2ebatch@worker-01, cvmfs on all nodes, no /pnfs or /exp, no shared FS; first prodtools job (ExtractedCRY, runlocal from cvmfs v3.3.4) art exit 0 on worker-02 _(2026-10-08)_
+- [[2026-10-21-fcl-only-code-tarball-ts30]] — fcl-only code tarball (a `.muse` repo backed on cvmfs SimJob MDC2025ay, 2.8 KB) for a field file no Musing has (`bfield.scaleFactor` 0.3); push_cnf takes self code entries since #81; TS-at-30% campaigns 52–54 _(2026-10-21)_
+- [[2026-10-21-dif-flash-dts-to-digitize]] — digitizing a MuBeamFlash dts (DIF study, DS 50%): run number, broken `bfgeom_DS50_reco_v01.txt` include, FindMCPrimary, compressDigiMCs tags; DIF hits at 125–550 ns, stock OnSpill writes 0 events _(2026-10-21)_
 
 ### Sources
 - [[pbi-sequence-workflow]] — full PBI chain (stage 1 dts → stage 2 mix dig → stage 3 reco mcs) via `json2jobdef` + `runmu2e` _(2026-04-25)_
