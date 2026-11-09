@@ -14822,6 +14822,7 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
                  patch.object(json2jobdef, 'get_parfile_name',
                               return_value='cnf.mu2e.PhysicalPionStops.Run1Bap.0.tar'), \
                  patch('utils.submit._resolve_ledger_db', return_value=':memory:'), \
+                 patch('utils.submit.preflight_entry', return_value={}), \
                  patch('utils.submit.enqueue_entry', return_value=1), \
                  patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
                               return_value=True):
@@ -14903,6 +14904,79 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         self.assertEqual(camp['entry'], expected_entry)
         self.assertEqual(camp['slice_size'], 7)
         self.assertEqual(camp['origin'], 'data/x.json#IntegDesc@IntegConf')
+
+
+class TestEnqueuePreflightBeforePush(unittest.TestCase):
+    """`--prod --enqueue` must run every enqueue check on the LOCAL cnf
+    before the cnf is pushed to SAM. The push cannot be undone and a cnf
+    name is never reused, so a check that fails after it leaves a
+    registered cnf with no campaign (three times in the week of
+    2026-11-02: an input with no SAM definition, an input with no
+    resilient copy, and a Python 3.10 crash in the input check)."""
+
+    CONFIG = {'desc': 'OrderDesc', 'dsconf': 'OrderConf',
+              'simjob_setup': 's', 'fcl': 'f.fcl',
+              'outloc': {'*.art': 'tape'}, 'inloc': 'none',
+              'njobs': 5, 'owner': 'mu2e'}
+    TARBALL = 'cnf.mu2e.OrderDesc.OrderConf.0.tar'
+
+    def _run(self, inputs_ok, calls):
+        from utils import json2jobdef
+        from utils import submit
+        db_path = os.path.join(_mkdtemp(), 'submissions.db')
+        tmpdir = _mkdtemp()
+        cwd = os.getcwd()
+
+        def fake_check(tarball, inloc):
+            calls.append('check')
+            return (True, []) if inputs_ok else (False, ['an input is gone'])
+
+        real_create = submit._create_campaign
+
+        def fake_create(*a, **kw):
+            calls.append('create')
+            return real_create(*a, **kw)
+
+        try:
+            os.chdir(tmpdir)
+            with patch.object(json2jobdef.shutil, 'which',
+                              return_value='/usr/bin/mu2e'), \
+                 patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+                 patch.object(json2jobdef, 'build_jobdef', return_value=None), \
+                 patch.object(json2jobdef, 'get_parfile_name',
+                              return_value=self.TARBALL), \
+                 patch.object(json2jobdef, '_pushout_to_sam',
+                              side_effect=lambda *a: calls.append('push')), \
+                 patch.object(submit, '_ensure_local_tarball',
+                              return_value=Path(self.TARBALL)), \
+                 patch.object(submit, 'check_inputs', side_effect=fake_check), \
+                 patch.object(submit, 'format_report', return_value=''), \
+                 patch.object(submit, 'check_code_tarball',
+                              return_value=(True, [])), \
+                 patch.object(submit, '_create_campaign',
+                              side_effect=fake_create), \
+                 patch.object(submit, '_resolve_ledger_db',
+                              return_value=db_path), \
+                 patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
+                              return_value=True), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                json2jobdef.process_single_entry(
+                    dict(self.CONFIG), pushout=True, no_cleanup=True,
+                    enqueue=True, slice_size=5, json_path='data/x.json',
+                    prodtools_dir=FAKE_PRODTOOLS_DIR)
+        finally:
+            os.chdir(cwd)
+
+    def test_failed_input_check_never_reaches_sam(self):
+        calls = []
+        with self.assertRaises(SystemExit):
+            self._run(inputs_ok=False, calls=calls)
+        self.assertEqual(calls, ['check'])
+
+    def test_order_is_check_then_push_then_campaign(self):
+        calls = []
+        self._run(inputs_ok=True, calls=calls)
+        self.assertEqual(calls, ['check', 'push', 'create'])
 
 
 class TestEraAgreement(unittest.TestCase):
