@@ -2,7 +2,7 @@
 title: json2jobdef staging-config workflow
 tags: [reference, workflow, json2jobdef, mdc2025, staging]
 sources: []
-updated: 2026-05-05
+updated: 2026-11-08
 ---
 
 # json2jobdef staging-config workflow
@@ -247,3 +247,5 @@ contribute one slot to the flat space.
 - [[pbi-sequence-workflow]] — full deep-dive on one stage
 - [[metacat-reference]] — MQL queries that often feed `input_data`
 - [[run1bak-campaign]] — example campaign-bump using the additive pattern (new dsconf appended; originals kept)
+- [[2026-11-05-cnf-registered-before-input-check]] — `--prod --enqueue` pushed the cnf before its input check until PR #88; recover an orphan with `--extend`
+- [[2026-11-08-push-downstream-only-when-upstream-stopped]] — push the next stage only after the stage before it has stopped

@@ -1465,3 +1465,7 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 
 ## [2026-10-25] update | DIF EventNtuple fit selection
 - [[2026-10-21-dif-flash-dts-to-digitize]]: `trk.pdg` in EventNtuple's merged trk branch is the fitted charge, not the fitter; the DIF workflow now writes separate de/ue/dm/um branches (tarball v2) and the note counts 223 KKDe fits, all truth-matched DIF electrons.
+
+## [2026-11-08] ingest | Run 1A COL5 production week (campaigns 193–197)
+Pages written: 2026-11-08-run1a-col5-production-week, 2026-11-05-cnf-registered-before-input-check, 2026-11-08-push-downstream-only-when-upstream-stopped
+Pages updated: 2026-07-18-direct-recovery-loop (dated caveat: a wall-clock tail can be the node, so one same-seed retry is worth it), 2026-07-21-input-preflight-check (the gate ran after the push until PR #88), json2jobdef-staging-workflow, justin-vs-prodtools, 2026-08-20-jobwait-jobsub-history-drops-schedd (backlinks), index, overview

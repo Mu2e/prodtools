@@ -2,7 +2,7 @@
 title: jobwait 0/N ok on successful cluster — jobsub_history drops -name schedd
 tags: [incident]
 sources: [2026-08-20-prodtools-jobwait-empty-history-unknown-rc]
-updated: 2026-08-20
+updated: 2026-11-08
 ---
 
 # jobwait `0/N ok` on a fully successful cluster — jobsub_history drops `-name <schedd>`
@@ -81,3 +81,4 @@ next release.
 
 - [[2026-04-30-phase2-direct-jobsub-implementation]] — same direction
   of travel: bypass wrappers, drive condor/jobsub primitives directly.
+- [[2026-11-08-run1a-col5-production-week]] — same wrong-schedd family: PRs #83/#84 (merged 2026-11-08) make the tick and jobwait confirm a "drained" cluster with its own schedd
