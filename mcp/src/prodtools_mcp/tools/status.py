@@ -11,6 +11,7 @@ from prodtools_mcp.adapters import ToolError
 import re
 
 from utils import account, submission_ledger
+from utils.queue_state import schedd_of
 
 CAMPAIGN_STATES = ('active', 'complete', 'paused', 'cancelled')
 
@@ -272,6 +273,26 @@ def _outputs_block(entry, njobs, submitted, count_fn, rows=None,
     return {'state': 'known', 'datasets': datasets}
 
 
+def covered_queue_block(cluster_ids, schedds, clusters, owner,
+                        reason=None):
+    """queue_block, unless one of `schedds` (the schedds holding these
+    clusters) was never asked by the snapshot: then 'unknown', because a
+    cluster's absence from a schedd nobody asked says nothing about its
+    jobs. A snapshot that does not name the schedds it covers (a plain
+    dict) cannot be checked and is taken as it is; a None snapshot is
+    queue_block's own 'unknown'."""
+    covered = getattr(clusters, 'schedds', None)
+    unseen = ([] if covered is None else
+              sorted({s for s in schedds if s and s.lower() not in covered}))
+    if unseen:
+        return queue_block(
+            cluster_ids, None, owner,
+            reason=(f"clusters on {', '.join(unseen)}, which did not "
+                    f"answer the queue query (not advertised by the "
+                    f"collector), so their jobs were not counted"))
+    return queue_block(cluster_ids, clusters, owner, reason=reason)
+
+
 def _default_clusters_fn(owner=None):
     """condor.query_owner_jobs(), the MCP server's own path — direct
     ClassAd queries, independent of utils.submissions.live_clusters()
@@ -417,8 +438,11 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
             rec['rows'] = _row_counts(camp_rows)
             cluster_ids = [r['cluster_id'] for r in camp_rows
                            if r['cluster_id']]
-            rec['queue'] = queue_block(cluster_ids, clusters, owner,
-                                       reason=queue_reason)
+            open_schedds = [schedd_of(r.get('jobsub_id')) for r in camp_rows
+                            if r.get('state') == 'active']
+            rec['queue'] = covered_queue_block(cluster_ids, open_schedds,
+                                               clusters, owner,
+                                               reason=queue_reason)
         if want_outputs:
             rec['outputs'] = _outputs_block(
                 camp['entry'], njobs, camp['cursor'],

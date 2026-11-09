@@ -196,5 +196,42 @@ class TestScheddClusterState(unittest.TestCase):
         self.assertEqual(seen, [])
 
 
+class TestConfirmedQueueState(unittest.TestCase):
+    """The tick and jobwait share this: absence from the jobsub_q table
+    is only a drain candidate, so the cluster's own schedd decides."""
+
+    def _state(self, clusters, schedd='s', stdout=None):
+        seen = []
+        out = cq_reply(schedd or 's') if stdout is None else stdout
+        with contextlib.redirect_stdout(io.StringIO()):
+            st = qs.confirmed_queue_state('7', clusters, schedd,
+                                          runner=runner_for(out, seen=seen))
+        return st, seen
+
+    def test_live_in_table_is_not_asked_again(self):
+        st, seen = self._state({'7': ['R']})
+        self.assertEqual((st, seen), ('running', []))
+
+    def test_terminal_rows_in_table_are_a_real_drain(self):
+        # The table showed the cluster, so its schedd answered.
+        st, seen = self._state({'7': ['C', 'X']})
+        self.assertEqual((st, seen), ('drained', []))
+
+    def test_failed_snapshot_is_error_without_asking(self):
+        st, seen = self._state(None)
+        self.assertEqual((st, seen), ('error', []))
+
+    def test_absent_takes_the_schedds_answer(self):
+        st, seen = self._state({}, stdout=cq_reply('s', running=5))
+        self.assertEqual(st, 'running')
+        self.assertEqual(len(seen), 1)
+        st, _ = self._state({})
+        self.assertEqual(st, 'drained')
+
+    def test_absent_with_no_schedd_is_error(self):
+        st, seen = self._state({}, schedd=None)
+        self.assertEqual((st, seen), ('error', []))
+
+
 if __name__ == '__main__':
     unittest.main()

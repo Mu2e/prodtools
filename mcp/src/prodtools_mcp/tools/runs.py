@@ -24,6 +24,8 @@ import os
 import socket
 from types import SimpleNamespace
 
+from utils.queue_state import schedd_of
+
 from ..adapters import ToolError
 from . import status
 
@@ -93,8 +95,11 @@ def run_status(name, mine=False, user=None, runs_root=None,
 
     cluster, njobs = str(receipt['cluster_id']), int(receipt['njobs'])
     clusters, reason = (clusters_fn or status._default_clusters_fn)(login)
-    out['queue'] = status.queue_block([cluster], clusters, owner=login,
-                                      reason=reason)
+    # The receipt's jobid names the schedd; a snapshot that never asked
+    # it would read this cluster as gone, and the run as finished.
+    out['queue'] = status.covered_queue_block(
+        [cluster], [schedd_of(receipt.get('jobid'))], clusters, login,
+        reason=reason)
     if out['queue']['state'] != 'known':
         out['state'] = 'unknown'
         return out

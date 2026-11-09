@@ -7545,14 +7545,13 @@ class TestRecoverLoop(unittest.TestCase):
 
     def _process(self, qstate='drained', missing=(), partial=(),
                  resub_ok=True, max_attempts=3, dry_run=False,
-                 verify_exc=None, resub_writes_child=True,
-                 confirmed='drained', clusters=None):
+                 verify_exc=None, resub_writes_child=True, clusters=None):
         from utils import submissions as recover
         calls = {}
 
-        def fake_confirm(cid, schedd):
-            calls['confirm'] = (cid, schedd)
-            return confirmed
+        def fake_state(cid, clusters, schedd):
+            calls['state'] = (cid, schedd)
+            return qstate
 
         def fake_verify(row):
             if verify_exc:
@@ -7571,49 +7570,28 @@ class TestRecoverLoop(unittest.TestCase):
         action = recover.process_row(
             self.row, self.db, max_attempts,
             clusters={} if clusters is None else clusters, dry_run=dry_run,
-            queue_state_fn=lambda cid, clusters: qstate,
-            verify_fn=fake_verify, resubmit_fn=fake_resubmit,
-            confirm_fn=fake_confirm)
+            queue_state_fn=fake_state,
+            verify_fn=fake_verify, resubmit_fn=fake_resubmit)
         return action, calls
 
-    def test_absent_cluster_is_confirmed_with_its_own_schedd(self):
-        # The schedd comes from the row's recorded jobsub id.
+    def test_queue_check_gets_the_rows_own_schedd(self):
+        # The schedd comes from the row's recorded jobsub id, so a cluster
+        # missing from jobsub_q --user is confirmed where it actually ran.
         action, calls = self._process()
         self.assertEqual(action, 'complete')
-        self.assertEqual(calls['confirm'], ('1', 'js.fnal.gov'))
+        self.assertEqual(calls['state'], ('1', 'js.fnal.gov'))
 
-    def test_absent_but_schedd_still_holds_it_is_not_verified(self):
-        # Measured 2026-11-02: jobsub_q --user omitted jobsub01 with exit
-        # 0, and the tick resubmitted 906 files still running there. The
-        # schedd's own answer wins over the table's silence.
-        action, calls = self._process(missing=(1,), confirmed='running')
-        self.assertEqual(action, 'running')
-        self.assertNotIn('resubmit', calls)
-        self.assertEqual(self.sl.open_rows(self.db)[0]['state'], 'active')
-
-    def test_absent_and_schedd_unconfirmed_is_queue_error(self):
+    def test_unconfirmed_drain_is_queue_error_and_says_what_clears_it(self):
         import contextlib
         import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            action, calls = self._process(missing=(1,), confirmed='error')
+            action, calls = self._process(qstate='error', missing=(1,))
         self.assertEqual(action, 'queue-error')
         self.assertNotIn('resubmit', calls)
         # The row stays open every tick; the line must say what clears it.
         self.assertIn('js.fnal.gov did not confirm', buf.getvalue())
         self.assertIn('close the row in the ledger by hand', buf.getvalue())
-
-    def test_absent_and_schedd_reports_held(self):
-        action, calls = self._process(missing=(1,), confirmed='held')
-        self.assertEqual(action, 'held')
-        self.assertNotIn('resubmit', calls)
-
-    def test_terminal_rows_in_table_need_no_confirmation(self):
-        # The table showed the cluster, so its schedd answered: C/X-only
-        # rows are a real drain and are not asked again.
-        action, calls = self._process(clusters={'1': ['C', 'X']})
-        self.assertEqual(action, 'complete')
-        self.assertNotIn('confirm', calls)
 
     def test_running_skips(self):
         action, calls = self._process(qstate='running')
@@ -7799,7 +7777,7 @@ class TestRecoverLoop(unittest.TestCase):
         from utils import submissions as recover
         action = recover.process_row(
             row2, self.db, 3, clusters={'9': ['R']},
-            queue_state_fn=lambda cid, cl: self.fail('must not be called'),
+            queue_state_fn=lambda cid, cl, sd: self.fail('must not be called'),
             verify_fn=lambda r: ([], []),
             resubmit_fn=lambda r, m, d: self.fail('must not be called'))
         self.assertEqual(action, 'queue-error')
@@ -9809,6 +9787,15 @@ class TestMcpCondor(unittest.TestCase):
                                                    query_fn=query)
         self.assertEqual(len(clusters['1']), 2)
 
+    def test_query_owner_jobs_names_the_schedds_it_covered(self):
+        from prodtools_mcp import condor
+        clusters, reason = condor.query_owner_jobs(
+            schedds_fn=lambda: ['Sched-A', 'sched-b'],
+            query_fn=lambda sd, owner: [])
+        self.assertIsNone(reason)
+        self.assertEqual(clusters, {})
+        self.assertEqual(clusters.schedds, {'sched-a', 'sched-b'})
+
     def test_schedd_discovery_failure_is_unknown(self):
         from prodtools_mcp import condor
 
@@ -10177,6 +10164,41 @@ class TestMcpCampaignStatus(unittest.TestCase):
         out = camp['outputs']['datasets'][0]
         self.assertEqual(out['produced'], 412)
         self.assertEqual(out['expected_at_completion'], 4000)
+
+    def test_open_row_on_an_unasked_schedd_makes_the_queue_unknown(self):
+        """2026-11-02: the collector stopped advertising jobsub02, the
+        query reached only the other schedds, and campaign_status said
+        'known' while jobsub02's clusters ran unseen. The fixture's open
+        row sits on 'sched'; a snapshot covering only 'other' must not
+        report a count."""
+        from prodtools_mcp import condor
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=lambda owner: (
+                    condor.OwnerJobs(schedds=['other']), None))
+        queue = result['campaigns'][0]['queue']
+        self.assertEqual(queue['state'], 'unknown')
+        self.assertNotIn('running', queue)
+        self.assertIn('sched', queue['reason'])
+
+    def test_open_row_on_an_asked_schedd_counts_normally(self):
+        from prodtools_mcp import condor
+        from prodtools_mcp.tools import status
+        running_job = {'JobStatus': 2, 'HoldReasonCode': None,
+                       'HoldReason': None}
+        with tempfile.TemporaryDirectory() as td:
+            db = self._make_db(td)
+            result = status.campaign_status(
+                campaign='MDC2025au', db_path=db, include_outputs=False,
+                clusters_fn=lambda owner: (
+                    condor.OwnerJobs({'29308498': [running_job]},
+                                     schedds=['SCHED', 'other']), None))
+        queue = result['campaigns'][0]['queue']
+        self.assertEqual(queue['state'], 'known')
+        self.assertEqual(queue['running'], 1)
 
     def test_outputs_report_submitted_alongside_njobs(self):
         """Every direct campaign is sliced. njobs alone under-reports a
@@ -14194,7 +14216,7 @@ class TestProcessRowKindDispatch(unittest.TestCase):
                 row, '/x.db', 3,
                 clusters={},   # absent from snapshot; its schedd confirms
                 dry_run=False,
-                confirm_fn=lambda cid, schedd: 'drained')
+                queue_state_fn=lambda cid, cl, sd: 'drained')
         self.assertEqual(action, 'complete')
         self.assertTrue(called.get('verify'))
 
@@ -14237,7 +14259,7 @@ class TestProcessRowKindDispatch(unittest.TestCase):
                           side_effect=[[], [child_row]]):
             action = submissions.process_row(
                 row, '/x.db', 3, clusters={}, dry_run=False,
-                confirm_fn=lambda cid, schedd: 'drained')
+                queue_state_fn=lambda cid, cl, sd: 'drained')
         self.assertEqual(action, 'resubmitted')
         self.assertIn('resubmit_files', calls)
         self.assertEqual(calls['resubmit_files'], (row, missing, '/x.db'))
@@ -19920,6 +19942,30 @@ class TestMcpRunStatus(unittest.TestCase):
                                    clusters_fn=clusters_fn,
                                    codes_fn=codes_fn, job_pars_fn=FakePars)
         return out, seen
+
+    def test_a_run_on_a_schedd_the_query_never_asked_is_unknown(self):
+        # Review of #83: a snapshot that reached only other schedds read
+        # this cluster as gone and the run as finished (queue 'known',
+        # zero jobs). The receipt's jobid names jobsub01.
+        from prodtools_mcp import condor
+        self._submitted()
+        out, seen = self._status(
+            clusters=condor.OwnerJobs(schedds=['jobsub02.fnal.gov']))
+        self.assertEqual(out['state'], 'unknown')
+        self.assertEqual(out['queue']['state'], 'unknown')
+        self.assertNotIn('running', out['queue'])
+        self.assertIn('jobsub01.fnal.gov', out['queue']['reason'])
+        self.assertNotIn('history', seen)
+
+    def test_a_run_on_an_asked_schedd_reads_its_queue(self):
+        from prodtools_mcp import condor
+        self._submitted()
+        running = {'JobStatus': 2, 'HoldReasonCode': None,
+                   'HoldReason': None}
+        out, _ = self._status(clusters=condor.OwnerJobs(
+            {'42': [running]}, schedds=['JobSub01.fnal.gov']))
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(out['queue']['running'], 1)
 
     def test_a_run_that_was_never_submitted_reports_its_receipt_state(self):
         self.rr.update(self.dir, state='failed', error='pre-flight FAILED')

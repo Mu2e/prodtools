@@ -169,8 +169,7 @@ def cluster_queue_state(cluster_id, clusters):
     non-terminal jobs held -> 'held' (human decides).
 
     'drained' for an ABSENT cluster is only a candidate: the table can
-    miss a whole schedd. Callers that act on it confirm with
-    schedd_cluster_state first."""
+    miss a whole schedd. Callers that act on it use confirmed_queue_state."""
     if clusters is None:
         return 'error'
     states = clusters.get(str(cluster_id))
@@ -251,3 +250,23 @@ def schedd_cluster_state(cluster_id, schedd, runner=subprocess.run):
     if counts['held']:
         return 'held'
     return 'drained'
+
+
+def confirmed_queue_state(cluster_id, clusters, schedd,
+                          runner=subprocess.run):
+    """cluster_queue_state, with a cluster ABSENT from the snapshot asked
+    of its own schedd (schedd_cluster_state), whose answer is the state.
+
+    Presence in the `jobsub_q --user` table proves its schedd answered,
+    so a cluster shown there (C/X-only rows included) is taken as it is.
+    Absence proves nothing: the table silently drops a schedd that did
+    not answer. No schedd to ask -> 'error'."""
+    state = cluster_queue_state(cluster_id, clusters)
+    if state != 'drained' or str(cluster_id) in clusters:
+        return state
+    state = schedd_cluster_state(cluster_id, schedd, runner=runner)
+    if state in ('running', 'held'):
+        print(f"cluster {cluster_id}: missing from jobsub_q --user but "
+              f"{schedd} still holds it — that table missed the schedd",
+              flush=True)
+    return state
