@@ -574,5 +574,24 @@
             "*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "Ntuples of the Run 1A mixed COL5 calo-aimed flat gamma reco (reco.json PolyFlatGammaCaloMix1BB MDC2025bb_best_v1_5: 200 mcs files, about 4.5M events). Same settings as the MuCap tail mix ntuples, but 5 mcs files per job because each holds about 23k events: 40 jobs. Smoke 2026-11-08 on the 109-event reco smoke output: 0.006 s/event CPU, VmHWM 1.0 GB, 109/109 entries, all with calo hits, 11 kB/event; so about 15 min and 1.3 GB per job, about 50 GB in total. Push only after the reco campaign has stopped.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "PolyFlatGammaCaloMix1BB",
+        "tarball_append": "-nts",
+        "owner": "mu2e",
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "input_data": {
+            "mcs.mu2e.PolyFlatGammaCaloMix1BB.MDC2025bb_best_v1_5.art": 5
+        },
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.PolyFlatGammaCaloMix1BB.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     }
 ]

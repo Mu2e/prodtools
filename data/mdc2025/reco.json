@@ -686,5 +686,25 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Reco of the Run 1A Mix1BB of the MDC2025bb COL5 calo-aimed flat gamma (mix.json PolyFlatGammaCaloMix1BB), Michael MacKenzie's request. Same settings as the MuCap tail mix reco above. One dig file per job (about 23k events per file): 200 jobs. Smoke 2026-11-08 on the 109-event mix smoke output: 0.061 s/event CPU, VmHWM 1.1 GB, every event written, 48 kB/event; so about 25 min and 1.1 GB per job, about 220 GB in total. Push only after the mix campaign has stopped and the dig dataset is complete (200 files) with its SAM definition.",
+        "desc": "PolyFlatGammaCaloMix1BB",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "input_data": {
+            "dig.mu2e.PolyFlatGammaCaloMix1BB.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
     }
 ]

@@ -159,7 +159,7 @@
         ]
     },
     {
-        "_comment": "Run 1A Mix1BB of the MDC2025bb COL5 calo-aimed flat gamma (primary_muon.json PolyFlatGammaCalo, campaign 193), Michael MacKenzie's request, following Run 1B (PolyFlatGammaCaloMix1BB.Run1Baq/aw). Same pileup, conditions and standard Mix.fcl selection as the MuCapProtonTail/MuCapNeutronTailCalo mix above. One dts per job (about 63k events). Push only after the dts dataset is complete and has its SAM definition; it must finish before the ~2026-12-06 resilient purge.",
+        "_comment": "Run 1A Mix1BB of the MDC2025bb COL5 calo-aimed flat gamma (primary_muon.json PolyFlatGammaCalo, campaign 193), Michael MacKenzie's request, following Run 1B (PolyFlatGammaCaloMix1BB.Run1Baq/aw). Same pileup, conditions and standard Mix.fcl selection as the MuCapProtonTail/MuCapNeutronTailCalo mix above. One dts per job (about 63k events). Smoke 2026-11-07 on a landed campaign-193 file, 300 events: 109 kept (36%, mostly calo_photon), 0.27 s/event, VmHWM 1.1 GB, 537 kB per kept event; so ~4.7 h and ~12 GB per job, ~4.5M events and ~2.4 TB in total (Run 1B's Run1Baq mix: 45% kept, 178 kB/event, 0.93 TB). Push only after the dts dataset is complete and has its SAM definition; it must finish before the ~2026-12-06 resilient purge.",
         "input_data": [
             {
                 "dts.mu2e.PolyFlatGammaCalo.MDC2025bb.art": 1
