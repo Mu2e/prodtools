@@ -4593,7 +4593,8 @@ class TestPushLogsParents(unittest.TestCase):
 
     def test_cnf_makes_the_list_wanted_without_tracked_inputs(self):
         """track_parents=False but a cnf was declared: push_data wrote a
-        cnf-only parents_list.txt and the log names it too (ADR 0003)."""
+        cnf-only parents_list.txt and the log names it too (wiki decision
+        2026-09-11-cnf-tarball-declared-as-sam-parent)."""
         with tempfile.TemporaryDirectory() as d:
             parents = self._capture(d, log_file='log.mu2e.Y.MDC2025ar.7.log',
                                     track_parents=False, with_parents=True,
@@ -4903,7 +4904,8 @@ class TestPushDataExcludesInputs(unittest.TestCase):
                 (Path(d) / 'parents_list.txt').read_text(),
                 self.IN + '\n')
 
-    # -- ADR 0003: the cnf is a SAM parent of every output ----------------
+    # -- the cnf is a SAM parent of every output (wiki decision
+    #    2026-09-11-cnf-tarball-declared-as-sam-parent) -------------------
 
     CNF = 'cnf.mu2e.X.MDC2025au_best_v1_5.0.tar'
 

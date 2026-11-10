@@ -1,8 +1,14 @@
 ---
-status: superseded
+title: Exit codes harvested at tick time (superseded)
+tags: [decision, adr, superseded, submissions, verify_row, jobwait]
+sources: [docs-adr-0002]
+updated: 2026-11-10
 ---
 
-# Exit codes are harvested at tick time and persisted to the ledger
+# Exit codes harvested at tick time (superseded)
+
+**Status:** superseded 2026-08-28, never implemented.
+**Origin:** `docs/adr/0002-exit-codes-harvested-at-tick-time.md`, added 2026-08-28 (commit 0907f77); moved into the wiki on 2026-11-10, when `docs/adr/` was removed. The text below is the ADR unchanged.
 
 > **Superseded 2026-08-28 — never implemented.** SAM verification is the
 > completeness mechanism. See "Superseded by SAM verification" at the

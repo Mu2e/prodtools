@@ -1469,3 +1469,8 @@ Amended `2026-08-28-workers-run-prodtools-from-cvmfs-releases` (restored mechani
 ## [2026-11-08] ingest | Run 1A COL5 production week (campaigns 193–197)
 Pages written: 2026-11-08-run1a-col5-production-week, 2026-11-05-cnf-registered-before-input-check, 2026-11-08-push-downstream-only-when-upstream-stopped
 Pages updated: 2026-07-18-direct-recovery-loop (dated caveat: a wall-clock tail can be the node, so one same-seed retry is worth it), 2026-07-21-input-preflight-check (the gate ran after the push until PR #88), json2jobdef-staging-workflow, justin-vs-prodtools, 2026-08-20-jobwait-jobsub-history-drops-schedd (backlinks), index, overview
+
+## [2026-11-10] update | docs/adr moved into the wiki
+Pages written: 2026-08-28-chain-map-override-precedence, 2026-08-28-exit-codes-harvested-at-tick-time, 2026-09-11-cnf-tarball-declared-as-sam-parent (ADR text unchanged, frontmatter added)
+Pages updated: 2026-09-02-sim-epochs-design, 2026-07-18-direct-recovery-loop, 2026-08-20-jobwait-jobsub-history-drops-schedd (backlinks), index
+`docs/adr/` removed: the wiki's Decisions category is the one home for decision records. The code comments that cited "ADR 0003" now name the wiki page.

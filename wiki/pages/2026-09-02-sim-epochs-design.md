@@ -42,7 +42,7 @@ complete; `epochs gaps` exits 1 while one is owed.
 
 ## What prodtools still owes it
 
-- **ADR 0003 (in the new repo): declare the cnf as a SAM parent.**
+- **ADR 0003 (in the new repo; prodtools' copy is [[2026-09-11-cnf-tarball-declared-as-sam-parent]]): declare the cnf as a SAM parent.**
   `runmu2e` writes `parents_list.txt` from the input files only, so a
   new output's cnf is found through `data/epochs/cnf_index.json`
   instead of parentage. Appending the cnf name to `parents_list.txt`

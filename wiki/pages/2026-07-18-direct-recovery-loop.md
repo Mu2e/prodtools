@@ -729,3 +729,4 @@ Design: `docs/superpowers/specs/2026-08-01-draining-campaigns-design.md`.
   retirement; also records the "Decided against" ruling on a cross-path
   ownership key (see the Operator quickstart decision tree above for
   the interim mitigation)
+- [[2026-08-28-exit-codes-harvested-at-tick-time]] — the superseded plan to judge completeness from exit codes; SAM verification (`verify_row`) stayed the mechanism

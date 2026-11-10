@@ -1,8 +1,14 @@
 ---
-status: accepted (implemented 2026-09-11)
+title: The cnf tarball is declared as a SAM parent of every output
+tags: [decision, adr, runmu2e, sam-lineage, provenance, cnf]
+sources: [docs-adr-0003]
+updated: 2026-11-10
 ---
 
 # The cnf tarball is declared as a SAM parent of every output
+
+**Status:** accepted, implemented 2026-09-11.
+**Origin:** `docs/adr/0003-cnf-tarball-declared-as-sam-parent.md`, added 2026-09-11 (commit bea8e6f); moved into the wiki on 2026-11-10, when `docs/adr/` was removed. The text below is the ADR unchanged.
 
 SAM parentage records what data a file was made from (nts -> mcs -> dig
 -> dts) and nothing about what code made it: two ntuple generations
