@@ -15010,7 +15010,8 @@ class TestResamplerRereadGuard(unittest.TestCase):
     def test_refuses_physical_poly_pion_stops_on_disk(self):
         msg = self._refusal(self._cfg(5_000_000, 11_448))
         self.assertIn('437', msg)                 # the re-read count
-        self.assertIn('resilient', msg)           # names the fix
+        self.assertIn('merge factor', msg)        # names the fix
+        self.assertNotIn('copy_to_stash', msg)    # resilient is no fix
 
     def test_refuses_on_tape_too(self):
         self._refusal(self._cfg(5_000_000, 16_290, inloc='tape'))
@@ -15033,10 +15034,14 @@ class TestResamplerRereadGuard(unittest.TestCase):
             self._cfg(lim - 1, per_file)))
         self._refusal(self._cfg(lim, per_file))
 
-    def test_resilient_and_stash_inputs_pass(self):
-        for inloc in ('resilient', 'stash'):
-            self.assertIsNone(self.j.validate_resampler_reread(
-                self._cfg(5_000_000, 11_448, inloc=inloc)))
+    def test_resilient_input_is_refused(self):
+        # The 2026-11-10 reruns read from resilient and still stalled.
+        msg = self._refusal(self._cfg(5_000_000, 11_448, inloc='resilient'))
+        self.assertIn("inloc 'resilient'", msg)
+
+    def test_stash_input_passes(self):
+        self.assertIsNone(self.j.validate_resampler_reread(
+            self._cfg(5_000_000, 11_448, inloc='stash')))
 
     def test_dir_inloc_is_skipped(self):
         # dir: inputs carry no SAM count (no _max_events_to_skip).

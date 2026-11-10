@@ -491,8 +491,9 @@ def validate_era_agreement(config):
             f"intentional, add \"era_mismatch_ok\": \"<reason>\" to the entry.")
 
 # A resampler job re-reads its input file(s) `events / (files_per_job x
-# events_per_file)` times. Above this, with the input streamed from plain
-# dCache, a cheap stage's jobs wait on reads instead of computing.
+# events_per_file)` times. Above this, with the input streamed from dCache
+# (persistent, tape or resilient), a cheap stage's jobs wait on reads
+# instead of computing.
 REREAD_LIMIT = 50
 # Events per job are sized to a stage's cost, so this many marks a stage
 # at well under a millisecond per event: one that cannot hide its reads
@@ -500,12 +501,14 @@ REREAD_LIMIT = 50
 # runs at 1-2M per job and re-reads harmlessly, up to ~2400x for
 # RPCExternalPhysical.Run1Bah.
 CHEAP_STAGE_EVENTS = 2_000_000
-# Inputs that tolerate heavy concurrent re-reads: replicated dCache and CVMFS.
-_REREAD_SAFE_INLOCS = ('resilient', 'stash')
+# Inputs whose re-reads are served from the node's CVMFS cache. Resilient
+# dCache is NOT exempt: the 2026-11-10 PhysicalPolyPionStops reruns read
+# from resilient and most still ran at 14-16% CPU (see the docstring).
+_REREAD_SAFE_INLOCS = ('stash',)
 
 def validate_resampler_reread(config):
     """Refuse a resampler entry whose jobs would re-read a small input file
-    many times over from plain dCache disk or tape.
+    many times over from dCache (persistent disk, tape or resilient).
 
     PhysicalPolyPionStops.MDC2025bb (2026-11-09) drew 5M events per job from
     ~11k-event files, ~437 re-reads, streamed from persistent disk by 500
@@ -513,6 +516,11 @@ def validate_resampler_reread(config):
     limit. PhysicalPionStops.Run1Bap (2026-08-10, ~307 re-reads) lost
     239/500 the same way. A local smoke cannot show it (no contention), so
     it is predicted from SAM's counts here, before the cnf is pushed.
+
+    Moving the input to resilient does not cure it. The reruns of those
+    jobs (2026-11-10) read from resilient: 62 of 146 and 61 of 159 finished
+    in about an hour at 76-84% CPU, but the other 84 and 98 were still
+    running after 6 h at 14-16% CPU. The fix is fewer re-reads.
 
     Re-reads alone do not predict it: compute-heavy resamplers re-read
     harmlessly (RPC primaries up to ~2400x, CPU-bound on disk). What stalls
@@ -548,11 +556,12 @@ def validate_resampler_reread(config):
     sys.exit(
         f"json2jobdef: {config.get('desc')} would re-read its input {detail}; "
         f"a stage this cheap per event stalls on dCache reads above "
-        f"{REREAD_LIMIT}.\n"
-        f"  Stage the input to resilient (copy_to_stash --dest resilient) "
-        f"and set \"inloc\": \"resilient\", or concatenate it into fewer, "
-        f"larger files. If the re-reads are harmless (compute-heavy job), "
-        f"add \"reread_ok\": \"<reason>\" to the entry.")
+        f"{REREAD_LIMIT}, from resilient as well as persistent disk.\n"
+        f"  Lower the re-reads: give each job more input files (the "
+        f"input_data merge factor), concatenate the input into larger "
+        f"files, or draw fewer events per job. If the re-reads are "
+        f"harmless (compute-heavy job), add \"reread_ok\": \"<reason>\" "
+        f"to the entry.")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.
