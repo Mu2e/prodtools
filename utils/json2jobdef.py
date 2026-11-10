@@ -490,6 +490,79 @@ def validate_era_agreement(config):
             f"  Fix the dsconf or the Musing. If the cross-era pin is "
             f"intentional, add \"era_mismatch_ok\": \"<reason>\" to the entry.")
 
+# A resampler job re-reads its input file(s) `events / (files_per_job x
+# events_per_file)` times. Above this, with the input streamed from dCache
+# (persistent, tape or resilient), a cheap stage's jobs wait on reads
+# instead of computing.
+REREAD_LIMIT = 50
+# Events per job are sized to a stage's cost, so this many marks a stage
+# at well under a millisecond per event: one that cannot hide its reads
+# behind compute. Every Geant4-heavy resampler (RPC, RMC, STM, flat gamma)
+# runs at 1-2M per job and re-reads harmlessly, up to ~2400x for
+# RPCExternalPhysical.Run1Bah.
+CHEAP_STAGE_EVENTS = 2_000_000
+# Inputs whose re-reads are served from the node's CVMFS cache. Resilient
+# dCache is NOT exempt: the 2026-11-10 PhysicalPolyPionStops reruns read
+# from resilient and most still ran at 14-16% CPU (see the docstring).
+_REREAD_SAFE_INLOCS = ('stash',)
+
+def validate_resampler_reread(config):
+    """Refuse a resampler entry whose jobs would re-read a small input file
+    many times over from dCache (persistent disk, tape or resilient).
+
+    PhysicalPolyPionStops.MDC2025bb (2026-11-09) drew 5M events per job from
+    ~11k-event files, ~437 re-reads, streamed from persistent disk by 500
+    jobs at once: CPU was ~15% of wall time and 146/500 jobs hit the 24 h
+    limit. PhysicalPionStops.Run1Bap (2026-08-10, ~307 re-reads) lost
+    239/500 the same way. A local smoke cannot show it (no contention), so
+    it is predicted from SAM's counts here, before the cnf is pushed.
+
+    Moving the input to resilient does not cure it. The reruns of those
+    jobs (2026-11-10) read from resilient: 62 of 146 and 61 of 159 finished
+    in about an hour at 76-84% CPU, but the other 84 and 98 were still
+    running after 6 h at 14-16% CPU. The fix is fewer re-reads.
+
+    Re-reads alone do not predict it: compute-heavy resamplers re-read
+    harmlessly (RPC primaries up to ~2400x, CPU-bound on disk). What stalls
+    is a CHEAP stage re-reading heavily, and events per job is the proxy for
+    cheap (CHEAP_STAGE_EVENTS). Over data/ on 2026-11-10 the rule matches
+    exactly the four PhysicalPionStops / PhysicalPolyPionStops entries.
+    An entry that must exceed it states why:
+
+        "reread_ok": "<reason the re-reads are harmless here>"
+    """
+    if determine_job_type(config) != 'resampler':
+        return
+    inloc = str(config.get('inloc', ''))
+    if inloc in _REREAD_SAFE_INLOCS or _is_dir_inloc(config):
+        return
+    events = config.get('events')
+    per_file = config.get('_max_events_to_skip')   # mean events per input file
+    if not events or not per_file or events < CHEAP_STAGE_EVENTS:
+        return
+    files = calculate_merge_factor(config)
+    rereads = events / (files * per_file)
+    if rereads <= REREAD_LIMIT:
+        return
+    detail = (f"{rereads:.0f} times per job ({events} events from {files} "
+              f"file(s) of ~{per_file} events, inloc '{inloc}')")
+    reason = config.get('reread_ok')
+    if reason:
+        # The override is the only record of why this push went ahead, so
+        # say it in the push log rather than skipping silently.
+        print(f"json2jobdef: {config.get('desc')} re-reads its input {detail}, "
+              f"above the limit of {REREAD_LIMIT}; allowed by reread_ok: {reason}")
+        return
+    sys.exit(
+        f"json2jobdef: {config.get('desc')} would re-read its input {detail}; "
+        f"a stage this cheap per event stalls on dCache reads above "
+        f"{REREAD_LIMIT}, from resilient as well as persistent disk.\n"
+        f"  Lower the re-reads: give each job more input files (the "
+        f"input_data merge factor), concatenate the input into larger "
+        f"files, or draw fewer events per job. If the re-reads are "
+        f"harmless (compute-heavy job), add \"reread_ok\": \"<reason>\" "
+        f"to the entry.")
+
 def determine_job_type(config):
     """Determine the job type based on config contents.
 
@@ -1284,6 +1357,7 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
     # after it leaves a registered cnf with no campaign. The campaign is
     # created only after the push, so it never names a cnf SAM lacks.
     if enqueue:
+        validate_resampler_reread(config)
         from types import SimpleNamespace
         from utils.submit import (enqueue_entry, preflight_entry,
                                   _resolve_ledger_db)
