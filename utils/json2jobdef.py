@@ -528,24 +528,31 @@ def validate_resampler_reread(config):
     inloc = str(config.get('inloc', ''))
     if inloc in _REREAD_SAFE_INLOCS or _is_dir_inloc(config):
         return
-    if config.get('reread_ok'):
-        return
     events = config.get('events')
     per_file = config.get('_max_events_to_skip')   # mean events per input file
     if not events or not per_file or events < CHEAP_STAGE_EVENTS:
         return
     files = calculate_merge_factor(config)
     rereads = events / (files * per_file)
-    if rereads > REREAD_LIMIT:
-        sys.exit(
-            f"json2jobdef: {config.get('desc')} would re-read its input "
-            f"{rereads:.0f} times per job ({events} events from {files} "
-            f"file(s) of ~{per_file} events, inloc '{inloc}'); a stage this "
-            f"cheap per event stalls on dCache reads above {REREAD_LIMIT}.\n"
-            f"  Stage the input to resilient (copy_to_stash --dest resilient) "
-            f"and set \"inloc\": \"resilient\", or concatenate it into fewer, "
-            f"larger files. If the re-reads are harmless (compute-heavy job), "
-            f"add \"reread_ok\": \"<reason>\" to the entry.")
+    if rereads <= REREAD_LIMIT:
+        return
+    detail = (f"{rereads:.0f} times per job ({events} events from {files} "
+              f"file(s) of ~{per_file} events, inloc '{inloc}')")
+    reason = config.get('reread_ok')
+    if reason:
+        # The override is the only record of why this push went ahead, so
+        # say it in the push log rather than skipping silently.
+        print(f"json2jobdef: {config.get('desc')} re-reads its input {detail}, "
+              f"above the limit of {REREAD_LIMIT}; allowed by reread_ok: {reason}")
+        return
+    sys.exit(
+        f"json2jobdef: {config.get('desc')} would re-read its input {detail}; "
+        f"a stage this cheap per event stalls on dCache reads above "
+        f"{REREAD_LIMIT}.\n"
+        f"  Stage the input to resilient (copy_to_stash --dest resilient) "
+        f"and set \"inloc\": \"resilient\", or concatenate it into fewer, "
+        f"larger files. If the re-reads are harmless (compute-heavy job), "
+        f"add \"reread_ok\": \"<reason>\" to the entry.")
 
 def determine_job_type(config):
     """Determine the job type based on config contents.

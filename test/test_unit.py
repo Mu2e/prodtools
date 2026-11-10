@@ -15050,9 +15050,26 @@ class TestResamplerRereadGuard(unittest.TestCase):
             self._cfg(5_000_000, 11_448, merge=10)))
 
     def test_stated_reason_overrides(self):
-        self.assertIsNone(self.j.validate_resampler_reread(
-            self._cfg(5_000_000, 11_448,
-                      reread_ok='compute-heavy; measured CPU-bound')))
+        import io, contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertIsNone(self.j.validate_resampler_reread(
+                self._cfg(5_000_000, 11_448,
+                          reread_ok='compute-heavy; measured CPU-bound')))
+        # The override is logged with its reason and the re-read count.
+        self.assertIn('allowed by reread_ok: compute-heavy; measured CPU-bound',
+                      out.getvalue())
+        self.assertIn('437 times per job', out.getvalue())
+
+    def test_reason_is_silent_under_the_limit(self):
+        # An override on an entry the rule would pass anyway logs nothing.
+        import io, contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertIsNone(self.j.validate_resampler_reread(
+                self._cfg(5_000_000, 11_448, merge=10,
+                          reread_ok='not needed')))
+        self.assertEqual(out.getvalue(), '')
 
     def test_non_resampler_entry_is_ignored(self):
         cfg = self._cfg(5_000_000, 11_448)
