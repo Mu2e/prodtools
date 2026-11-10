@@ -14979,6 +14979,129 @@ class TestEnqueuePreflightBeforePush(unittest.TestCase):
         self.assertEqual(calls, ['check', 'push', 'create'])
 
 
+class TestResamplerRereadGuard(unittest.TestCase):
+    """A resampler job draws `events` from its input file(s); when a file
+    holds far fewer events, the job re-reads it many times over. With
+    the input streamed from plain dCache disk or tape and hundreds of
+    jobs reading at once, the jobs wait on reads instead of computing:
+    PhysicalPolyPionStops.MDC2025bb (2026-11-09) re-read each 11k-event
+    PiPolyStops file ~437 times per job and lost 146/500 jobs to the 24 h
+    limit; PhysicalPionStops.Run1Bap (2026-08-10, ~307 re-reads) lost
+    239/500. The enqueue path refuses such an entry before the push."""
+
+    def setUp(self):
+        from utils import json2jobdef
+        self.j = json2jobdef
+
+    def _cfg(self, events, per_file, inloc='disk', merge=1, **over):
+        cfg = {'desc': 'D', 'dsconf': 'C', 'fcl': 'a.fcl',
+               'resampler_name': 'StopResampler',
+               'input_data': {'sim.mu2e.PiPolyStops.MDC2025bb.art': merge},
+               'events': events, 'inloc': inloc,
+               '_max_events_to_skip': per_file}
+        cfg.update(over)
+        return cfg
+
+    def _refusal(self, cfg):
+        with self.assertRaises(SystemExit) as cm:
+            self.j.validate_resampler_reread(cfg)
+        return str(cm.exception)
+
+    def test_refuses_physical_poly_pion_stops_on_disk(self):
+        msg = self._refusal(self._cfg(5_000_000, 11_448))
+        self.assertIn('437', msg)                 # the re-read count
+        self.assertIn('resilient', msg)           # names the fix
+
+    def test_refuses_on_tape_too(self):
+        self._refusal(self._cfg(5_000_000, 16_290, inloc='tape'))
+
+    def test_passes_rpc_like_entry(self):
+        # RPCExternalPhysicalPoly: 1M draws from ~49k-event files, ~20x.
+        self.assertIsNone(self.j.validate_resampler_reread(
+            self._cfg(1_000_000, 49_146)))
+
+    def test_compute_heavy_stage_rereads_harmlessly(self):
+        # RPCExternalPhysical.MDC2025ac: 1M draws from ~1.2k-event files,
+        # ~836 re-reads, CPU-bound on disk. Under CHEAP_STAGE_EVENTS.
+        self.assertIsNone(self.j.validate_resampler_reread(
+            self._cfg(1_000_000, 1_196)))
+
+    def test_cheap_stage_boundary(self):
+        lim = self.j.CHEAP_STAGE_EVENTS
+        per_file = lim // 100                     # 100 re-reads at the limit
+        self.assertIsNone(self.j.validate_resampler_reread(
+            self._cfg(lim - 1, per_file)))
+        self._refusal(self._cfg(lim, per_file))
+
+    def test_resilient_and_stash_inputs_pass(self):
+        for inloc in ('resilient', 'stash'):
+            self.assertIsNone(self.j.validate_resampler_reread(
+                self._cfg(5_000_000, 11_448, inloc=inloc)))
+
+    def test_dir_inloc_is_skipped(self):
+        # dir: inputs carry no SAM count (no _max_events_to_skip).
+        cfg = self._cfg(5_000_000, None, inloc='dir:/some/path')
+        cfg.pop('_max_events_to_skip')
+        self.assertIsNone(self.j.validate_resampler_reread(cfg))
+
+    def test_files_per_job_divide_the_rereads(self):
+        # 10 files per job: 5e6 / (10 * 11448) ~ 44, under the limit.
+        self.assertIsNone(self.j.validate_resampler_reread(
+            self._cfg(5_000_000, 11_448, merge=10)))
+
+    def test_stated_reason_overrides(self):
+        self.assertIsNone(self.j.validate_resampler_reread(
+            self._cfg(5_000_000, 11_448,
+                      reread_ok='compute-heavy; measured CPU-bound')))
+
+    def test_non_resampler_entry_is_ignored(self):
+        cfg = self._cfg(5_000_000, 11_448)
+        cfg.pop('resampler_name')
+        self.assertIsNone(self.j.validate_resampler_reread(cfg))
+
+    def test_enqueue_refuses_before_the_push(self):
+        """Wired into --prod --enqueue ahead of the cnf push: a refused
+        entry registers nothing in SAM."""
+        from utils import json2jobdef
+        calls = []
+        cfg = {'desc': 'RereadDesc', 'dsconf': 'RereadConf',
+               'simjob_setup': 's', 'fcl': 'f.fcl', 'owner': 'mu2e',
+               'outloc': {'*.art': 'disk'}, 'inloc': 'disk', 'njobs': 5,
+               'resampler_name': 'StopResampler', 'events': 5_000_000,
+               'input_data': {'sim.mu2e.PiPolyStops.MDC2025bb.art': 1}}
+
+        def fake_build_args(config):
+            config['_max_events_to_skip'] = 11_448
+            return []
+
+        tmpdir, cwd = _mkdtemp(), os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            with patch.object(json2jobdef.shutil, 'which',
+                              return_value='/usr/bin/mu2e'), \
+                 patch.object(json2jobdef, '_create_inputs_file'), \
+                 patch.object(json2jobdef, '_build_job_args',
+                              side_effect=fake_build_args), \
+                 patch.object(json2jobdef, 'build_jobdef', return_value=None), \
+                 patch.object(json2jobdef, 'get_parfile_name',
+                              return_value='cnf.mu2e.RereadDesc.RereadConf.0.tar'), \
+                 patch.object(json2jobdef, '_pushout_to_sam',
+                              side_effect=lambda *a: calls.append('push')), \
+                 patch('utils.submit.preflight_entry',
+                       side_effect=lambda *a, **k: calls.append('preflight')), \
+                 patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
+                              return_value=True), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    json2jobdef.process_single_entry(
+                        cfg, pushout=True, no_cleanup=True, enqueue=True,
+                        slice_size=5, json_path='data/x.json',
+                        prodtools_dir=FAKE_PRODTOOLS_DIR)
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(calls, [])
+
+
 class TestEraAgreement(unittest.TestCase):
     """validate_era_agreement compares the era letters of a dsconf with
     those of the Musing that processes it. It must compare only when
