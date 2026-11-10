@@ -1,8 +1,8 @@
 ---
 title: Direct-backend recovery loop — ledger + submissions + cron
 tags: [decision, recovery, direct-backend, submit_map, operations, sliced-campaigns, draining-campaigns]
-sources: [docs/superpowers/specs/2026-07-18-direct-recovery-design.md, docs/superpowers/specs/2026-07-18-sliced-submission-design.md, docs/superpowers/specs/2026-07-19-workflow-hardening-design.md, docs/superpowers/specs/2026-08-01-draining-campaigns-design.md]
-updated: 2026-08-01
+sources: [docs/superpowers/specs/2026-07-18-direct-recovery-design.md, docs/superpowers/specs/2026-07-18-sliced-submission-design.md, docs/superpowers/specs/2026-07-19-workflow-hardening-design.md, docs/superpowers/specs/2026-08-01-draining-campaigns-design.md, 2026-11-08-run1a-col5-production-week]
+updated: 2026-11-08
 ---
 
 # Direct-backend recovery loop — ledger + submissions + cron
@@ -636,7 +636,17 @@ request) fails the same way every attempt. `exhausted` is therefore not
 a failure of the loop; it is the loop correctly recognizing that blind
 retry will not fix this and handing off to a human. Held jobs are never
 touched automatically — `condor_rm`/`condor_release`/`jobsub_rm` are
-always a human decision, reported but not acted on. Submissions made
+always a human decision, reported but not acted on.
+
+> **Caveat (2026-11-08).** "A wall-clock tail fails the same way every
+> attempt" holds only when the payload causes the tail. In campaigns 193
+> and 194 five jobs hit the 24 h limit (hold code 26) while their siblings
+> took ~2.5 h; after removing the held procs, the same-seed recoveries (at
+> the 4000 MB / 48 h floor) finished fast — 193's in under 6.3 h, the first
+> of 194's four in about 3.7 h. The node was the cause, so one same-seed retry is worth it before treating a tail as
+> systematic. See [[2026-11-08-run1a-col5-production-week]].
+
+Submissions made
 with `--no-ledger` (ad-hoc smoke tests, `/mu2ejobsub-submit`-style
 one-offs, anything explicitly opted out) are structurally invisible to
 this loop — there is no row to process, so no drain-check, no verify,

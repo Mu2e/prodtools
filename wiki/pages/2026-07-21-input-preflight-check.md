@@ -1,8 +1,8 @@
 ---
 title: Input pre-flight check — resilient size + tape prestage gate
 tags: [decision, check_inputs, submit_map, enqueue, resilient, prestage, mdh, data-handling, sliced-campaigns]
-sources: [docs/superpowers/specs/2026-07-21-input-preflight-check-design.md, docs/superpowers/plans/2026-07-21-input-preflight-check.md]
-updated: 2026-07-21
+sources: [docs/superpowers/specs/2026-07-21-input-preflight-check-design.md, docs/superpowers/plans/2026-07-21-input-preflight-check.md, 2026-11-08-run1a-col5-production-week]
+updated: 2026-11-08
 ---
 
 # Input pre-flight check — resilient size + tape prestage gate
@@ -54,7 +54,10 @@ unparseable result is a `query_error`, never assumed OK.
   detects `NEARLINE` and prints the `/prestage <dataset>` command.
 - **Enqueue gate, not per-tick.** `submit_map --enqueue` runs the check
   before writing a campaign row; a failing entry blocks with a grouped
-  report and **no campaign is created**. It does NOT run before every
+  report and **no campaign is created**. (Until PR #88, 2026-11-08, the
+  `--prod --enqueue` path pushed the cnf to SAM *before* this gate, so a
+  failure still left an orphan registered cnf — see
+  [[2026-11-05-cnf-registered-before-input-check]].) It does NOT run before every
   slice — a file purged *mid-campaign* is not caught by the gate. The
   runtime tape-fallback is the accepted safety net for that window, and
   the standalone `bin/check_inputs` is available to re-check by hand when

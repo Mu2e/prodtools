@@ -1,8 +1,8 @@
 ---
 title: Overview
 tags: [overview, synthesis]
-sources: [2026-04-21-pbi-sequence-implementation, 2026-05-19-run1bak-resampler-additions, 2026-05-22-mdc2025ap-rpcexternal-chain, 2026-05-23-mdc2025ap-pbarstgun-chain, 2026-06-07-run1ban-mustop-rebuild-chain]
-updated: 2026-06-07
+sources: [2026-04-21-pbi-sequence-implementation, 2026-05-19-run1bak-resampler-additions, 2026-05-22-mdc2025ap-rpcexternal-chain, 2026-05-23-mdc2025ap-pbarstgun-chain, 2026-06-07-run1ban-mustop-rebuild-chain, 2026-11-08-run1a-col5-production-week]
+updated: 2026-11-08
 ---
 
 # Mu2e prodtools — Operational Overview
@@ -53,6 +53,16 @@ A reference rule fell out of the RPC/Pbar work:
 `bfgeom_no_tsu_ps_v01.txt` as `fcl_overrides` since the include
 chain via `StopParticle.fcl:41` already sets it.
 
+**Operating the direct backend (2026-11).** Production now runs
+chains stage by stage through `push_cnf` + ledger ticks, and the week
+of [[2026-11-08-run1a-col5-production-week]] fixed three operating
+rules: push a stage only once the stage before it has stopped
+([[2026-11-08-push-downstream-only-when-upstream-stopped]]); a job held
+at the 24 h limit is often the node, so remove it and let one same-seed
+recovery run before calling the tail systematic; and the enqueue checks
+run before the cnf reaches SAM (PR #88, after
+[[2026-11-05-cnf-registered-before-input-check]]).
+
 ## Open Questions
 
 - **Scale test of `chunk_mode` at N ≫ 52 jobs** (first production
@@ -68,6 +78,10 @@ chain via `StopParticle.fcl:41` already sets it.
 
 ## Key Campaigns / Incidents / Decisions
 
+- [[2026-11-08-run1a-col5-production-week]] — Run 1A COL5 campaigns
+  193–197; straggler workflow, push-order fix, #83/#84 merged.
+- [[2026-11-08-push-downstream-only-when-upstream-stopped]] — the
+  stage-ordering rule for chains.
 - [[run1bak-campaign]] — first per-campaign page (Run1B family);
   records additive-bump pattern, +10 run-number cadence, and DS-off
   geometry pairing.

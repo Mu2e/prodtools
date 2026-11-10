@@ -2,7 +2,7 @@
 title: justIN vs prodtools — workflow-model comparison
 tags: [reference, justin, workflow, architecture]
 sources: [dunejustin-docs]
-updated: 2026-07-07
+updated: 2026-11-08
 ---
 
 # justIN vs prodtools — workflow-model comparison
@@ -153,3 +153,4 @@ one module, not forty call sites.
   submit path justIN would subsume
 - [[metacat-reference]] — the metadata half of the DUNE stack
 - [[poms-reference]] — the system justIN replaces in spirit
+- [[2026-11-08-push-downstream-only-when-upstream-stopped]] — why prodtools waits for a stage to stop rather than push on a partial input and `--extend` later (the frozen-cnf-list trade-off above)

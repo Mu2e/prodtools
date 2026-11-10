@@ -112,7 +112,7 @@ You are given `$ARGUMENTS`. Follow these steps:
      && muse setup ops \
      && muse setup SimJob <MUSING_VERSION> \
      && setup OfflineOps \
-     && bash <REPO>/bin/<command> <CMD_ARGS>
+     && <REPO>/bin/<command> <CMD_ARGS>
    RC=$?
    echo "=== artifacts ==="
    ls -la "$WORKDIR"
@@ -131,7 +131,7 @@ You are given `$ARGUMENTS`. Follow these steps:
      && muse setup ops \
      && source /cvmfs/mu2e.opensciencegrid.org/Musings/<MUSING>/<MUSING_VERSION>/setup.sh \
      && setup OfflineOps \
-     && bash <REPO>/bin/<command> <CMD_ARGS>
+     && <REPO>/bin/<command> <CMD_ARGS>
    RC=$?
    echo "=== artifacts ==="
    ls -la "$WORKDIR"

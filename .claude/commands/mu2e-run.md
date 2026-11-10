@@ -46,7 +46,7 @@ You are given `$ARGUMENTS`. Follow these steps:
      && getToken > /dev/null \
      && muse setup ops \
      && muse setup SimJob <MUSING_VERSION> \
-     && bash bin/<command> <remaining-args>
+     && bin/<command> <remaining-args>
    ```
 
    For any other Musing (sourced directly — works for AnalysisMDC2025 and other non-SimJob musings):
@@ -55,7 +55,7 @@ You are given `$ARGUMENTS`. Follow these steps:
      && getToken > /dev/null \
      && muse setup ops \
      && source /cvmfs/mu2e.opensciencegrid.org/Musings/<MUSING>/<MUSING_VERSION>/setup.sh \
-     && bash bin/<command> <remaining-args>
+     && bin/<command> <remaining-args>
    ```
 
    `getToken` (on PATH directly after `setupmu2e-art.sh`, before `muse setup ops`) refreshes the user's bearer token at `/run/user/$UID/bt_u$UID` so xrootd reads from dCache `/pnfs/...` work in `mu2e -c` smokes against `inloc: disk` or `tape` entries. Without it, you get `Auth failed: No protocols left to try` from `TNetXNGFile::Open`.
