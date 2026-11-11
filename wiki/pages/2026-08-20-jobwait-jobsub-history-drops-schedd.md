@@ -82,3 +82,4 @@ next release.
 - [[2026-04-30-phase2-direct-jobsub-implementation]] — same direction
   of travel: bypass wrappers, drive condor/jobsub primitives directly.
 - [[2026-11-08-run1a-col5-production-week]] — same wrong-schedd family: PRs #83/#84 (merged 2026-11-08) make the tick and jobwait confirm a "drained" cluster with its own schedd
+- [[2026-08-28-exit-codes-harvested-at-tick-time]] — why `jobwait.collect_exit_codes` has no caller: the exit-code harvest was superseded by SAM verification

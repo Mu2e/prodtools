@@ -1,8 +1,14 @@
 ---
-status: accepted
+title: Chain-map overrides apply before the campaign common.json overlay
+tags: [decision, adr, json2jobdef, chain-map, common-json]
+sources: [docs-adr-0001]
+updated: 2026-11-10
 ---
 
 # Chain-map overrides apply before the campaign common.json overlay
+
+**Status:** accepted.
+**Origin:** `docs/adr/0001-chain-map-override-precedence.md`, added 2026-08-28 (commit 0907f77); moved into the wiki on 2026-11-10, when `docs/adr/` was removed. The text below is the ADR unchanged.
 
 A chain map may override any field of the Entry it points at, which puts
 it in direct conflict with `json2jobdef.apply_common_overlay`: that

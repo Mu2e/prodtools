@@ -353,7 +353,7 @@ def push_data(outputs, infiles, simjob_setup=None, track_parents=True, cnf=""):
     otherwise.
 
     `cnf` is the SAM name of the job's cnf tarball, declared as a parent
-    of every output alongside the inputs (ADR 0003): SAM lineage then
+    of every output alongside the inputs (wiki/pages/2026-09-11-cnf-tarball-declared-as-sam-parent.md): SAM lineage then
     says what CODE made a file, not only what data. It is always
     SAM-registered — json2jobdef --prod and the self-owned path push it
     before any job runs — so it is a parent even when the inputs are
@@ -778,7 +778,8 @@ class JobRun(NamedTuple):
                    worker bootstrap's own OfflineOps (g4bl)
     track_parents  whether infiles are SAM-registered parents
     cnf            SAM name of the job's cnf tarball, declared as a parent
-                   of every output and of the log (ADR 0003); "" = none
+                   of every output and of the log (wiki decision
+                   2026-09-11-cnf-tarball-declared-as-sam-parent); "" = none
     """
     outputs: list
     log_file: str

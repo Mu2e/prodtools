@@ -62,7 +62,6 @@ the newest MDC2025 release, fifteen minutes, nothing to edit.
 | `mcp/` | the read-only and write MCP servers |
 | `EXAMPLES.md` | CLI reference, regenerated from the code |
 | `CONTEXT.md` | glossary: tier, hop, stage, campaign, entry |
-| `docs/adr/` | decisions and why they were made |
 | `wiki/` | operational knowledge: campaigns, incidents, runbooks |
 | `test/` | unit suite: `cd test && python3 -m unittest test_unit` (two MCP cases skip without `mcp/.venv`) |
 
