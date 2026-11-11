@@ -292,7 +292,15 @@ When regenerating, read in this order:
       code-mode cnf (nothing printed for an ordinary Musing cnf). Do
       NOT document `--extract-code` — it was removed (it extracted any
       tar member ending in `.tar`, which under sidecar delivery is not
-      code at all).
+      code at all). Cover that the positional argument may also be a
+      dataset, a file of one, or a cnf name instead of a local tarball:
+      `jobquery --setup nts.mu2e.CosmicSignalOffSpill-LH.MDC2025au_best_v1_1.root`
+      answers "which Musing made this dataset" in one command. The cnf
+      comes from SAM (the cnf parent of one output file, else a match by
+      name, shared with `fcldump` through `jobdef_lookup.cnf_for_dataset`),
+      its path goes to stderr so stdout stays the answer, and no token is
+      needed. A name with no files in SAM that only a generic cnf matches
+      is refused instead of answered.
     - `jobwait` — one-line role ("block until a submitted cluster
       leaves the queue, then record how every job ended"). Cover:
       `--jobdef` and `--cluster` (required; the cluster id ideally

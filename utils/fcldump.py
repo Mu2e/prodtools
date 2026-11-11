@@ -9,7 +9,7 @@ from utils.job_common import Mu2eName
 from utils.jobfcl import Mu2eJobFCL
 # Dataset->cnf resolution lives in jobdef_lookup so other tools (e.g.
 # latestDatasets --complete-only) can reuse it without this entry point.
-from utils.jobdef_lookup import (list_jobdefs, find_matching_jobdef, set_verbose,
+from utils.jobdef_lookup import (list_jobdefs, cnf_for_dataset, set_verbose,
                                  is_generic_cnf, derive_generic_input,
                                  sample_dataset_target)
 
@@ -71,17 +71,10 @@ def main():
         except ValueError:
             p.error(f"Invalid dataset: {source}")
 
-        input_type = src.tier  # e.g., 'dig', 'sim', 'mcs'
-        dsconf = src.dsconf
-        desc = src.description
-
-        jobdefs = list_jobdefs(dsconf)
-        if not jobdefs:
-            p.error(f"No job definitions found for dsconf: {dsconf}")
-        
-        tarball_path = find_matching_jobdef(jobdefs, desc, input_type)
-        if not tarball_path:
-            p.error(f"No matching job definition found for source description: {desc}")
+        try:
+            tarball_path = cnf_for_dataset(source)
+        except (LookupError, RuntimeError) as e:
+            p.error(str(e))
 
         # generic cnf defers {desc}/sequencer to runtime: derive from --target
         # if given, else a bare --dataset has no sequencer — report, don't crash
