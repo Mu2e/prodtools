@@ -3,15 +3,19 @@
 produced it, and read ground-truth facts (e.g. njobs) from that cnf.
 
 Extracted from ``fcldump`` so other tools (e.g. ``latestDatasets
---complete-only``) can reuse it without importing the fcldump entry point.
+--complete-only``, ``jobquery``) can reuse it without importing the fcldump
+entry point. ``cnf_for_dataset`` is the one entry point from a name to a cnf
+path; ``cnf_path`` adds "or an existing local file" for command-line args.
 
 All diagnostics go to **stderr** so callers emitting machine-readable output
 on stdout (config JSON, dataset lists) stay clean.
 
-The cnf is NOT in SAM data lineage, so the mapping is by name: a fast 1:1 cnf
-desc match, then a fallback that scans the dsconf's cnfs and matches on each
-cnf's *declared* outputs (handles the suffixed-output case, e.g. cnf desc
-``CeEndpoint`` produces ``dig.mu2e.CeEndpointOnSpillTriggerable.*``). See
+Outputs pushed since 2026-09-11 list their cnf as a SAM parent, and
+``cnf_for_dataset`` uses that when it can. Older outputs carry no cnf in SAM
+lineage, so the fallback mapping is by name: a fast 1:1 cnf desc match, then a
+scan of the dsconf's cnfs matching on each cnf's *declared* outputs (handles
+the suffixed-output case, e.g. cnf desc ``CeEndpoint`` produces
+``dig.mu2e.CeEndpointOnSpillTriggerable.*``). See
 ``reference_cnf_to_output_desc_mismatch``.
 """
 
@@ -263,6 +267,89 @@ def locate_tarball(jobdef):
 
     _log(f"Found tarball at: {tarball_path}")
     return tarball_path
+
+
+def _cnf_dataset_name(cnf):
+    """``cnf.owner.desc.dsconf.tar`` for a parsed cnf name, with or without index."""
+    return f"cnf.{cnf.owner}.{cnf.description}.{cnf.dsconf}.tar"
+
+
+def _sample_file(src, name):
+    """One file name standing for ``name``: the name itself when it is a file,
+    else the first file SAM lists for the dataset, or None when it has none."""
+    if src.is_file:
+        return name
+    from utils.samweb_wrapper import list_files
+    files = list_files(f"dh.dataset {name} with limit 1")
+    return files[0] if files else None
+
+
+def _cnf_parent(filename):
+    """The cnf SAM records as a parent of ``filename``, or None.
+
+    Outputs pushed since 2026-09-11 list their cnf as a SAM parent (wiki:
+    2026-09-11-cnf-tarball-declared-as-sam-parent); older outputs, and files
+    SAM does not know (e.g. a failed job's --target), have none."""
+    from utils.samweb_wrapper import file_lineage, FileNotFound
+    try:
+        parents = file_lineage(filename, 'parents')
+    except FileNotFound:
+        return None
+    return next((p for p in parents if p.startswith('cnf.')), None)
+
+
+def cnf_for_dataset(name):
+    """Return the readable path of the cnf tarball behind ``name``.
+
+    ``name`` may be an output dataset (``nts.mu2e.X.Y.root``), one file of it
+    (``nts.mu2e.X.Y.001430_00000292.root``), or a cnf itself
+    (``cnf.mu2e.X.Y.tar`` or ``cnf.mu2e.X.Y.0.tar``). In order:
+      1. a cnf name is located directly;
+      2. the cnf SAM records as a parent of one file of the output;
+      3. otherwise the cnf matched by name (``find_matching_jobdef``). A
+         generic cnf matches any desc, so it is refused when the output has
+         no files in SAM: a mistyped dataset must not get a confident answer.
+
+    Raises ValueError when ``name`` is not a Mu2e name, LookupError when no
+    cnf matches, and RuntimeError (from ``locate_tarball``) when the matched
+    cnf cannot be read.
+    """
+    src = Mu2eName.parse(name)
+    if src.tier == 'cnf':
+        return locate_tarball(_cnf_dataset_name(src))
+
+    sample = _sample_file(src, name)
+    parent = _cnf_parent(sample) if sample else None
+    if parent:
+        _log(f"SAM lists {parent} as a parent of {sample}")
+        return locate_tarball(_cnf_dataset_name(Mu2eName.parse(parent)))
+
+    jobdefs = list_jobdefs(src.dsconf)
+    if not jobdefs:
+        raise LookupError(f"No job definitions found for dsconf: {src.dsconf}")
+    tarball_path = find_matching_jobdef(jobdefs, src.description, src.tier)
+    if not tarball_path:
+        raise LookupError(
+            f"No matching job definition found for source description: {src.description}")
+    if sample is None and is_generic_cnf(tarball_path):
+        raise LookupError(
+            f"{name} has no files in SAM and only a generic cnf matches its name "
+            f"({tarball_path}); check the dataset name")
+    return tarball_path
+
+
+def cnf_path(arg):
+    """Local cnf path for a command-line argument: an existing file as given,
+    else the cnf behind a dataset, file or cnf name (``cnf_for_dataset``).
+
+    Raises FileNotFoundError for a missing path (anything containing a path
+    separator is a path, not a SAM name), plus whatever ``cnf_for_dataset``
+    raises."""
+    if os.path.exists(arg):
+        return arg
+    if os.sep in arg:
+        raise FileNotFoundError(arg)
+    return cnf_for_dataset(arg)
 
 
 def output_njobs_map(dsconf):

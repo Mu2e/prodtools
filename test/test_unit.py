@@ -2333,6 +2333,242 @@ def _perdesc_mcs_jobpars(desc='CeEndpoint', dsconf='TestConf'):
     }
 
 
+class TestCnfForDataset(unittest.TestCase):
+    """cnf_for_dataset maps a dataset, a file of one, or a cnf name to the cnf
+    tarball path; jobquery and fcldump both go through it."""
+
+    def _no_lineage(self, sample=None):
+        """Patch SAM away: the output has ``sample`` as its one file (None =
+        no files) and SAM records no cnf parent for it."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        return (patch.object(jobdef_lookup, '_sample_file', return_value=sample),
+                patch.object(jobdef_lookup, '_cnf_parent', return_value=None))
+
+    def test_sam_parent_cnf_wins(self):
+        """When SAM lists a cnf parent for a file of the output, that cnf is
+        the answer and the by-name search never runs."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        f = 'nts.mu2e.X-LH.Conf.001430_00000292.root'
+        with patch.object(jobdef_lookup, '_sample_file', return_value=f), \
+             patch.object(jobdef_lookup, '_cnf_parent',
+                          return_value='cnf.mu2e.X-LH.Conf.0.tar') as cp, \
+             patch.object(jobdef_lookup, 'locate_tarball', return_value='/p.tar') as lt, \
+             patch.object(jobdef_lookup, 'list_jobdefs') as lj:
+            got = jobdef_lookup.cnf_for_dataset('nts.mu2e.X-LH.Conf.root')
+        self.assertEqual(got, '/p.tar')
+        cp.assert_called_once_with(f)
+        lt.assert_called_once_with('cnf.mu2e.X-LH.Conf.tar')
+        lj.assert_not_called()
+
+    def test_dataset_without_lineage_is_matched_by_desc_and_tier(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        defs = ['cnf.mu2e.X-LH.Conf.tar', 'cnf.mu2e.X-reco.Conf.tar']
+        sf, cp = self._no_lineage(sample='nts.mu2e.X-LH.Conf.001430_00000001.root')
+        with sf, cp, \
+             patch.object(jobdef_lookup, 'list_jobdefs', return_value=defs) as lj, \
+             patch.object(jobdef_lookup, 'find_matching_jobdef',
+                          return_value='/pnfs/x/cnf.mu2e.X-LH.Conf.0.tar') as fm:
+            got = jobdef_lookup.cnf_for_dataset('nts.mu2e.X-LH.Conf.root')
+        self.assertEqual(got, '/pnfs/x/cnf.mu2e.X-LH.Conf.0.tar')
+        lj.assert_called_once_with('Conf')
+        fm.assert_called_once_with(defs, 'X-LH', 'nts')
+
+    def test_file_name_resolves_like_its_dataset(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        sf, cp = self._no_lineage(sample='nts.mu2e.X-LH.Conf.001430_00000292.root')
+        with sf, cp, patch.object(jobdef_lookup, 'list_jobdefs', return_value=['c']), \
+             patch.object(jobdef_lookup, 'find_matching_jobdef',
+                          return_value='/p.tar') as fm, \
+             patch.object(jobdef_lookup, 'is_generic_cnf', return_value=False):
+            jobdef_lookup.cnf_for_dataset('nts.mu2e.X-LH.Conf.001430_00000292.root')
+        fm.assert_called_once_with(['c'], 'X-LH', 'nts')
+
+    def test_generic_match_for_dataset_without_files_is_refused(self):
+        """A generic cnf matches any desc, so a mistyped dataset (no files in
+        SAM) would get that cnf's musing as a confident wrong answer."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        sf, cp = self._no_lineage(sample=None)
+        with sf, cp, patch.object(jobdef_lookup, 'list_jobdefs', return_value=['c']), \
+             patch.object(jobdef_lookup, 'find_matching_jobdef', return_value='/evnt.tar'), \
+             patch.object(jobdef_lookup, 'is_generic_cnf', return_value=True):
+            with self.assertRaisesRegex(LookupError, 'no files in SAM .*generic cnf'):
+                jobdef_lookup.cnf_for_dataset('nts.mu2e.NoSuch.Conf.root')
+
+    def test_exact_match_for_dataset_without_files_is_kept(self):
+        """A cnf pushed before any output exists still resolves by name
+        (fcldump is used that way to inspect a fresh cnf)."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        sf, cp = self._no_lineage(sample=None)
+        with sf, cp, patch.object(jobdef_lookup, 'list_jobdefs', return_value=['c']), \
+             patch.object(jobdef_lookup, 'find_matching_jobdef', return_value='/x.tar'), \
+             patch.object(jobdef_lookup, 'is_generic_cnf', return_value=False):
+            self.assertEqual(jobdef_lookup.cnf_for_dataset('nts.mu2e.X.Conf.root'), '/x.tar')
+
+    def test_cnf_parent_is_none_for_file_sam_does_not_know(self):
+        """fcldump --target may name a failed job's output, which SAM never saw."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup, samweb_wrapper
+        with patch.object(samweb_wrapper, 'file_lineage',
+                          side_effect=samweb_wrapper.FileNotFound('no such file')):
+            self.assertIsNone(jobdef_lookup._cnf_parent('dig.mu2e.X.Conf.001430_00000428.art'))
+        with patch.object(samweb_wrapper, 'file_lineage',
+                          return_value=['mcs.mu2e.X.Conf.001430_00000428.art',
+                                        'cnf.mu2e.X-LH.Conf.0.tar']):
+            self.assertEqual(jobdef_lookup._cnf_parent('nts.mu2e.X-LH.Conf.001430_00000428.root'),
+                             'cnf.mu2e.X-LH.Conf.0.tar')
+
+    def test_cnf_path_existing_file_is_returned_as_given(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        tar = _make_tarball(_perdesc_mcs_jobpars())
+        try:
+            with patch.object(jobdef_lookup, 'cnf_for_dataset') as cfd:
+                self.assertEqual(jobdef_lookup.cnf_path(tar), tar)
+            cfd.assert_not_called()
+        finally:
+            os.unlink(tar)
+
+    def test_cnf_path_missing_path_raises_without_sam(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        with patch.object(jobdef_lookup, 'cnf_for_dataset') as cfd:
+            with self.assertRaises(FileNotFoundError):
+                jobdef_lookup.cnf_path('/no/such/cnf.mu2e.X.Conf.0.tar')
+        cfd.assert_not_called()
+
+    def test_cnf_name_is_located_directly(self):
+        """A cnf name skips the output match (which could never match tier
+        'cnf') and locates the cnf dataset itself."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        for name in ('cnf.mu2e.X-LH.Conf.0.tar', 'cnf.mu2e.X-LH.Conf.tar'):
+            with patch.object(jobdef_lookup, 'locate_tarball',
+                              return_value='/p.tar') as lt, \
+                 patch.object(jobdef_lookup, 'list_jobdefs') as lj:
+                self.assertEqual(jobdef_lookup.cnf_for_dataset(name), '/p.tar')
+            lt.assert_called_once_with('cnf.mu2e.X-LH.Conf.tar')
+            lj.assert_not_called()
+
+    def test_no_cnfs_at_dsconf_raises(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        sf, cp = self._no_lineage()
+        with sf, cp, patch.object(jobdef_lookup, 'list_jobdefs', return_value=[]):
+            with self.assertRaisesRegex(LookupError, 'No job definitions found for dsconf: Conf'):
+                jobdef_lookup.cnf_for_dataset('nts.mu2e.X-LH.Conf.root')
+
+    def test_no_match_raises(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        sf, cp = self._no_lineage()
+        with sf, cp, patch.object(jobdef_lookup, 'list_jobdefs', return_value=['c']), \
+             patch.object(jobdef_lookup, 'find_matching_jobdef', return_value=None):
+            with self.assertRaisesRegex(LookupError, 'source description: X-LH'):
+                jobdef_lookup.cnf_for_dataset('nts.mu2e.X-LH.Conf.root')
+
+    def test_not_a_mu2e_name_raises_valueerror(self):
+        from utils import jobdef_lookup
+        with self.assertRaises(ValueError):
+            jobdef_lookup.cnf_for_dataset('not-a-name.tar')
+
+    def _run_jobquery(self, argv):
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        from unittest.mock import patch
+        from utils import jobquery
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with patch.object(sys, 'argv', ['jobquery'] + argv), \
+             redirect_stdout(out), redirect_stderr(err):
+            try:
+                jobquery.main()
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_jobquery_setup_from_dataset_name(self):
+        """jobquery --setup <dataset> prints the musing of the producing cnf;
+        the resolved cnf path goes to stderr so stdout stays one line."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        tar = _make_tarball(_perdesc_mcs_jobpars(desc='X-LH', dsconf='Conf'))
+        try:
+            with patch.object(jobdef_lookup, 'cnf_for_dataset', return_value=tar) as cfd:
+                code, out, err = self._run_jobquery(['--setup', 'nts.mu2e.X-LH.Conf.root'])
+            cfd.assert_called_once_with('nts.mu2e.X-LH.Conf.root')
+            self.assertEqual(code, 0)
+            self.assertEqual(out.strip(),
+                             '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/Conf/setup.sh')
+            self.assertIn(f'cnf: {tar}', err)
+        finally:
+            os.unlink(tar)
+
+    def test_jobquery_local_file_skips_sam(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        tar = _make_tarball(_perdesc_mcs_jobpars(desc='X-LH', dsconf='Conf'))
+        try:
+            with patch.object(jobdef_lookup, 'cnf_for_dataset') as cfd:
+                code, out, _ = self._run_jobquery(['--njobs', tar])
+            cfd.assert_not_called()
+            self.assertEqual(code, 0)
+        finally:
+            os.unlink(tar)
+
+    def test_jobquery_missing_path_fails_without_sam(self):
+        """A path that does not exist is a typo, not a SAM name."""
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        with patch.object(jobdef_lookup, 'cnf_for_dataset') as cfd:
+            code, out, _ = self._run_jobquery(['--setup', '/no/such/cnf.mu2e.X.Conf.0.tar'])
+        cfd.assert_not_called()
+        self.assertEqual(code, 1)
+        self.assertIn('File not found: /no/such/cnf.mu2e.X.Conf.0.tar', out)
+
+    def test_jobquery_unresolvable_name_fails_loudly(self):
+        from unittest.mock import patch
+        from utils import jobdef_lookup
+        with patch.object(jobdef_lookup, 'cnf_for_dataset',
+                          side_effect=LookupError('No job definitions found for dsconf: Conf')):
+            code, out, _ = self._run_jobquery(['--setup', 'nts.mu2e.X-LH.Conf.root'])
+        self.assertEqual(code, 1)
+        self.assertIn('no cnf found for nts.mu2e.X-LH.Conf.root', out)
+
+    def test_fcldump_cnf_dataset_writes_that_cnf(self):
+        """fcldump --dataset cnf.mu2e.X.Y.tar (its documented example) used to
+        fail with 'No matching job definition'; it now dumps that cnf."""
+        from unittest.mock import patch
+        from utils import fcldump
+        with patch.object(sys, 'argv', ['fcldump', '--dataset', 'cnf.mu2e.X-LH.Conf.tar']), \
+             patch.object(fcldump, 'cnf_for_dataset', return_value='/p.tar') as cfd, \
+             patch.object(fcldump, 'is_generic_cnf', return_value=False), \
+             patch.object(fcldump, 'write_fcl') as wf:
+            fcldump.main()
+        cfd.assert_called_once_with('cnf.mu2e.X-LH.Conf.tar')
+        wf.assert_called_once_with('/p.tar', 'tape', 'root', 0, None)
+
+    def test_fcldump_lookup_error_is_a_usage_error(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest.mock import patch
+        from utils import fcldump
+        err = io.StringIO()
+        with patch.object(sys, 'argv', ['fcldump', '--dataset', 'nts.mu2e.X-LH.Conf.root']), \
+             patch.object(fcldump, 'cnf_for_dataset',
+                          side_effect=LookupError('No matching job definition found for source description: X-LH')), \
+             redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                fcldump.main()
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn('No matching job definition found for source description: X-LH', err.getvalue())
+
+
 class TestGenericCnfDiscovery(unittest.TestCase):
     """A generic cnf (output desc deferred as {desc}) must be discoverable by
     the dataset->cnf matcher as a LAST resort: exact per-desc cnfs always win,

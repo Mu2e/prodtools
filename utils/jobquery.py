@@ -180,9 +180,12 @@ def usage():
     return f"""
 Usage:
     {script_name} [-h|--help] <query> cnf.tar
+    {script_name} [-h|--help] <query> <dataset, file or cnf name>
 
 This script extracts and prints out information from the job parameter
-file cnf.tar. The possible queries are:
+file cnf.tar. Given a name that is not a local file, it looks up the cnf
+that produced that dataset or file in SAM first (the path goes to stderr).
+The possible queries are:
 
     --jobname     The name of the job set.
     --njobs       The number of jobs in the set, zero means unlimited.
@@ -240,7 +243,9 @@ def main():
     parser.add_argument('--recipe', action='store_true',
                         help='Build config: setup, njobs, output patterns, and the '
                              'embedded mu2e.fcl (json2jobdef fcl + fcl_overrides)')
-    parser.add_argument('parfile', help='Job parameter file (.tar)')
+    parser.add_argument('parfile',
+                        help='Job parameter file (.tar), or a dataset, file or cnf '
+                             'name whose cnf is looked up in SAM')
 
     args = parser.parse_args()
 
@@ -253,12 +258,21 @@ def main():
         print(usage())
         sys.exit(1)
 
-    if not os.path.exists(args.parfile):
+    # Lazy: jobdef_lookup imports this module's Mu2eJobPars.
+    from utils.jobdef_lookup import cnf_path
+    try:
+        parfile = cnf_path(args.parfile)
+    except (FileNotFoundError, ValueError):
         print(f"Error: File not found: {args.parfile}")
         sys.exit(1)
-    
+    except (LookupError, RuntimeError) as e:
+        print(f"Error: no cnf found for {args.parfile}: {e}")
+        sys.exit(1)
+    if parfile != args.parfile:
+        print(f"cnf: {parfile}", file=sys.stderr)
+
     try:
-        jp = Mu2eJobPars(args.parfile)
+        jp = Mu2eJobPars(parfile)
 
         dispatch = {
             'jobname':         lambda: print(jp.jobname()),
