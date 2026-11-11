@@ -260,7 +260,11 @@ def create_mcp_server():
                           'name without ".tar". Say whose run: '
                           'user="<login>", or mine=true on your own stdio '
                           'server. state="unknown" is never a failure and '
-                          'never a success.')
+                          'never a success. A failed job\'s exit_codes '
+                          'value is not always a positive int: -N means '
+                          'killed by signal N, and "removed" means it was '
+                          'removed (condor_rm, jobsub_rm or a '
+                          'periodic_remove policy); both count as failed.')
     def run_status(name: str, mine: bool = False,
                    user: Optional[str] = None) -> dict:
         return TOOL_FUNCTIONS['run_status'](name=name, mine=mine, user=user)
