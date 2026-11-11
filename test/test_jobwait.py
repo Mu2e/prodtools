@@ -102,6 +102,19 @@ def _condor_q_reply(schedd, idle=0, running=0, held=0):
         '3847 running, 103 held, 0 suspended', '']) + '\n'
 
 
+def _hist(*rows):
+    """condor_history `-af ProcId ExitCode JobStatus ExitBySignal
+    ExitSignal` rows. A (proc, rc) pair is a job that completed (status
+    4) with exit code rc; a five-tuple gives every field as condor
+    prints it."""
+    lines = []
+    for row in rows:
+        if len(row) == 2:
+            row = (row[0], row[1], 4, 'false', 'undefined')
+        lines.append(' '.join(str(f) for f in row))
+    return '\n'.join(lines) + '\n'
+
+
 class FakeGrid:
     """Injected `runner`: scripted jobsub_q replies, condor_q drain
     confirmations, and one history reply.
@@ -245,24 +258,75 @@ class TestWaitForDrain(unittest.TestCase):
 class TestCollectExitCodes(unittest.TestCase):
 
     def test_rows_parsed_header_skipped(self):
-        grid = FakeGrid([], history_stdout=f"0 0\n1 84\n\n{_HEADER}\n")
+        grid = FakeGrid([], history_stdout=_hist((0, 0), (1, 84))
+                        + f"\n{_HEADER}\n")
         codes = collect_exit_codes('777@s', 2, runner=grid, log=QUIET)
         self.assertEqual(codes, {0: 0, 1: 84})
 
-    def test_undefined_exitcode_stays_unknown(self):
-        # Removed jobs / exited-by-signal have no ExitCode attribute;
-        # condor prints 'undefined'. That proc must not appear at all —
-        # absent is what the caller reports as unknown.
-        grid = FakeGrid([], history_stdout="0 0\n1 undefined\n")
+    def test_removed_job_is_failed_not_unknown(self):
+        # Mu2e/prodtools#93, rows as condor printed them for cluster
+        # 87467970@jobsub01 (2026-11-11): three jobs removed with
+        # condor_rm have no ExitCode, JobStatus 3, and the SIGTERM the
+        # removal sent. Absent from the map, they read as unknown, and
+        # a run_status poll never ended: the record will never gain an
+        # exit code.
+        grid = FakeGrid([], history_stdout=_hist(
+            (78, 'undefined', 3, 'true', 15), (69, 0),
+            (70, 'undefined', 3, 'true', 15)))
+        codes = collect_exit_codes('777@s', 100, runner=grid, log=QUIET)
+        self.assertEqual(codes, {78: 'removed', 69: 0, 70: 'removed'})
+
+    def test_removed_wins_over_an_earlier_attempts_exit_code(self):
+        # A job that leaves the queue on removal never completed; an
+        # ExitCode on its record is from an attempt condor requeued.
+        grid = FakeGrid([], history_stdout=_hist((1, 0, 3, 'false',
+                                                  'undefined')))
         codes = collect_exit_codes('777@s', 2, runner=grid, log=QUIET)
+        self.assertEqual(codes, {1: 'removed'})
+
+    def test_killed_by_signal_is_minus_the_signal(self):
+        # The subprocess convention runlocal's rc already follows.
+        grid = FakeGrid([], history_stdout=_hist(
+            (0, 0), (1, 'undefined', 4, 'true', 9)))
+        codes = collect_exit_codes('777@s', 2, runner=grid, log=QUIET)
+        self.assertEqual(codes, {0: 0, 1: -9})
+
+    def test_no_exit_code_no_signal_no_removal_stays_unknown(self):
+        # Nothing on the record says how the job ended: absent, which
+        # the caller reports as unknown — never zero.
+        grid = FakeGrid([], history_stdout=_hist(
+            (0, 0), (1, 'undefined', 4, 'false', 'undefined'),
+            (2, 'undefined', 'undefined', 'undefined', 'undefined')))
+        codes = collect_exit_codes('777@s', 3, runner=grid, log=QUIET)
         self.assertEqual(codes, {0: 0})
+
+    def test_old_two_field_rows_are_not_data(self):
+        grid = FakeGrid([], history_stdout="0 0\n1 84\n")
+        codes = collect_exit_codes('777@s', 2, runner=grid, log=QUIET)
+        self.assertEqual(codes, {})
+
+    def test_command_asks_how_each_job_ended(self):
+        grid = FakeGrid([], history_stdout=_hist((0, 0)))
+        collect_exit_codes('777@s', 1, runner=grid, log=QUIET)
+        cmd = grid.history_cmds[0]
+        self.assertEqual(cmd[cmd.index('-af'):],
+                         ['-af', 'ProcId', 'ExitCode', 'JobStatus',
+                          'ExitBySignal', 'ExitSignal'])
 
     def test_rerun_proc_first_record_wins(self):
         # History is newest-first; a re-run proc appears twice and the
         # newest record is the one that counts.
-        grid = FakeGrid([], history_stdout="1 0\n1 84\n")
+        grid = FakeGrid([], history_stdout=_hist((1, 0), (1, 84)))
         codes = collect_exit_codes('777@s', 2, runner=grid, log=QUIET)
         self.assertEqual(codes, {1: 0})
+
+    def test_rerun_proc_newest_record_wins_even_when_it_says_nothing(self):
+        # An older attempt's exit 0 does not describe the run that
+        # counts: the proc stays unknown rather than borrowing it.
+        grid = FakeGrid([], history_stdout=_hist(
+            (1, 'undefined', 4, 'false', 'undefined'), (1, 0)))
+        codes = collect_exit_codes('777@s', 2, runner=grid, log=QUIET)
+        self.assertEqual(codes, {})
 
     def test_query_failure_returns_empty(self):
         grid = FakeGrid([], history_rc=1)
@@ -275,7 +339,7 @@ class TestCollectExitCodes(unittest.TestCase):
         # SCHEDD_HOST, which is how a fully successful jobsub05 cluster
         # was reported 0/N ok (2026-08-20). condor_history is called
         # directly, schedd split out of the jobid.
-        grid = FakeGrid([], history_stdout="0 0\n")
+        grid = FakeGrid([], history_stdout=_hist((0, 0)))
         collect_exit_codes('777@jobsub01.fnal.gov', 40,
                            runner=grid, log=QUIET)
         cmd = grid.history_cmds[0]
@@ -289,7 +353,7 @@ class TestCollectExitCodes(unittest.TestCase):
     def test_bare_cluster_queries_without_name(self):
         # A caller that lost the schedd still gets a query — against
         # the node's default schedd only, which is the best available.
-        grid = FakeGrid([], history_stdout="0 0\n")
+        grid = FakeGrid([], history_stdout=_hist((0, 0)))
         collect_exit_codes('777', 1, runner=grid, log=QUIET)
         cmd = grid.history_cmds[0]
         self.assertEqual(cmd[0], 'condor_history')
@@ -309,7 +373,7 @@ class TestCollectExitCodes(unittest.TestCase):
 
     def test_nonempty_history_no_empty_warning(self):
         lines = []
-        grid = FakeGrid([], history_stdout="0 0\n")
+        grid = FakeGrid([], history_stdout=_hist((0, 0)))
         collect_exit_codes('777@jobsub05.fnal.gov', 1,
                            runner=grid, log=lines.append)
         self.assertFalse(any('no usable records' in l for l in lines),
@@ -345,14 +409,14 @@ class TestDrive(unittest.TestCase):
             return rc, json.load(fh)
 
     def test_all_ok_exits_zero(self):
-        rc, data = self._drive(self._args(), "0 0\n1 0\n2 0\n")
+        rc, data = self._drive(self._args(), _hist((0, 0), (1, 0), (2, 0)))
         self.assertEqual(rc, 0)
         self.assertEqual(data['ok'], 3)
         self.assertEqual(data['failed'], [])
         self.assertEqual(data['unknown'], [])
 
     def test_one_failure_exits_one_json_still_written(self):
-        rc, data = self._drive(self._args(), "0 0\n1 84\n2 0\n")
+        rc, data = self._drive(self._args(), _hist((0, 0), (1, 84), (2, 0)))
         self.assertEqual(rc, 1)
         self.assertEqual(data['ok'], 2)
         self.assertEqual(data['failed'], [1])
@@ -361,15 +425,24 @@ class TestDrive(unittest.TestCase):
         # Two records for three jobs: the third is unknown — rc null in
         # the JSON, counted in `unknown`, never in `ok`, and the exit
         # code is nonzero. An unverifiable job is not a successful one.
-        rc, data = self._drive(self._args(), "0 0\n1 0\n")
+        rc, data = self._drive(self._args(), _hist((0, 0), (1, 0)))
         self.assertEqual(rc, 1)
         self.assertEqual(data['ok'], 2)
         self.assertEqual(data['failed'], [])
         self.assertEqual(data['unknown'], [2])
         self.assertIsNone(data['jobs'][2]['rc'])
 
+    def test_removed_job_is_failed_with_its_marker(self):
+        rc, data = self._drive(self._args(), _hist(
+            (0, 0), (1, 'undefined', 3, 'true', 15), (2, 0)))
+        self.assertEqual(rc, 1)
+        self.assertEqual(data['ok'], 2)
+        self.assertEqual(data['failed'], [1])
+        self.assertEqual(data['unknown'], [])
+        self.assertEqual(data['jobs'][1]['rc'], 'removed')
+
     def test_first_offset_maps_proc_to_cnf_index(self):
-        rc, data = self._drive(self._args(first=100), "0 0\n1 84\n2 0\n")
+        rc, data = self._drive(self._args(first=100), _hist((0, 0), (1, 84), (2, 0)))
         self.assertEqual([j['index'] for j in data['jobs']],
                          [100, 101, 102])
         self.assertEqual(data['failed'], [101])
@@ -377,7 +450,7 @@ class TestDrive(unittest.TestCase):
 
     def test_outstage_makes_output_paths_absolute(self):
         _, data = self._drive(self._args(outstage='/pnfs/out/'),
-                              "0 0\n1 0\n2 0\n")
+                              _hist((0, 0), (1, 0), (2, 0)))
         for proc, job in enumerate(data['jobs']):
             self.assertTrue(job['outputs'],
                             "cnf declares an output; none reported")
@@ -387,7 +460,7 @@ class TestDrive(unittest.TestCase):
                     path)
 
     def test_dev_null_sink_not_reported_as_output(self):
-        _, data = self._drive(self._args(), "0 0\n1 0\n2 0\n")
+        _, data = self._drive(self._args(), _hist((0, 0), (1, 0), (2, 0)))
         for job in data['jobs']:
             for path in job['outputs']:
                 self.assertNotIn('/dev/null', path)
@@ -396,7 +469,7 @@ class TestDrive(unittest.TestCase):
         # The shared contract: a caller reads one schema whether the
         # stage ran via runlocal or jobwait. Core keys per job and per
         # summary must match runlocal's summary().
-        _, data = self._drive(self._args(), "0 0\n1 0\n2 0\n")
+        _, data = self._drive(self._args(), _hist((0, 0), (1, 0), (2, 0)))
         for key in ('jobdef', 'jobs', 'ok', 'failed'):
             self.assertIn(key, data)
         for job in data['jobs']:
@@ -404,7 +477,7 @@ class TestDrive(unittest.TestCase):
                 self.assertIn(key, job)
 
     def test_json_written_atomically(self):
-        self._drive(self._args(), "0 0\n1 0\n2 0\n")
+        self._drive(self._args(), _hist((0, 0), (1, 0), (2, 0)))
         self.assertEqual(os.listdir(self.tmpdir), ['wait.json'])
 
 

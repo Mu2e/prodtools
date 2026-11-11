@@ -20233,6 +20233,43 @@ class TestMcpRunStatus(unittest.TestCase):
         self.assertEqual(out['jobs']['exit_codes'], {1: 65})
         self.assertNotIn(1, out['outputs'])
 
+    def test_a_removed_job_makes_the_run_short_not_unknown(self):
+        # Mu2e/prodtools#93: a job removed with condor_rm has a history
+        # record (JobStatus 3) but no ExitCode. It read as unknown, which
+        # never resolves, so a caller polling for done-or-short waited
+        # forever. Driven through jobwait's real parser.
+        from types import SimpleNamespace
+        from utils import jobwait
+        self._submitted()
+        history = ('0 0 4 false undefined\n'
+                   '1 undefined 3 true 15\n'
+                   '2 0 4 false undefined\n')
+
+        def runner(cmd, capture_output=True, text=True):
+            return SimpleNamespace(returncode=0, stdout=history, stderr='')
+
+        def codes_fn(jobid, njobs, log=None):
+            return jobwait.collect_exit_codes(jobid, njobs, runner=runner,
+                                              log=lambda *_: None)
+
+        class FakePars:
+            def __init__(self, path):
+                pass
+
+            def job_outputs(self, index):
+                return {}
+
+        out = self.runs.run_status(self.NAME, user='alice',
+                                   runs_root=self.root,
+                                   clusters_fn=lambda owner: ({}, None),
+                                   codes_fn=codes_fn, job_pars_fn=FakePars)
+        self.assertEqual(out['state'], 'short')
+        self.assertEqual(out['jobs']['ok'], 2)
+        self.assertEqual(out['jobs']['failed'], [1])
+        self.assertEqual(out['jobs']['unknown'], [])
+        self.assertEqual(out['jobs']['exit_codes'], {1: 'removed'})
+        self.assertNotIn('note', out)
+
     def test_an_index_history_lost_is_unknown_not_short_and_not_done(self):
         self._submitted()
         out, _ = self._status(clusters={}, codes={0: 0, 2: 0})

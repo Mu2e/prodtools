@@ -92,6 +92,35 @@ def wait_for_drain(cluster, jobid, poll_s, runner=subprocess.run,
         sleeper(poll_s)
 
 
+HISTORY_ATTRS = ('ProcId', 'ExitCode', 'JobStatus', 'ExitBySignal',
+                 'ExitSignal')
+
+# The rc of a job that left the queue by removal (condor_rm, jobsub_rm,
+# or a periodic_remove policy). Such a record has no ExitCode and never
+# will; it is a failure, not an unknown (Mu2e/prodtools#93).
+REMOVED = 'removed'
+
+
+def _job_outcome(exit_code, job_status, by_signal, exit_signal):
+    """How one history record says its job ended: the exit code, minus
+    the signal number for a job killed by a signal (the subprocess
+    convention runlocal's rc follows), REMOVED, or None when the record
+    does not say.
+
+    Removal is checked first. A removed job also carries the SIGTERM
+    the removal sent (ExitBySignal true, ExitSignal 15), and an
+    ExitCode on it would be from an attempt condor requeued: a removed
+    job never completed.
+    """
+    if job_status == '3':
+        return REMOVED
+    if by_signal == 'true' and exit_signal.isdigit():
+        return -int(exit_signal)
+    if exit_code.lstrip('-').isdigit():
+        return int(exit_code)
+    return None
+
+
 def collect_exit_codes(jobid, njobs, runner=subprocess.run, log=print):
     """{proc: rc} from one condor_history call. Missing procs -> absent.
 
@@ -110,31 +139,36 @@ def collect_exit_codes(jobid, njobs, runner=subprocess.run, log=print):
     records than njobs just completes the scan.
 
     A proc can appear more than once (condor re-ran it); records come
-    newest-first, so the FIRST occurrence wins. A non-numeric ExitCode
-    stays out of the map — unknown, not zero.
+    newest-first, so the FIRST occurrence wins. Each record's rc is read
+    by _job_outcome: an exit code, minus the signal, or REMOVED. A
+    record that says none of these stays out of the map — unknown, not
+    zero.
     """
     cluster, _, schedd = jobid.partition('@')
     cluster = cluster.split('.', 1)[0]
     where = schedd or 'the default schedd'
     cmd = (['condor_history'] + (['-name', schedd] if schedd else [])
-           + [cluster, '-limit', str(njobs), '-af', 'ProcId', 'ExitCode'])
+           + [cluster, '-limit', str(njobs), '-af', *HISTORY_ATTRS])
     res = runner(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         # One call, no retries (spec): the caller reports unknowns.
         log(f"[jobwait] condor_history rc={res.returncode}; "
             f"stderr:\n{res.stderr}")
         return {}
-    codes = {}
+    codes, seen = {}, set()
     for line in (res.stdout or '').splitlines():
         fields = line.split()
-        # Real rows are "ProcId ExitCode". Anything else is not data.
-        if len(fields) != 2 or not fields[0].isdigit():
+        # Real rows hold one value per HISTORY_ATTRS entry, ProcId
+        # first. Anything else is not data.
+        if len(fields) != len(HISTORY_ATTRS) or not fields[0].isdigit():
             continue
         proc = int(fields[0])
-        if proc in codes:
+        if proc in seen:
             continue
-        if fields[1].lstrip('-').isdigit():
-            codes[proc] = int(fields[1])
+        seen.add(proc)
+        rc = _job_outcome(*fields[1:])
+        if rc is not None:
+            codes[proc] = rc
     if not codes:
         # Name the condition: "history unavailable on <schedd>" reads
         # very differently from an unknown list that looks like failed
@@ -160,7 +194,9 @@ def summary(args, codes, job_pars):
     or on the grid. Grid-only additions: `proc` (condor proc id; `index`
     is `--first` + proc, the cnf index), `cluster`, and `unknown` — the
     indices condor history had no usable record for. Unknown is NEVER
-    folded into ok: an unverifiable job is not a successful one.
+    folded into ok: an unverifiable job is not a successful one. A
+    job's `rc` is an int (negative: killed by that signal) or REMOVED;
+    both non-zero kinds count as failed.
 
     Output paths are `<outstage>/<cluster>/<proc>/<name>` when
     `--outstage` names the root (exit 0 is the receipt they exist), bare

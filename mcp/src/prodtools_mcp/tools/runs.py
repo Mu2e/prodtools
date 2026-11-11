@@ -116,8 +116,9 @@ def run_status(name, mine=False, user=None, runs_root=None,
     failed, unknown = _fill_jobs(out, njobs, summary)
     if unknown:
         out['state'] = 'unknown'
-        out['note'] = (f'condor history has no record for {len(unknown)} '
-                       f'of {njobs} jobs. That is not a failure and not a '
+        out['note'] = (f'condor history has no record of how {len(unknown)} '
+                       f'of {njobs} jobs ended (no exit code, no signal, '
+                       f'no removal). That is not a failure and not a '
                        f'success: history fades after about two weeks, and '
                        f'a schedd can be briefly unreachable.')
     else:
