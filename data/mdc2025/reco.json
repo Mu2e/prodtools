@@ -708,7 +708,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
     },
     {
-        "_comment": "Reco of the Run 1A BNV signal mixes (mix.json BNV*Mix1BB), Michael MacKenzie's request. Same settings as the MuCap tail mix reco. One dig file per job. Smoke 2026-11-12 at MDC2025bc on the mix smoke outputs: every event written, 0.13 s per event, VmHWM 1.1 GB, about 310 kB per event; so about 10-20 min and 1.2-2.5 GB per job, about 1.8 TB in total. Push only after the mix campaigns have stopped and every dig dataset is complete with its SAM definition.",
+        "_comment": "Reco of the Run 1A BNV signal mixes (mix.json BNV*Mix1BB), Michael MacKenzie's request. Same settings as the MuCap tail mix reco. One dig file per job. Smoke 2026-11-12 at MDC2025bc on the mix smoke outputs: every event written, 0.13 s per event, VmHWM 1.1 GB, about 310 kB per event; so about 10-20 min and 1.2-2.5 GB per job, about 2.8 TB in total. Push only after the mix campaigns have stopped and every dig dataset is complete with its SAM definition.",
         "dsconf": [
             "MDC2025bd_best_v1_5"
         ],

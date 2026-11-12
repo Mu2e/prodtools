@@ -1424,7 +1424,7 @@
         "sequential_aux": true
     },
     {
-        "_comment": "Run 1A BNV signal samples, Michael MacKenzie's request (Slack 2026-11-12): 17 scan points of the four BNVMuonCapture generators, N(gen) from his table (25.0M total, about 500k events per sample after digitization). Muon stops from MuminusStopsCat.MDC2025ac with the geom_run1_a override all Run 1A primaries carry. Needs the release with the BNV nucleus-mass fix (Offline PR #2127). Full chain: Mix1BB (mix.json), reco (reco.json), ntuples (evntuple.json). Fcl-default points carry no generator override. Smoke at MDC2025bc 2026-11-12, 200 events per fcl default: PrimaryFilter keeps 52% (EmDarkFermion), 40% (DarkCascade), 41% (DarkCascadeElectron), 38% (LongLived 30 ns), in line with Michael's acceptances; 0.06-0.085 s per event; VmHWM 2.40 GB (under the 2500MB default); about 25 kB per kept event. So 20k draws per job: about 25 min and 250 MB per job, 1250 jobs, about 210 GB of dts on disk in total.",
+        "_comment": "Run 1A BNV signal samples, Michael MacKenzie's request (Slack 2026-11-12): 17 scan points of the four BNVMuonCapture generators, N(gen) is his table's value scaled up by 1/(fraction the Mix1BB selection keeps), so each sample keeps about 500k events after mixing (his choice, 2026-11-12): 38.8M generated in total. Muon stops from MuminusStopsCat.MDC2025ac with the geom_run1_a override all Run 1A primaries carry. Needs the release with the BNV nucleus-mass fix (Offline PR #2127). Full chain: Mix1BB (mix.json), reco (reco.json), ntuples (evntuple.json). Fcl-default points carry no generator override. Smoke at MDC2025bc 2026-11-12, 200 events per fcl default: PrimaryFilter keeps 52% (EmDarkFermion), 40% (DarkCascade), 41% (DarkCascadeElectron), 38% (LongLived 30 ns), in line with Michael's acceptances; 0.06-0.085 s per event; VmHWM 2.40 GB (under the 2500MB default); about 25 kB per kept event. So 20k draws per job: about 25 min and 250 MB per job, 1941 jobs, about 13.7M dts events and 340 GB on disk in total.",
         "desc": "BNVEmDarkFermion_m1_840",
         "dsconf": "MDC2025bd",
         "fcl": "Production/JobConfig/primary/BNVEmDarkFermion.fcl",
@@ -1438,7 +1438,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 130,
+        "njobs": 167,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1462,7 +1462,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 90,
+        "njobs": 116,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1486,7 +1486,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 65,
+        "njobs": 84,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1509,7 +1509,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 50,
+        "njobs": 65,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1533,7 +1533,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 55,
+        "njobs": 71,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1557,7 +1557,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 65,
+        "njobs": 85,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1581,7 +1581,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 60,
+        "njobs": 79,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1604,7 +1604,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 70,
+        "njobs": 92,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1628,7 +1628,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 70,
+        "njobs": 92,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1652,7 +1652,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 80,
+        "njobs": 105,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1676,7 +1676,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 60,
+        "njobs": 87,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1699,7 +1699,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 80,
+        "njobs": 116,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1723,7 +1723,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 70,
+        "njobs": 146,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1746,7 +1746,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 70,
+        "njobs": 146,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1770,7 +1770,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 75,
+        "njobs": 156,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1794,7 +1794,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 80,
+        "njobs": 167,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",
@@ -1818,7 +1818,7 @@
             "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
         },
         "events": 20000,
-        "njobs": 80,
+        "njobs": 167,
         "run": 1430,
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh",
         "owner": "mu2e",

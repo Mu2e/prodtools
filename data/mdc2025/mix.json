@@ -206,7 +206,7 @@
         ]
     },
     {
-        "_comment": "Run 1A Mix1BB of the 17 BNV signal samples (primary_muon.json BNV*), Michael MacKenzie's request. Same pileup, conditions and standard Mix.fcl selection as the MuCapProtonTail mix above. One dts per job. Smoke 2026-11-12 at MDC2025bc on the four primary smoke outputs: Mix.fcl keeps 78% (EmDarkFermion), 77% (DarkCascade), 70% (DarkCascadeElectron) and 49% (LongLived 30 ns) of the dts events; 0.31-0.34 s per event, VmHWM 1.1 GB, about 640 kB per kept event. So about 45-55 min and 2.5-5 GB per job, about 5.7M events and 3.7 TB in total. Push only after all 17 primary datasets are complete.",
+        "_comment": "Run 1A Mix1BB of the 17 BNV signal samples (primary_muon.json BNV*), Michael MacKenzie's request. Same pileup, conditions and standard Mix.fcl selection as the MuCapProtonTail mix above. One dts per job. Smoke 2026-11-12 at MDC2025bc on the four primary smoke outputs: Mix.fcl keeps 78% (EmDarkFermion), 77% (DarkCascade), 70% (DarkCascadeElectron) and 48% (LongLived; 47-49% at 10, 30 and 1000 ns) of the dts events; 0.31-0.34 s per event, VmHWM 1.1 GB, about 640 kB per kept event. So about 45-55 min and 2.5-5 GB per job, about 8.9M events and 5.7 TB in total. Push only after all 17 primary datasets are complete.",
         "input_data": [
             {
                 "dts.mu2e.BNVEmDarkFermion_m1_840.MDC2025bd.art": 1

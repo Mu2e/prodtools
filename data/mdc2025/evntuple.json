@@ -595,7 +595,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     },
     {
-        "_comment": "Ntuples of the Run 1A BNV signal reco (reco.json BNV*Mix1BB), Michael MacKenzie's request. from_mcs-mixed.fcl as for the MuCap tail ntuples. Two mcs files per job. Smoke 2026-11-12 at AnalysisMDC2025 v02_03_01 on the reco smoke outputs: every event written, VmHWM 1.0 GB, about 67 kB per event; so about 0.5-1.1 GB per job, about 0.4 TB in total.",
+        "_comment": "Ntuples of the Run 1A BNV signal reco (reco.json BNV*Mix1BB), Michael MacKenzie's request. from_mcs-mixed.fcl as for the MuCap tail ntuples. Two mcs files per job. Smoke 2026-11-12 at AnalysisMDC2025 v02_03_01 on the reco smoke outputs: every event written, VmHWM 1.0 GB, about 67 kB per event; so about 0.5-1.1 GB per job, about 0.6 TB in total.",
         "dsconf": [
             "MDC2025bd_best_v1_5"
         ],
