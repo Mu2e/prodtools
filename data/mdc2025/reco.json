@@ -706,5 +706,86 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Reco of the Run 1A BNV signal mixes (mix.json BNV*Mix1BB), Michael MacKenzie's request. Same settings as the MuCap tail mix reco. One dig file per job. Smoke 2026-11-12 at MDC2025bc on the mix smoke outputs: every event written, 0.13 s per event, VmHWM 1.1 GB, about 310 kB per event; so about 10-20 min and 1.2-2.5 GB per job, about 2.8 TB in total. Push only after the mix campaigns have stopped and every dig dataset is complete with its SAM definition.",
+        "dsconf": [
+            "MDC2025bd_best_v1_5"
+        ],
+        "tarball_append": "-reco",
+        "fcl": [
+            "Production/JobConfig/recoMC/OnSpill.fcl"
+        ],
+        "input_data": [
+            {
+                "dig.mu2e.BNVEmDarkFermion_m1_840Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVEmDarkFermion_m1_860Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVEmDarkFermion_m1_880Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVEmDarkFermion_m1_900Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVEmDarkFermion_m1_915Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascade_m1_840Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascade_m1_870Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascade_m1_900Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascade_m1_900_mA45Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascade_m1_930Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascadeElectron_m1_870Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascadeElectron_m1_900Mix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascadeLongLived_tau_10nsMix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascadeLongLived_tau_30nsMix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascadeLongLived_tau_100nsMix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascadeLongLived_tau_300nsMix1BB.MDC2025bd_best_v1_5.art": 1
+            },
+            {
+                "dig.mu2e.BNVDarkCascadeLongLived_tau_1000nsMix1BB.MDC2025bd_best_v1_5.art": 1
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5"
+            }
+        ],
+        "inloc": [
+            "tape"
+        ],
+        "outloc": [
+            {
+                "*.art": "tape"
+            }
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh"
+        ]
     }
 ]

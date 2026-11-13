@@ -204,5 +204,100 @@
                 "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
             }
         ]
+    },
+    {
+        "_comment": "Run 1A Mix1BB of the 17 BNV signal samples (primary_muon.json BNV*), Michael MacKenzie's request. Same pileup, conditions and standard Mix.fcl selection as the MuCapProtonTail mix above. One dts per job. Smoke 2026-11-12 at MDC2025bc on the four primary smoke outputs: Mix.fcl keeps 78% (EmDarkFermion), 77% (DarkCascade), 70% (DarkCascadeElectron) and 48% (LongLived; 47-49% at 10, 30 and 1000 ns) of the dts events; 0.31-0.34 s per event, VmHWM 1.1 GB, about 640 kB per kept event. So about 45-55 min and 2.5-5 GB per job, about 8.9M events and 5.7 TB in total. Push only after all 17 primary datasets are complete.",
+        "input_data": [
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_840.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_860.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_880.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_915.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_840.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_870.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900_mA45.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_930.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_870.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_10ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_30ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_100ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_300ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_1000ns.MDC2025bd.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025bd_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+            }
+        ]
     }
 ]
