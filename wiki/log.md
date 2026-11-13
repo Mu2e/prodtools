@@ -1474,3 +1474,7 @@ Pages updated: 2026-07-18-direct-recovery-loop (dated caveat: a wall-clock tail 
 Pages written: 2026-08-28-chain-map-override-precedence, 2026-08-28-exit-codes-harvested-at-tick-time, 2026-09-11-cnf-tarball-declared-as-sam-parent (ADR text unchanged, frontmatter added)
 Pages updated: 2026-09-02-sim-epochs-design, 2026-07-18-direct-recovery-loop, 2026-08-20-jobwait-jobsub-history-drops-schedd (backlinks), index
 `docs/adr/` removed: the wiki's Decisions category is the one home for decision records. The code comments that cited "ADR 0003" now name the wiki page.
+
+## [2026-11-13] update | log_metrics MCP tool and prodtools-tool guard hook
+Pages updated: prodtools-mcp-server (tool list: run_status, log_metrics)
+A cosmic stage-2 CPU question was answered by hand-scanning 112k job logs before `logparser` was remembered. Added `log_metrics` to the read-only MCP server (evenly spread sample, total = mean × log count; Run1Bah 500-log estimate 28,812 h vs 28,762 h exact), a question-to-tool table in CLAUDE.md, and `.claude/hooks/prodtools-tool-guard.py`, which denies bulk /pnfs scans, inline samweb_client, SHA-256 path building and direct SAM web calls unless the command carries `# no-prodtools-tool: <reason>`.

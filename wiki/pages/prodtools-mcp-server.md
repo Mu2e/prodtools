@@ -2,7 +2,7 @@
 title: prodtools MCP server (read-only)
 tags: [reference, mcp, tooling, commissioned]
 sources: [2026-07-26-prodtools-mcp-design]
-updated: 2026-09-17
+updated: 2026-11-13
 ---
 
 # prodtools MCP server (read-only)
@@ -14,10 +14,13 @@ several readers can share one instance. Spec:
 
 ## What it is
 
-Eight tools: `campaign_status`, `list_campaigns`, `find_datasets`,
+Ten tools: `campaign_status`, `list_campaigns`, `find_datasets`,
 `dataset_details`, `locate_file` (whether SAM knows a file, and its
 first location), `dataset_files` (every file of a dataset with size and
-/pnfs path at a location), `trace_provenance`, `get_server_info`. It
+/pnfs path at a location), `trace_provenance`, `run_status`,
+`log_metrics` (CPU, wall time and memory per job from a log dataset,
+read from an evenly spread sample and scaled to `total_cpu_hours`),
+`get_server_info`. It
 imports `utils/*` in-process and composes existing functions; there is
 no LLM in it and it makes no external API calls.
 

@@ -13,6 +13,31 @@ root. It is the authoritative reference for CLI flags, JSON config
 shapes, and canonical invocations. Do not guess flags or copy patterns
 from memory — consult the current doc.
 
+### Before writing your own script
+
+Look up the question in this table before any hand-rolled grep, find,
+curl, `samweb_client` or `/pnfs` scan. If no row fits, check
+`EXAMPLES.md` §11 and `bin/`. A hand-rolled path is a last resort: say
+which tool you checked and why it did not fit. A PreToolUse hook
+(`.claude/hooks/prodtools-tool-guard.py`) denies bulk `/pnfs` scans,
+inline `samweb_client`, SHA-256 path building and direct SAM web API
+calls unless the command carries `# no-prodtools-tool: <reason>`.
+
+| question | tool |
+|---|---|
+| CPU, memory or wall time of a production step | MCP `log_metrics(dataset="log.mu2e.<desc>.<dsconf>.log")` (sampled; returns `total_cpu_hours`); CLI `logparser <log dataset> -n 500` |
+| datasets matching a name or campaign | MCP `find_datasets`; `latestDatasets` for the newest dsconf per series |
+| file count, events, size of a dataset | MCP `dataset_details` |
+| /pnfs paths of a dataset's files | MCP `dataset_files`; `datasetFileList` |
+| where one file lives | MCP `locate_file` |
+| parents, children, lineage | MCP `trace_provenance`; `famtree` |
+| recently produced datasets, completeness | `listNewDatasets --days N --completeness`; `/check-completeness` |
+| campaign progress | MCP `campaign_status`, `list_campaigns` |
+| a `--once` or `run_local` run | MCP `run_status` |
+| filter efficiency | `genFilterEff` |
+| what a cnf runs (njobs, inputs, outputs, fcl) | `jobquery`, `fcldump` |
+| inputs readable or staged before launch | `check_inputs`; `/prestage` |
+
 `EXAMPLES.md` is a derived artifact, regenerated from source by the
 `/refresh-examples` slash command. The source of truth for its shape
 and tribal knowledge is `docs/EXAMPLES_schema.md`. If `EXAMPLES.md`
@@ -57,7 +82,7 @@ same indices.
 A read-only MCP server at `mcp/` exposes campaign status and dataset
 discovery as typed tools (`campaign_status`, `list_campaigns`,
 `find_datasets`, `dataset_details`, `locate_file`, `dataset_files`,
-`trace_provenance`, `run_status`, `get_server_info`). Prefer it over shelling the CLI
+`trace_provenance`, `run_status`, `log_metrics`, `get_server_info`). Prefer it over shelling the CLI
 for status questions — it returns structured JSON and costs less
 context.
 

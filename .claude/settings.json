@@ -20,6 +20,16 @@
         ]
       },
       {
+        "matcher": "Bash|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prodtools-tool-guard.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "mcp__prodtools-write__.*",
         "hooks": [
           {
