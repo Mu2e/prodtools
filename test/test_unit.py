@@ -12661,6 +12661,71 @@ class TestMcpWriteGuardHook(unittest.TestCase):
         self.assertIn('"permissionDecision":"ask"', out)
 
 
+class TestProdtoolsToolGuardHook(unittest.TestCase):
+    """.claude/hooks/prodtools-tool-guard.py denies hand-rolled SAM and
+    /pnfs access that a prodtools tool already covers, and must stay out
+    of the way of code searches, single-log reads, one-off samweb CLI
+    calls (retire-file, prestage and check-completeness run them) and
+    commands carrying a reasoned override."""
+    REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    HOOK = os.path.join(REPO, '.claude', 'hooks', 'prodtools-tool-guard.py')
+    S = 'sam' + 'web'   # keeps this file's text from matching the rules
+    P = '/' + 'pnfs/mu2e/persistent/datasets/phy-etc/log/mu2e/X/Y/log'
+
+    def _decision(self, tool, tool_input):
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=self.REPO)
+        r = subprocess.run(
+            [sys.executable, '-I', self.HOOK],
+            input=json.dumps({'tool_name': tool, 'tool_input': tool_input}),
+            capture_output=True, text=True, timeout=10, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        if not r.stdout.strip():
+            return None
+        out = json.loads(r.stdout)['hookSpecificOutput']
+        self.assertEqual(out['hookEventName'], 'PreToolUse')
+        return out
+
+    def test_denies_hand_rolled_access(self):
+        S, P = self.S, self.P
+        cases = [
+            ('Bash', {'command': f"python3 - <<'PY'\nimport {S}_client\nPY"}),
+            ('Bash', {'command': '"$PYTHON_BIN" - <<\'PY\'\nh=hashlib.sha256(n.encode())\nPY'}),
+            ('Bash', {'command': f'curl -s https://{S}.fnal.gov:8483/sam/mu2e/api/x'}),
+            ('Bash', {'command': f'find {P} -name "*.log"'}),
+            ('Bash', {'command': f'grep -rl TimeReport {P}'}),
+            ('Bash', {'command': f'grep -m1 TimeReport {P}/*/*/*.log'}),
+            ('Bash', {'command': f'xargs -P 32 grep -m1 TimeReport < {P}.txt'}),
+            ('Bash', {'command': f'find {P}  # no-prodtools-tool:'}),
+            ('Write', {'file_path': '/exp/mu2e/data/users/x/scan.py',
+                       'content': f'import {S}_client\n'}),
+        ]
+        for tool, ti in cases:
+            with self.subTest(ti):
+                out = self._decision(tool, ti)
+                self.assertIsNotNone(out)
+                self.assertEqual(out['permissionDecision'], 'deny')
+                self.assertIn('no-prodtools-tool', out['permissionDecisionReason'])
+
+    def test_allows_searches_single_reads_and_overrides(self):
+        S, P = self.S, self.P
+        cases = [
+            ('Bash', {'command': f'grep -rn "{S}_client" utils/ mcp/src'}),
+            ('Bash', {'command': 'grep -rn "hashlib.sha256" utils/'}),
+            ('Bash', {'command': f'grep -rn "{S}.fnal.gov" mcp/'}),
+            ('Bash', {'command': 'git ls-files | xargs grep -n logparser'}),
+            ('Bash', {'command': f'tail -50 {P}/ab/cd/log.mu2e.X.Y.0-1.log'}),
+            ('Bash', {'command': f'{S} locate-file dts.mu2e.X.Y.0.art'}),
+            ('Bash', {'command': f'{S} list-definition-files ds | head -1'}),
+            ('Bash', {'command': 'bin/logparser log.mu2e.X.Y.log -n 500'}),
+            ('Bash', {'command': f'find {P}  # no-prodtools-tool: need mtimes'}),
+            ('Write', {'file_path': os.path.join(self.REPO, 'utils', 'x.py'),
+                       'content': f'import {S}_client\n'}),
+            ('Read', {'file_path': '/etc/hosts'}),
+        ]
+        for tool, ti in cases:
+            with self.subTest(ti):
+                self.assertIsNone(self._decision(tool, ti))
+
 
 # ---------------------------------------------------------------------------
 # push_cnf tool
