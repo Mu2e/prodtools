@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from prodtools_mcp import condor, runtime
 from prodtools_mcp.adapters import safe_tool
-from prodtools_mcp.tools import discovery, lineage, runs, status
+from prodtools_mcp.tools import discovery, lineage, logs, runs, status
 
 
 # mu2eaigpvm01 runs one server per port, registered in the registry's
@@ -37,6 +37,7 @@ WHAT IT ANSWERS:
 - "Does SAM know this file?"  -> locate_file(name="cnf.mu2e....0.tar")
 - "How did my --once / run_local run go?" -> run_status(name="cnf.<login>....0", user="<login>")
 - "Where are its files?"      -> dataset_files(dataset="nts....root", location="scratch")
+- "How much CPU did it cost?" -> log_metrics(dataset="log.mu2e.<desc>.<dsconf>.log")
 
 READING THE RESULTS:
 - campaign_status called with NO argument is ledger-only and cheap. Name
@@ -91,6 +92,13 @@ READING THE RESULTS:
   earlier round or a smoke wrote into the same dataset.
 - campaign_status `rows` is a count per submission state. `exhausted`
   means the attempt cap was reached and a human must take over.
+- log_metrics reads a SAMPLE of the job logs (default 500, spread over
+  the dataset) and scales the mean by the exact log count:
+  `total_cpu_hours` is an estimate unless `exact` is true. Never scan
+  every log yourself for a cost question. The log desc is the job's,
+  which can differ from the output's; find_datasets(tier="log") lists
+  them. Jobs that never pushed a log are missing, so totals are lower
+  bounds.
 - Errors arrive as {"error": {"kind", "message", "remedy"}}. Never retry
   an auth_expired — tell the user to renew in their own shell. This
   server never refreshes credentials.
@@ -106,6 +114,7 @@ TOOL_FUNCTIONS = {
     'dataset_files': safe_tool(discovery.dataset_files),
     'trace_provenance': safe_tool(lineage.trace_provenance),
     'run_status': safe_tool(runs.run_status),
+    'log_metrics': safe_tool(logs.log_metrics),
 }
 
 TOOL_NAMES = sorted(list(TOOL_FUNCTIONS) + ['get_server_info'])
@@ -297,6 +306,19 @@ def create_mcp_server():
         return TOOL_FUNCTIONS['trace_provenance'](
             name=name, direction=direction, depth=depth,
             max_nodes=max_nodes)
+
+    @mcp.tool(description='CPU, wall time and memory per job from a log '
+                          'dataset (log.<owner>.<desc>.<dsconf>.log), and '
+                          'total_cpu_hours = mean per job x number of '
+                          'logs. Reads `sample` logs spread over the '
+                          'dataset (default 500, max 5000); `exact` says '
+                          'whether every log was read. Use this for any '
+                          'CPU-cost question instead of scanning logs. '
+                          'Jobs that never pushed a log are not counted, '
+                          'so totals are lower bounds.')
+    def log_metrics(dataset: str,
+                    sample: int = logs.DEFAULT_SAMPLE) -> dict:
+        return TOOL_FUNCTIONS['log_metrics'](dataset=dataset, sample=sample)
 
     # Registered under the module function's name via name=, because a
     # nested `def get_server_info` would shadow the module-level one and
