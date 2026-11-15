@@ -541,13 +541,13 @@
         "sequential_aux": true
     },
     {
-        "_comment": "Physical (accept-reject on the pion lifetime) version of the Run 1A PiPolyStops, as PhysicalPionStops.Run1Bap: early gate tmin 0 with acceptRejectMax 1.0 so the prompt region is not clipped; fastCloning off. Local chained smoke 2026-11-07 on the stage-1 smoke output, 100k draws: 919 accepted (0.92%), 0.26 ms/draw, 0.8 GB; so ~22 min and ~46k physical stops per job.",
+        "_comment": "Physical (accept-reject on the pion lifetime) version of the Run 1A PiPolyStops. Early gate tmin 0; fastCloning off. Sizing (2026-11-11): each input file holds ~11,400 stops, and a one-pass scan of 5 PiPolyStops.MDC2025bb files (57k stops) found survival weights exp(-tau) with mean 0.0099 and max 0.175. So acceptRejectMax 0.25 does not clip and keeps ~4% of draws (1.0 kept ~1%). 250k draws per job reads the file ~22 times and keeps ~10k stops, about 3x the ~3,300 effective stops a file holds (weighted Neff/N 0.29). The first production (campaign 198: 5M draws, acceptRejectMax 1.0) read each file 437 times and stalled on dCache reads. A rerun needs a new dsconf: cnf.mu2e.PhysicalPolyPionStops.MDC2025bb.0.tar exists.",
         "desc": "PhysicalPolyPionStops",
         "dsconf": "MDC2025bb",
         "fcl": "Production/JobConfig/beam/PhysicalPolyPionStops.fcl",
         "fcl_overrides": {
             "physics.filters.StopSelection.cuts.tmin": 0,
-            "physics.filters.StopSelection.acceptRejectMax": 1.0,
+            "physics.filters.StopSelection.acceptRejectMax": 0.25,
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
             "outputs.PionOutput.fastCloning": false
         },
@@ -556,7 +556,7 @@
             "sim.mu2e.PiPolyStops.MDC2025bb.art": 1
         },
         "njobs": 500,
-        "events": 5000000,
+        "events": 250000,
         "run": 1430,
         "inloc": "disk",
         "outloc": {
