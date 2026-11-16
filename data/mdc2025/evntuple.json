@@ -611,5 +611,23 @@
             "nts.*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "One generic draining ntuple cnf for the on-spill, unmixed CE/DIO reco at MDC2025bd with Sim_best v2_0 (reco.json, generic entry; first sample CeMLeadingLog). It takes every mcs dataset matching input_pattern, one mcs file per job, so a new sample needs no new entry or campaign. Same fcl as the MDC2025ba unmixed entries (from_mcs-primary.fcl) on AnalysisMDC2025 v02_03_01, which carries the TrkQual fix, so no SkipEvent.",
+        "desc": "evnt",
+        "dsconf": "MDC2025bd_best_v2_0",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025bd_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     }
 ]
