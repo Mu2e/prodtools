@@ -301,5 +301,28 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Re-digitization of the standard-target CeMLeadingLog MDC2025ba dts (primary_muon.json) with the newest tracker conditions, Sim_best v2_0 (2026-11-06, 'Tracker conditions based on expectations from KPP'; verified 0 missing tables or IoVs at run 1430), and the Run 1A trigger configuration: mu2e-trig-config run1a.fcl is included before the digitize FCL, so before its trigger includes (Michael MacKenzie 2026-11-16). Same geometry and settings as the MDC2025ba digi entry. Reco defaults to Run 1A, so reco needs no include.",
+        "dsconf": "MDC2025bd_best_v2_0",
+        "fcl": "mu2e-trig-config/core/conditions/run1a.fcl",
+        "input_data": {
+            "dts.mu2e.CeMLeadingLog.MDC2025ba.art": 10
+        },
+        "fcl_overrides": {
+            "#include": [
+                "Production/JobConfig/digitize/OnSpill.fcl"
+            ],
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
+            "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh"
     }
 ]
