@@ -631,7 +631,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     },
     {
-        "_comment": "One generic draining ntuple cnf for the Mix1BB reco at MDC2025be with Sim_best v2_0 (reco.json, generic Mix1BB entry). It takes every mcs dataset matching input_pattern, one mcs file per job. from_mcs-mixed.fcl as for the BNV mixes, on AnalysisMDC2025 v02_03_01 (the newest).",
+        "_comment": "One generic draining ntuple cnf for the Mix1BB reco at MDC2025be with Sim_best v2_0 (reco.json, generic Mix1BB entry). It takes every mcs dataset matching input_pattern, one mcs file per job. from_mcs-mixed.fcl as for the BNV mixes, on AnalysisMDC2025 v02_04_00, which is backed on SimJob MDC2025be like the reco.",
         "desc": "evnt",
         "dsconf": "MDC2025be_best_v2_0",
         "tarball_append": "-Mix1BB",
@@ -646,6 +646,6 @@
         "outloc": {
             "nts.*.root": "tape"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
     }
 ]
