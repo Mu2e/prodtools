@@ -809,5 +809,25 @@
             "mcs.*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh"
+    },
+    {
+        "_comment": "One generic draining reco cnf for the Mix1BB digitization at MDC2025be with Sim_best v2_0 (mix.json; first samples FlateMinus, FlatePlus and FlatMuMinus). It takes every dig dataset matching input_pattern, one dig file per job, so a new mixed sample needs no new entry or campaign: samDD.sh makes its SAM definition, a tick drains it. Output desc and sequencer follow the input. Reco defaults to Run 1A, so no scenario include.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%Mix1BB.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]
