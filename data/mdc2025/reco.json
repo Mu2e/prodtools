@@ -829,5 +829,25 @@
             "mcs.*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "One generic draining reco cnf for the unmixed on-spill digitization at MDC2025be with Sim_best v2_0 (digi.json). It takes every dig dataset matching input_pattern, one dig file per job: samDD.sh makes each new SAM definition, a tick drains it. Output desc and sequencer follow the input. Reco defaults to Run 1A, so no scenario include.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%OnSpill.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]

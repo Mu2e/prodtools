@@ -647,5 +647,23 @@
             "nts.*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "One generic draining ntuple cnf for the unmixed on-spill reco at MDC2025be (reco.json, generic -OnSpill entry). It takes every mcs dataset matching input_pattern, one mcs file per job. from_mcs-primary.fcl as for the MDC2025bd unmixed entry, on AnalysisMDC2025 v02_04_00, which is backed on SimJob MDC2025be like the reco.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
     }
 ]
