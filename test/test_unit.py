@@ -13038,6 +13038,42 @@ class TestPushCnfTool(unittest.TestCase):
             self.tools.push_cnf(json=path, desc='D', dsconf='C',
                                 slice_size=500, run_as='self')
 
+    def _two_generic_entries(self):
+        # Same desc and dsconf, different tarball_append: the generic
+        # reco-Mix1BB and reco-OnSpill entries of one dsconf.
+        path = os.path.join(self._tmpdir, 'generic.json')
+        mix_setup = '/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MIX/setup.sh'
+        with open(path, 'w') as f:
+            json.dump([
+                {'desc': 'reco', 'dsconf': 'C', 'tarball_append': '-Mix1BB',
+                 'simjob_setup': mix_setup},
+                {'desc': 'reco', 'dsconf': 'C', 'tarball_append': '-OnSpill',
+                 'simjob_setup': self.simjob_setup},
+            ], f)
+        return path
+
+    def test_tarball_desc_selects_one_of_entries_sharing_desc(self):
+        path = self._two_generic_entries()
+        setup, tarball_desc = self.tools._select_push_params(
+            path, 'reco-OnSpill', 'C')
+        self.assertEqual(setup, self.simjob_setup)
+        self.assertEqual(tarball_desc, 'reco-OnSpill')
+
+    def test_shared_desc_stays_ambiguous_and_names_the_choices(self):
+        path = self._two_generic_entries()
+        with self.assertRaises(ValueError) as ctx:
+            self.tools._select_push_params(path, 'reco', 'C')
+        msg = str(ctx.exception)
+        self.assertIn('found 2', msg)
+        self.assertIn('reco-Mix1BB', msg)
+        self.assertIn('reco-OnSpill', msg)
+
+    def test_tarball_desc_match_respects_dsconf(self):
+        path = self._two_generic_entries()
+        with self.assertRaises(ValueError) as ctx:
+            self.tools._select_push_params(path, 'reco-OnSpill', 'OTHER')
+        self.assertIn('found 0', str(ctx.exception).lower())
+
     def test_mixing_entry_with_no_raw_desc_resolves_end_to_end(self):
         # Mixing entries carry no literal `desc` key in the raw JSON --
         # it is derived from input_data + pbeam by prepare_fields_for_job
