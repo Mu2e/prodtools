@@ -1519,16 +1519,29 @@ def load_json(json_path):
     return apply_common_overlay(configs, json_path)
 
 def find_json_entry(configs, desc=None, dsconf=None, index=None):
-    """Find a matching JSON entry from configuration list"""
+    """Find a matching JSON entry from configuration list.
+
+    `desc` matches an entry's own `desc` or its tarball description
+    (`desc` + `tarball_append`, the name in `cnf.<owner>.<name>.<dsconf>`).
+    The second form tells apart entries that share desc and dsconf and
+    differ only in tarball_append, e.g. the generic reco-Mix1BB and
+    reco-OnSpill entries at one dsconf. Exactly one match is still
+    required; an ambiguous desc names the tarball descriptions to use.
+    """
     if index is not None:
-        try: 
+        try:
             return configs[index]
-        except IndexError: 
+        except IndexError:
             sys.exit(f"Index {index} out of range.")
-    
-    matches = [e for e in configs if e.get('desc') == desc and e.get('dsconf') == dsconf]
+
+    matches = [e for e in configs
+               if e.get('dsconf') == dsconf
+               and (e.get('desc') == desc or get_tarball_desc(e) == desc)]
     if len(matches) != 1:
-        sys.exit(f"Expected 1 match for desc={desc}, dsconf={dsconf}; found {len(matches)}.")
+        names = [get_tarball_desc(e) or e.get('desc') for e in matches]
+        hint = f": {names}" if len(matches) > 1 else ""
+        sys.exit(f"Expected 1 match for desc={desc}, dsconf={dsconf}; "
+                 f"found {len(matches)}{hint}.")
     return matches[0]
 
 def process_all_for_dsconf(expanded_configs, dsconf, args):
