@@ -604,5 +604,47 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Off-spill cosmics digitization at MDC2025be with Sim_best v2_0 (Run 1A tracker), for the Run 1A set next to the MDC2025be on-spill samples. Plain OffSpill.fcl: the digitize prolog defaults to the Run 1A trigger tuning, and Production has no OffSpill_run1a.fcl. Same dts as the MDC2025be on-spill cosmics (CosmicSignal MDC2025ap, 5000 files, 5.96M events). 50 dts files per job, 100 jobs: the MDC2025an off-spill digitization used 100 per job and took 5.1 CPU hours on average but up to 18.5 hours of wall time, too close to the 24 h limit. Off-spill keeps almost every event (an: 5.85M of 5.89M), about 9.5 GB per 100 dts files. Reco and ntuples come from the generic off-spill entries at the same dsconf (reco.json, evntuple.json).",
+        "desc": "CosmicSignalOffSpill",
+        "dsconf": "MDC2025be_best_v2_0",
+        "fcl": "Production/JobConfig/digitize/OffSpill.fcl",
+        "input_data": {
+            "dts.mu2e.CosmicSignal.MDC2025ap.art": 50
+        },
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Off-spill cosmics digitization for Run 2 (nominal tracker) at MDC2025be with Sim_best v1_5. Production has no OffSpill_run2.fcl, so the entry spells out what OnSpill_run2.fcl does: the Run 2 trigger conditions file is the base include, because its values are bound with @protect_ignore and the first binding wins, then OffSpill.fcl and digitize/run2_epilog.fcl (Offline run2conditions_epilog.fcl). Same dts as the MDC2025be on-spill cosmics (CosmicSignal MDC2025ap, 5000 files, 5.96M events). 50 dts files per job, 100 jobs: the MDC2025an off-spill digitization used 100 per job and took 5.1 CPU hours on average but up to 18.5 hours of wall time, too close to the 24 h limit. Off-spill keeps almost every event (an: 5.85M of 5.89M), about 9.5 GB per 100 dts files. Reco and ntuples come from the generic off-spill entries at the same dsconf (reco.json, evntuple.json).",
+        "desc": "CosmicSignalOffSpill",
+        "dsconf": "MDC2025be_best_v1_5",
+        "fcl": "mu2e-trig-config/core/conditions/run2.fcl",
+        "input_data": {
+            "dts.mu2e.CosmicSignal.MDC2025ap.art": 50
+        },
+        "fcl_overrides": {
+            "#include": [
+                "Production/JobConfig/digitize/OffSpill.fcl",
+                "Production/JobConfig/digitize/run2_epilog.fcl"
+            ],
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]

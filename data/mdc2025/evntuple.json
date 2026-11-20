@@ -701,5 +701,77 @@
             "nts.*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, LH flavour, for the CosmicSignalOffSpill-LH reco at MDC2025be_best_v2_0 (reco.json -OffSpill entry). from_mcs-mockdata.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OffSpill-LH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-LH.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, CH flavour, for the CosmicSignalOffSpill-CH reco at MDC2025be_best_v2_0 (reco.json -OffSpill entry). from_mcs-OffSpill.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OffSpill-CH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-CH.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-OffSpill.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, LH flavour, for the CosmicSignalOffSpill-LH reco at MDC2025be_best_v1_5 (reco.json -OffSpill entry). from_mcs-mockdata.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OffSpill-LH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-LH.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, CH flavour, for the CosmicSignalOffSpill-CH reco at MDC2025be_best_v1_5 (reco.json -OffSpill entry). from_mcs-OffSpill.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OffSpill-CH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-CH.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-OffSpill.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
     }
 ]
