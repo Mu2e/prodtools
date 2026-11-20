@@ -849,5 +849,47 @@
             "mcs.*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 version of the generic draining Mix1BB reco above, for the MDC2025be_best_v1_5 Mix1BB dig. Includes Production/JobConfig/reco/run2_epilog.fcl after the reco fcl (nominal-tracker pattern recognition and tracker conditions), with Sim_best v1_5 as at digitization.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%Mix1BB.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "#include": "Production/JobConfig/reco/run2_epilog.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 version of the generic draining on-spill reco above, for the MDC2025be_best_v1_5 unmixed dig. Includes Production/JobConfig/reco/run2_epilog.fcl after the reco fcl, with Sim_best v1_5 as at digitization.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%OnSpill.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "#include": "Production/JobConfig/reco/run2_epilog.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]

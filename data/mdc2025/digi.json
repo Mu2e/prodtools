@@ -455,5 +455,136 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) version of the unmixed on-spill digitization at MDC2025be_best_v2_0 above: OnSpill_run2.fcl (Run 2 trigger tuning plus Offline run2conditions_epilog.fcl) and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts and files per job.",
+        "dsconf": "MDC2025be_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run2.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.FlateMinus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatePlus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatMuMinus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.CePLeadingLog.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RPCExternalPhysical.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RPCInternalPhysical.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NExternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NExternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.IPAMuminusMichel.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.PbarResampling.MDC2025ar.art": 10
+            },
+            {
+                "dts.mu2e.CosmicSignal.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGamma.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGammaCalo.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 10
+            },
+            {
+                "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.MuCapNeutronTailCalo.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.PolyFlatGammaCalo.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_840.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_860.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_880.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_915.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_840.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_870.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900_mA45.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_930.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_870.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_10ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_30ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_100ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_300ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_1000ns.MDC2025bd.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]
