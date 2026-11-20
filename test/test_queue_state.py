@@ -34,6 +34,18 @@ def row(jobid, st, owner='mu2epro'):
             f'0+00:00:00 {st}    0    0.0 job.sh ')
 
 
+def blank_runtime_row(jobid, st, owner='mu2epro'):
+    """A row whose RUNTIME column is empty.
+
+    jobsub_lite prints RUNTIME with condor_q `-format "%T "` from an
+    expression that reads ShadowBday when JobStatus == 2. A job that has
+    only just started running has no ShadowBday yet, the expression is
+    undefined, and condor_q prints nothing for it, so the state letter
+    is the fifth field instead of the sixth."""
+    return (f'{jobid}            {owner}   \t01/09 06:00   '
+            f'{st}    0    0.0 job.sh ')
+
+
 def table(*rows, header=HDR, summary=SUM):
     return '\n'.join([header, summary, *rows]) + '\n'
 
@@ -76,6 +88,66 @@ class TestClusterParse(unittest.TestCase):
     def test_dag_worker_rows_parse_like_any_other(self):
         out = table(row('4.0@jobsub02.fnal.gov', 'H', owner='|-WORKER_12'))
         self.assertEqual(qs._jobsub_table_cluster_states(out), {'4': ['H']})
+
+
+class TestBlankRuntime(unittest.TestCase):
+    """A just-started job's row has no RUNTIME. Until 2026-11-19 such a
+    row failed the whole parse, so a production tick read the queue as
+    untrusted and skipped top-up and drain (rc 2, needs_attention)."""
+
+    def test_blank_runtime_row_is_read(self):
+        out = table(row('111.0@jobsub01.fnal.gov', 'R'),
+                    blank_runtime_row('111.1@jobsub01.fnal.gov', 'R'),
+                    row('222.0@jobsub02.fnal.gov', 'I'))
+        self.assertEqual(qs._jobsub_table_cluster_states(out),
+                         {'111': ['R', 'R'], '222': ['I']})
+
+    def test_flat_projection_counts_blank_runtime_rows(self):
+        out = table(blank_runtime_row('111.0@jobsub01.fnal.gov', 'R'),
+                    blank_runtime_row('111.1@jobsub01.fnal.gov', 'I'))
+        self.assertCountEqual(qs._jobsub_table_states(out), ['R', 'I'])
+
+    def test_state_without_submit_time_before_it_fails(self):
+        # The fifth field counts as the state only when the column
+        # before it is the SUBMITTED time; anything else stays untrusted.
+        out = table('111.0@jobsub01.fnal.gov mu2epro 01/09 0600 R '
+                    '0 0.0 job.sh')
+        self.assertIsNone(qs._jobsub_table_cluster_states(out))
+
+    def test_state_without_priority_after_it_fails(self):
+        out = table('111.0@jobsub01.fnal.gov mu2epro 01/09 06:00 R '
+                    'x 0.0 job.sh')
+        self.assertIsNone(qs._jobsub_table_cluster_states(out))
+
+    def test_unknown_state_in_blank_runtime_row_fails(self):
+        out = table(blank_runtime_row('111.0@jobsub01.fnal.gov', 'Z'))
+        self.assertIsNone(qs._jobsub_table_cluster_states(out))
+
+
+class TestRejectionReason(unittest.TestCase):
+    """Why a table was not trusted, for the tick log. The output tail
+    alone missed it: the rejected row is usually far from the end."""
+
+    def test_names_the_first_rejected_line(self):
+        out = table(row('111.0@jobsub01.fnal.gov', 'R'),
+                    'unexpected garbage line',
+                    'second bad line')
+        why = qs._jobsub_table_rejection(out)
+        self.assertIn('unexpected garbage line', why)
+        self.assertNotIn('second bad line', why)
+
+    def test_missing_header(self):
+        self.assertIn('JOBSUBJOBID',
+                      qs._jobsub_table_rejection(SUM + '\n'))
+
+    def test_trusted_table_has_no_reason(self):
+        self.assertIsNone(qs._jobsub_table_rejection(
+            table(row('111.0@jobsub01.fnal.gov', 'R'),
+                  blank_runtime_row('111.1@jobsub01.fnal.gov', 'R'))))
+
+    def test_reason_is_bounded(self):
+        why = qs._jobsub_table_rejection(table('x' * 2000))
+        self.assertLess(len(why), 400)
 
 
 class TestFlatProjection(unittest.TestCase):
