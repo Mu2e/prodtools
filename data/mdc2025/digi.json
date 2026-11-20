@@ -457,7 +457,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     },
     {
-        "_comment": "Run 2 (nominal tracker) version of the unmixed on-spill digitization at MDC2025be_best_v2_0 above: OnSpill_run2.fcl (Run 2 trigger tuning plus Offline run2conditions_epilog.fcl) and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts and files per job.",
+        "_comment": "Run 2 (nominal tracker) version of the unmixed on-spill digitization at MDC2025be_best_v2_0 above: OnSpill_run2.fcl (Run 2 trigger tuning plus Offline run2conditions_epilog.fcl) and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts and files per job. MuCap1809keVCalo is not in this list: it has its own keep-all entry at the end of this file.",
         "dsconf": "MDC2025be_best_v1_5",
         "fcl": "Production/JobConfig/digitize/OnSpill_run2.fcl",
         "input_data": [
@@ -511,9 +511,6 @@
             },
             {
                 "dts.mu2e.FlatGammaCalo.MDC2025ap.art": 10
-            },
-            {
-                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 10
             },
             {
                 "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 10
@@ -580,6 +577,27 @@
             "services.DbService.purpose": "Sim_best",
             "services.DbService.version": "v1_5",
             "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) unmixed on-spill MuCap1809keVCalo digitization at MDC2025be_best_v1_5, alone so that it can keep every event. MuCap1809keVCalo needs Production/JobConfig/mixing/NoPrimary.fcl: the 1.809 MeV photon never passes the trigger paths, and without it the MDC2025be_best_v2_0 digitization kept almost nothing (redone at MDC2025be_best_v2_0-001). OnSpill_run2.fcl and Sim_best v1_5 as for the other Run 2 unmixed samples; 10 dts files per job: 100 jobs.",
+        "dsconf": "MDC2025be_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run2.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
+            "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
         },
         "inloc": "tape",
         "outloc": {

@@ -604,7 +604,7 @@
         ]
     },
     {
-        "_comment": "Run 2 (nominal tracker) version of the remix of every other Mix1BB sample at MDC2025be_best_v2_0 above: Mix_run2.fcl and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts, pileup, files per job and job counts as the Run 1A entry.",
+        "_comment": "Run 2 (nominal tracker) version of the remix of every other Mix1BB sample at MDC2025be_best_v2_0 above: Mix_run2.fcl and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts, pileup, files per job and job counts as the Run 1A entry. MuCap1809keVCalo is not in this list: it has its own keep-all entry at the end of this file.",
         "input_data": [
             {
                 "dts.mu2e.CeMLeadingLog.MDC2025ap.art": 4
@@ -647,9 +647,6 @@
             },
             {
                 "dts.mu2e.FlatGammaCalo.MDC2025ap.art": 5
-            },
-            {
-                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5
             },
             {
                 "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 1
@@ -757,6 +754,54 @@
         "input_data": [
             {
                 "dts.mu2e.NoPrimary.MDC2025af.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run2.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+                "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+            }
+        ]
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) MuCap1809keVCalo Mix1BB at MDC2025be_best_v1_5, alone so that it can keep every event. MuCap1809keVCalo needs Production/JobConfig/mixing/NoPrimary.fcl: the 1.809 MeV photon never passes the trigger paths, and without it the MDC2025be_best_v2_0 digitization kept almost nothing (redone at MDC2025be_best_v2_0-001). Mix_run2.fcl and Sim_best v1_5 as for the other Run 2 mixes; same dts, pileup and 5 dts files per job as the Run 1A redo: 200 jobs.",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5
             }
         ],
         "pileup_datasets": [
