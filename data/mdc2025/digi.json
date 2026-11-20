@@ -326,7 +326,7 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh"
     },
     {
-        "_comment": "Unmixed (no pileup) on-spill digitization at MDC2025be with Sim_best v2_0, for every primary of the MDC2025be Mix1BB remix (mix.json; NoPrimary left out, it has no primary) plus Flat e-, e+ and mu-. OnSpill_run1a.fcl pins the Run 1A trigger scenario (Production #605). Same dts inputs as the mixes, 10 dts files per job as in the MDC2025ap unmixed entry. No geometry pin: digitization runs after G4. Reco and ntuples come from the generic -OnSpill entries at MDC2025be (reco.json, evntuple.json).",
+        "_comment": "Unmixed (no pileup) on-spill digitization at MDC2025be with Sim_best v2_0, for every primary of the MDC2025be Mix1BB remix (mix.json; NoPrimary left out, it has no primary) plus Flat e-, e+ and mu-. OnSpill_run1a.fcl pins the Run 1A trigger scenario (Production #605). Same dts inputs as the mixes, 10 dts files per job as in the MDC2025ap unmixed entry. No geometry pin: digitization runs after G4. Reco and ntuples come from the generic -OnSpill entries at MDC2025be (reco.json, evntuple.json). MuCap1809keVCalo from this entry kept almost no events (no NoPrimary.fcl); it is redone at MDC2025be_best_v2_0-001 (entry at the end of this file).",
         "dsconf": "MDC2025be_best_v2_0",
         "fcl": "Production/JobConfig/digitize/OnSpill_run1a.fcl",
         "input_data": [
@@ -640,6 +640,27 @@
             "services.DbService.purpose": "Sim_best",
             "services.DbService.version": "v1_5",
             "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Keep-all redo of the unmixed on-spill MuCap1809keVCalo digitization at MDC2025be with Sim_best v2_0 and the Run 1A trigger. The MDC2025be_best_v2_0 digitization put MuCap1809keVCalo in a shared input list without Production/JobConfig/mixing/NoPrimary.fcl, so the trigger selection kept almost nothing (Mix1BB 6,556 of 2,162,530 events, OnSpill 0). Same dts and 10 dts files (about 21,600 events) per job as before: 100 jobs. The MDC2025au on-spill digitization of this dts kept every event: 2,162,530 events, 10 GB.",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run1a.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
+            "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
         },
         "inloc": "tape",
         "outloc": {

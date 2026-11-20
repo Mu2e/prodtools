@@ -354,7 +354,7 @@
         ]
     },
     {
-        "_comment": "Remix of every other Run 1A Mix1BB sample at MDC2025be with the newest tracker conditions (Sim_best v2_0) and the Run 1A trigger, as for the flat e-, e+ and mu- entry above: the MDC2025au mixes (16 samples; NoPrimary is the next entry), the MDC2025bb mixes (3) and the MDC2025bd BNV mixes (17). Same primaries (dts) and the same pileup as before; only the digitization is redone. Files per job are chosen for round job counts (au used 834, 1667 and so on): 11,150 jobs for the au and bb samples, plus 1938 for BNV at one file per job as in bd. The generic draining reco and ntuple entries (reco.json, evntuple.json) pick up the new dig and mcs datasets.",
+        "_comment": "Remix of every other Run 1A Mix1BB sample at MDC2025be with the newest tracker conditions (Sim_best v2_0) and the Run 1A trigger, as for the flat e-, e+ and mu- entry above: the MDC2025au mixes (16 samples; NoPrimary is the next entry), the MDC2025bb mixes (3) and the MDC2025bd BNV mixes (17). Same primaries (dts) and the same pileup as before; only the digitization is redone. Files per job are chosen for round job counts (au used 834, 1667 and so on): 11,150 jobs for the au and bb samples, plus 1938 for BNV at one file per job as in bd. The generic draining reco and ntuple entries (reco.json, evntuple.json) pick up the new dig and mcs datasets. MuCap1809keVCalo from this entry kept almost no events (no NoPrimary.fcl); it is redone at MDC2025be_best_v2_0-001 (entry at the end of this file).",
         "input_data": [
             {
                 "dts.mu2e.CeMLeadingLog.MDC2025ap.art": 4
@@ -839,6 +839,54 @@
             {
                 "services.DbService.purpose": "Sim_best",
                 "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+                "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+            }
+        ]
+    },
+    {
+        "_comment": "Keep-all redo of the MuCap1809keVCalo Mix1BB at MDC2025be with Sim_best v2_0 and the Run 1A trigger. The MDC2025be_best_v2_0 digitization put MuCap1809keVCalo in a shared input list without Production/JobConfig/mixing/NoPrimary.fcl, so the trigger selection kept almost nothing (Mix1BB 6,556 of 2,162,530 events, OnSpill 0). Same dts, pileup and 5 dts files (about 10,800 events) per job as before: 200 jobs. The MDC2025au mix of this dts kept every event: 200 files, 2,162,530 events, 1.14 TB, mean 1.0 CPU hour per job (max 2.6), VmHWM up to 1.5 GB.",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v2_0-001"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run1a.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v2_0",
                 "physics.producers.PBISim.SDF": 0.8,
                 "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
                 "#include": "Production/JobConfig/mixing/NoPrimary.fcl"

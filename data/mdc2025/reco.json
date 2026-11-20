@@ -934,5 +934,24 @@
             "mcs.*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Generic draining reco for the MuCap1809keVCalo keep-all redo at MDC2025be_best_v2_0-001 (mix.json and digi.json): one entry takes both the Mix1BB and the OnSpill dig, since the mixed and unmixed MDC2025be reco entries differ only in input_pattern. One dig file per job; output desc and sequencer follow the input.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.MuCap1809keVCalo%.MDC2025be_best_v2_0-001.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]

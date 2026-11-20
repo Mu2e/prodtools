@@ -773,5 +773,41 @@
             "nts.*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining ntuple entry for the Mix1BB reco of the MuCap1809keVCalo keep-all redo at MDC2025be_best_v2_0-001. Same fcl and AnalysisMDC2025 v02_04_00 as the MDC2025be_best_v2_0 -Mix1BB entry.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%Mix1BB.MDC2025be_best_v2_0-001.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining ntuple entry for the OnSpill reco of the MuCap1809keVCalo keep-all redo at MDC2025be_best_v2_0-001. Same fcl and AnalysisMDC2025 v02_04_00 as the MDC2025be_best_v2_0 -OnSpill entry.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025be_best_v2_0-001.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
     }
 ]
