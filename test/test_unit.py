@@ -20698,16 +20698,99 @@ class TestPublishRun(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn(self.files[0], self.pushed_parents[0])
 
+    MARKER = '.publish_run'     # publish_run's mark in a batch dir it made
+
+    def _batch_dir(self, work, name, run=None):
+        d = os.path.join(work, name)
+        os.makedirs(d)
+        Path(d, 'leftover').write_text('x')
+        if run is not None:
+            Path(d, self.MARKER).write_text(run + '\n')
+        return d
+
     def test_stale_batch_dirs_are_removed_with_a_notice(self):
         self._setup()
         work = _mkdtemp()
-        stale = os.path.join(work, 'batch_0000')
-        os.makedirs(stale)
-        Path(stale, 'leftover').write_text('x')
+        self._batch_dir(work, 'batch_0000', run=self.RUN)
+        self._batch_dir(work, 'batch_0005', run=self.RUN)
         rc, out, err = self._main(work=work)
         self.assertEqual(rc, 0, err)
         self.assertIn('batch_0000', err)
+        self.assertIn('batch_0005', err)
         self.assertEqual(os.listdir(work), [])
+
+    def test_batch_dirs_record_the_run_that_made_them(self):
+        self._setup()
+        seen = {}
+        def look(k):        # the push runs in its batch dir
+            seen[k] = Path(self.cwds[-1], self.MARKER).read_text().strip()
+        self.after_push = look
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(seen, {0: self.RUN})
+
+    def test_cleanup_leaves_anything_not_this_runs_alone(self):
+        """The work dir is the caller's: only batch_NNNN dirs this run
+        marked are removed, and a plain file is no traceback."""
+        self._setup()
+        work = _mkdtemp()
+        keep = [self._batch_dir(work, 'batch_jobs'),
+                self._batch_dir(work, 'batch_0003'),
+                self._batch_dir(work, 'batch_0004', run='cnf.u.Other.Conf.0'),
+                self._batch_dir(work, 'batch_00001', run=self.RUN)]
+        plain = os.path.join(work, 'batch_0007')
+        Path(plain).write_text('mine')
+        rc, out, err = self._main(work=work)
+        self.assertEqual(rc, 0, err)
+        for d in keep:
+            self.assertTrue(os.path.isfile(os.path.join(d, 'leftover')), d)
+        self.assertEqual(Path(plain).read_text(), 'mine')
+        self.assertNotIn('removing', err)
+
+    def test_a_batch_name_taken_by_something_else_is_refused_before_any_push(self):
+        for make in (lambda w: self._batch_dir(w, 'batch_0000', run='cnf.u.Other.Conf.0'),
+                     lambda w: Path(w, 'batch_0000').write_text('mine')):
+            with self.subTest(make=make):
+                self._setup()
+                work = _mkdtemp()
+                make(work)
+                rc, out, err = self._main(work=work)
+                self.assertEqual(rc, 2)
+                self.assertIn(os.path.join(work, 'batch_0000'), err)
+                self.assertEqual(self.pushes, [])
+                self.assertEqual(self.token_cmds, [])
+                self.assertTrue(os.path.lexists(os.path.join(work, 'batch_0000')))
+
+    def test_a_failed_cleanup_does_not_mask_the_push_error(self):
+        self._setup()
+        def boom(*a, **k):
+            raise subprocess.CalledProcessError(3, 'pushOutput output.txt')
+        real_rmtree = shutil.rmtree
+        def rmtree(path, *a, **k):
+            if os.path.basename(str(path)).startswith('batch_'):
+                raise OSError('cleanup boom')
+            return real_rmtree(path, *a, **k)
+        with patch.object(self, '_push', boom), \
+             patch.object(self.pr.shutil, 'rmtree', rmtree):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 1)
+        self.assertIn('exit 3', err)          # the push error, not the cleanup's
+        self.assertIn('cleanup boom', err)    # which is still reported
+        self.assertEqual(self.created, [])
+
+    def test_a_pushed_batch_whose_staging_stays_is_not_called_unpushed(self):
+        self._setup()
+        real_rmtree = shutil.rmtree
+        def rmtree(path, *a, **k):
+            if os.path.basename(str(path)).startswith('batch_'):
+                raise OSError('cleanup boom')
+            return real_rmtree(path, *a, **k)
+        with patch.object(self.pr.shutil, 'rmtree', rmtree):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 1)
+        self.assertIn('batch 0 pushed, but', err)
+        self.assertIn('cleanup boom', err)
+        self.assertNotIn('not fully pushed', err)
 
     def test_unpadded_adler32_still_matches(self):
         self._setup()

@@ -63,6 +63,8 @@ TOKEN_CMD = ['htgettoken', '-a', 'htvaultprod.fnal.gov', '-i', 'mu2e',
 _SUFFIX = re.compile(r'[A-Za-z0-9_-]+')
 _CHUNK = 1 << 20
 LOCK_NAME = "publish.lock"      # in the run's directory, beside its receipt
+MARKER = ".publish_run"         # in each batch dir: the run it stages
+_BATCH_DIR = re.compile(r"batch_[0-9]{4}")
 
 
 class Item(NamedTuple):
@@ -275,40 +277,104 @@ def _stage(item: Item, batch_dir: Path, stage: str) -> str:
     return dest
 
 
-def _push_batch(k: int, batch: List[Item], location: str, work_dir: Path,
-                stage: str) -> int:
-    batch_dir = work_dir / f"batch_{k:04d}"
-    batch_dir.mkdir(parents=True)
-    cwd = os.getcwd()
+def _batch_dir(work_dir: Path, k: int) -> Path:
+    return work_dir / f"batch_{k:04d}"
+
+
+def _made_by(path: Path, run_name: str) -> bool:
+    """True when `path` is a batch dir publish_run made for `run_name`: a
+    real directory holding a MARKER that names the run."""
+    if path.is_symlink() or not path.is_dir():
+        return False
     try:
-        specs = []
-        for j, item in enumerate(batch):
-            staged = _stage(item, batch_dir, stage)
-            field = "none"
-            if item.parents:
-                field = f"parents_{j}.txt"
-                (batch_dir / field).write_text("\n".join(item.parents) + "\n")
-            specs.append((location, staged, field))
-        os.chdir(batch_dir)
-        try:
-            rc = push_output(specs, "output.txt")
-        finally:
-            os.chdir(cwd)
-        if rc != 0:
-            return rc
-        # push_output skips a missing file with only a warning; do not
-        # count what it did not hand to pushOutput.
-        listed = set()
-        out = batch_dir / "output.txt"
-        if out.is_file():
-            listed = {ln.split()[1] for ln in out.read_text().splitlines() if ln.strip()}
-        lost = [s[1] for s in specs if s[1] not in listed]
-        if lost or len(listed) != len(specs):
-            raise OSError("push_output left out " + ", ".join(
-                os.path.basename(x) for x in lost) + " (missing at push time?)")
-        return 0
-    finally:
+        return (path / MARKER).read_text().strip() == run_name
+    except OSError:
+        return False        # no readable marker: not ours
+
+
+def _clear_batch_dirs(work_dir: Path, run_name: str, needed: int) -> None:
+    """Remove the batch dirs an earlier call for this run left in the
+    caller's work_dir, and nothing else; then refuse when a batch name
+    this call needs is still taken."""
+    for entry in sorted(work_dir.iterdir()):
+        if _BATCH_DIR.fullmatch(entry.name) and _made_by(entry, run_name):
+            print(f"publish_run: removing {entry}, left by an earlier "
+                  f"publish_run of {run_name}", file=sys.stderr)
+            try:
+                shutil.rmtree(entry)
+            except OSError as e:
+                raise Refusal(f"publish_run: cannot remove {entry}: {e}") from None
+    for k in range(needed):
+        taken = _batch_dir(work_dir, k)
+        if os.path.lexists(taken):
+            raise Refusal(f"publish_run: {taken} exists and is not staging "
+                          f"publish_run made for {run_name}; move it or pass "
+                          f"another --work-dir")
+
+
+class StagingLeft(OSError):
+    """A pushed batch whose staging dir could not be removed."""
+
+
+def _remove_after_error(batch_dir: Path) -> None:
+    """Remove a failed batch's dir; a failure here is reported but never
+    replaces the error that is already on its way out."""
+    try:
         shutil.rmtree(batch_dir)
+    except OSError as e:
+        print(f"publish_run: also could not remove {batch_dir}: {e}", file=sys.stderr)
+
+
+def _push_batch(k: int, batch: List[Item], location: str, work_dir: Path,
+                stage: str, run_name: str) -> int:
+    batch_dir = _batch_dir(work_dir, k)
+    batch_dir.mkdir()            # a name taken since the start-up check raises
+    try:
+        (batch_dir / MARKER).write_text(run_name + "\n")
+        rc = _push_staged(batch, location, batch_dir, stage)
+    except BaseException:
+        _remove_after_error(batch_dir)
+        raise
+    if rc != 0:
+        _remove_after_error(batch_dir)
+        return rc
+    try:
+        shutil.rmtree(batch_dir)
+    except OSError as e:
+        raise StagingLeft(f"its staging dir {batch_dir} could not be "
+                          f"removed: {e}") from None
+    return 0
+
+
+def _push_staged(batch: List[Item], location: str, batch_dir: Path,
+                 stage: str) -> int:
+    cwd = os.getcwd()
+    specs = []
+    for j, item in enumerate(batch):
+        staged = _stage(item, batch_dir, stage)
+        field = "none"
+        if item.parents:
+            field = f"parents_{j}.txt"
+            (batch_dir / field).write_text("\n".join(item.parents) + "\n")
+        specs.append((location, staged, field))
+    os.chdir(batch_dir)
+    try:
+        rc = push_output(specs, "output.txt")
+    finally:
+        os.chdir(cwd)
+    if rc != 0:
+        return rc
+    # push_output skips a missing file with only a warning; do not
+    # count what it did not hand to pushOutput.
+    listed = set()
+    out = batch_dir / "output.txt"
+    if out.is_file():
+        listed = {ln.split()[1] for ln in out.read_text().splitlines() if ln.strip()}
+    lost = [s[1] for s in specs if s[1] not in listed]
+    if lost or len(listed) != len(specs):
+        raise OSError("push_output left out " + ", ".join(
+            os.path.basename(x) for x in lost) + " (missing at push time?)")
+    return 0
 
 
 def _renew_token(run) -> Optional[str]:
@@ -409,25 +475,29 @@ def _publish(args, cnf: str, owner: str, run: Callable) -> int:
                 raise Refusal(f"publish_run: parent {parent} is not in SAM "
                               f"(needed by {next(i.name for i in items if parent in i.parents)})")
         groups = batches(todo, args.batch)
+        work_dir = Path(os.path.abspath(args.work_dir))
+        try:
+            work_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise Refusal(f"publish_run: cannot make --work-dir {work_dir}: {e}") from None
+        _clear_batch_dirs(work_dir, args.run, len(groups))
     except Refusal as e:
         print(e, file=sys.stderr)
         return 2
 
-    work_dir = Path(os.path.abspath(args.work_dir))
-    work_dir.mkdir(parents=True, exist_ok=True)
-    for stale in sorted(work_dir.glob("batch_*")):
-        print(f"publish_run: removing {stale}, left by an earlier run "
-              f"(this tool's own staging)", file=sys.stderr)
-        shutil.rmtree(stale)
     for k, batch in enumerate(groups):
         bad = _renew_token(run)
         if bad:
             print(f"{bad}; batch {k} and later not pushed", file=sys.stderr)
             return 1
         try:
-            rc = _push_batch(k, batch, args.location, work_dir, args.stage)
+            rc = _push_batch(k, batch, args.location, work_dir, args.stage, args.run)
         except subprocess.CalledProcessError as e:
             rc = e.returncode or 1
+        except StagingLeft as e:
+            print(f"publish_run: batch {k} pushed, but {e}; remove it and rerun "
+                  f"to resume", file=sys.stderr)
+            return 1
         except OSError as e:
             print(f"publish_run: batch {k} not fully pushed: {e}; rerun to resume",
                   file=sys.stderr)
