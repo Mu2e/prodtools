@@ -20520,6 +20520,30 @@ class TestPublishRun(unittest.TestCase):
         self.assertIn(self._parent(1), err)
         self.assertEqual(self.pushes, [])
         self.assertEqual(self.token_cmds, [])
+        rc, out, err = self._main(extra=['--parents', 'require'])
+        self.assertEqual(rc, 2)
+        self.assertIn(self._parent(1), err)
+
+    def test_parents_skip_leaves_missing_parents_out_and_names_them(self):
+        """Spec 5.2: parents="skip" publishes without the parents SAM does
+        not hold (a step left out of the publish), and says which."""
+        self._setup(nparents=3)        # parents 0 and 1 are in SAM, 2 is not
+        del self.sam[self._parent(1)]
+        rc, out, err = self._main(extra=['--parents', 'skip'])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.pushed_parents[0][self.files[0]], [self._parent(0)])
+        self.assertEqual(self.pushed_parents[0][self.files[1]], [])
+        self.assertEqual(self.pushed_parents[0][self.files[2]], [])
+        summary = json.loads(out)
+        self.assertEqual(summary["skipped_parents"],
+                         [self._parent(1), self._parent(2)])
+        self.assertEqual(summary["pushed"], 3)
+
+    def test_parents_require_is_the_default_and_adds_no_summary_key(self):
+        self._setup()
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("skipped_parents", json.loads(out))
 
     def test_missing_file_refuses_and_pushes_nothing(self):
         self._setup()
@@ -20978,6 +21002,7 @@ class TestPublishRunTool(unittest.TestCase):
             'rename extra key': dict(rename={'o': {'dsconf': 'n', 'suffix': 's', 'x': 'y'}}),
             'rename missing key': dict(rename={'o': {'dsconf': 'n'}}),
             'rename not dict': dict(rename={'o': 'n'}),
+            'bad parents': dict(parents='maybe'),
         }
         for label, kw in cases.items():
             with self.subTest(label):
@@ -21022,6 +21047,20 @@ class TestPublishRunTool(unittest.TestCase):
         self._call()
         self.assertNotIn('--rename-from', self.seen['argv'])
         self.assertEqual(self.seen['argv'][self.seen['argv'].index('--stage') + 1], 'copy')
+
+    def test_parents_default_require_and_skip_reports_skipped_parents(self):
+        out = self._call()
+        argv = self.seen['argv']
+        self.assertEqual(argv[argv.index('--parents') + 1], 'require')
+        self.assertNotIn('skipped_parents', out)
+        self.work = _mkdtemp()          # a success removes the workdir
+        out = self._call(parents='skip', cli={
+            'rc': 0, 'stderr': '',
+            'stdout': '{"pushed": 2, "skipped": 0, "datasets": ["d1"], '
+                      '"skipped_parents": ["p1", "p2"]}\n'})
+        argv = self.seen['argv']
+        self.assertEqual(argv[argv.index('--parents') + 1], 'skip')
+        self.assertEqual(out['skipped_parents'], ['p1', 'p2'])
 
     def test_nonzero_rc_raises_with_both_streams_and_keeps_the_workdir(self):
         with self.assertRaises(RuntimeError) as cm:

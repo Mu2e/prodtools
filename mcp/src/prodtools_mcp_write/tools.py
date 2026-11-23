@@ -629,14 +629,18 @@ def push_file(path: str, location: str, parents: List[str], run_as: str,
 
 
 _PUBLISH_STAGES = ('copy', 'link')
+_PUBLISH_PARENTS = ('require', 'skip')
 
 
-def _publish_run_validate(location, files, work_dir, rename, stage):
+def _publish_run_validate(location, files, work_dir, rename, stage, parents):
     if location not in _push_file.PUSH_LOCATIONS:
         raise ValueError(f"publish_run: location must be one of "
                          f"{_push_file.PUSH_LOCATIONS}, got {location!r}")
     if stage not in _PUBLISH_STAGES:
         raise ValueError(f"publish_run: stage must be one of {_PUBLISH_STAGES}, got {stage!r}")
+    if parents not in _PUBLISH_PARENTS:
+        raise ValueError(f"publish_run: parents must be one of {_PUBLISH_PARENTS}, "
+                         f"got {parents!r}")
     if (not isinstance(files, list) or not files
             or not all(isinstance(f, str) and os.path.isabs(f) for f in files)):
         raise ValueError(f"publish_run: files must be a non-empty list of absolute "
@@ -657,7 +661,7 @@ def _publish_run_validate(location, files, work_dir, rename, stage):
 
 def publish_run(run_name: str, location: str, files: List[str], work_dir: str,
                 rename: Optional[Dict[str, Dict[str, str]]] = None,
-                stage: str = "copy"):
+                stage: str = "copy", parents: str = "require"):
     """Declare a finished one-shot run's outstage files to SAM, each with
     the parents its job read (`bin/publish_run`), as you only.
 
@@ -669,17 +673,22 @@ def publish_run(run_name: str, location: str, files: List[str], work_dir: str,
     `rename` maps an old dsconf to `{"dsconf": new, "suffix": label}`;
     those names, and their parents, are published with the new dsconf and
     `_<label>` appended to the sequencer. A file already in SAM with the
-    same size and checksum is skipped, so a rerun resumes.
+    same size and checksum and a copy at `location` is skipped, so a
+    rerun resumes. `parents` "require" (default) refuses a parent that is
+    not in SAM; "skip" leaves it out of its file's metadata and lists it
+    in the result's skipped_parents.
 
     Every refusal here happens before the setup chain runs. Returns
-    run_name, pushed, skipped and datasets (counts and dataset names).
+    run_name, pushed, skipped and datasets (counts and dataset names),
+    plus skipped_parents with parents="skip".
     """
-    _publish_run_validate(location, files, work_dir, rename, stage)
+    _publish_run_validate(location, files, work_dir, rename, stage, parents)
     workdir = _self_workdir(run_name)
     files_path = os.path.join(workdir, 'files.txt')
     Path(files_path).write_text("\n".join(files) + "\n")
     argv = ['bin/publish_run', '--run', run_name, '--location', location,
-            '--files-from', files_path, '--work-dir', work_dir, '--stage', stage]
+            '--files-from', files_path, '--work-dir', work_dir, '--stage', stage,
+            '--parents', parents]
     if rename:
         rename_path = os.path.join(workdir, 'rename.json')
         Path(rename_path).write_text(_json.dumps(rename))
@@ -693,6 +702,8 @@ def publish_run(run_name: str, location: str, files: List[str], work_dir: str,
         summary = _json.loads(lines[-1])
         out = {'run_name': run_name, 'pushed': summary['pushed'],
                'skipped': summary['skipped'], 'datasets': summary['datasets'], 'rc': 0}
+        if parents == 'skip':
+            out['skipped_parents'] = summary['skipped_parents']
     except (IndexError, ValueError, KeyError, TypeError):
         raise RuntimeError(f"publish_run: rc 0 but the last stdout line is not the "
                            f"summary JSON: {_both_streams(result)} -- workdir kept at {workdir}")

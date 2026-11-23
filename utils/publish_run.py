@@ -7,12 +7,13 @@ pushOutput, in batches, each file carrying the parents its job read:
 
     publish_run --run cnf.u.Desc.Conf.0 --location scratch \\
                 --files-from files.txt --work-dir /exp/mu2e/data/users/u/pub \\
-                [--rename-from rename.json] [--batch 50]
+                [--rename-from rename.json] [--batch 50] [--parents skip]
 
 The caller passes the files (one path per line). Each is matched to its
 job index through the run's own cnf, `<runs_root>/<run>/<run>.tar`, and a
 file the run did not produce is refused. A file's parents are every input
-file of its job.
+file of its job. With --parents skip, a parent not in SAM is left out of
+its file's metadata and named in the summary's skipped_parents.
 
 --rename-from is a JSON table `{old_dsconf: {"dsconf": new, "suffix": label}}`.
 A name whose dsconf is in the table is published as
@@ -27,7 +28,9 @@ same run (its lock is held), no files, a missing file, a
 file the run did not produce, a name owned by someone else, a name
 already in SAM with a different size or adler32, the same file in SAM
 with no location or none at --location (a declared file is never
-moved), and a parent that is not in SAM. A file already in SAM with the
+moved), and a parent that is not in SAM (unless --parents skip), and a
+batch_NNNN name in --work-dir taken by anything this run did not stage
+there (only this run's own leftovers are removed). A file already in SAM with the
 same size and adler32 and a location at --location is skipped, so a
 rerun after a died push resumes. A failed `htgettoken` or pushOutput
 exits 1, and so does a batch after which SAM does not hold every pushed
@@ -64,6 +67,7 @@ _SUFFIX = re.compile(r'[A-Za-z0-9_-]+')
 _CHUNK = 1 << 20
 LOCK_NAME = "publish.lock"      # in the run's directory, beside its receipt
 MARKER = ".publish_run"         # in each batch dir: the run it stages
+PARENTS_MODES = ("require", "skip")
 _BATCH_DIR = re.compile(r"batch_[0-9]{4}")
 
 
@@ -398,6 +402,10 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
     ap.add_argument("--batch", type=int, default=50)
     ap.add_argument("--stage", choices=("copy", "link"), default="copy",
                     help="how a renamed file reaches its batch dir (default copy)")
+    ap.add_argument("--parents", choices=PARENTS_MODES, default="require",
+                    help="a parent not in SAM refuses the call (require, the "
+                         "default), or is left out of its file's metadata and "
+                         "listed in the summary's skipped_parents (skip)")
     args = ap.parse_args(argv)
 
     lock = None
@@ -470,10 +478,16 @@ def _publish(args, cnf: str, owner: str, run: Callable) -> int:
                 skipped += 1
             else:
                 todo.append(item)
-        for parent in sorted({p for it in items for p in it.parents}):
-            if not _in_sam(parent):
-                raise Refusal(f"publish_run: parent {parent} is not in SAM "
-                              f"(needed by {next(i.name for i in items if parent in i.parents)})")
+        absent = [p for p in sorted({p for it in items for p in it.parents})
+                  if not _in_sam(p)]
+        if absent and args.parents == "require":
+            parent = absent[0]
+            raise Refusal(f"publish_run: parent {parent} is not in SAM "
+                          f"(needed by {next(i.name for i in items if parent in i.parents)})")
+        if absent:              # --parents skip: leave them out of the metadata
+            gone = set(absent)
+            todo = [i._replace(parents=[p for p in i.parents if p not in gone])
+                    for i in todo]
         groups = batches(todo, args.batch)
         work_dir = Path(os.path.abspath(args.work_dir))
         try:
@@ -521,7 +535,10 @@ def _publish(args, cnf: str, owner: str, run: Callable) -> int:
                 print(f"{bad}; definition {ds} not created", file=sys.stderr)
                 return 1
             create_definition(ds, f"dh.dataset {ds}")
-    print(json.dumps({"pushed": len(todo), "skipped": skipped, "datasets": datasets}))
+    summary = {"pushed": len(todo), "skipped": skipped, "datasets": datasets}
+    if args.parents == "skip":
+        summary["skipped_parents"] = absent
+    print(json.dumps(summary))
     return 0
 
 
