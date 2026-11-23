@@ -362,12 +362,35 @@ def _validate_options_for_source_type(source_type: str, args_state: Dict) -> Non
             raise ValueError(f"Error: --events-per-job is not compatible with fcl files that use source type {source_type}.")
 
 
+def _validate_sequencer_suffix(config: Dict) -> Optional[str]:
+    """Return the entry's sequencer_suffix (None when absent), or raise.
+
+    The suffix is appended to every output sequencer as _<suffix>, so it
+    must be a non-empty string with no '.' (the sequencer sits between two
+    dots in the file name) and no whitespace. g4bl entries name outputs by
+    bare index and take no suffix.
+    """
+    if not config or 'sequencer_suffix' not in config:
+        return None
+    suffix = config['sequencer_suffix']
+    if (not isinstance(suffix, str) or not suffix or '.' in suffix
+            or any(c.isspace() for c in suffix)):
+        raise ValueError(
+            f"sequencer_suffix must be a non-empty string with no '.' and "
+            f"no whitespace, got {suffix!r}")
+    if config.get('runner') == 'g4bl':
+        raise ValueError("sequencer_suffix is not supported with runner: g4bl")
+    return suffix
+
+
 def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None) -> Dict:
     """
     Parse mu2ejobdef CLI options and build complete TBS structure.
     Returns the tbs dict. Unknown tokens are ignored (historical behavior).
     """
     tbs: Dict[str, Any] = {}
+    # Refuse a bad suffix before any fcl is read.
+    suffix = _validate_sequencer_suffix(config)
 
     args_state = {
         'inputs_list': [],
@@ -518,6 +541,10 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
     # input files. Fixes different indices producing the same output filename.
     if 'sequencer_from_index' in config:
         tbs['sequencer_from_index'] = config['sequencer_from_index']
+
+    # sequencer_suffix: label appended to every output sequencer (_<suffix>).
+    if suffix is not None:
+        tbs['sequencer_suffix'] = suffix
 
     # event_id_per_index: per-job linear overrides, e.g.
     # {"source.firstEventNumber": {"offset": 0, "step": 1000}}, evaluated as

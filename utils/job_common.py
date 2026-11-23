@@ -467,7 +467,20 @@ class Mu2eJobBase:
     # ------------------------------------------------------------------
 
     def sequencer(self, index: int) -> str:
-        """Get sequencer for job index.
+        """Get sequencer for job index, with tbs.sequencer_suffix applied.
+
+        With a suffix every branch returns "<run>_<subrun>_<suffix>": the
+        first two '_' fields of the plain sequencer, then the suffix (an
+        inherited parent label is replaced, never doubled).
+        """
+        base = self._base_sequencer(index)
+        suffix = self.json_data.get('tbs', {}).get('sequencer_suffix')
+        if suffix:
+            return "_".join(base.split("_")[:2]) + "_" + suffix
+        return base
+
+    def _base_sequencer(self, index: int) -> str:
+        """Sequencer for job index before any sequencer_suffix.
 
         Precedence: an explicit run number in tbs.event_id wins (the job
         family is run/index-addressed, e.g. mix and generator jobs);

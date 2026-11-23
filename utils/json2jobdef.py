@@ -342,7 +342,7 @@ def _validate_g4bl_entry(config):
             sys.exit(f"json2jobdef: g4bl entry missing required field: {req}")
     forbidden = ('fcl', 'simjob_setup', 'code', 'input_data',
                  'resampler_name', 'pbeam', 'generic_tarball',
-                 'input_pattern', 'firstjob', 'inloc')
+                 'input_pattern', 'firstjob', 'inloc', 'sequencer_suffix')
     for key in forbidden:
         if key in config:
             sys.exit(f"json2jobdef: g4bl entry must not carry '{key}'")

@@ -87,6 +87,9 @@ class Mu2eJobFCL(Mu2eJobBase):
         else:
             # infinite job set: parse "run_subrun" directly
             parts = seq.split('_')
+            if self.json_data.get('tbs', {}).get('sequencer_suffix'):
+                # "run_subrun_suffix": the suffix is checked by test_seq below
+                parts = parts[:2] if len(parts) == 3 else parts
             if len(parts) != 2:
                 raise ValueError(f"Unexpected format of the sequencer \"{seq}\"")
             

@@ -918,6 +918,89 @@ class TestSequencer(unittest.TestCase):
             os.unlink(tar)
 
 
+class TestSequencerSuffix(unittest.TestCase):
+    """Entry key sequencer_suffix: every output sequencer ends _<suffix>."""
+
+    def _job(self, jp, suffix=None, fcl="module_type : EmptyEvent\n"):
+        from utils.jobfcl import Mu2eJobFCL
+        if suffix is not None:
+            jp['tbs']['sequencer_suffix'] = suffix
+        tar = _make_tarball(jp, fcl)
+        self.addCleanup(os.unlink, tar)
+        return Mu2eJobFCL(tar, inloc='dir:/tmp')
+
+    def _parent(self, name, suffix=None):
+        jp = _root_input_jobpars([name])
+        return self._job(jp, suffix, "module_type : RootInput\n")
+
+    def test_run_branch_appends(self):
+        job = self._job(_empty_event_jobpars(run=1430), 'R85')
+        self.assertEqual(job.sequencer(3), "001430_00000003_R85")
+
+    def test_parent_branch_replaces_label(self):
+        job = self._parent("sim.mu2e.T.C.001430_00000000_R85.art", 'R85')
+        self.assertEqual(job.sequencer(0), "001430_00000000_R85")
+
+    def test_parent_with_other_label(self):
+        job = self._parent("sim.mu2e.T.C.001430_00000000_R85.art", 'R07')
+        self.assertEqual(job.sequencer(0), "001430_00000000_R07")
+
+    def test_parent_without_label(self):
+        job = self._parent("sim.mu2e.T.C.001430_00000000.art", 'R85')
+        self.assertEqual(job.sequencer(0), "001430_00000000_R85")
+
+    def test_sequencer_from_index_appends(self):
+        jp = _root_input_jobpars(["dts.mu2e.P.C.001470_00000005.art",
+                                  "dts.mu2e.P.C.001470_00000009.art"])
+        jp['tbs']['sequencer_from_index'] = True
+        job = self._job(jp, 'R85', "module_type : RootInput\n")
+        self.assertEqual(job.sequencer(1), "001470_00000001_R85")
+
+    def test_job_outputs_carry_suffix(self):
+        job = self._job(_empty_event_jobpars(run=1430), 'R85')
+        out = job.job_outputs(7)['outputs.PrimaryOutput.fileName']
+        self.assertTrue(out.endswith(".001430_00000007_R85.art"), out)
+
+    def test_index_round_trip_closed_and_open(self):
+        open_job = self._job(_empty_event_jobpars(run=1430), 'R85')
+        self.assertEqual(open_job.index_from_sequencer("001430_00000004_R85"), 4)
+        jp = _empty_event_jobpars(run=1430)
+        jp['tbs']['njobs'] = 10
+        closed = self._job(jp, 'R85')
+        self.assertEqual(closed.index_from_sequencer("001430_00000004_R85"), 4)
+        with self.assertRaises(ValueError):
+            open_job.index_from_sequencer("001430_00000004_R99")
+
+    def test_no_key_is_unchanged(self):
+        self.assertEqual(
+            self._job(_empty_event_jobpars(run=1430)).sequencer(3),
+            "001430_00000003")
+        self.assertEqual(
+            self._parent("sim.mu2e.T.C.001430_00000000_R85.art").sequencer(0),
+            "001430_00000000_R85")
+        jp = _root_input_jobpars(["dts.mu2e.P.C.001470_00000005.art"])
+        jp['tbs']['sequencer_from_index'] = True
+        self.assertEqual(
+            self._job(jp, None, "module_type : RootInput\n").sequencer(0),
+            "001470_00000000")
+
+    def test_jobdef_refuses_bad_suffix(self):
+        from utils.jobdef import _parse_job_args
+        for bad in ("", "R.85", "R 85", 7):
+            with self.assertRaises(ValueError) as cm:
+                _parse_job_args([], "unused.fcl", {"sequencer_suffix": bad})
+            self.assertIn("sequencer_suffix", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            _parse_job_args([], "unused.fcl",
+                            {"sequencer_suffix": "R85", "runner": "g4bl"})
+        self.assertIn("sequencer_suffix", str(cm.exception))
+
+    def test_jobdef_copies_good_suffix(self):
+        from utils.jobdef import _validate_sequencer_suffix
+        self.assertEqual(_validate_sequencer_suffix({"sequencer_suffix": "R85"}), "R85")
+        self.assertIsNone(_validate_sequencer_suffix({}))
+
+
 # ---------------------------------------------------------------------------
 # 7. Mu2eJobFCL: job outputs
 # ---------------------------------------------------------------------------
