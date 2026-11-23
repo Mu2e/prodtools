@@ -37,15 +37,13 @@ import zlib
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional
 
-from samweb_client import DefinitionNotFound  # type: ignore
-
 from utils import run_receipt
 from utils.job_common import Mu2eName, apply_sequencer_suffix, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import push_output
 from utils.push_file import PUSH_LOCATIONS
 from utils.run_receipt import runs_root
-from utils.samweb_wrapper import (FileNotFound, create_definition,
+from utils.samweb_wrapper import (DefinitionNotFound, FileNotFound, create_definition,
                                   describe_definition, get_metadata)
 
 Rename = Dict[str, Dict[str, str]]
@@ -67,7 +65,10 @@ class Refusal(Exception):
 
 
 def load_rename(path: str) -> Rename:
-    table = json.loads(Path(path).read_text())
+    try:
+        table = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as e:
+        raise Refusal(f"publish_run: cannot read rename table {path}: {e}") from None
     if not isinstance(table, dict):
         raise Refusal(f"publish_run: {path} must hold a JSON object")
     for old, spec in table.items():
@@ -115,18 +116,23 @@ def plan(run_name: str, files: List[str], rename: Optional[Rename], *,
         for out in job_pars.job_outputs(i).values():
             index_of[os.path.basename(out)] = i
     items = []
+    seen: Dict[str, str] = {}
     for f in files:
         base = os.path.basename(f)
         if base not in index_of:
             raise ValueError(f"publish_run: {base} is not an output of run {run_name}")
         name = renamed(base, rename)
+        if name in seen:
+            raise ValueError(f"publish_run: {name} would be published twice, from "
+                             f"{seen[name]} and {f}")
+        seen[name] = f
         if Mu2eName.parse(name).owner != owner:
             raise ValueError(f"publish_run: {name} is owned by "
                              f"{Mu2eName.parse(name).owner!r} but this identity "
                              f"publishes as {owner!r}")
         ins = _flat(job_pars.job_inputs(index_of[base]).values())
         parents = sorted({renamed(os.path.basename(p), rename) for p in ins})
-        items.append(Item(f, name, parents))
+        items.append(Item(os.path.abspath(f), name, parents))
     return items
 
 
@@ -153,13 +159,19 @@ def _sam_state(item: Item) -> str:
         meta = get_metadata(item.name)
     except FileNotFound:
         return "absent"
-    sums = [c.split(":", 1)[1] for c in (meta.get("checksum") or [])
-            if c.startswith("adler32:")]
+    sums = []
+    for c in (meta.get("checksum") or []):
+        if c.startswith("adler32:"):
+            try:
+                sums.append(int(c.split(":", 1)[1], 16))
+            except ValueError:
+                raise Refusal(f"publish_run: SAM's adler32 for {item.name} is "
+                              f"not hexadecimal: {c!r}") from None
     if not sums:
         raise Refusal(f"publish_run: SAM's record of {item.name} has no adler32 "
                       f"checksum, so it cannot be compared with {item.path}")
     if meta.get("file_size") == os.path.getsize(item.path) \
-            and sums[0].lower() == adler32_hex(item.path):
+            and sums[0] == int(adler32_hex(item.path), 16):
         return "same"
     raise Refusal(f"publish_run: {item.name} is in SAM with a different size or "
                   f"adler32 than {item.path}; a name is never reused")
@@ -173,32 +185,32 @@ def _in_sam(name: str) -> bool:
     return True
 
 
-def _stage(item: Item, batch_dir: Path, use_links: bool) -> str:
+def _stage(item: Item, batch_dir: Path, stage: str) -> str:
     """Path pushOutput should read: the file itself, or, when renamed,
-    a link (preferred) or copy under its SAM name in the batch dir."""
+    a copy (default) or symlink under its SAM name in the batch dir.
+    An existing destination or a failed link raises; nothing falls back."""
     if item.name == os.path.basename(item.path):
-        return str(Path(item.path).resolve())
-    dest = batch_dir / item.name
-    src = str(Path(item.path).resolve())
-    if use_links:
-        try:
-            os.symlink(src, dest)
-            return str(dest)
-        except OSError:
-            pass
-    shutil.copyfile(src, dest)
-    return str(dest)
+        return os.path.abspath(item.path)
+    dest = str(batch_dir / item.name)
+    if os.path.lexists(dest):
+        raise FileExistsError(f"publish_run: {dest} already exists; "
+                              f"refusing to write through it")
+    if stage == "link":
+        os.symlink(os.path.abspath(item.path), dest)
+    else:
+        shutil.copyfile(item.path, dest)
+    return dest
 
 
 def _push_batch(k: int, batch: List[Item], location: str, work_dir: Path,
-                use_links: bool) -> int:
+                stage: str) -> int:
     batch_dir = work_dir / f"batch_{k:04d}"
     batch_dir.mkdir(parents=True)
     cwd = os.getcwd()
     try:
         specs = []
         for j, item in enumerate(batch):
-            staged = _stage(item, batch_dir, use_links)
+            staged = _stage(item, batch_dir, stage)
             field = "none"
             if item.parents:
                 field = f"parents_{j}.txt"
@@ -206,11 +218,34 @@ def _push_batch(k: int, batch: List[Item], location: str, work_dir: Path,
             specs.append((location, staged, field))
         os.chdir(batch_dir)
         try:
-            return push_output(specs, "output.txt")
+            rc = push_output(specs, "output.txt")
         finally:
             os.chdir(cwd)
+        if rc != 0:
+            return rc
+        # push_output skips a missing file with only a warning; do not
+        # count what it did not hand to pushOutput.
+        listed = set()
+        out = batch_dir / "output.txt"
+        if out.is_file():
+            listed = {ln.split()[1] for ln in out.read_text().splitlines() if ln.strip()}
+        lost = [s[1] for s in specs if s[1] not in listed]
+        if lost or len(listed) != len(specs):
+            raise OSError("push_output left out " + ", ".join(
+                os.path.basename(x) for x in lost) + " (missing at push time?)")
+        return 0
     finally:
-        shutil.rmtree(batch_dir, ignore_errors=True)
+        shutil.rmtree(batch_dir)
+
+
+def _renew_token(run) -> Optional[str]:
+    try:
+        rc = run(TOKEN_CMD, stdout=subprocess.DEVNULL).returncode
+    except OSError as e:
+        rc = str(e)
+    if rc != 0:
+        return f"publish_run: `{' '.join(TOKEN_CMD)}` failed ({rc})"
+    return None
 
 
 def main(argv=None, *, run: Callable = subprocess.run) -> int:
@@ -222,23 +257,32 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
     ap.add_argument("--work-dir", required=True)
     ap.add_argument("--rename-from")
     ap.add_argument("--batch", type=int, default=50)
+    ap.add_argument("--stage", choices=("copy", "link"), default="copy",
+                    help="how a renamed file reaches its batch dir (default copy)")
     args = ap.parse_args(argv)
 
     try:
+        owner = default_owner()
+        if owner == "mu2e" or os.getenv("USER") == "mu2epro":
+            raise Refusal("publish_run: publishes as the user only; "
+                          "mu2epro is out of scope")
         root = runs_root()
         try:
             run_receipt.read(root, args.run)
-        except run_receipt.RunNotFound as e:
+        except (run_receipt.RunNotFound, ValueError) as e:
             raise Refusal(f"publish_run: {e}") from None
         cnf = os.path.join(root, args.run, args.run + ".tar")
         if not os.path.isfile(cnf):
             raise Refusal(f"publish_run: run {args.run} has no cnf at {cnf}")
-        rename = load_rename(args.rename_from) if args.rename_from else None
-        files = [ln.strip() for ln in Path(args.files_from).read_text().splitlines()
-                 if ln.strip()]
+        try:
+            rename = load_rename(args.rename_from) if args.rename_from else None
+            files = [ln.strip() for ln in Path(args.files_from).read_text().splitlines()
+                     if ln.strip()]
+        except OSError as e:
+            raise Refusal(f"publish_run: cannot read input: {e}") from None
         try:
             items = plan(args.run, files, rename, job_pars=Mu2eJobPars(cnf),
-                         owner=default_owner())
+                         owner=owner)
             batches([], args.batch)  # refuse a bad --batch before any SAM call
         except ValueError as e:
             raise Refusal(str(e)) from None
@@ -258,21 +302,25 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
         print(e, file=sys.stderr)
         return 2
 
-    work_dir = Path(args.work_dir)
+    work_dir = Path(os.path.abspath(args.work_dir))
     work_dir.mkdir(parents=True, exist_ok=True)
+    for stale in sorted(work_dir.glob("batch_*")):
+        print(f"publish_run: removing {stale}, left by an earlier run "
+              f"(this tool's own staging)", file=sys.stderr)
+        shutil.rmtree(stale)
     for k, batch in enumerate(groups):
-        try:
-            rc = run(TOKEN_CMD, stdout=subprocess.DEVNULL).returncode
-        except OSError as e:
-            rc = f"{e}"
-        if rc != 0:
-            print(f"publish_run: `{' '.join(TOKEN_CMD)}` failed ({rc}); "
-                  f"batch {k} and later not pushed", file=sys.stderr)
+        bad = _renew_token(run)
+        if bad:
+            print(f"{bad}; batch {k} and later not pushed", file=sys.stderr)
             return 1
         try:
-            rc = _push_batch(k, batch, args.location, work_dir, bool(rename))
+            rc = _push_batch(k, batch, args.location, work_dir, args.stage)
         except subprocess.CalledProcessError as e:
             rc = e.returncode or 1
+        except OSError as e:
+            print(f"publish_run: batch {k} not fully pushed: {e}; rerun to resume",
+                  file=sys.stderr)
+            return 1
         if rc != 0:
             print(f"publish_run: pushOutput failed (exit {rc}) on batch {k}; "
                   f"rerun to resume", file=sys.stderr)
@@ -283,6 +331,10 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
         try:
             describe_definition(ds)
         except DefinitionNotFound:
+            bad = _renew_token(run)
+            if bad:
+                print(f"{bad}; definition {ds} not created", file=sys.stderr)
+                return 1
             create_definition(ds, f"dh.dataset {ds}")
     print(json.dumps({"pushed": len(todo), "skipped": skipped, "datasets": datasets}))
     return 0

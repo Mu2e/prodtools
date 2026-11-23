@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from samweb_client import SAMWebClient #type: ignore
-from samweb_client import Error as SAMError, FileNotFound  # type: ignore
+from samweb_client import Error as SAMError, FileNotFound, DefinitionNotFound  # type: ignore  # noqa: F401 (re-exported)
 
 
 # SAM's per-file generated-event count. Not the metacat spelling of the

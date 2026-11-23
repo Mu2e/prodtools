@@ -20096,6 +20096,8 @@ class TestPublishRun(unittest.TestCase):
         self.token_rc = 0
         self.token_cmds = []
         self.cwds = []
+        self.links = []
+        self.after_push = None
 
     def parents_in_sam(self, rename=None):
         for i in range(2):
@@ -20113,23 +20115,33 @@ class TestPublishRun(unittest.TestCase):
         return "x"
 
     def _push(self, specs, output_file='output.txt', simjob_setup=None):
+        """Mimics prod_utils.push_output: a spec whose file is missing from
+        the cwd is skipped with a warning, the rest go into output.txt."""
         self.cwds.append(os.getcwd())
+        self.links.append({s[1]: os.path.islink(s[1]) for s in specs})
+        kept = [s for s in specs if Path(s[1]).exists()]
+        Path(output_file).write_text(
+            "".join(f"{s[0]} {s[1]} {s[2]}\n" for s in kept))
         self.pushed_parents.append({
             s[1]: (Path(s[2]).read_text().split() if s[2] != 'none' else [])
-            for s in specs})
+            for s in kept})
         self.pushes.append(specs)
+        if self.after_push:
+            self.after_push(len(self.pushes) - 1)
         return 0
 
     def _runner(self, cmd, **kw):
         self.token_cmds.append(cmd)
         return subprocess.CompletedProcess(cmd, self.token_rc)
 
-    def _main(self, extra=(), files=None, location='scratch'):
+    def _main(self, extra=(), files=None, location='scratch', work=None,
+              run_name=None, listing=None):
         files = self.files if files is None else files
-        listing = os.path.join(_mkdtemp(), 'files.txt')
-        Path(listing).write_text("\n".join(files) + ("\n" if files else ""))
-        work = _mkdtemp()
-        argv = ['--run', self.RUN, '--location', location,
+        if listing is None:
+            listing = os.path.join(_mkdtemp(), 'files.txt')
+            Path(listing).write_text("\n".join(files) + ("\n" if files else ""))
+        work = work or _mkdtemp()
+        argv = ['--run', run_name or self.RUN, '--location', location,
                 '--files-from', listing, '--work-dir', work] + list(extra)
         pr = self.pr
         out, err = io.StringIO(), io.StringIO()
@@ -20349,7 +20361,7 @@ class TestPublishRun(unittest.TestCase):
         rc, out, err = self._main(extra=['--batch', '3'])
         self.assertEqual(rc, 0, err)
         self.assertEqual([len(p) for p in self.pushes], [3, 3, 1])
-        self.assertEqual(len(self.token_cmds), 3)
+        self.assertEqual(len(self.token_cmds), 4)   # 3 batches + the definition
 
     def test_definition_created_once_per_dataset(self):
         self._setup()
@@ -20357,6 +20369,184 @@ class TestPublishRun(unittest.TestCase):
         rc, out, err = self._main()
         self.assertEqual(rc, 0, err)
         self.assertEqual(self.created, [])
+
+
+    # -- fix round 1 -------------------------------------------------
+
+    def test_plan_refuses_a_repeated_sam_name(self):
+        self._setup()
+        d2 = _mkdtemp()
+        dup = os.path.join(d2, os.path.basename(self.files[0]))
+        Path(dup).write_text("other")
+        with self.assertRaises(ValueError) as cm:
+            self._plan(files=[self.files[0], dup])
+        self.assertIn(self.files[0], str(cm.exception))
+        self.assertIn(dup, str(cm.exception))
+
+    def test_stage_refuses_an_existing_destination(self):
+        self._setup()
+        item = self._plan(rename=self.TABLE)[0]
+        bd = Path(_mkdtemp())
+        (bd / item.name).write_text("first")
+        with self.assertRaises(FileExistsError):
+            self.pr._stage(item, bd, 'copy')
+        self.assertEqual((bd / item.name).read_text(), "first")
+
+    def test_relative_work_dir_still_pushes_renamed_files(self):
+        self._setup(rename=self.TABLE)
+        base = _mkdtemp()
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(base)
+        work = 'wd'
+        rc, out, err = self._main(extra=['--rename-from', self._table_file()], work=work)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(self.pushed_parents[0]), 2)
+
+    def test_push_that_skipped_a_file_exits_1(self):
+        self._setup()
+        def skip_all(specs, output_file='output.txt', simjob_setup=None):
+            Path(output_file).write_text("")
+            return 0
+        with patch.object(self, '_push', skip_all):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 1)
+        self.assertIn(os.path.basename(self.files[0]), err)
+        self.assertEqual(self.created, [])
+
+    def test_file_purged_between_batches_exits_1(self):
+        self._setup(nparents=2)
+        self.after_push = lambda k: os.unlink(self.files[1])
+        rc, out, err = self._main(extra=['--batch', '1'])
+        self.assertEqual(rc, 1)
+        self.assertIn(os.path.basename(self.files[1]), err)
+        self.assertEqual(self.created, [])
+
+    def test_stage_defaults_to_copy_and_link_is_explicit(self):
+        self._setup(rename=self.TABLE)
+        rc, _, err = self._main(extra=['--rename-from', self._table_file()])
+        self.assertEqual(rc, 0, err)
+        self.assertFalse(any(self.links[0].values()))
+        self._setup(rename=self.TABLE)
+        rc, _, err = self._main(extra=['--rename-from', self._table_file(),
+                                       '--stage', 'link'])
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(all(self.links[0].values()))
+
+    def test_symlink_error_propagates_no_copy(self):
+        self._setup(rename=self.TABLE)
+        with patch.object(self.pr.os, 'symlink', side_effect=OSError('no links')):
+            rc, out, err = self._main(extra=['--rename-from', self._table_file(),
+                                             '--stage', 'link'])
+        self.assertEqual(rc, 1)
+        self.assertIn('no links', err)
+        self.assertEqual(self.pushes, [])
+
+    def test_unreadable_inputs_are_refusals_not_tracebacks(self):
+        self._setup()
+        rc, _, err = self._main(run_name='../escape')
+        self.assertEqual(rc, 2)
+        rc, _, err = self._main(listing=os.path.join(_mkdtemp(), 'nope.txt'))
+        self.assertEqual(rc, 2)
+        self.assertIn('nope.txt', err)
+        rc, _, err = self._main(extra=['--rename-from', '/nonexistent/r.json'])
+        self.assertEqual(rc, 2)
+        bad = os.path.join(_mkdtemp(), 'r.json')
+        Path(bad).write_text('{not json')
+        rc, _, err = self._main(extra=['--rename-from', bad])
+        self.assertEqual(rc, 2)
+        self.assertIn('r.json', err)
+        self.assertEqual(self.pushes, [])
+
+    def test_all_skipped_rerun_renews_token_before_definition(self):
+        import zlib
+        self._setup()
+        for f in self.files:
+            data = Path(f).read_bytes()
+            self.sam[os.path.basename(f)] = {
+                "file_size": len(data),
+                "checksum": ["adler32:%08x" % (zlib.adler32(data) & 0xffffffff)]}
+        order = []
+        self._runner_orig = self._runner
+        def runner(cmd, **kw):
+            order.append('token')
+            return self._runner_orig(cmd, **kw)
+        pr = self.pr
+        with patch.object(self, '_runner', runner):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.pushes, [])
+        self.assertEqual(len(self.token_cmds), 1)
+        self.assertEqual(len(self.created), 1)
+
+    def test_token_failure_before_definition_exits_1(self):
+        import zlib
+        self._setup()
+        for f in self.files:
+            data = Path(f).read_bytes()
+            self.sam[os.path.basename(f)] = {
+                "file_size": len(data),
+                "checksum": ["adler32:%08x" % (zlib.adler32(data) & 0xffffffff)]}
+        self.token_rc = 1
+        rc, out, err = self._main()
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.created, [])
+
+    def test_symlinked_input_keeps_its_own_name(self):
+        self._setup()
+        real = self.files[0]
+        alias = os.path.join(_mkdtemp(), 'target_name.dat')
+        os.rename(real, alias)
+        os.symlink(alias, real)
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertIn(self.files[0], self.pushed_parents[0])
+
+    def test_stale_batch_dirs_are_removed_with_a_notice(self):
+        self._setup()
+        work = _mkdtemp()
+        stale = os.path.join(work, 'batch_0000')
+        os.makedirs(stale)
+        Path(stale, 'leftover').write_text('x')
+        rc, out, err = self._main(work=work)
+        self.assertEqual(rc, 0, err)
+        self.assertIn('batch_0000', err)
+        self.assertEqual(os.listdir(work), [])
+
+    def test_unpadded_adler32_still_matches(self):
+        self._setup()
+        data = Path(self.files[0]).read_bytes()
+        import zlib
+        a = zlib.adler32(data) & 0xffffffff
+        self.sam[os.path.basename(self.files[0])] = {
+            "file_size": len(data), "checksum": ["adler32:%x" % a]}
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["skipped"], 1)
+
+    def test_refuses_to_publish_as_mu2epro(self):
+        self._setup()
+        pr = self.pr
+        with patch.object(pr, 'default_owner', return_value='mu2e'):
+            rc, out, err = self._run_as_owner('mu2e')
+        self.assertEqual(rc, 2)
+        self.assertIn('mu2epro', err)
+        with patch.dict(os.environ, {'USER': 'mu2epro'}):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.pushes, [])
+
+    def _run_as_owner(self, owner):
+        pr = self.pr
+        listing = os.path.join(_mkdtemp(), 'f.txt')
+        Path(listing).write_text("\n".join(self.files) + "\n")
+        err = io.StringIO()
+        with patch.object(pr, 'runs_root', return_value=self.root), \
+             patch.object(pr, 'default_owner', return_value=owner), \
+             contextlib.redirect_stderr(err):
+            rc = pr.main(['--run', self.RUN, '--location', 'scratch',
+                          '--files-from', listing, '--work-dir', _mkdtemp()],
+                         run=self._runner)
+        return rc, '', err.getvalue()
 
 
 class TestPushFileTool(unittest.TestCase):
