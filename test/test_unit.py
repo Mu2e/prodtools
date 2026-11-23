@@ -15412,6 +15412,51 @@ class TestJson2JobdefEnqueueFlags(unittest.TestCase):
         finally:
             os.chdir(cwd)
 
+    def test_enqueue_refuses_suffix_when_the_worker_release_lacks_the_rule(self):
+        """--enqueue resolves the release every job will run; an entry with
+        sequencer_suffix is refused, before the cnf push, when that
+        release has no suffix rule (it would drop the key silently)."""
+        from utils import json2jobdef
+        config = {
+            'desc': 'PhysicalPionStops', 'dsconf': 'Run1Bap',
+            'simjob_setup': 's', 'fcl': 'f.fcl',
+            'outloc': {'*.art': 'tape'}, 'inloc': 'none',
+            'njobs': 1, 'owner': 'u', 'sequencer_suffix': 'R85',
+        }
+        old = _mkdtemp()      # a valid release tree, but no suffix rule
+        for rel in ('bin/setup.sh', 'bin/runjob.sh', 'utils/runmu2e.py'):
+            f = Path(old) / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text('# fake\nMU2EGRID_PRODTOOLS_DIR\n')
+        Path(old, 'utils', 'job_common.py').write_text("def other():\n    pass\n")
+        tmpdir = _mkdtemp()
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            with patch.object(json2jobdef.shutil, 'which',
+                              return_value='/usr/bin/mu2e'), \
+                 patch.object(json2jobdef, '_build_job_args', return_value=[]), \
+                 patch.object(json2jobdef, 'build_jobdef', return_value=None), \
+                 patch.object(json2jobdef, 'get_parfile_name',
+                              return_value='cnf.u.PhysicalPionStops.Run1Bap.0.tar'), \
+                 patch.object(json2jobdef, '_pushout_to_sam') as push, \
+                 patch('utils.submit.preflight_entry', return_value={}) as pre, \
+                 patch('utils.submit.enqueue_entry', return_value=1) as enq, \
+                 patch.object(json2jobdef, 'is_cvmfs_prodtools_dir',
+                              return_value=True):
+                with self.assertRaises(SystemExit) as ctx:
+                    json2jobdef.process_single_entry(
+                        dict(config), pushout=True, no_cleanup=True,
+                        enqueue=True, slice_size=1000,
+                        json_path='x.json', prodtools_dir=old)
+        finally:
+            os.chdir(cwd)
+        self.assertIn(old, str(ctx.exception))
+        self.assertIn('sequencer_suffix', str(ctx.exception))
+        push.assert_not_called()
+        pre.assert_not_called()
+        enq.assert_not_called()
+
     def test_enqueue_joins_build_jobdesc_to_real_enqueue_entry(self):
         """End-to-end join of the branch's headline path: build_jobdesc's
         output must be exactly what the REAL utils.submit.enqueue_entry
@@ -21188,7 +21233,8 @@ class TestJson2jobdefOnce(unittest.TestCase):
                 'njobs': config['njobs'], 'inloc': 'tape',
                 'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
 
-    def _run(self, config, result=None, build_raises=None, submit_raises=None):
+    def _run(self, config, result=None, build_raises=None, submit_raises=None,
+             release=FAKE_PRODTOOLS_DIR):
         result = result or {'status': 'submitted', 'cluster_id': '42',
                             'jobsub_id': '42.0@jobsub01.fnal.gov',
                             'tarball': 'cnf.alice.CeEndpoint.T1.0.tar',
@@ -21208,15 +21254,72 @@ class TestJson2jobdefOnce(unittest.TestCase):
                 raise submit_raises
             return result
 
+        def entry_keys(prodtools_dir, user):
+            self.calls['entry_keys_dir'] = prodtools_dir
+            return {'prodtools_dir': prodtools_dir}
+
         with patch.object(self.j, 'build_jobdesc', side_effect=self._entry), \
              patch.object(self.j, 'resolve_prodtools_dir',
-                          return_value=FAKE_PRODTOOLS_DIR), \
+                          return_value=release), \
              patch.object(self.j, 'prodtools_entry_keys',
-                          return_value={'prodtools_dir': FAKE_PRODTOOLS_DIR}), \
+                          side_effect=entry_keys), \
              patch.object(self.j.account, 'current_account', return_value='alice'):
             return self.j.submit_once(config, json_path='/j.json',
                                       root=self.root, build=build,
                                       submit=submit)
+
+    def _release(self, with_rule):
+        """A worker release dir whose utils/job_common.py has, or lacks,
+        the suffix rule."""
+        d = _mkdtemp()
+        os.makedirs(os.path.join(d, 'utils'))
+        body = ("def apply_sequencer_suffix(base, suffix):\n    return base\n"
+                if with_rule else "def other():\n    pass\n")
+        Path(d, 'utils', 'job_common.py').write_text(body)
+        return d
+
+    def test_suffix_refused_when_the_worker_release_lacks_the_rule(self):
+        """The grid worker regenerates the FCL and names outputs with the
+        release the submit ships; one without the rule drops the key
+        silently. Refused before the run name is reserved."""
+        old = self._release(with_rule=False)
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(sequencer_suffix='R85'), release=old)
+        msg = str(ctx.exception)
+        self.assertIn(old, msg)
+        self.assertIn('sequencer_suffix', msg)
+        self.assertIn('prodtools_dir', msg)
+        self.assertEqual(os.listdir(self.root), [])
+        self.assertNotIn('build_cwd', self.calls)
+
+    def test_suffix_refused_when_the_worker_release_has_no_job_common(self):
+        empty = _mkdtemp()
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(self._config(sequencer_suffix='R85'), release=empty)
+        self.assertIn(os.path.join(empty, 'utils', 'job_common.py'), str(ctx.exception))
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_suffix_accepted_when_the_worker_release_has_the_rule(self):
+        new = self._release(with_rule=True)
+        receipt = self._run(self._config(sequencer_suffix='R85'), release=new)
+        self.assertEqual(receipt['state'], 'submitted')
+        # the release checked is the release shipped
+        self.assertEqual(self.calls['entry_keys_dir'], new)
+
+    def test_no_suffix_never_reads_the_worker_release(self):
+        receipt = self._run(self._config(), release=_mkdtemp())
+        self.assertEqual(receipt['state'], 'submitted')
+
+    def test_bad_suffix_refused_before_the_name_is_reserved(self):
+        for over in ({'sequencer_suffix': 'R.85'}, {'sequencer_suffix': ''},
+                     {'sequencer_suffix': 'R85', 'runner': 'g4bl'}):
+            with self.subTest(over):
+                with self.assertRaises(SystemExit) as ctx:
+                    self._run(self._config(**over),
+                              release=self._release(with_rule=True))
+                self.assertIn('sequencer_suffix', str(ctx.exception))
+                self.assertEqual(os.listdir(self.root), [])
+                self.assertNotIn('build_cwd', self.calls)
 
     def test_happy_path_builds_in_the_run_dir_and_records_the_cluster(self):
         receipt = self._run(self._config())
@@ -22333,6 +22436,13 @@ class TestJson2jobdefOnceLocal(unittest.TestCase):
                 config, json_path='/j.json', root=self.root, build=build,
                 submit=submit, local=True, parallel=parallel,
                 launch=launch or self._launch)
+
+    def test_local_suffix_run_does_not_check_a_worker_release(self):
+        """A local run executes this checkout, not a shipped release."""
+        old = _mkdtemp()      # no utils/job_common.py at all
+        with patch.object(self.j, 'resolve_prodtools_dir', return_value=old):
+            receipt = self._run(self._config(sequencer_suffix='R85'))
+        self.assertEqual(receipt['state'], 'running')
 
     def test_local_starts_runlocal_detached_and_records_it(self):
         receipt = self._run(self._config())

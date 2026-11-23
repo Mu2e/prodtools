@@ -34,7 +34,8 @@ from utils.jobdesc import (
 from utils.submit import bundle_prodtools
 from utils.job_common import Mu2eName, default_owner
 from utils.jobquery import Mu2eJobPars
-from utils.jobdef import create_jobdef, get_output_dataset_names
+from utils.jobdef import (_validate_sequencer_suffix, create_jobdef,
+                          get_output_dataset_names)
 from utils.jobfcl import validate_output_filenames
 from utils.samweb_wrapper import (
     list_files,
@@ -1023,6 +1024,18 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
                 f"hand: build the cnf with json2jobdef, then run "
                 f"`runlocal --first {firstjob} --num {config.get('njobs')}` "
                 f"on it; or drop firstjob from the entry.")
+    # The suffix and the worker release are checked before the name is
+    # reserved: a refusal after it would spend the desc+dsconf pair.
+    worker_dir = None
+    try:
+        _validate_sequencer_suffix(config)
+        if not local:
+            # The worker code travels with grid jobs only.
+            worker_dir = resolve_prodtools_dir(
+                prodtools_dir or PRODTOOLS_CVMFS_CURRENT)
+            require_worker_suffix_rule(config, worker_dir)
+    except ValueError as exc:
+        sys.exit(f"json2jobdef: {exc}")
 
     name = run_receipt.run_name(get_parfile_name(config))
     try:
@@ -1039,11 +1052,7 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
         build(config, pushout=False, enqueue=False, no_cleanup=False)
         entry = build_jobdesc(config)
         if not local:
-            # The worker code travels with grid jobs only.
-            entry.update(prodtools_entry_keys(
-                resolve_prodtools_dir(
-                    prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
-                user=user))
+            entry.update(prodtools_entry_keys(worker_dir, user=user))
         njobs = njobs_of(entry)
         if njobs is None or njobs < 1 or njobs > ONCE_MAX_JOBS:
             raise ValueError(
@@ -1363,9 +1372,11 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
                                   _resolve_ledger_db)
         entry = build_jobdesc(config)
         try:
+            worker_dir = resolve_prodtools_dir(
+                prodtools_dir or PRODTOOLS_CVMFS_CURRENT)
+            require_worker_suffix_rule(config, worker_dir)
             entry.update(prodtools_entry_keys(
-                resolve_prodtools_dir(prodtools_dir or PRODTOOLS_CVMFS_CURRENT),
-                user=account.current_account()))
+                worker_dir, user=account.current_account()))
         except ValueError as e:
             sys.exit(f"json2jobdef: {e}")
         print(f"Campaign will run prodtools from {entry['prodtools_dir']}")
@@ -1392,6 +1403,37 @@ def process_single_entry(config, pushout=False, no_cleanup=True,
         _cleanup_temp_files()
 
     return result
+
+def require_worker_suffix_rule(config, prodtools_dir):
+    """Raise ValueError when `config` carries sequencer_suffix and the
+    prodtools release its grid jobs run (`prodtools_dir`, resolved) has
+    no suffix rule.
+
+    A grid worker regenerates the FCL and names its outputs with that
+    release (MU2EGRID_PRODTOOLS_DIR), not with this checkout. A release
+    without `apply_sequencer_suffix` ignores the key, so its outputs
+    would lack the suffix and nothing would say so; cvmfs `current` was
+    v03_04_01 when the key was added. Local runs use this checkout and
+    do not call this."""
+    if 'sequencer_suffix' not in config:
+        return
+    path = os.path.join(prodtools_dir, 'utils', 'job_common.py')
+    try:
+        text = Path(path).read_text()
+    except OSError as e:
+        raise ValueError(
+            f"this entry sets sequencer_suffix, but the worker prodtools "
+            f"release {prodtools_dir} cannot be checked for the suffix "
+            f"rule ({e}). Pass a prodtools_dir (--prodtools-dir) that has "
+            f"it.") from None
+    if not re.search(r'^def apply_sequencer_suffix\b', text, re.M):
+        raise ValueError(
+            f"this entry sets sequencer_suffix, but the worker prodtools "
+            f"release {prodtools_dir} has no suffix rule (no `def "
+            f"apply_sequencer_suffix` in {path}): its jobs would name "
+            f"outputs without the suffix. Pass a prodtools_dir "
+            f"(--prodtools-dir) that has it.")
+
 
 def prodtools_entry_keys(prodtools_dir, user):
     """Entry keys naming the prodtools every job of the campaign runs.
