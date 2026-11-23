@@ -20055,6 +20055,310 @@ class TestPushFileCli(unittest.TestCase):
         self.assertEqual(rc, 3)
 
 
+class TestPublishRun(unittest.TestCase):
+    """utils/publish_run.py: declare a finished one-shot run's files to
+    SAM through pushOutput in batches, each with its real parents."""
+
+    RUN = 'cnf.u.Desc.Conf.0'
+    TABLE = {"Conf": {"dsconf": "ConfNew", "suffix": "R85"}}
+
+    class _NotFound(Exception):
+        pass
+
+    def _parent(self, n):
+        return f"dts.u.P.Old.001430_{n:08d}.art"
+
+    def _setup(self, nparents=2, rename=None):
+        """A runs root holding the run's receipt + cnf, an outstage dir
+        holding one file per job, and a fake SAM."""
+        from utils import publish_run
+        self.pr = publish_run
+        self.root = _mkdtemp()
+        run_dir = os.path.join(self.root, self.RUN)
+        os.makedirs(run_dir)
+        Path(run_dir, 'receipt.json').write_text('{"name": "%s", "state": "done"}' % self.RUN)
+        jp = _root_input_jobpars([self._parent(i) for i in range(nparents)],
+                                 owner='u', dsconf='Conf')
+        tar = _make_tarball(jp)
+        shutil.move(tar, os.path.join(run_dir, self.RUN + '.tar'))
+        self.out = _mkdtemp()
+        self.files = []
+        for i in range(nparents):
+            p = os.path.join(self.out, f"sim.u.TestDesc.Conf.001430_{i:08d}.art")
+            Path(p).write_bytes(b"payload %d" % i)
+            self.files.append(p)
+        self.sam = {}                 # name -> metadata dict
+        self.parents_in_sam(rename)
+        self.pushes = []
+        self.pushed_parents = []
+        self.defs = {}
+        self.created = []
+        self.token_rc = 0
+        self.token_cmds = []
+        self.cwds = []
+
+    def parents_in_sam(self, rename=None):
+        for i in range(2):
+            n = self.pr.renamed(self._parent(i), rename)
+            self.sam[n] = {"file_size": 1, "checksum": ["adler32:00000001"]}
+
+    def _meta(self, name):
+        if name not in self.sam:
+            raise self._NotFound(name)
+        return self.sam[name]
+
+    def _describe(self, name):
+        if name not in self.defs:
+            raise self._NotFound(name)
+        return "x"
+
+    def _push(self, specs, output_file='output.txt', simjob_setup=None):
+        self.cwds.append(os.getcwd())
+        self.pushed_parents.append({
+            s[1]: (Path(s[2]).read_text().split() if s[2] != 'none' else [])
+            for s in specs})
+        self.pushes.append(specs)
+        return 0
+
+    def _runner(self, cmd, **kw):
+        self.token_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, self.token_rc)
+
+    def _main(self, extra=(), files=None, location='scratch'):
+        files = self.files if files is None else files
+        listing = os.path.join(_mkdtemp(), 'files.txt')
+        Path(listing).write_text("\n".join(files) + ("\n" if files else ""))
+        work = _mkdtemp()
+        argv = ['--run', self.RUN, '--location', location,
+                '--files-from', listing, '--work-dir', work] + list(extra)
+        pr = self.pr
+        out, err = io.StringIO(), io.StringIO()
+        cwd = os.getcwd()
+        with patch.object(pr, 'runs_root', return_value=self.root), \
+             patch.object(pr, 'default_owner', return_value='u'), \
+             patch.object(pr, 'get_metadata', self._meta), \
+             patch.object(pr, 'describe_definition', self._describe), \
+             patch.object(pr, 'create_definition',
+                          lambda n, q: self.created.append((n, q))), \
+             patch.object(pr, 'push_output', self._push), \
+             patch.object(pr, 'FileNotFound', self._NotFound), \
+             patch.object(pr, 'DefinitionNotFound', self._NotFound), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = pr.main(argv, run=self._runner)
+        self.assertEqual(os.getcwd(), cwd)
+        self.work = work
+        return rc, out.getvalue(), err.getvalue()
+
+    # -- pure helpers ------------------------------------------------
+
+    def test_renamed_maps_dsconf_and_label(self):
+        from utils.publish_run import renamed
+        t = {"MDC2025bc_yo03R85_00": {"dsconf": "MDC2025bc_yo03", "suffix": "R85"}}
+        self.assertEqual(
+            renamed("dts.oksuzian.MuStopPileup.MDC2025bc_yo03R85_00.001430_00000003.art", t),
+            "dts.oksuzian.MuStopPileup.MDC2025bc_yo03.001430_00000003_R85.art")
+        official = "sim.mu2e.MuBeamCat.Run1Baa.001202_00000017.art"
+        self.assertEqual(renamed(official, t), official)
+        self.assertEqual(renamed(official, None), official)
+
+    def test_renamed_replaces_an_inherited_label(self):
+        from utils.publish_run import renamed
+        t = {"C": {"dsconf": "D", "suffix": "R07"}}
+        self.assertEqual(renamed("sim.u.T.C.001430_00000003_R85.art", t),
+                         "sim.u.T.D.001430_00000003_R07.art")
+
+    # -- plan --------------------------------------------------------
+
+    def _plan(self, files=None, rename=None, owner='u'):
+        from utils.jobquery import Mu2eJobPars
+        jp = Mu2eJobPars(os.path.join(self.root, self.RUN, self.RUN + '.tar'))
+        return self.pr.plan(self.RUN, self.files if files is None else files,
+                            rename, job_pars=jp, owner=owner)
+
+    def test_plan_parents_from_job_inputs(self):
+        self._setup()
+        items = self._plan()
+        self.assertEqual([i.name for i in items],
+                         [os.path.basename(f) for f in self.files])
+        self.assertEqual(items[1].parents, [self._parent(1)])
+        table = {"Old": {"dsconf": "New", "suffix": "R85"}}
+        items = self._plan(rename=table)
+        self.assertEqual(items[1].parents, ["dts.u.P.New.001430_00000001_R85.art"])
+
+    def test_plan_renames_the_output_too(self):
+        self._setup()
+        items = self._plan(rename=self.TABLE)
+        self.assertEqual(items[0].name, "sim.u.TestDesc.ConfNew.001430_00000000_R85.art")
+        self.assertEqual(items[0].path, self.files[0])
+
+    def test_plan_refuses_foreign_file(self):
+        self._setup()
+        other = os.path.join(self.out, "sim.u.Other.Conf.001430_00000000.art")
+        Path(other).write_text("x")
+        with self.assertRaisesRegex(ValueError, 'Other.Conf'):
+            self._plan(files=[other])
+
+    def test_plan_refuses_missing_file(self):
+        self._setup()
+        gone = self.files[1] + '.gone'
+        with self.assertRaisesRegex(ValueError, 'gone'):
+            self._plan(files=[self.files[0], gone])
+
+    def test_plan_lists_every_missing_file(self):
+        self._setup()
+        os.unlink(self.files[0])
+        os.unlink(self.files[1])
+        with self.assertRaises(ValueError) as cm:
+            self._plan()
+        for f in self.files:
+            self.assertIn(os.path.basename(f), str(cm.exception))
+
+    def test_plan_refuses_empty(self):
+        self._setup()
+        with self.assertRaisesRegex(ValueError, 'no files'):
+            self._plan(files=[])
+
+    def test_plan_refuses_a_name_owned_by_someone_else(self):
+        self._setup()
+        with self.assertRaisesRegex(ValueError, "owned by 'u'"):
+            self._plan(owner='mu2e')
+
+    def test_batches_of_50(self):
+        from utils.publish_run import batches
+        got = batches(list(range(120)), 50)
+        self.assertEqual([len(b) for b in got], [50, 50, 20])
+
+    # -- CLI ---------------------------------------------------------
+
+    def test_pushes_with_parents_and_creates_definition(self):
+        self._setup()
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(self.pushes), 1)
+        self.assertEqual(self.pushed_parents[0][self.files[1]], [self._parent(1)])
+        self.assertEqual(json.loads(out), {"pushed": 2, "skipped": 0,
+                                           "datasets": ["sim.u.TestDesc.Conf.art"]})
+        self.assertEqual(self.created, [("sim.u.TestDesc.Conf.art",
+                                         "dh.dataset sim.u.TestDesc.Conf.art")])
+        self.assertEqual(self.token_cmds[0],
+                         ['htgettoken', '-a', 'htvaultprod.fnal.gov', '-i', 'mu2e',
+                          '--minsecs', '1800'])
+        self.assertEqual(os.listdir(self.work), [])
+
+    def test_rename_pushes_renamed_files_from_batch_dir(self):
+        self._setup(rename=self.TABLE)
+        rc, out, err = self._main(extra=['--rename-from', self._table_file()])
+        self.assertEqual(rc, 0, err)
+        spec = self.pushes[0][0]
+        self.assertEqual(os.path.basename(spec[1]),
+                         "sim.u.TestDesc.ConfNew.001430_00000000_R85.art")
+        self.assertIn(self.work, self.cwds[0])
+        self.assertEqual(self.pushed_parents[0][spec[1]],
+                         [self.pr.renamed(self._parent(0), self.TABLE)])
+        self.assertTrue(os.path.exists(self.files[0]))
+        self.assertEqual(os.listdir(self.work), [])
+        self.assertEqual(json.loads(out)["datasets"], ["sim.u.TestDesc.ConfNew.art"])
+
+    def _table_file(self):
+        p = os.path.join(_mkdtemp(), 'rename.json')
+        Path(p).write_text(json.dumps(self.TABLE))
+        return p
+
+    def test_rerun_skips_same_and_refuses_different(self):
+        import zlib
+        self._setup()
+        data = Path(self.files[0]).read_bytes()
+        self.sam[os.path.basename(self.files[0])] = {
+            "file_size": len(data),
+            "checksum": ["enstore:1", "adler32:%08x" % (zlib.adler32(data) & 0xffffffff)]}
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["skipped"], 1)
+        self.assertEqual(json.loads(out)["pushed"], 1)
+        self.assertEqual(list(self.pushed_parents[0]), [self.files[1]])
+        # now a different size for the second file
+        self._setup()
+        self.sam[os.path.basename(self.files[1])] = {
+            "file_size": 999, "checksum": ["adler32:00000000"]}
+        rc, out, err = self._main()
+        self.assertEqual(rc, 2)
+        self.assertIn(os.path.basename(self.files[1]), err)
+        self.assertEqual(self.pushes, [])
+        self.assertEqual(self.token_cmds, [])
+
+    def test_sam_record_without_adler32_is_refused(self):
+        self._setup()
+        data = Path(self.files[0]).read_bytes()
+        self.sam[os.path.basename(self.files[0])] = {
+            "file_size": len(data), "checksum": ["enstore:1"]}
+        rc, out, err = self._main()
+        self.assertEqual(rc, 2)
+        self.assertIn('adler32', err)
+        self.assertIn(os.path.basename(self.files[0]), err)
+        self.assertEqual(self.pushes, [])
+
+    def test_missing_parent_refuses_before_push(self):
+        self._setup()
+        del self.sam[self._parent(1)]
+        rc, out, err = self._main()
+        self.assertEqual(rc, 2)
+        self.assertIn(self._parent(1), err)
+        self.assertEqual(self.pushes, [])
+        self.assertEqual(self.token_cmds, [])
+
+    def test_missing_file_refuses_and_pushes_nothing(self):
+        self._setup()
+        os.unlink(self.files[1])
+        rc, out, err = self._main()
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.pushes, [])
+
+    def test_token_failure_stops_before_push(self):
+        self._setup()
+        self.token_rc = 1
+        rc, out, err = self._main()
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.pushes, [])
+        self.assertIn('htgettoken', err)
+
+    def test_pushoutput_failure_exits_1(self):
+        self._setup()
+        def boom(*a, **k):
+            raise subprocess.CalledProcessError(3, 'pushOutput output.txt')
+        with patch.object(self, '_push', boom):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 1)
+        self.assertIn('pushOutput', err)
+        self.assertEqual(self.created, [])
+
+    def test_unknown_run_exits_2(self):
+        self._setup()
+        self.RUN_BAK, self.RUN = self.RUN, 'cnf.u.Nope.Conf.0'
+        try:
+            rc, out, err = self._main()
+        finally:
+            self.RUN = self.RUN_BAK
+        self.assertEqual(rc, 2)
+        self.assertIn('Nope', err)
+
+    def test_batching_one_push_per_batch(self):
+        self._setup(nparents=7)
+        self.parents_in_sam()
+        for i in range(2, 7):
+            self.sam[self._parent(i)] = {"file_size": 1, "checksum": ["adler32:00000001"]}
+        rc, out, err = self._main(extra=['--batch', '3'])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([len(p) for p in self.pushes], [3, 3, 1])
+        self.assertEqual(len(self.token_cmds), 3)
+
+    def test_definition_created_once_per_dataset(self):
+        self._setup()
+        self.defs["sim.u.TestDesc.Conf.art"] = True
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.created, [])
+
+
 class TestPushFileTool(unittest.TestCase):
     """prodtools_mcp_write.tools.push_file: the same gates as push_cnf,
     every refusal before run_cli, argv composed for bin/push_file."""

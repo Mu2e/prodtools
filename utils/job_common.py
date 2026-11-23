@@ -54,6 +54,17 @@ _TIER_TO_OWNER_CLASS = {
 _CAMPAIGN_RE = re.compile(r"^(MDC\d{4}[a-z]*|Run\d+[A-Z]?[a-z]*)")
 
 
+def apply_sequencer_suffix(base: str, suffix: str) -> str:
+    """THE suffix rule: keep base's first two '_' fields (run, subrun),
+    then _<suffix>. Raises ValueError when base has fewer than two."""
+    fields = base.split("_")
+    if len(fields) < 2:
+        raise ValueError(
+            f"sequencer_suffix {suffix!r} needs a <run>_<subrun> "
+            f"sequencer, got {base!r}")
+    return "_".join(fields[:2]) + "_" + suffix
+
+
 class Mu2eName:
     """Parse and build Mu2e dot-names (file / dataset / tarball).
 
@@ -484,12 +495,7 @@ class Mu2eJobBase:
         suffix = self.json_data.get('tbs', {}).get('sequencer_suffix')
         if not suffix:
             return base
-        fields = base.split("_")
-        if len(fields) < 2:
-            raise ValueError(
-                f"sequencer_suffix {suffix!r} needs a <run>_<subrun> "
-                f"sequencer, got {base!r}")
-        return "_".join(fields[:2]) + "_" + suffix
+        return apply_sequencer_suffix(base, suffix)
 
     def _base_sequencer(self, index: int) -> str:
         """Sequencer for job index before any sequencer_suffix.
