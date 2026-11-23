@@ -20146,6 +20146,8 @@ class TestPublishRun(unittest.TestCase):
             Path(p).write_bytes(b"payload %d" % i)
             self.files.append(p)
         self.sam = {}                 # name -> metadata dict
+        self.locs = {}                # name -> SAM location records
+        self.declare_on_push = True   # the fake push declares + locates
         self.parents_in_sam(rename)
         self.pushes = []
         self.pushed_parents = []
@@ -20172,9 +20174,35 @@ class TestPublishRun(unittest.TestCase):
             raise self._NotFound(name)
         return "x"
 
+    @staticmethod
+    def _record(name, location):
+        """A SAM location record as pushOutput leaves it: <enstore|dcache>:
+        <locprefix>/<family>/<ds path>/<hash dirs>, here with a tape label
+        suffix too."""
+        from utils.file_resolver import file_path_at
+        d = os.path.dirname(file_path_at(name, location))
+        if location == 'tape':
+            return {'full_path': f'enstore:{d}(1234@VR0001M8)', 'location_type': 'tape'}
+        return {'full_path': f'dcache:{d}', 'location_type': 'disk'}
+
+    def _locate(self, name):
+        if name not in self.sam:
+            raise self._NotFound(name)
+        return self.locs.get(name, [])
+
+    def _declare(self, path, location='scratch', name=None):
+        """SAM holds `path`'s bytes under `name` at `location`."""
+        import zlib
+        data = Path(path).read_bytes()
+        name = name or os.path.basename(path)
+        self.sam[name] = {"file_size": len(data),
+                          "checksum": ["adler32:%08x" % (zlib.adler32(data) & 0xffffffff)]}
+        self.locs[name] = [self._record(name, location)]
+
     def _push(self, specs, output_file='output.txt', simjob_setup=None):
         """Mimics prod_utils.push_output: a spec whose file is missing from
-        the cwd is skipped with a warning, the rest go into output.txt."""
+        the cwd is skipped with a warning, the rest go into output.txt.
+        Then declares each file with its location, as pushOutput does."""
         self.cwds.append(os.getcwd())
         self.links.append({s[1]: os.path.islink(s[1]) for s in specs})
         kept = [s for s in specs if Path(s[1]).exists()]
@@ -20184,6 +20212,9 @@ class TestPublishRun(unittest.TestCase):
             s[1]: (Path(s[2]).read_text().split() if s[2] != 'none' else [])
             for s in kept})
         self.pushes.append(specs)
+        if self.declare_on_push:
+            for s in kept:
+                self._declare(s[1], s[0])
         if self.after_push:
             self.after_push(len(self.pushes) - 1)
         return 0
@@ -20207,6 +20238,7 @@ class TestPublishRun(unittest.TestCase):
         with patch.object(pr, 'runs_root', return_value=self.root), \
              patch.object(pr, 'default_owner', return_value='u'), \
              patch.object(pr, 'get_metadata', self._meta), \
+             patch.object(pr, 'locate_file_strict', self._locate), \
              patch.object(pr, 'describe_definition', self._describe), \
              patch.object(pr, 'create_definition',
                           lambda n, q: self.created.append((n, q))), \
@@ -20338,6 +20370,7 @@ class TestPublishRun(unittest.TestCase):
         import zlib
         self._setup()
         data = Path(self.files[0]).read_bytes()
+        self._declare(self.files[0])
         self.sam[os.path.basename(self.files[0])] = {
             "file_size": len(data),
             "checksum": ["enstore:1", "adler32:%08x" % (zlib.adler32(data) & 0xffffffff)]}
@@ -20355,6 +20388,84 @@ class TestPublishRun(unittest.TestCase):
         self.assertIn(os.path.basename(self.files[1]), err)
         self.assertEqual(self.pushes, [])
         self.assertEqual(self.token_cmds, [])
+
+    # -- SAM locations (a "same" file must have a copy of the kind asked) --
+
+    def test_rerun_refuses_a_same_file_declared_without_a_location(self):
+        """pushOutput declares, then adds the location in a separate call;
+        a push that died between them leaves a record SAM cannot serve.
+        A rerun must not count it as published."""
+        self._setup()
+        self._declare(self.files[0])
+        self.locs[os.path.basename(self.files[0])] = []
+        rc, out, err = self._main()
+        self.assertEqual(rc, 2)
+        self.assertIn(os.path.basename(self.files[0]), err)
+        self.assertIn('no location', err)
+        self.assertEqual(self.pushes, [])
+        self.assertEqual(self.token_cmds, [])
+
+    def test_rerun_refuses_a_same_file_at_another_location(self):
+        """Published to scratch earlier, asked for tape now: nothing would
+        go to tape, so the call refuses and says so."""
+        self._setup()
+        self._declare(self.files[0], 'scratch')
+        rc, out, err = self._main(location='tape')
+        self.assertEqual(rc, 2)
+        self.assertIn(os.path.basename(self.files[0]), err)
+        self.assertIn('scratch', err)
+        self.assertIn('tape', err)
+        self.assertIn('never moved', err)
+        self.assertEqual(self.pushes, [])
+
+    def test_same_file_on_tape_with_a_label_is_skipped(self):
+        self._setup()
+        self._declare(self.files[0], 'tape')
+        rc, out, err = self._main(location='tape')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["skipped"], 1)
+        self.assertEqual(json.loads(out)["pushed"], 1)
+
+    def test_disk_and_scratch_are_told_apart_by_path(self):
+        """SAM calls both 'disk'; pushOutput's path prefix tells them apart."""
+        self._setup()
+        self._declare(self.files[0], 'disk')
+        rc, out, err = self._main(location='scratch')
+        self.assertEqual(rc, 2)
+        self.assertIn('disk', err)
+
+    def test_after_a_batch_a_pushed_file_without_a_location_exits_1(self):
+        self._setup()
+        def drop_location(k):
+            self.locs[os.path.basename(self.files[1])] = []
+        self.after_push = drop_location
+        rc, out, err = self._main()
+        self.assertEqual(rc, 1)
+        self.assertIn(os.path.basename(self.files[1]), err)
+        self.assertIn('no location', err)
+        self.assertNotIn('rerun to resume', err)    # a rerun refuses it too
+        self.assertEqual(self.created, [])
+
+    def test_after_a_batch_a_pushed_file_at_the_wrong_location_exits_1(self):
+        self._setup()
+        def elsewhere(k):
+            name = os.path.basename(self.files[0])
+            self.locs[name] = [self._record(name, 'disk')]
+        self.after_push = elsewhere
+        rc, out, err = self._main(location='scratch')
+        self.assertEqual(rc, 1)
+        self.assertIn(os.path.basename(self.files[0]), err)
+        self.assertEqual(self.created, [])
+
+    def test_after_a_batch_a_file_missing_from_sam_exits_1_and_rerun_resumes(self):
+        self._setup()
+        self.declare_on_push = False
+        rc, out, err = self._main(extra=['--batch', '1'])
+        self.assertEqual(rc, 1)
+        self.assertIn(os.path.basename(self.files[0]), err)
+        self.assertIn('rerun to resume', err)
+        self.assertEqual(len(self.pushes), 1)       # stopped after batch 0
+        self.assertEqual(self.created, [])
 
     def test_sam_record_without_adler32_is_refused(self):
         self._setup()
@@ -20519,10 +20630,7 @@ class TestPublishRun(unittest.TestCase):
         import zlib
         self._setup()
         for f in self.files:
-            data = Path(f).read_bytes()
-            self.sam[os.path.basename(f)] = {
-                "file_size": len(data),
-                "checksum": ["adler32:%08x" % (zlib.adler32(data) & 0xffffffff)]}
+            self._declare(f)
         order = []
         self._runner_orig = self._runner
         def runner(cmd, **kw):
@@ -20540,10 +20648,7 @@ class TestPublishRun(unittest.TestCase):
         import zlib
         self._setup()
         for f in self.files:
-            data = Path(f).read_bytes()
-            self.sam[os.path.basename(f)] = {
-                "file_size": len(data),
-                "checksum": ["adler32:%08x" % (zlib.adler32(data) & 0xffffffff)]}
+            self._declare(f)
         self.token_rc = 1
         rc, out, err = self._main()
         self.assertEqual(rc, 1)
@@ -20575,6 +20680,7 @@ class TestPublishRun(unittest.TestCase):
         data = Path(self.files[0]).read_bytes()
         import zlib
         a = zlib.adler32(data) & 0xffffffff
+        self._declare(self.files[0])
         self.sam[os.path.basename(self.files[0])] = {
             "file_size": len(data), "checksum": ["adler32:%x" % a]}
         rc, out, err = self._main()

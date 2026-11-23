@@ -21,10 +21,13 @@ parents (the same rule as the cnf key sequencer_suffix).
 
 Refused before any token or push (exit 2): no files, a missing file, a
 file the run did not produce, a name owned by someone else, a name
-already in SAM with a different size or adler32 (a file already there
-with the same ones is skipped, so a rerun after a died push resumes),
-and a parent that is not in SAM. A failed `htgettoken` or pushOutput
-exits 1. Nothing else falls back.
+already in SAM with a different size or adler32, the same file in SAM
+with no location or none at --location (a declared file is never
+moved), and a parent that is not in SAM. A file already in SAM with the
+same size and adler32 and a location at --location is skipped, so a
+rerun after a died push resumes. A failed `htgettoken` or pushOutput
+exits 1, and so does a batch after which SAM does not hold every pushed
+file at --location. Nothing else falls back.
 """
 import argparse
 import json
@@ -38,13 +41,14 @@ from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional
 
 from utils import run_receipt
+from utils.file_resolver import file_path_at, path_from_sam_location
 from utils.job_common import Mu2eName, apply_sequencer_suffix, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import push_output
 from utils.push_file import PUSH_LOCATIONS
 from utils.run_receipt import runs_root
 from utils.samweb_wrapper import (DefinitionNotFound, FileNotFound, create_definition,
-                                  describe_definition, get_metadata)
+                                  describe_definition, get_metadata, locate_file_strict)
 
 Rename = Dict[str, Dict[str, str]]
 
@@ -153,8 +157,47 @@ def adler32_hex(path: str) -> str:
     return "%08x" % (a & 0xffffffff)
 
 
-def _sam_state(item: Item) -> str:
-    """'absent', or 'same'; raises Refusal when SAM holds a different file."""
+class Where(NamedTuple):
+    status: str          # 'ok', 'absent', 'nolocation' or 'elsewhere'
+    text: str            # why not 'ok', naming the file
+
+
+def _where(name: str, location: str) -> Where:
+    """Is `name` in SAM with a location of kind `location`?
+
+    pushOutput declares a file, then adds its location in a separate call,
+    as `<enstore|dcache>:<locprefix[action]>/<family>/<tier>/<owner>/<desc>/
+    <dsconf>/<ext>/<h01>/<h23>` (OfflineOps Util/pushOutput.py, fillDataFile
+    and declareSam). That is file_path_at(name, action) without the file
+    name, so a record is of kind `location` when its path, storage prefix
+    and tape label removed, is that path. SAM's own location_type cannot
+    tell disk from scratch (both are 'disk').
+    """
+    try:
+        records = locate_file_strict(name)
+    except FileNotFound:
+        return Where("absent", f"{name} is not in SAM")
+    if not records:
+        return Where("nolocation", f"{name} is declared in SAM with no location "
+                     f"(a push that died between declaring it and adding its "
+                     f"location leaves this)")
+    try:
+        paths = [path_from_sam_location(name, r) for r in records]
+    except ValueError as e:
+        return Where("nolocation", f"{name} has an unreadable SAM location: {e}")
+    if file_path_at(name, location) in paths:
+        return Where("ok", "")
+    kinds = []
+    for p in paths:
+        kind = next((loc for loc in PUSH_LOCATIONS if p == file_path_at(name, loc)), p)
+        kinds.append(kind)
+    return Where("elsewhere", f"{name} is in SAM on {', '.join(kinds)}, not on "
+                 f"{location}; a declared file is never moved")
+
+
+def _sam_state(item: Item, location: str) -> str:
+    """'absent', or 'same'; raises Refusal when SAM holds a different file,
+    or the same file without a location of kind `location`."""
     try:
         meta = get_metadata(item.name)
     except FileNotFound:
@@ -170,11 +213,30 @@ def _sam_state(item: Item) -> str:
     if not sums:
         raise Refusal(f"publish_run: SAM's record of {item.name} has no adler32 "
                       f"checksum, so it cannot be compared with {item.path}")
-    if meta.get("file_size") == os.path.getsize(item.path) \
-            and sums[0] == int(adler32_hex(item.path), 16):
+    if meta.get("file_size") != os.path.getsize(item.path) \
+            or sums[0] != int(adler32_hex(item.path), 16):
+        raise Refusal(f"publish_run: {item.name} is in SAM with a different size "
+                      f"or adler32 than {item.path}; a name is never reused")
+    where = _where(item.name, location)
+    if where.status == "ok":
         return "same"
-    raise Refusal(f"publish_run: {item.name} is in SAM with a different size or "
-                  f"adler32 than {item.path}; a name is never reused")
+    if where.status == "nolocation":
+        raise Refusal(f"publish_run: {where.text}; a rerun cannot add it, so fix "
+                      f"or retire that SAM record first")
+    raise Refusal(f"publish_run: {where.text}")
+
+
+def _confirm_pushed(batch: List[Item], location: str) -> Optional[str]:
+    """None when SAM holds every pushed name with a location of kind
+    `location`, else the failure message (rerun advice only when a rerun
+    would push the missing files again)."""
+    bad = [w for w in (_where(i.name, location) for i in batch) if w.status != "ok"]
+    if not bad:
+        return None
+    text = "; ".join(w.text for w in bad)
+    if all(w.status == "absent" for w in bad):
+        return f"{text}; rerun to resume"
+    return f"{text}; a rerun refuses these too, so fix their SAM records first"
 
 
 def _in_sam(name: str) -> bool:
@@ -289,7 +351,7 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
 
         todo, skipped = [], 0
         for item in items:
-            if _sam_state(item) == "same":
+            if _sam_state(item, args.location) == "same":
                 skipped += 1
             else:
                 todo.append(item)
@@ -324,6 +386,10 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
         if rc != 0:
             print(f"publish_run: pushOutput failed (exit {rc}) on batch {k}; "
                   f"rerun to resume", file=sys.stderr)
+            return 1
+        bad = _confirm_pushed(batch, args.location)
+        if bad:
+            print(f"publish_run: batch {k} pushed, but {bad}", file=sys.stderr)
             return 1
 
     datasets = sorted({Mu2eName.parse(i.name).dataset.filename for i in items})
