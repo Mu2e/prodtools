@@ -20467,6 +20467,40 @@ class TestPublishRun(unittest.TestCase):
         self.assertEqual(len(self.pushes), 1)       # stopped after batch 0
         self.assertEqual(self.created, [])
 
+    # -- one publish of a run at a time, in a stable order -----------
+
+    def test_a_held_run_lock_refuses_naming_the_lock(self):
+        """Two pushes of one run at once can make pushOutput's rollback
+        delete bytes of files the other declared."""
+        import fcntl
+        self._setup()
+        lock = os.path.join(self.root, self.RUN, 'publish.lock')
+        with open(lock, 'w') as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            rc, out, err = self._main()
+        self.assertEqual(rc, 2)
+        self.assertIn(lock, err)
+        self.assertEqual(self.pushes, [])
+        self.assertEqual(self.token_cmds, [])
+        rc, out, err = self._main()        # released: the next call runs
+        self.assertEqual(rc, 0, err)
+
+    def test_the_lock_is_released_after_a_failed_call(self):
+        self._setup()
+        self.token_rc = 1
+        rc, _, _ = self._main()
+        self.assertEqual(rc, 1)
+        self.token_rc = 0
+        rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["pushed"], 2)
+
+    def test_plan_lists_files_by_name_whatever_the_input_order(self):
+        self._setup(nparents=2)
+        items = self._plan(files=list(reversed(self.files)))
+        self.assertEqual([i.name for i in items],
+                         sorted(os.path.basename(f) for f in self.files))
+
     def test_sam_record_without_adler32_is_refused(self):
         self._setup()
         data = Path(self.files[0]).read_bytes()

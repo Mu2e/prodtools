@@ -19,7 +19,11 @@ A name whose dsconf is in the table is published as
 `tier.owner.desc.<new>.<run>_<subrun>_<label>.ext`, and so are its
 parents (the same rule as the cnf key sequencer_suffix).
 
-Refused before any token or push (exit 2): no files, a missing file, a
+One publish of a run at a time: the call holds `<runs_root>/<run>/
+publish.lock` throughout, and files are pushed in name order.
+
+Refused before any token or push (exit 2): another publish_run of the
+same run (its lock is held), no files, a missing file, a
 file the run did not produce, a name owned by someone else, a name
 already in SAM with a different size or adler32, the same file in SAM
 with no location or none at --location (a declared file is never
@@ -30,6 +34,8 @@ exits 1, and so does a batch after which SAM does not hold every pushed
 file at --location. Nothing else falls back.
 """
 import argparse
+import errno
+import fcntl
 import json
 import os
 import re
@@ -56,6 +62,7 @@ TOKEN_CMD = ['htgettoken', '-a', 'htvaultprod.fnal.gov', '-i', 'mu2e',
              '--minsecs', '1800']
 _SUFFIX = re.compile(r'[A-Za-z0-9_-]+')
 _CHUNK = 1 << 20
+LOCK_NAME = "publish.lock"      # in the run's directory, beside its receipt
 
 
 class Item(NamedTuple):
@@ -137,7 +144,11 @@ def plan(run_name: str, files: List[str], rename: Optional[Rename], *,
         ins = _flat(job_pars.job_inputs(index_of[base]).values())
         parents = sorted({renamed(os.path.basename(p), rename) for p in ins})
         items.append(Item(os.path.abspath(f), name, parents))
-    return items
+    # By name, so a rerun lists the files in the same order whatever order
+    # the caller gave: a file a died call left copied but undeclared is
+    # then first in its rerun batch, where pushOutput's rollback of that
+    # batch deletes nothing it declared.
+    return sorted(items, key=lambda i: i.name)
 
 
 def batches(items, size: int = 50) -> list:
@@ -323,19 +334,57 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
                     help="how a renamed file reaches its batch dir (default copy)")
     args = ap.parse_args(argv)
 
+    lock = None
     try:
-        owner = default_owner()
-        if owner == "mu2e" or os.getenv("USER") == "mu2epro":
-            raise Refusal("publish_run: publishes as the user only; "
-                          "mu2epro is out of scope")
-        root = runs_root()
         try:
-            run_receipt.read(root, args.run)
-        except (run_receipt.RunNotFound, ValueError) as e:
-            raise Refusal(f"publish_run: {e}") from None
-        cnf = os.path.join(root, args.run, args.run + ".tar")
-        if not os.path.isfile(cnf):
-            raise Refusal(f"publish_run: run {args.run} has no cnf at {cnf}")
+            owner = default_owner()
+            if owner == "mu2e" or os.getenv("USER") == "mu2epro":
+                raise Refusal("publish_run: publishes as the user only; "
+                              "mu2epro is out of scope")
+            root = runs_root()
+            try:
+                run_receipt.read(root, args.run)
+            except (run_receipt.RunNotFound, ValueError) as e:
+                raise Refusal(f"publish_run: {e}") from None
+            run_dir = os.path.join(root, args.run)
+            cnf = os.path.join(run_dir, args.run + ".tar")
+            if not os.path.isfile(cnf):
+                raise Refusal(f"publish_run: run {args.run} has no cnf at {cnf}")
+            lock = _lock_run(run_dir, args.run)
+        except Refusal as e:
+            print(e, file=sys.stderr)
+            return 2
+        return _publish(args, cnf, owner, run)
+    finally:
+        if lock is not None:
+            os.close(lock)      # releases the run's publish lock
+
+
+def _lock_run(run_dir: str, run_name: str) -> int:
+    """Take the run's publish lock, `<run_dir>/publish.lock`, exclusive and
+    non-blocking, and return its descriptor; it is held until main closes
+    it. Two publishes of one run at once can make pushOutput's rollback
+    delete the bytes of files the other already declared (it calls rmFile,
+    not retireSam, on a declared file), so a second one is refused."""
+    path = os.path.join(run_dir, LOCK_NAME)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+        raise Refusal(f"publish_run: cannot open the run's lock {path}: {e}") from None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+            raise Refusal(f"publish_run: another publish_run of {run_name} holds "
+                          f"{path}; wait for it to end") from None
+        raise Refusal(f"publish_run: cannot lock {path}: {e}") from None
+    return fd
+
+
+def _publish(args, cnf: str, owner: str, run: Callable) -> int:
+    """Everything after the run's checks, under its lock."""
+    try:
         try:
             rename = load_rename(args.rename_from) if args.rename_from else None
             files = [ln.strip() for ln in Path(args.files_from).read_text().splitlines()
