@@ -20574,6 +20574,9 @@ class TestPublishRun(unittest.TestCase):
             rc, out, err = self._main()
         self.assertEqual(rc, 1)
         self.assertIn('pushOutput', err)
+        # pushOutput may have declared a file and failed to add its
+        # location; the rerun advice says the rerun refuses such a file.
+        self.assertIn('declared without its location', err)
         self.assertEqual(self.created, [])
 
     def test_unknown_run_exits_2(self):

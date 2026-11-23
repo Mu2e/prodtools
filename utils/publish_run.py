@@ -536,7 +536,8 @@ def _publish(args, cnf: str, owner: str, run: Callable) -> int:
             return 1
         if rc != 0:
             print(f"publish_run: pushOutput failed (exit {rc}) on batch {k}; "
-                  f"rerun to resume", file=sys.stderr)
+                  f"rerun to resume (a rerun refuses, naming it, any file SAM "
+                  f"declared without its location)", file=sys.stderr)
             return 1
         bad = _confirm_pushed(batch, args.location)
         if bad:
