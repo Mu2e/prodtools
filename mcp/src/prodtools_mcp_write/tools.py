@@ -42,7 +42,7 @@ from utils.config_utils import get_tarball_desc
 from utils.job_common import Mu2eName
 from utils.json2jobdef import determine_job_type, load_json, find_json_entry
 from utils import push_file as _push_file
-from utils import account, code_cache
+from utils import account, code_cache, run_receipt
 
 
 def _select_push_params(json_path, desc, dsconf, allow_code=False):
@@ -630,9 +630,21 @@ def push_file(path: str, location: str, parents: List[str], run_as: str,
 
 _PUBLISH_STAGES = ('copy', 'link')
 _PUBLISH_PARENTS = ('require', 'skip')
+# A failed publish returns this many last lines of each stream; the whole
+# output goes to a log in the kept workdir (pushOutput prints its full
+# environment and a log per file, megabytes for a long run).
+_PUBLISH_TAIL_LINES = 200
+_PUBLISH_LOG = 'publish_run.log'
 
 
-def _publish_run_validate(location, files, work_dir, rename, stage, parents):
+def _publish_run_validate(run_name, location, files, work_dir, rename, stage, parents):
+    # run_receipt's own rule, before _self_workdir makes a directory from it.
+    if not isinstance(run_name, str):
+        raise ValueError(f"publish_run: run_name must be a string, got {run_name!r}")
+    try:
+        run_receipt._checked(run_name)
+    except ValueError as e:
+        raise ValueError(f"publish_run: {e}") from None
     if location not in _push_file.PUSH_LOCATIONS:
         raise ValueError(f"publish_run: location must be one of "
                          f"{_push_file.PUSH_LOCATIONS}, got {location!r}")
@@ -678,11 +690,13 @@ def publish_run(run_name: str, location: str, files: List[str], work_dir: str,
     not in SAM; "skip" leaves it out of its file's metadata and lists it
     in the result's skipped_parents.
 
-    Every refusal here happens before the setup chain runs. Returns
-    run_name, pushed, skipped and datasets (counts and dataset names),
-    plus skipped_parents with parents="skip".
+    Every refusal here, run_name's included, happens before anything is
+    made on disk or the setup chain runs. Returns run_name, pushed, skipped
+    and datasets (counts and dataset names), plus skipped_parents with
+    parents="skip". A failure raises with the last 200 lines of each
+    stream and the path of a log holding all of both, in the kept workdir.
     """
-    _publish_run_validate(location, files, work_dir, rename, stage, parents)
+    _publish_run_validate(run_name, location, files, work_dir, rename, stage, parents)
     workdir = _self_workdir(run_name)
     files_path = os.path.join(workdir, 'files.txt')
     Path(files_path).write_text("\n".join(files) + "\n")
@@ -696,7 +710,7 @@ def publish_run(run_name: str, location: str, files: List[str], work_dir: str,
     result = runner.run_cli(argv, 'self', cwd=workdir)
     if result['rc'] != 0:
         raise RuntimeError(f"publish_run failed (rc={result['rc']}): "
-                           f"{_both_streams(result)} -- workdir kept at {workdir}")
+                           f"{_publish_failure(result, workdir)}")
     lines = [ln for ln in (result.get('stdout') or '').splitlines() if ln.strip()]
     try:
         summary = _json.loads(lines[-1])
@@ -706,6 +720,29 @@ def publish_run(run_name: str, location: str, files: List[str], work_dir: str,
             out['skipped_parents'] = summary['skipped_parents']
     except (IndexError, ValueError, KeyError, TypeError):
         raise RuntimeError(f"publish_run: rc 0 but the last stdout line is not the "
-                           f"summary JSON: {_both_streams(result)} -- workdir kept at {workdir}")
+                           f"summary JSON: {_publish_failure(result, workdir)}")
     shutil.rmtree(workdir, ignore_errors=True)
     return out
+
+
+def _tail(text, n):
+    lines = (text or '').splitlines()
+    if len(lines) <= n:
+        return text or ''
+    return (f"[{len(lines) - n} earlier lines are in the log]\n"
+            + "\n".join(lines[-n:]))
+
+
+def _publish_failure(result, workdir):
+    """The last _PUBLISH_TAIL_LINES of each stream, and where the whole of
+    both went: a log written into the kept workdir."""
+    log = os.path.join(workdir, _PUBLISH_LOG)
+    try:
+        Path(log).write_text(f"--- stdout ---\n{result.get('stdout') or ''}\n"
+                             f"--- stderr ---\n{result.get('stderr') or ''}\n")
+        where = f"full output in {log}"
+    except OSError as e:
+        where = f"the full output could not be written to {log}: {e}"
+    tails = {name: _tail(result.get(name), _PUBLISH_TAIL_LINES)
+             for name in ('stdout', 'stderr')}
+    return f"{_both_streams(tails)}\n-- {where}; workdir kept at {workdir}"

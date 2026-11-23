@@ -21020,13 +21020,44 @@ class TestPublishRunTool(unittest.TestCase):
             return cli
 
         with patch('prodtools_mcp_write.runner.run_cli', side_effect=fake) as run, \
-             patch('prodtools_mcp_write.tools._self_workdir', return_value=self.work):
+             patch('prodtools_mcp_write.tools._self_workdir',
+                   return_value=self.work) as workdir:
             self.last_run = run
+            self.last_workdir = workdir
             return self.tools.publish_run(**args)
 
     def test_registered(self):
         from prodtools_mcp_write import server
         self.assertIn('publish_run', server.TOOL_NAMES)
+
+    def test_a_bad_run_name_is_refused_before_any_workdir_exists(self):
+        """_self_workdir makes a directory from the name; '../x' would put
+        it outside the push_file area before the CLI refused the name."""
+        for name in ('../x', 'a/b', '', '..', None):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    self._call(run_name=name)
+                self.last_workdir.assert_not_called()
+                self.last_run.assert_not_called()
+
+    def test_a_failure_returns_the_tail_and_the_path_of_the_full_log(self):
+        """pushOutput prints its whole environment and a log per file; a
+        late failure must not return megabytes through MCP."""
+        stdout = "\n".join(f"L{i:04d} pushOutput chatter" for i in range(1000))
+        with self.assertRaises(RuntimeError) as cm:
+            self._call(cli={'rc': 1, 'stdout': stdout,
+                            'stderr': 'publish_run: pushOutput failed (exit 2)'})
+        msg = str(cm.exception)
+        self.assertIn('L0999', msg)
+        self.assertIn('L0800', msg)
+        self.assertNotIn('L0799', msg)          # only the last 200 lines
+        self.assertIn('publish_run: pushOutput failed (exit 2)', msg)
+        log = os.path.join(self.work, 'publish_run.log')
+        self.assertIn(log, msg)
+        full = Path(log).read_text()
+        self.assertIn('L0000', full)
+        self.assertIn('L0999', full)
+        self.assertIn('publish_run: pushOutput failed (exit 2)', full)
 
     def test_entry_point_is_allowed(self):
         from prodtools_mcp_write import runner
