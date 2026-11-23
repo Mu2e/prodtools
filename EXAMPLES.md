@@ -62,6 +62,7 @@ Core production tools:
   sliced-campaign top-up + hand re-firing)
 - `check_inputs` — pre-flight readability check on a campaign's inputs
 - `push_file` — publish one already-built file to SAM with its parents, through the same `pushOutput` call a grid job makes
+- `publish_run` — declare a finished one-shot run's outstage files to SAM in batches, each with its parents, optionally renamed to a new dsconf and sequencer label
 
 Analysis / diagnostic tools:
 
@@ -1533,6 +1534,30 @@ Flags: `--file` (required; the basename IS the SAM name), `--location`
   that for you and keeps the dir on failure so `pushOutput`'s log can be
   read.
 - The source file is left in place after a successful push.
+
+### `publish_run`
+
+Declare the outstage files of a finished one-shot run (`json2jobdef
+--once`) to SAM, in batches, each file with every input its job read as
+parents. Each file is matched to its job index through the run's own cnf
+(`<runs_root>/<run>/<run>.tar`); a file the run did not produce is
+refused. Needs the ops environment plus `setup OfflineOps`; the
+`prodtools-write` MCP tool `publish_run(run_name, location, files,
+work_dir, rename, stage)` supplies both and publishes as you only.
+
+```bash
+muse setup ops && setup OfflineOps
+publish_run --run cnf.u.Desc.Conf.0 --location scratch \
+            --files-from files.txt --work-dir /exp/mu2e/data/users/$USER/pub \
+            --rename-from rename.json --batch 50 --stage copy
+```
+
+`files.txt` holds one outstage path per line. `rename.json` is
+`{old_dsconf: {"dsconf": new, "suffix": label}}`: those names, and their
+parents, are published as `tier.owner.desc.<new>.<run>_<subrun>_<label>.ext`.
+Exit 0 ok, 1 pushOutput/token/stage failure, 2 refusal; the last stdout
+line is JSON `{"pushed", "skipped", "datasets"}`. A name already in SAM
+with the same size and checksum is skipped, so a rerun resumes.
 
 ### `install_prodtools.sh` / `submissions_cron`
 

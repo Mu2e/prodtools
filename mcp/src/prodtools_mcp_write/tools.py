@@ -1,6 +1,6 @@
 """Write tool implementations for the prodtools-write MCP server.
 
-Exposes `push_cnf`, `push_file` and `run_submissions`. Campaign creation is
+Exposes `push_cnf`, `push_file`, `publish_run` and `run_submissions`. Campaign creation is
 `push_cnf` (one call, mirroring `json2jobdef --prod --enqueue`) --
 there is no separate `enqueue_campaign` tool; that would have paired
 with a map file to enqueue, and no map file exists anywhere in this
@@ -35,7 +35,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from prodtools_mcp_write import runner
 from utils.config_utils import get_tarball_desc
@@ -626,3 +626,75 @@ def push_file(path: str, location: str, parents: List[str], run_as: str,
     if workdir:
         shutil.rmtree(workdir, ignore_errors=True)
     return {'name': name.filename, 'location': location, 'parents': len(parents), 'rc': 0}
+
+
+_PUBLISH_STAGES = ('copy', 'link')
+
+
+def _publish_run_validate(location, files, work_dir, rename, stage):
+    if location not in _push_file.PUSH_LOCATIONS:
+        raise ValueError(f"publish_run: location must be one of "
+                         f"{_push_file.PUSH_LOCATIONS}, got {location!r}")
+    if stage not in _PUBLISH_STAGES:
+        raise ValueError(f"publish_run: stage must be one of {_PUBLISH_STAGES}, got {stage!r}")
+    if (not isinstance(files, list) or not files
+            or not all(isinstance(f, str) and os.path.isabs(f) for f in files)):
+        raise ValueError(f"publish_run: files must be a non-empty list of absolute "
+                         f"paths, got {files!r}")
+    if (not isinstance(work_dir, str) or not os.path.isabs(work_dir)
+            or work_dir == '/tmp' or work_dir.startswith('/tmp/')):
+        raise ValueError(f"publish_run: work_dir must be an absolute path outside "
+                         f"/tmp, got {work_dir!r}")
+    if rename is not None:
+        if not isinstance(rename, dict):
+            raise ValueError(f"publish_run: rename must be a dict, got {rename!r}")
+        for old, v in rename.items():
+            if (not isinstance(v, dict) or set(v) != {'dsconf', 'suffix'}
+                    or not all(isinstance(x, str) and x for x in v.values())):
+                raise ValueError(f"publish_run: rename[{old!r}] must be exactly "
+                                 f"{{'dsconf': str, 'suffix': str}}, got {v!r}")
+
+
+def publish_run(run_name: str, location: str, files: List[str], work_dir: str,
+                rename: Optional[Dict[str, Dict[str, str]]] = None,
+                stage: str = "copy"):
+    """Declare a finished one-shot run's outstage files to SAM, each with
+    the parents its job read (`bin/publish_run`), as you only.
+
+    `files` are absolute outstage paths of files the run `run_name`
+    produced; each is matched to its job through the run's own cnf and a
+    file the run did not produce is refused. `location` is a pushOutput
+    action: tape, disk or scratch. `work_dir` is an absolute directory
+    outside /tmp for the staged copies (`stage` "copy" or "link").
+    `rename` maps an old dsconf to `{"dsconf": new, "suffix": label}`;
+    those names, and their parents, are published with the new dsconf and
+    `_<label>` appended to the sequencer. A file already in SAM with the
+    same size and checksum is skipped, so a rerun resumes.
+
+    Every refusal here happens before the setup chain runs. Returns
+    run_name, pushed, skipped and datasets (counts and dataset names).
+    """
+    _publish_run_validate(location, files, work_dir, rename, stage)
+    workdir = _self_workdir(run_name)
+    files_path = os.path.join(workdir, 'files.txt')
+    Path(files_path).write_text("\n".join(files) + "\n")
+    argv = ['bin/publish_run', '--run', run_name, '--location', location,
+            '--files-from', files_path, '--work-dir', work_dir, '--stage', stage]
+    if rename:
+        rename_path = os.path.join(workdir, 'rename.json')
+        Path(rename_path).write_text(_json.dumps(rename))
+        argv += ['--rename-from', rename_path]
+    result = runner.run_cli(argv, 'self', cwd=workdir)
+    if result['rc'] != 0:
+        raise RuntimeError(f"publish_run failed (rc={result['rc']}): "
+                           f"{_both_streams(result)} -- workdir kept at {workdir}")
+    lines = [ln for ln in (result.get('stdout') or '').splitlines() if ln.strip()]
+    try:
+        summary = _json.loads(lines[-1])
+        out = {'run_name': run_name, 'pushed': summary['pushed'],
+               'skipped': summary['skipped'], 'datasets': summary['datasets'], 'rc': 0}
+    except (IndexError, ValueError, KeyError, TypeError):
+        raise RuntimeError(f"publish_run: rc 0 but the last stdout line is not the "
+                           f"summary JSON: {_both_streams(result)} -- workdir kept at {workdir}")
+    shutil.rmtree(workdir, ignore_errors=True)
+    return out

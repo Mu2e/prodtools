@@ -142,7 +142,7 @@ PreToolUse hook, none of which survives being reached over a port.
 ## `prodtools-write`
 
 Exposes submission: `push_cnf`, `run_submissions`, `submit_once`,
-`run_local`, and publishing: `push_file`.
+`run_local`, and publishing: `push_file`, `publish_run`.
 
 A production campaign takes two calls: `push_cnf(..., slice_size=N)`
 builds the cnf, registers it in SAM and creates the campaign, returning
@@ -161,6 +161,12 @@ already-built file to SAM with its parents through the same `pushOutput`
 call a grid job makes (`bin/push_file`). The basename is the SAM name: a
 six-field Mu2e file name owned by the identity (`mu2e` for mu2epro).
 `location` is tape/disk/scratch. A name already in SAM is refused.
+
+`publish_run(run_name, location, files, work_dir, rename=None, stage="copy")`
+declares a finished one-shot run's outstage files to SAM in batches, each
+with its job's inputs as parents (`bin/publish_run`), as you only (no
+`run_as`). `rename` maps an old dsconf to `{dsconf, suffix}`. Returns
+`run_name`, `pushed`, `skipped`, `datasets`.
 
 `submit_once(json, desc, dsconf, run_as)` sends one entry to the grid
 once, every output to outstage and nothing to SAM (`json2jobdef

@@ -20642,6 +20642,119 @@ class TestPushFileTool(unittest.TestCase):
         self.assertTrue(os.path.exists(self.work))
 
 
+class TestPublishRunTool(unittest.TestCase):
+    """prodtools_mcp_write.tools.publish_run: self only, every refusal
+    before run_cli, files/rename written as input files for bin/publish_run."""
+
+    def setUp(self):
+        from prodtools_mcp_write import tools
+        self.tools = tools
+        self.work = _mkdtemp()
+        self.pub = '/exp/mu2e/data/users/u/pub'
+        self.files = ['/exp/mu2e/data/users/u/outstage/a.art',
+                      '/exp/mu2e/data/users/u/outstage/b.art']
+        self.seen = {}
+
+    def _call(self, cli=None, **kw):
+        cli = cli if cli is not None else {
+            'rc': 0, 'stderr': '',
+            'stdout': 'log line\n{"pushed": 2, "skipped": 0, "datasets": ["d1"]}\n'}
+        args = dict(run_name='cnf.u.D.C.0', location='scratch',
+                    files=self.files, work_dir=self.pub)
+        args.update(kw)
+
+        def fake(argv, run_as, cwd=None, **_):
+            self.seen['argv'] = argv
+            self.seen['run_as'] = run_as
+            self.seen['cwd'] = cwd
+            for flag in ('--files-from', '--rename-from'):
+                if flag in argv:
+                    self.seen[flag] = Path(argv[argv.index(flag) + 1]).read_text()
+            return cli
+
+        with patch('prodtools_mcp_write.runner.run_cli', side_effect=fake) as run, \
+             patch('prodtools_mcp_write.tools._self_workdir', return_value=self.work):
+            self.last_run = run
+            return self.tools.publish_run(**args)
+
+    def test_registered(self):
+        from prodtools_mcp_write import server
+        self.assertIn('publish_run', server.TOOL_NAMES)
+
+    def test_entry_point_is_allowed(self):
+        from prodtools_mcp_write import runner
+        self.assertIn('bin/publish_run', runner.ALLOWED_ENTRY_POINTS)
+
+    def test_refusals_happen_before_run_cli(self):
+        cases = {
+            'bad location': dict(location='outstage'),
+            'relative file': dict(files=['a.art']),
+            'empty files': dict(files=[]),
+            'files not a list': dict(files='/a.art'),
+            'tmp work_dir': dict(work_dir='/tmp/pub'),
+            'relative work_dir': dict(work_dir='pub'),
+            'bad stage': dict(stage='move'),
+            'rename extra key': dict(rename={'o': {'dsconf': 'n', 'suffix': 's', 'x': 'y'}}),
+            'rename missing key': dict(rename={'o': {'dsconf': 'n'}}),
+            'rename not dict': dict(rename={'o': 'n'}),
+        }
+        for label, kw in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError):
+                    self._call(**kw)
+                self.last_run.assert_not_called()
+
+    def test_refuses_bad_location(self):
+        with self.assertRaises(ValueError):
+            self._call(location='outstage')
+
+    def test_refuses_relative_file(self):
+        with self.assertRaises(ValueError):
+            self._call(files=['a.art'])
+
+    def test_refuses_tmp_work_dir(self):
+        with self.assertRaises(ValueError):
+            self._call(work_dir='/tmp/x')
+
+    def test_refuses_bad_rename(self):
+        with self.assertRaises(ValueError):
+            self._call(rename={'o': {'dsconf': 'n'}})
+
+    def test_success_returns_counts_and_composes_argv(self):
+        out = self._call(rename={'o': {'dsconf': 'n', 'suffix': 's'}}, stage='link')
+        self.assertEqual(out, {'run_name': 'cnf.u.D.C.0', 'pushed': 2, 'skipped': 0,
+                               'datasets': ['d1'], 'rc': 0})
+        argv = self.seen['argv']
+        self.assertEqual(argv[0], 'bin/publish_run')
+        self.assertEqual(argv[argv.index('--run') + 1], 'cnf.u.D.C.0')
+        self.assertEqual(argv[argv.index('--location') + 1], 'scratch')
+        self.assertEqual(argv[argv.index('--work-dir') + 1], self.pub)
+        self.assertEqual(argv[argv.index('--stage') + 1], 'link')
+        self.assertEqual(self.seen['run_as'], 'self')
+        self.assertEqual(self.seen['cwd'], self.work)
+        self.assertEqual(self.seen['--files-from'].split(), self.files)
+        self.assertEqual(json.loads(self.seen['--rename-from']),
+                         {'o': {'dsconf': 'n', 'suffix': 's'}})
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_no_rename_means_no_rename_flag(self):
+        self._call()
+        self.assertNotIn('--rename-from', self.seen['argv'])
+        self.assertEqual(self.seen['argv'][self.seen['argv'].index('--stage') + 1], 'copy')
+
+    def test_nonzero_rc_raises_with_both_streams_and_keeps_the_workdir(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._call(cli={'rc': 1, 'stdout': 'HTTP 403', 'stderr': 'Traceback'})
+        msg = str(cm.exception)
+        for part in ('HTTP 403', 'Traceback', self.work):
+            self.assertIn(part, msg)
+        self.assertTrue(os.path.exists(self.work))
+
+    def test_unparseable_last_line_raises(self):
+        with self.assertRaises(RuntimeError):
+            self._call(cli={'rc': 0, 'stdout': 'done\n', 'stderr': ''})
+
+
 # ---------------------------------------------------------------------------
 # Shared (streamable-http) mode: transport flags and caller identity
 # ---------------------------------------------------------------------------
