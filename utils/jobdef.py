@@ -8,6 +8,7 @@ structure) and mu2e.fcl (embedded from template.fcl): source-type detection
 sections, aux/sampling input processing, and output filename overrides.
 """
 import os
+import re
 import sys
 # Add parent directory to path when run directly
 if __name__ == "__main__":
@@ -366,18 +367,16 @@ def _validate_sequencer_suffix(config: Dict) -> Optional[str]:
     """Return the entry's sequencer_suffix (None when absent), or raise.
 
     The suffix is appended to every output sequencer as _<suffix>, so it
-    must be a non-empty string with no '.' (the sequencer sits between two
-    dots in the file name) and no whitespace. g4bl entries name outputs by
+    must match [A-Za-z0-9_-]+ (the sequencer sits between two dots in the
+    file name; "_" is allowed, e.g. a whole config name). g4bl entries name outputs by
     bare index and take no suffix.
     """
     if not config or 'sequencer_suffix' not in config:
         return None
     suffix = config['sequencer_suffix']
-    if (not isinstance(suffix, str) or not suffix or '.' in suffix
-            or any(c.isspace() for c in suffix)):
+    if not isinstance(suffix, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', suffix):
         raise ValueError(
-            f"sequencer_suffix must be a non-empty string with no '.' and "
-            f"no whitespace, got {suffix!r}")
+            f"sequencer_suffix must match [A-Za-z0-9_-]+, got {suffix!r}")
     if config.get('runner') == 'g4bl':
         raise ValueError("sequencer_suffix is not supported with runner: g4bl")
     return suffix

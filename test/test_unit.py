@@ -984,9 +984,40 @@ class TestSequencerSuffix(unittest.TestCase):
             self._job(jp, None, "module_type : RootInput\n").sequencer(0),
             "001470_00000000")
 
+    def test_direct_input_override_seq_gets_suffix(self):
+        from utils.job_common import expected_outputs_for
+        job = self._job(_empty_event_jobpars(run=1430), 'R85')
+        for name in ("dts.mu2e.P.C.001430_00000005.art",
+                     "dts.mu2e.P.C.001430_00000005_R85.art"):
+            outs = expected_outputs_for(name, job)
+            self.assertEqual(len(outs), 1)
+            self.assertTrue(outs[0].endswith(".001430_00000005_R85.art"), outs)
+
+    def test_suffix_with_underscore_round_trip(self):
+        sfx = 'yo02R07_00'
+        open_job = self._job(_empty_event_jobpars(run=1430), sfx)
+        self.assertEqual(open_job.sequencer(4), "001430_00000004_yo02R07_00")
+        self.assertEqual(
+            open_job.index_from_sequencer("001430_00000004_yo02R07_00"), 4)
+        with self.assertRaises(ValueError):
+            open_job.index_from_sequencer("001430_00000004_yo02R07_01")
+        with self.assertRaises(ValueError):
+            open_job.index_from_sequencer("001430_00000004")
+        jp = _empty_event_jobpars(run=1430)
+        jp['tbs']['njobs'] = 10
+        closed = self._job(jp, sfx)
+        self.assertEqual(
+            closed.index_from_sequencer("001430_00000004_yo02R07_00"), 4)
+
+    def test_base_without_two_fields_refused(self):
+        job = self._parent("sim.mu2e.T.C.nounderscore.art", 'R85')
+        with self.assertRaises(ValueError) as cm:
+            job.sequencer(0)
+        self.assertIn("nounderscore", str(cm.exception))
+
     def test_jobdef_refuses_bad_suffix(self):
         from utils.jobdef import _parse_job_args
-        for bad in ("", "R.85", "R 85", 7):
+        for bad in ("", "R.85", "R 85", "R/85", 7):
             with self.assertRaises(ValueError) as cm:
                 _parse_job_args([], "unused.fcl", {"sequencer_suffix": bad})
             self.assertIn("sequencer_suffix", str(cm.exception))

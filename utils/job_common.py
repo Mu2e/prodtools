@@ -473,11 +473,23 @@ class Mu2eJobBase:
         first two '_' fields of the plain sequencer, then the suffix (an
         inherited parent label is replaced, never doubled).
         """
-        base = self._base_sequencer(index)
+        return self._apply_sequencer_suffix(self._base_sequencer(index))
+
+    def _apply_sequencer_suffix(self, base: str) -> str:
+        """THE suffix rule: keep base's first two '_' fields, then _<suffix>.
+
+        No-op without tbs.sequencer_suffix. Raises ValueError when a suffix
+        is set and base has fewer than two '_' fields.
+        """
         suffix = self.json_data.get('tbs', {}).get('sequencer_suffix')
-        if suffix:
-            return "_".join(base.split("_")[:2]) + "_" + suffix
-        return base
+        if not suffix:
+            return base
+        fields = base.split("_")
+        if len(fields) < 2:
+            raise ValueError(
+                f"sequencer_suffix {suffix!r} needs a <run>_<subrun> "
+                f"sequencer, got {base!r}")
+        return "_".join(fields[:2]) + "_" + suffix
 
     def _base_sequencer(self, index: int) -> str:
         """Sequencer for job index before any sequencer_suffix.
@@ -546,7 +558,8 @@ class Mu2eJobBase:
             return {}
 
         result = {}
-        seq = override_seq if override_seq is not None else self.sequencer(index)
+        seq = (self._apply_sequencer_suffix(override_seq)
+               if override_seq is not None else self.sequencer(index))
 
         for key, template in outfiles.items():
             resolved_template = template
