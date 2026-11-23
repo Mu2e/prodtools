@@ -20120,8 +20120,14 @@ class TestPublishRun(unittest.TestCase):
     RUN = 'cnf.u.Desc.Conf.0'
     TABLE = {"Conf": {"dsconf": "ConfNew", "suffix": "R85"}}
 
-    class _NotFound(Exception):
+    class _SAMError(Exception):            # samweb_client's Error
         pass
+
+    class _NotFound(_SAMError):            # FileNotFound / DefinitionNotFound
+        pass
+
+    def _create(self, name, query):
+        self.created.append((name, query))
 
     def _parent(self, n):
         return f"dts.u.P.Old.001430_{n:08d}.art"
@@ -20240,11 +20246,11 @@ class TestPublishRun(unittest.TestCase):
              patch.object(pr, 'get_metadata', self._meta), \
              patch.object(pr, 'locate_file_strict', self._locate), \
              patch.object(pr, 'describe_definition', self._describe), \
-             patch.object(pr, 'create_definition',
-                          lambda n, q: self.created.append((n, q))), \
+             patch.object(pr, 'create_definition', self._create), \
              patch.object(pr, 'push_output', self._push), \
              patch.object(pr, 'FileNotFound', self._NotFound), \
              patch.object(pr, 'DefinitionNotFound', self._NotFound), \
+             patch.object(pr, 'SAMError', self._SAMError), \
              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = pr.main(argv, run=self._runner)
         self.assertEqual(os.getcwd(), cwd)
@@ -20597,6 +20603,35 @@ class TestPublishRun(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(self.created, [])
 
+    def test_a_definition_another_call_created_meanwhile_is_success(self):
+        """Parallel calls of one campaign share a dataset; the loser of the
+        create race reads the definition again instead of failing."""
+        self._setup()
+        def race(name, query):
+            self.created.append((name, query))
+            self.defs[name] = True          # the other call won
+            raise self._SAMError(f"Definition {name} already exists")
+        with patch.object(self, '_create', race):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["datasets"], ["sim.u.TestDesc.Conf.art"])
+
+    def test_any_other_definition_error_still_raises(self):
+        self._setup()
+        def refuse(name, query):
+            raise self._SAMError("HTTP 403: forbidden")
+        with patch.object(self, '_create', refuse):
+            with self.assertRaisesRegex(self._SAMError, '403'):
+                self._main()
+
+    def test_definition_query_comes_from_q_dataset(self):
+        self._setup()
+        with patch.object(self.pr, 'q_dataset', lambda ds: f"Q[{ds}]"):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.created, [("sim.u.TestDesc.Conf.art",
+                                         "Q[sim.u.TestDesc.Conf.art]")])
+
 
     # -- fix round 1 -------------------------------------------------
 
@@ -20835,10 +20870,17 @@ class TestPublishRun(unittest.TestCase):
             rc, out, err = self._run_as_owner('mu2e')
         self.assertEqual(rc, 2)
         self.assertIn('mu2epro', err)
-        with patch.dict(os.environ, {'USER': 'mu2epro'}):
+        # The effective uid decides, not $USER (ksu keeps the caller's).
+        with patch('utils.account.current_account', return_value='mu2epro'), \
+             patch.dict(os.environ, {'USER': 'u'}):
             rc, out, err = self._main()
         self.assertEqual(rc, 2)
+        self.assertIn('mu2epro', err)
         self.assertEqual(self.pushes, [])
+        with patch('utils.account.current_account', return_value='u'), \
+             patch.dict(os.environ, {'USER': 'mu2epro'}):
+            rc, out, err = self._main()
+        self.assertEqual(rc, 0, err)
 
     def _run_as_owner(self, owner):
         pr = self.pr

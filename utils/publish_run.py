@@ -49,15 +49,16 @@ import zlib
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional
 
-from utils import run_receipt
+from utils import account, run_receipt
 from utils.file_resolver import file_path_at, path_from_sam_location
 from utils.job_common import Mu2eName, apply_sequencer_suffix, default_owner
 from utils.jobquery import Mu2eJobPars
 from utils.prod_utils import push_output
 from utils.push_file import PUSH_LOCATIONS
 from utils.run_receipt import runs_root
-from utils.samweb_wrapper import (DefinitionNotFound, FileNotFound, create_definition,
-                                  describe_definition, get_metadata, locate_file_strict)
+from utils.samweb_wrapper import (DefinitionNotFound, FileNotFound, SAMError,
+                                  create_definition, describe_definition, get_metadata,
+                                  locate_file_strict, q_dataset)
 
 Rename = Dict[str, Dict[str, str]]
 
@@ -381,6 +382,22 @@ def _push_staged(batch: List[Item], location: str, batch_dir: Path,
     return 0
 
 
+def _create_definition(ds: str) -> None:
+    """Create `dh.dataset <ds>`. Parallel publishes of one campaign share
+    its datasets, so two can both find no definition and both create it:
+    when create fails and the definition now exists, another call made it
+    and that is success. Any other failure raises as SAM gave it."""
+    try:
+        create_definition(ds, q_dataset(ds))
+    except SAMError as err:
+        try:
+            describe_definition(ds)
+        except DefinitionNotFound:
+            raise err from None
+        print(f"publish_run: definition {ds} was created meanwhile by "
+              f"another call ({err}); using it", file=sys.stderr)
+
+
 def _renew_token(run) -> Optional[str]:
     try:
         rc = run(TOKEN_CMD, stdout=subprocess.DEVNULL).returncode
@@ -412,7 +429,8 @@ def main(argv=None, *, run: Callable = subprocess.run) -> int:
     try:
         try:
             owner = default_owner()
-            if owner == "mu2e" or os.getenv("USER") == "mu2epro":
+            # The effective uid, not $USER: `ksu mu2epro` keeps the caller's.
+            if owner == "mu2e" or account.current_account() == "mu2epro":
                 raise Refusal("publish_run: publishes as the user only; "
                               "mu2epro is out of scope")
             root = runs_root()
@@ -534,7 +552,7 @@ def _publish(args, cnf: str, owner: str, run: Callable) -> int:
             if bad:
                 print(f"{bad}; definition {ds} not created", file=sys.stderr)
                 return 1
-            create_definition(ds, f"dh.dataset {ds}")
+            _create_definition(ds)
     summary = {"pushed": len(todo), "skipped": skipped, "datasets": datasets}
     if args.parents == "skip":
         summary["skipped_parents"] = absent
