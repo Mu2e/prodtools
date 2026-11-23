@@ -18261,6 +18261,19 @@ class TestRunLocalOutputGlobs(unittest.TestCase):
         from utils.runlocal import output_globs
         self.assertEqual(output_globs(self._tarball({})), [])
 
+    def test_sequencer_suffix_globs_without_raising_and_match_suffixed_names(self):
+        """A '*' sequencer is a glob, not a sequencer: the suffix rule must
+        not see it (it raised, so every suffixed local run died at once)."""
+        import fnmatch
+        from utils.runlocal import output_globs
+        tar = _make_tarball({'owner': 'mu2e', 'dsconf': 'TestConf',
+                             'tbs': {'outfiles': {'o': 'dts.owner.X.version.sequencer.art'},
+                                     'sequencer_suffix': 'R85'}})
+        globs = output_globs(tar)
+        self.assertEqual(globs, ['dts.mu2e.X.TestConf.*.art'])
+        self.assertTrue(fnmatch.fnmatch('dts.mu2e.X.TestConf.001430_00000003_R85.art',
+                                        globs[0]))
+
 
 class TestRunLocalJobdesc(unittest.TestCase):
     """The synthesized jobdesc has ONE index space — the cnf's."""

@@ -555,7 +555,9 @@ class Mu2eJobBase:
         override_desc: if provided, substitute {desc} in outfile patterns.
                        Used in direct-input mode where desc comes from fname.
         override_seq:  if provided, use this sequencer instead of computing
-                       from input files. Used in direct-input mode.
+                       from input files. Used in direct-input mode. The
+                       wildcard '*' (runlocal.output_globs) passes through
+                       untouched: it already matches a suffixed sequencer.
         """
         tbs = self.json_data.get('tbs', {})
         outfiles = tbs.get('outfiles')
@@ -564,8 +566,12 @@ class Mu2eJobBase:
             return {}
 
         result = {}
-        seq = (self._apply_sequencer_suffix(override_seq)
-               if override_seq is not None else self.sequencer(index))
+        if override_seq is None:
+            seq = self.sequencer(index)
+        elif override_seq == '*':
+            seq = override_seq
+        else:
+            seq = self._apply_sequencer_suffix(override_seq)
 
         for key, template in outfiles.items():
             resolved_template = template
