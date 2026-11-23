@@ -318,8 +318,14 @@ at most 16). Neither pushes anything to SAM.
 
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
-sequencer) and `generic_tarball` (build a reusable direct-input cnf with
-`{desc}` deferred to runtime):
+sequencer), `sequencer_suffix` (a label, `[A-Za-z0-9_-]+`, appended to
+every output sequencer: outputs keep the sequencer's first two `_`
+fields, run and subrun, and end `_<label>`, so `001430_00000003` becomes
+`001430_00000003_R85` and an inherited label is replaced, never doubled;
+refused with `runner: g4bl`; a grid submit (`--once`, `--enqueue`) is
+refused when the worker prodtools release has no suffix rule, because an
+older prodtools ignores the key silently) and `generic_tarball` (build a
+reusable direct-input cnf with `{desc}` deferred to runtime):
 
 ```json
 {
@@ -1543,21 +1549,40 @@ parents. Each file is matched to its job index through the run's own cnf
 (`<runs_root>/<run>/<run>.tar`); a file the run did not produce is
 refused. Needs the ops environment plus `setup OfflineOps`; the
 `prodtools-write` MCP tool `publish_run(run_name, location, files,
-work_dir, rename, stage)` supplies both and publishes as you only.
+work_dir, rename, stage, parents)` supplies both and publishes as you only.
 
 ```bash
 muse setup ops && setup OfflineOps
 publish_run --run cnf.u.Desc.Conf.0 --location scratch \
             --files-from files.txt --work-dir /exp/mu2e/data/users/$USER/pub \
-            --rename-from rename.json --batch 50 --stage copy
+            --rename-from rename.json --batch 50 --stage copy --parents require
 ```
 
 `files.txt` holds one outstage path per line. `rename.json` is
 `{old_dsconf: {"dsconf": new, "suffix": label}}`: those names, and their
 parents, are published as `tier.owner.desc.<new>.<run>_<subrun>_<label>.ext`.
 Exit 0 ok, 1 pushOutput/token/stage failure, 2 refusal; the last stdout
-line is JSON `{"pushed", "skipped", "datasets"}`. A name already in SAM
-with the same size and checksum is skipped, so a rerun resumes.
+line is JSON `{"pushed", "skipped", "datasets"}`, plus `"skipped_parents"`
+with `--parents skip`.
+
+- A name already in SAM with the same size and checksum, and a location
+  of the `--location` kind, is skipped, so a rerun resumes. The kind is
+  read from the location's path, the way pushOutput builds it
+  (`/pnfs/mu2e/tape/...`, `/pnfs/mu2e/persistent/datasets/...`,
+  `/pnfs/mu2e/scratch/datasets/...`). The same file declared with no
+  location, or only at another kind, is refused: a declared file is
+  never moved.
+- After each batch, every pushed name must be in SAM at the `--location`
+  kind, or the call exits 1.
+- `--parents require` (default) refuses a parent that is not in SAM;
+  `--parents skip` leaves it out of that file's metadata and lists it in
+  `skipped_parents`.
+- One publish of a run at a time: the call holds
+  `<runs_root>/<run>/publish.lock` and a second one is refused. Files go
+  out in name order.
+- Staging uses `batch_NNNN` directories in `--work-dir`, each marked with
+  the run it stages. Only this run's leftovers are removed at start; any
+  other entry with a needed name is refused, not deleted.
 
 ### `install_prodtools.sh` / `submissions_cron`
 
