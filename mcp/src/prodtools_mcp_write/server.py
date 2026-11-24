@@ -11,7 +11,6 @@ from prodtools_mcp_write import tools
 TOOL_FUNCTIONS = {
     'push_cnf': tools.push_cnf,
     'push_file': tools.push_file,
-    'publish_run': tools.publish_run,
     'run_submissions': tools.run_submissions,
     'submit_once': tools.submit_once,
     'run_local': tools.run_local,
