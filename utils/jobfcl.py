@@ -86,7 +86,17 @@ class Mu2eJobFCL(Mu2eJobBase):
             raise ValueError(f"Outputs with the requested sequencer \"{seq}\" are not produced by this jobset.")
         else:
             # infinite job set: parse "run_subrun" directly
-            parts = seq.split('_')
+            suffix = self.json_data.get('tbs', {}).get('sequencer_suffix')
+            if suffix:
+                # "run_subrun_<suffix>"; the suffix may itself hold '_'.
+                parts = seq.split('_', 2)
+                if len(parts) != 3 or parts[2] != suffix:
+                    raise ValueError(
+                        f"Sequencer \"{seq}\" does not end _{suffix} "
+                        f"(the cnf's sequencer_suffix)")
+                parts = parts[:2]
+            else:
+                parts = seq.split('_')
             if len(parts) != 2:
                 raise ValueError(f"Unexpected format of the sequencer \"{seq}\"")
             

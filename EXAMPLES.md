@@ -317,8 +317,14 @@ at most 16). Neither pushes anything to SAM.
 
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
-sequencer) and `generic_tarball` (build a reusable direct-input cnf with
-`{desc}` deferred to runtime):
+sequencer), `sequencer_suffix` (a label, `[A-Za-z0-9_-]+`, appended to
+every output sequencer: outputs keep the sequencer's first two `_`
+fields, run and subrun, and end `_<label>`, so `001430_00000003` becomes
+`001430_00000003_R85` and an inherited label is replaced, never doubled;
+refused with `runner: g4bl`; a grid submit (`--once`, `--enqueue`) is
+refused when the worker prodtools release has no suffix rule, because an
+older prodtools ignores the key silently) and `generic_tarball` (build a
+reusable direct-input cnf with `{desc}` deferred to runtime):
 
 ```json
 {

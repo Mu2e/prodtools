@@ -54,6 +54,17 @@ _TIER_TO_OWNER_CLASS = {
 _CAMPAIGN_RE = re.compile(r"^(MDC\d{4}[a-z]*|Run\d+[A-Z]?[a-z]*)")
 
 
+def apply_sequencer_suffix(base: str, suffix: str) -> str:
+    """THE suffix rule: keep base's first two '_' fields (run, subrun),
+    then _<suffix>. Raises ValueError when base has fewer than two."""
+    fields = base.split("_")
+    if len(fields) < 2:
+        raise ValueError(
+            f"sequencer_suffix {suffix!r} needs a <run>_<subrun> "
+            f"sequencer, got {base!r}")
+    return "_".join(fields[:2]) + "_" + suffix
+
+
 class Mu2eName:
     """Parse and build Mu2e dot-names (file / dataset / tarball).
 
@@ -467,7 +478,27 @@ class Mu2eJobBase:
     # ------------------------------------------------------------------
 
     def sequencer(self, index: int) -> str:
-        """Get sequencer for job index.
+        """Get sequencer for job index, with tbs.sequencer_suffix applied.
+
+        With a suffix every branch returns "<run>_<subrun>_<suffix>": the
+        first two '_' fields of the plain sequencer, then the suffix (an
+        inherited parent label is replaced, never doubled).
+        """
+        return self._apply_sequencer_suffix(self._base_sequencer(index))
+
+    def _apply_sequencer_suffix(self, base: str) -> str:
+        """THE suffix rule: keep base's first two '_' fields, then _<suffix>.
+
+        No-op without tbs.sequencer_suffix. Raises ValueError when a suffix
+        is set and base has fewer than two '_' fields.
+        """
+        suffix = self.json_data.get('tbs', {}).get('sequencer_suffix')
+        if not suffix:
+            return base
+        return apply_sequencer_suffix(base, suffix)
+
+    def _base_sequencer(self, index: int) -> str:
+        """Sequencer for job index before any sequencer_suffix.
 
         Precedence: an explicit run number in tbs.event_id wins (the job
         family is run/index-addressed, e.g. mix and generator jobs);
@@ -524,7 +555,9 @@ class Mu2eJobBase:
         override_desc: if provided, substitute {desc} in outfile patterns.
                        Used in direct-input mode where desc comes from fname.
         override_seq:  if provided, use this sequencer instead of computing
-                       from input files. Used in direct-input mode.
+                       from input files. Used in direct-input mode. The
+                       wildcard '*' (runlocal.output_globs) passes through
+                       untouched: it already matches a suffixed sequencer.
         """
         tbs = self.json_data.get('tbs', {})
         outfiles = tbs.get('outfiles')
@@ -533,7 +566,12 @@ class Mu2eJobBase:
             return {}
 
         result = {}
-        seq = override_seq if override_seq is not None else self.sequencer(index)
+        if override_seq is None:
+            seq = self.sequencer(index)
+        elif override_seq == '*':
+            seq = override_seq
+        else:
+            seq = self._apply_sequencer_suffix(override_seq)
 
         for key, template in outfiles.items():
             resolved_template = template
