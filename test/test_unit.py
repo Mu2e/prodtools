@@ -6850,6 +6850,29 @@ class TestJobsubQFailureReported(unittest.TestCase):
         self.assertIn('not a jobsub_q table', out)
         self.assertIn('No jobs found', out)
 
+    def _table_with_bad_row_far_from_the_end(self):
+        # 2026-11-19: the rejected row sat mid-table, so the printed
+        # output tail never showed it and the cause stayed unknown.
+        T = TestRecoverCap
+        good = [T._row(f'111.{i}@jobsub01.fnal.gov', 'mu2epro', 'R')
+                for i in range(20)]
+        return '\n'.join([T._HDR, T._SUM, good[0],
+                          'this row is not a job row', *good[1:]]) + '\n'
+
+    def test_live_clusters_names_the_rejected_row(self):
+        from utils.queue_state import live_clusters
+        clusters, out = self._out(lambda: live_clusters(runner=self._run(
+            stdout=self._table_with_bad_row_far_from_the_end())))
+        self.assertIsNone(clusters)
+        self.assertIn('this row is not a job row', out)
+
+    def test_total_queued_names_the_rejected_row(self):
+        from utils.submissions import total_queued
+        n, out = self._out(lambda: total_queued(runner=self._run(
+            stdout=self._table_with_bad_row_far_from_the_end())))
+        self.assertIsNone(n)
+        self.assertIn('this row is not a job row', out)
+
     def test_unlaunchable_prints_the_oserror(self):
         from utils.queue_state import live_clusters
         def boom(*a, **k):

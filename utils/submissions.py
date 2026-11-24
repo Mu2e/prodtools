@@ -69,6 +69,7 @@ def resolve_cap(flag_value):
 # prod_utils -> samweb_client). Re-imported here under their original
 # names so every caller/test reading them off this module keeps working.
 from utils.queue_state import (_jobsub_table_states,  # noqa: F401
+                               _jobsub_table_rejection,
                                cluster_queue_state, live_clusters,
                                confirmed_queue_state, queue_owner,
                                report_jobsub_q_failure, schedd_of)
@@ -595,7 +596,8 @@ def total_queued(user=None, runner=subprocess.run):
         return None
     states = _jobsub_table_states(res.stdout)
     if states is None:
-        report_jobsub_q_failure(cmd, res)
+        report_jobsub_q_failure(
+            cmd, res, detail=_jobsub_table_rejection(res.stdout))
         return None
     return sum(1 for s in states if s in ('I', 'R'))
 

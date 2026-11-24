@@ -10,7 +10,8 @@ submissions re-imports every name, so callers are unaffected.
 and some flag orders silently drop --user and dump every experiment's
 queue). Both probes instead parse the DEFAULT table: field 1 = jobsub id,
 field 6 = one-letter HTCondor state (I idle, R running, H held,
-C completed, X removed, S suspended). Drained/unknown id -> header +
+C completed, X removed, S suspended), or field 5 when RUNTIME is empty
+(see _row_state). Drained/unknown id -> header +
 "0 total" summary, no rows; live -> header + summary + rows; DAG children
 use the same shape with the node name in OWNER.
 """
@@ -23,6 +24,8 @@ from utils import account
 
 _JOBID_RE = re.compile(r'^\d+\.\d+@\S+$')
 _KNOWN_STATES = frozenset('IRHCXS<>')
+_SUBMIT_TIME_RE = re.compile(r'^\d{1,2}:\d{2}$')
+_PRIO_RE = re.compile(r'^-?\d+$')
 _SKIP_PREFIXES = ('JOBSUBJOBID', 'Attempting to ', 'Storing bearer token')
 
 # How much of jobsub_q's own output to repeat when a query is not trusted:
@@ -40,7 +43,7 @@ def _output_tail(text):
 
 
 def report_jobsub_q_failure(cmd, res=None, error=None,
-                            expected='a jobsub_q table'):
+                            expected='a jobsub_q table', detail=None):
     """Print why a `jobsub_q` (or `condor_q`) query was not trusted.
 
     The callers stay fail-closed (they return None); this only says why.
@@ -48,7 +51,9 @@ def report_jobsub_q_failure(cmd, res=None, error=None,
     production tick logged "jobsub_q --user failed" with no evidence.
     `res` is the CompletedProcess, `error` an exception that stopped the
     command from running at all; stdout, where the tick log goes.
-    `expected` names what an exit-0 reply should have been.
+    `expected` names what an exit-0 reply should have been, and
+    `detail` what in it did not fit (the output tail rarely shows the
+    rejected row, which is usually far from the end).
     """
     what = ' '.join(cmd)
     if error is not None:
@@ -66,6 +71,7 @@ def report_jobsub_q_failure(cmd, res=None, error=None,
     else:
         tail = _output_tail(stdout) or _output_tail(stderr)
         print(f"{what}: exit 0 but not {expected}"
+              + (f" ({detail})" if detail else "")
               + (f"; its output ends:\n{tail}" if tail else
                  "; it printed nothing"), flush=True)
 
@@ -86,6 +92,51 @@ def _jobsub_table_states(stdout):
     return [s for states in clusters.values() for s in states]
 
 
+def _row_state(fields):
+    """The one-letter state of a job row split into `fields`, or None
+    when the row does not have the table's shape.
+
+    Columns: JOBSUBJOBID OWNER SUBMITTED (date, time) RUNTIME ST PRIO
+    SIZE COMMAND, so the state is field 6. RUNTIME can be empty:
+    jobsub_lite prints it with condor_q `-format "%T "` from an
+    expression that reads ShadowBday while JobStatus == 2, a job that
+    has only just started has no ShadowBday yet, and condor_q prints
+    nothing for an undefined value. The state is then field 5. Such a
+    row is accepted only when field 4 is the SUBMITTED time and field 6
+    the PRIO integer, so every other shape is still refused. Until
+    2026-11-19 these rows failed the whole parse, and a production tick
+    skipped top-up and drain with rc 2 whenever a job was starting."""
+    if len(fields) < 6 or not _JOBID_RE.match(fields[0]):
+        return None
+    if fields[5] in _KNOWN_STATES:
+        return fields[5]
+    if (fields[4] in _KNOWN_STATES and _SUBMIT_TIME_RE.match(fields[3])
+            and _PRIO_RE.match(fields[5])):
+        return fields[4]
+    return None
+
+
+def _parse_jobsub_table(stdout):
+    """(clusters, None) for a trusted table, (None, why) otherwise.
+
+    `why` names the first thing that failed, cut to
+    _REPORT_LINE_CHARS, for report_jobsub_q_failure."""
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+    if not any(ln.startswith('JOBSUBJOBID') for ln in lines):
+        return None, 'no JOBSUBJOBID header line'
+    clusters = {}
+    for ln in lines:
+        if ln.startswith(_SKIP_PREFIXES) or ' total; ' in ln:
+            continue
+        fields = ln.split()
+        state = _row_state(fields)
+        if state is None:
+            return None, f'not a job row: {ln[:_REPORT_LINE_CHARS]}'
+        cluster = fields[0].split('.', 1)[0]
+        clusters.setdefault(cluster, []).append(state)
+    return clusters, None
+
+
 def _jobsub_table_cluster_states(stdout):
     """{cluster_id: [states]} from jobsub_q's default table, or None if
     untrustworthy. Cluster id is the leading integer of JOBSUBJOBID,
@@ -95,21 +146,14 @@ def _jobsub_table_cluster_states(stdout):
     Requires the header line (proof we got the table, not an error
     page); skips token-refresh noise and summary lines; any other
     unrecognized line fails the whole parse — a miscount floods the
-    farm or starves campaigns, so never guess."""
-    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
-    if not any(ln.startswith('JOBSUBJOBID') for ln in lines):
-        return None
-    clusters = {}
-    for ln in lines:
-        if ln.startswith(_SKIP_PREFIXES) or ' total; ' in ln:
-            continue
-        fields = ln.split()
-        if (len(fields) < 6 or not _JOBID_RE.match(fields[0])
-                or fields[5] not in _KNOWN_STATES):
-            return None
-        cluster = fields[0].split('.', 1)[0]
-        clusters.setdefault(cluster, []).append(fields[5])
-    return clusters
+    farm or starves campaigns, so never guess. Row shape: _row_state."""
+    return _parse_jobsub_table(stdout)[0]
+
+
+def _jobsub_table_rejection(stdout):
+    """Why _jobsub_table_cluster_states refuses `stdout`, or None when it
+    trusts it."""
+    return _parse_jobsub_table(stdout)[1]
 
 
 def queue_owner():
@@ -155,9 +199,9 @@ def live_clusters(user=None, runner=subprocess.run):
     if res.returncode != 0:
         report_jobsub_q_failure(cmd, res)
         return None
-    clusters = _jobsub_table_cluster_states(res.stdout)
+    clusters, why = _parse_jobsub_table(res.stdout)
     if clusters is None:
-        report_jobsub_q_failure(cmd, res)
+        report_jobsub_q_failure(cmd, res, detail=why)
     return clusters
 
 
