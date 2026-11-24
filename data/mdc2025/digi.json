@@ -324,5 +324,348 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh"
+    },
+    {
+        "_comment": "Unmixed (no pileup) on-spill digitization at MDC2025be with Sim_best v2_0, for every primary of the MDC2025be Mix1BB remix (mix.json; NoPrimary left out, it has no primary) plus Flat e-, e+ and mu-. OnSpill_run1a.fcl pins the Run 1A trigger scenario (Production #605). Same dts inputs as the mixes, 10 dts files per job as in the MDC2025ap unmixed entry. No geometry pin: digitization runs after G4. Reco and ntuples come from the generic -OnSpill entries at MDC2025be (reco.json, evntuple.json). MuCap1809keVCalo from this entry kept almost no events (no NoPrimary.fcl); it is redone at MDC2025be_best_v2_0-001 (entry at the end of this file).",
+        "dsconf": "MDC2025be_best_v2_0",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run1a.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.FlateMinus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatePlus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatMuMinus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.CePLeadingLog.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RPCExternalPhysical.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RPCInternalPhysical.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NExternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NExternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.IPAMuminusMichel.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.PbarResampling.MDC2025ar.art": 10
+            },
+            {
+                "dts.mu2e.CosmicSignal.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGamma.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGammaCalo.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 10
+            },
+            {
+                "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.MuCapNeutronTailCalo.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.PolyFlatGammaCalo.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_840.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_860.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_880.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_915.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_840.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_870.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900_mA45.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_930.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_870.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_10ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_30ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_100ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_300ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_1000ns.MDC2025bd.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) version of the unmixed on-spill digitization at MDC2025be_best_v2_0 above: OnSpill_run2.fcl (Run 2 trigger tuning plus Offline run2conditions_epilog.fcl) and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts and files per job. MuCap1809keVCalo is not in this list: it has its own keep-all entry at the end of this file.",
+        "dsconf": "MDC2025be_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run2.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.FlateMinus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatePlus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatMuMinus.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.CePLeadingLog.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RPCExternalPhysical.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RPCInternalPhysical.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NExternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NExternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.IPAMuminusMichel.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.PbarResampling.MDC2025ar.art": 10
+            },
+            {
+                "dts.mu2e.CosmicSignal.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGamma.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGammaCalo.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.MuCapNeutronTailCalo.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.PolyFlatGammaCalo.MDC2025bb.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_840.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_860.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_880.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_915.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_840.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_870.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900_mA45.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_930.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_870.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_900.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_10ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_30ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_100ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_300ns.MDC2025bd.art": 10
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_1000ns.MDC2025bd.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) unmixed on-spill MuCap1809keVCalo digitization at MDC2025be_best_v1_5, alone so that it can keep every event. MuCap1809keVCalo needs Production/JobConfig/mixing/NoPrimary.fcl: the 1.809 MeV photon never passes the trigger paths, and without it the MDC2025be_best_v2_0 digitization kept almost nothing (redone at MDC2025be_best_v2_0-001). OnSpill_run2.fcl and Sim_best v1_5 as for the other Run 2 unmixed samples; 10 dts files per job: 100 jobs.",
+        "dsconf": "MDC2025be_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run2.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
+            "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Off-spill cosmics digitization at MDC2025be with Sim_best v2_0 (Run 1A tracker), for the Run 1A set next to the MDC2025be on-spill samples. Plain OffSpill.fcl: the digitize prolog defaults to the Run 1A trigger tuning, and Production has no OffSpill_run1a.fcl. Same dts as the MDC2025be on-spill cosmics (CosmicSignal MDC2025ap, 5000 files, 5.96M events). 50 dts files per job, 100 jobs: the MDC2025an off-spill digitization used 100 per job and took 5.1 CPU hours on average but up to 18.5 hours of wall time, too close to the 24 h limit. Off-spill keeps almost every event (an: 5.85M of 5.89M), about 9.5 GB per 100 dts files. Reco and ntuples come from the generic off-spill entries at the same dsconf (reco.json, evntuple.json).",
+        "desc": "CosmicSignalOffSpill",
+        "dsconf": "MDC2025be_best_v2_0",
+        "fcl": "Production/JobConfig/digitize/OffSpill.fcl",
+        "input_data": {
+            "dts.mu2e.CosmicSignal.MDC2025ap.art": 50
+        },
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Off-spill cosmics digitization for Run 2 (nominal tracker) at MDC2025be with Sim_best v1_5. Production has no OffSpill_run2.fcl, so the entry spells out what OnSpill_run2.fcl does: the Run 2 trigger conditions file is the base include, because its values are bound with @protect_ignore and the first binding wins, then OffSpill.fcl and digitize/run2_epilog.fcl (Offline run2conditions_epilog.fcl). Same dts as the MDC2025be on-spill cosmics (CosmicSignal MDC2025ap, 5000 files, 5.96M events). 50 dts files per job, 100 jobs: the MDC2025an off-spill digitization used 100 per job and took 5.1 CPU hours on average but up to 18.5 hours of wall time, too close to the 24 h limit. Off-spill keeps almost every event (an: 5.85M of 5.89M), about 9.5 GB per 100 dts files. Reco and ntuples come from the generic off-spill entries at the same dsconf (reco.json, evntuple.json).",
+        "desc": "CosmicSignalOffSpill",
+        "dsconf": "MDC2025be_best_v1_5",
+        "fcl": "mu2e-trig-config/core/conditions/run2.fcl",
+        "input_data": {
+            "dts.mu2e.CosmicSignal.MDC2025ap.art": 50
+        },
+        "fcl_overrides": {
+            "#include": [
+                "Production/JobConfig/digitize/OffSpill.fcl",
+                "Production/JobConfig/digitize/run2_epilog.fcl"
+            ],
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Keep-all redo of the unmixed on-spill MuCap1809keVCalo digitization at MDC2025be with Sim_best v2_0 and the Run 1A trigger. The MDC2025be_best_v2_0 digitization put MuCap1809keVCalo in a shared input list without Production/JobConfig/mixing/NoPrimary.fcl, so the trigger selection kept almost nothing (Mix1BB 6,556 of 2,162,530 events, OnSpill 0). Same dts and 10 dts files (about 21,600 events) per job as before: 100 jobs. The MDC2025au on-spill digitization of this dts kept every event: 2,162,530 events, 10 GB.",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run1a.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
+            "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]

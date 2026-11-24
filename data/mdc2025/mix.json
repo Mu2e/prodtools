@@ -299,5 +299,598 @@
                 "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
             }
         ]
+    },
+    {
+        "_comment": "Run 1A Mix1BB of the flat e-, e+ and mu- samples (MDC2025ap dts, 1500 files and about 2200 events each), with the newest tracker conditions (Sim_best v2_0) and the Run 1A trigger. Mix_run1a.fcl (Production #605, first in SimJob MDC2025be) pins the Run 1A scenario. Same pileup as the BNV mix. One dts per job, 4500 jobs. Smoke 2026-11-17 on MDC2025be (FlateMinus, one file, 2246 events): exit 0, 367 s CPU, VmHWM 1.27 GB, 0.80 GB of dig, so about 3.6 TB and 460 CPU hours in total.",
+        "input_data": [
+            {
+                "dts.mu2e.FlateMinus.MDC2025ap.art": 1
+            },
+            {
+                "dts.mu2e.FlatePlus.MDC2025ap.art": 1
+            },
+            {
+                "dts.mu2e.FlatMuMinus.MDC2025ap.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v2_0"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run1a.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v2_0",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+            }
+        ]
+    },
+    {
+        "_comment": "Remix of every other Run 1A Mix1BB sample at MDC2025be with the newest tracker conditions (Sim_best v2_0) and the Run 1A trigger, as for the flat e-, e+ and mu- entry above: the MDC2025au mixes (16 samples; NoPrimary is the next entry), the MDC2025bb mixes (3) and the MDC2025bd BNV mixes (17). Same primaries (dts) and the same pileup as before; only the digitization is redone. Files per job are chosen for round job counts (au used 834, 1667 and so on): 11,150 jobs for the au and bb samples, plus 1938 for BNV at one file per job as in bd. The generic draining reco and ntuple entries (reco.json, evntuple.json) pick up the new dig and mcs datasets. MuCap1809keVCalo from this entry kept almost no events (no NoPrimary.fcl); it is redone at MDC2025be_best_v2_0-001 (entry at the end of this file).",
+        "input_data": [
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ap.art": 4
+            },
+            {
+                "dts.mu2e.CePLeadingLog.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.RPCExternalPhysical.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.RPCInternalPhysical.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NExternal.MDC2025at.art": 14
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NExternal.MDC2025at.art": 14
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NInternal.MDC2025at.art": 5
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.IPAMuminusMichel.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.PbarResampling.MDC2025ar.art": 10
+            },
+            {
+                "dts.mu2e.CosmicSignal.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGamma.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.FlatGammaCalo.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5
+            },
+            {
+                "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 1
+            },
+            {
+                "dts.mu2e.MuCapNeutronTailCalo.MDC2025bb.art": 1
+            },
+            {
+                "dts.mu2e.PolyFlatGammaCalo.MDC2025bb.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_840.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_860.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_880.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_915.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_840.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_870.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900_mA45.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_930.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_870.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_10ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_30ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_100ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_300ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_1000ns.MDC2025bd.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v2_0"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run1a.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v2_0",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+            }
+        ]
+    },
+    {
+        "_comment": "NoPrimary (pileup only) remix at MDC2025be with Sim_best v2_0 and the Run 1A trigger. Needs NoPrimary.fcl, which keeps every event that digitizes, as the MDC2025af NoPrimary mix did. One dts file (2000 events) per job, 2000 jobs.",
+        "input_data": [
+            {
+                "dts.mu2e.NoPrimary.MDC2025af.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v2_0"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run1a.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v2_0",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+                "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+            }
+        ]
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) version of the flat e-, e+ and mu- Mix1BB entry at MDC2025be_best_v2_0 above: Mix_run2.fcl (Run 2 trigger tuning plus Offline run2conditions_epilog.fcl) and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts, pileup, files per job and job count as the Run 1A entry.",
+        "input_data": [
+            {
+                "dts.mu2e.FlateMinus.MDC2025ap.art": 1
+            },
+            {
+                "dts.mu2e.FlatePlus.MDC2025ap.art": 1
+            },
+            {
+                "dts.mu2e.FlatMuMinus.MDC2025ap.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run2.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+            }
+        ]
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) version of the remix of every other Mix1BB sample at MDC2025be_best_v2_0 above: Mix_run2.fcl and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts, pileup, files per job and job counts as the Run 1A entry. MuCap1809keVCalo is not in this list: it has its own keep-all entry at the end of this file.",
+        "input_data": [
+            {
+                "dts.mu2e.CeMLeadingLog.MDC2025ap.art": 4
+            },
+            {
+                "dts.mu2e.CePLeadingLog.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.DIOtail95.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.RPCExternalPhysical.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.RPCInternalPhysical.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NExternal.MDC2025at.art": 14
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NExternal.MDC2025at.art": 14
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace0NInternal.MDC2025at.art": 5
+            },
+            {
+                "dts.mu2e.RMCPhaseSpace1NInternal.MDC2025at.art": 10
+            },
+            {
+                "dts.mu2e.IPAMuminusMichel.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.PbarResampling.MDC2025ar.art": 10
+            },
+            {
+                "dts.mu2e.CosmicSignal.MDC2025ap.art": 10
+            },
+            {
+                "dts.mu2e.FlatGamma.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.FlatGammaCalo.MDC2025ap.art": 5
+            },
+            {
+                "dts.mu2e.MuCapProtonTail.MDC2025bb.art": 1
+            },
+            {
+                "dts.mu2e.MuCapNeutronTailCalo.MDC2025bb.art": 1
+            },
+            {
+                "dts.mu2e.PolyFlatGammaCalo.MDC2025bb.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_840.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_860.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_880.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVEmDarkFermion_m1_915.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_840.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_870.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_900_mA45.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascade_m1_930.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_870.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeElectron_m1_900.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_10ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_30ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_100ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_300ns.MDC2025bd.art": 1
+            },
+            {
+                "dts.mu2e.BNVDarkCascadeLongLived_tau_1000ns.MDC2025bd.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run2.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art"
+            }
+        ]
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) version of the NoPrimary remix at MDC2025be_best_v2_0 above: Mix_run2.fcl with NoPrimary.fcl, and Sim_best v1_5, not v2_0: v2_0 changes only seven tracker tables, all the KPP-based Run 1A state (about 30 panels without HV instead of 3, more dead straws, raised preamp thresholds), and the Run 2 epilog does not override them. Same dts and job count.",
+        "input_data": [
+            {
+                "dts.mu2e.NoPrimary.MDC2025af.art": 1
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run2.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+                "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+            }
+        ]
+    },
+    {
+        "_comment": "Run 2 (nominal tracker) MuCap1809keVCalo Mix1BB at MDC2025be_best_v1_5, alone so that it can keep every event. MuCap1809keVCalo needs Production/JobConfig/mixing/NoPrimary.fcl: the 1.809 MeV photon never passes the trigger paths, and without it the MDC2025be_best_v2_0 digitization kept almost nothing (redone at MDC2025be_best_v2_0-001). Mix_run2.fcl and Sim_best v1_5 as for the other Run 2 mixes; same dts, pileup and 5 dts files per job as the Run 1A redo: 200 jobs.",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v1_5"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run2.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v1_5",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+                "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+            }
+        ]
+    },
+    {
+        "_comment": "Keep-all redo of the MuCap1809keVCalo Mix1BB at MDC2025be with Sim_best v2_0 and the Run 1A trigger. The MDC2025be_best_v2_0 digitization put MuCap1809keVCalo in a shared input list without Production/JobConfig/mixing/NoPrimary.fcl, so the trigger selection kept almost nothing (Mix1BB 6,556 of 2,162,530 events, OnSpill 0). Same dts, pileup and 5 dts files (about 10,800 events) per job as before: 200 jobs. The MDC2025au mix of this dts kept every event: 200 files, 2,162,530 events, 1.14 TB, mean 1.0 CPU hour per job (max 2.6), VmHWM up to 1.5 GB.",
+        "input_data": [
+            {
+                "dts.mu2e.MuCap1809keVCalo.MDC2025ar.art": 5
+            }
+        ],
+        "pileup_datasets": [
+            {
+                "dts.mu2e.MuBeamFlashCat.MDC2025ac.art": 1,
+                "dts.mu2e.EleBeamFlashCat.MDC2025ac.art": 25,
+                "dts.mu2e.NeutralsFlashCat.MDC2025ad.art": 1,
+                "dts.mu2e.MuStopPileupCat.MDC2025ac.art": 2
+            }
+        ],
+        "dsconf": [
+            "MDC2025be_best_v2_0-001"
+        ],
+        "pbeam": [
+            "Mix1BB"
+        ],
+        "owner": [
+            "mu2e"
+        ],
+        "simjob_setup": [
+            "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        ],
+        "fcl": [
+            "Production/JobConfig/mixing/Mix_run1a.fcl"
+        ],
+        "inloc": [
+            "resilient"
+        ],
+        "outloc": [
+            {
+                "dig.mu2e.*.art": "tape"
+            }
+        ],
+        "fcl_overrides": [
+            {
+                "services.DbService.purpose": "Sim_best",
+                "services.DbService.version": "v2_0",
+                "physics.producers.PBISim.SDF": 0.8,
+                "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+                "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+            }
+        ]
     }
 ]

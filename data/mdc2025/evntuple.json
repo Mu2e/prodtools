@@ -611,5 +611,203 @@
             "nts.*.root": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "One generic draining ntuple cnf for the on-spill, unmixed CE/DIO reco at MDC2025bd with Sim_best v2_0 (reco.json, generic entry; first sample CeMLeadingLog). It takes every mcs dataset matching input_pattern, one mcs file per job, so a new sample needs no new entry or campaign. Same fcl as the MDC2025ba unmixed entries (from_mcs-primary.fcl) on AnalysisMDC2025 v02_03_01, which carries the TrkQual fix, so no SkipEvent.",
+        "desc": "evnt",
+        "dsconf": "MDC2025bd_best_v2_0",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025bd_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
+    },
+    {
+        "_comment": "One generic draining ntuple cnf for the Mix1BB reco at MDC2025be with Sim_best v2_0 (reco.json, generic Mix1BB entry). It takes every mcs dataset matching input_pattern, one mcs file per job. from_mcs-mixed.fcl as for the BNV mixes, on AnalysisMDC2025 v02_04_00, which is backed on SimJob MDC2025be like the reco.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%Mix1BB.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "One generic draining ntuple cnf for the unmixed on-spill reco at MDC2025be (reco.json, generic -OnSpill entry). It takes every mcs dataset matching input_pattern, one mcs file per job. from_mcs-primary.fcl as for the MDC2025bd unmixed entry, on AnalysisMDC2025 v02_04_00, which is backed on SimJob MDC2025be like the reco.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Run 2 version of the generic draining Mix1BB ntuple entry above, for the MDC2025be_best_v1_5 Mix1BB reco. Same fcl and AnalysisMDC2025 v02_04_00.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%Mix1BB.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Run 2 version of the generic draining on-spill ntuple entry above, for the MDC2025be_best_v1_5 unmixed reco. Same fcl and AnalysisMDC2025 v02_04_00.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, LH flavour, for the CosmicSignalOffSpill-LH reco at MDC2025be_best_v2_0 (reco.json -OffSpill entry). from_mcs-mockdata.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OffSpill-LH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-LH.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, CH flavour, for the CosmicSignalOffSpill-CH reco at MDC2025be_best_v2_0 (reco.json -OffSpill entry). from_mcs-OffSpill.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OffSpill-CH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-CH.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-OffSpill.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, LH flavour, for the CosmicSignalOffSpill-LH reco at MDC2025be_best_v1_5 (reco.json -OffSpill entry). from_mcs-mockdata.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OffSpill-LH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-LH.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mockdata.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill ntuples, CH flavour, for the CosmicSignalOffSpill-CH reco at MDC2025be_best_v1_5 (reco.json -OffSpill entry). from_mcs-OffSpill.fcl as for the MDC2025au off-spill ntuples, on AnalysisMDC2025 v02_04_00 like the other MDC2025be ntuples.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OffSpill-CH",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.CosmicSignalOffSpill-CH.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-OffSpill.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining ntuple entry for the Mix1BB reco of the MuCap1809keVCalo keep-all redo at MDC2025be_best_v2_0-001. Same fcl and AnalysisMDC2025 v02_04_00 as the MDC2025be_best_v2_0 -Mix1BB entry.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%Mix1BB.MDC2025be_best_v2_0-001.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-mixed.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+    },
+    {
+        "_comment": "Generic draining ntuple entry for the OnSpill reco of the MuCap1809keVCalo keep-all redo at MDC2025be_best_v2_0-001. Same fcl and AnalysisMDC2025 v02_04_00 as the MDC2025be_best_v2_0 -OnSpill entry.",
+        "desc": "evnt",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "mcs.mu2e.%OnSpill.MDC2025be_best_v2_0-001.art",
+        "prestage": true,
+        "fcl": "EventNtuple/fcl/from_mcs-primary.fcl",
+        "fcl_overrides": {
+            "services.TFileService.fileName": "nts.owner.{desc}.version.sequencer.root"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "nts.*.root": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
     }
 ]

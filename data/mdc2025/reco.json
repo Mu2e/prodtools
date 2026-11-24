@@ -789,14 +789,14 @@
         ]
     },
     {
-        "_comment": "Reconstruction of the CeMLeadingLog re-digitization with the newest tracker conditions, Sim_best v2_0 (digi.json). Same geometry and settings as the MDC2025ba reco entry; reco defaults to the Run 1A configuration. One dig file per job.",
+        "_comment": "One generic draining reco cnf for the on-spill, unmixed CE/DIO digitization at MDC2025bd with the newest tracker conditions, Sim_best v2_0 (digi.json; first sample CeMLeadingLog, campaign 258). It takes every dig dataset matching input_pattern, one dig file per job, so a new CE sample needs no new entry or campaign: samDD.sh makes its SAM definition, a tick drains it. Output desc and sequencer follow the input. Same geometry and settings as the MDC2025ba reco entries; reco defaults to Run 1A, so no trigger include. Replaces the per-sample CeMLeadingLogOnSpill entry of PR #100.",
+        "desc": "reco",
         "dsconf": "MDC2025bd_best_v2_0",
-        "desc": "CeMLeadingLogOnSpill",
-        "tarball_append": "-reco",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%OnSpill.MDC2025bd_best_v2_0.art",
+        "prestage": true,
         "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
-        "input_data": {
-            "dig.mu2e.CeMLeadingLogOnSpill.MDC2025bd_best_v2_0.art": 1
-        },
         "fcl_overrides": {
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
@@ -806,8 +806,152 @@
         },
         "inloc": "tape",
         "outloc": {
-            "*.art": "tape"
+            "mcs.*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bd/setup.sh"
+    },
+    {
+        "_comment": "One generic draining reco cnf for the Mix1BB digitization at MDC2025be with Sim_best v2_0 (mix.json; first samples FlateMinus, FlatePlus and FlatMuMinus). It takes every dig dataset matching input_pattern, one dig file per job, so a new mixed sample needs no new entry or campaign: samDD.sh makes its SAM definition, a tick drains it. Output desc and sequencer follow the input. Reco defaults to Run 1A, so no scenario include.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%Mix1BB.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "One generic draining reco cnf for the unmixed on-spill digitization at MDC2025be with Sim_best v2_0 (digi.json). It takes every dig dataset matching input_pattern, one dig file per job: samDD.sh makes each new SAM definition, a tick drains it. Output desc and sequencer follow the input. Reco defaults to Run 1A, so no scenario include.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%OnSpill.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 version of the generic draining Mix1BB reco above, for the MDC2025be_best_v1_5 Mix1BB dig. Includes Production/JobConfig/reco/run2_epilog.fcl after the reco fcl (nominal-tracker pattern recognition and tracker conditions), with Sim_best v1_5 as at digitization.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-Mix1BB",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%Mix1BB.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "#include": "Production/JobConfig/reco/run2_epilog.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Run 2 version of the generic draining on-spill reco above, for the MDC2025be_best_v1_5 unmixed dig. Includes Production/JobConfig/reco/run2_epilog.fcl after the reco fcl, with Sim_best v1_5 as at digitization.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%OnSpill.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "#include": "Production/JobConfig/reco/run2_epilog.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill reco for the CosmicSignalOffSpill dig at MDC2025be_best_v2_0 (digi.json). recoMC/OffSpill.fcl writes LoopHelix (-LH) and CentralHelix (-CH) outputs, as the MDC2025au off-spill reco did. One dig file per job. Run 1A: reco defaults to Run 1A, so no scenario include.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v2_0",
+        "tarball_append": "-OffSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.CosmicSignalOffSpill.MDC2025be_best_v2_0.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OffSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}-LH.version.sequencer.art",
+            "outputs.CentralHelixOutput.fileName": "mcs.owner.{desc}-CH.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Generic draining off-spill reco for the CosmicSignalOffSpill dig at MDC2025be_best_v1_5 (digi.json). recoMC/OffSpill.fcl writes LoopHelix (-LH) and CentralHelix (-CH) outputs, as the MDC2025au off-spill reco did. One dig file per job. Run 2: includes Production/JobConfig/reco/run2_epilog.fcl after the reco fcl, with Sim_best v1_5 as at digitization.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v1_5",
+        "tarball_append": "-OffSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.CosmicSignalOffSpill.MDC2025be_best_v1_5.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OffSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}-LH.version.sequencer.art",
+            "outputs.CentralHelixOutput.fileName": "mcs.owner.{desc}-CH.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5",
+            "#include": "Production/JobConfig/reco/run2_epilog.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Generic draining reco for the MuCap1809keVCalo keep-all redo at MDC2025be_best_v2_0-001 (mix.json and digi.json): one entry takes both the Mix1BB and the OnSpill dig, since the mixed and unmixed MDC2025be reco entries differ only in input_pattern. One dig file per job; output desc and sequencer follow the input.",
+        "desc": "reco",
+        "dsconf": "MDC2025be_best_v2_0-001",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.MuCap1809keVCalo%.MDC2025be_best_v2_0-001.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]
