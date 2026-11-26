@@ -689,8 +689,8 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
     },
     {
-        "_comment": "Unmixed digitization of the four MuCap flat primaries (primary_muon.json MuCap{Proton,Deuteron,Triton,Alpha}Flat MDC2025bf, campaigns 436-439) with the release of the realistic-tracker epoch, SimJob MDC2025be, so the existing generic draining OnSpill reco and ntuples at MDC2025be_best_v2_0 (campaigns 340, 341) pick them up. MDC2025be predates the TriggerableHeavy path (Production #611), so mixing/NoPrimary.fcl keeps every event, as for MuCap1809keVCalo; the heavy-particle selection can be applied in analysis. Tested 2026-11-26: a bf proton dts digitized, reconstructed and ntupled with be and AnalysisMDC2025 v02_04_00, 591 of 591 events. 10 dts per job: 20 jobs each for p, d, t and 100 for alpha.",
-        "dsconf": "MDC2025be_best_v2_0",
+        "_comment": "Unmixed digitization of the four MuCap flat primaries (primary_muon.json MuCap{Proton,Deuteron,Triton,Alpha}Flat MDC2025bf, campaigns 436-439) with the same release, SimJob MDC2025bf: OnSpill_run1a.fcl, whose OnSpill paths include TriggerableHeavyPath (bit 22, Production #611), so events are kept as Michael MacKenzie designed. Local test 2026-11-26 (3 dts each): kept p 64%, d 57%, t 60%, alpha 13%; about 10 ms/event, VmHWM 0.93 GB. 10 dts per job: 20 jobs each for p, d, t and 100 for alpha.",
+        "dsconf": "MDC2025bf_best_v2_0",
         "fcl": "Production/JobConfig/digitize/OnSpill_run1a.fcl",
         "input_data": [
             {
@@ -709,13 +709,12 @@
         "fcl_overrides": {
             "services.DbService.purpose": "Sim_best",
             "services.DbService.version": "v2_0",
-            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
-            "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
         },
         "inloc": "tape",
         "outloc": {
             "*.art": "tape"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh"
     }
 ]
