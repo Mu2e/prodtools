@@ -269,14 +269,19 @@ def create_mcp_server():
                           'name without ".tar". Say whose run: '
                           'user="<login>", or mine=true on your own stdio '
                           'server. state="unknown" is never a failure and '
-                          'never a success. A failed job\'s exit_codes '
+                          'never a success. outputs lists at most 200 jobs '
+                          '(outputs_truncated then holds the ok count); '
+                          'all_outputs=true lists every ok job\'s outputs. '
+                          'A failed job\'s exit_codes '
                           'value is not always a positive int: -N means '
                           'killed by signal N, and "removed" means it was '
                           'removed (condor_rm, jobsub_rm or a '
                           'periodic_remove policy); both count as failed.')
     def run_status(name: str, mine: bool = False,
-                   user: Optional[str] = None) -> dict:
-        return TOOL_FUNCTIONS['run_status'](name=name, mine=mine, user=user)
+                   user: Optional[str] = None,
+                   all_outputs: bool = False) -> dict:
+        return TOOL_FUNCTIONS['run_status'](name=name, mine=mine, user=user,
+                                            all_outputs=all_outputs)
 
     @mcp.tool(description='Whether SAM knows a file, and its first '
                           'location. An unknown name is exists=false, '
