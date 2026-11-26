@@ -2035,6 +2035,29 @@ class TestFamilySplitSourceJobdef(unittest.TestCase):
         self.assertEqual(tbs['subrunkey'], '')
 
 
+class TestAuxinFilesSequential(unittest.TestCase):
+    """The pre-submit check asks only for the aux files the jobs will open:
+    with sequential_aux, job i reads files [i*nreq, (i+1)*nreq), so jobs
+    0..njobs-1 read the first njobs*nreq; sampled selection may read any."""
+
+    def tbs(self, **kw):
+        return {'auxin': {'physics.filters.r.fileNames': [1, ['a', 'b', 'c', 'd']]}, **kw}
+
+    def test_sequential_checks_only_the_files_jobs_read(self):
+        from utils import check_inputs
+        self.assertEqual(check_inputs._auxin_files(self.tbs(sequential_aux=True, njobs=2)), ['a', 'b'])
+
+    def test_more_jobs_than_files_checks_them_all(self):
+        from utils import check_inputs
+        self.assertEqual(check_inputs._auxin_files(self.tbs(sequential_aux=True, njobs=9)),
+                         ['a', 'b', 'c', 'd'])
+
+    def test_derived_or_missing_njobs_and_sampled_check_everything(self):
+        from utils import check_inputs
+        for kw in ({'sequential_aux': True, 'njobs': -1}, {'sequential_aux': True}, {'njobs': 2}):
+            self.assertEqual(sorted(check_inputs._auxin_files(self.tbs(**kw))), ['a', 'b', 'c', 'd'])
+
+
 class TestCreateInputsFileExclude(unittest.TestCase):
     """Verify that _create_inputs_file honours the exclude_files parameter."""
 
