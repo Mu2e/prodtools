@@ -2009,6 +2009,32 @@ class TestInputDataOffset(unittest.TestCase):
                 normalize_input_data({'ds': {'count': 1, 'offset': bad}})
 
 
+class TestFamilySplitSourceJobdef(unittest.TestCase):
+    """A FamilySplitSource template (Offline Sources, Mu2e/Offline#2154: one
+    output event per family of a split stage-2 event) reads art files as
+    RootInput does, so its cnf carries the same inputs and no subrun key."""
+
+    def test_familysplitsource_builds_like_rootinput(self):
+        from utils.jobdef import _parse_job_args
+        tmpdir = _mkdtemp()
+        try:
+            files = ["dts.owner.S2.conf.001430_00000000.art",
+                     "dts.owner.S2.conf.001430_00000001.art"]
+            listfile = os.path.join(tmpdir, "inputs.txt")
+            with open(listfile, "w") as f:
+                f.write("\n".join(files) + "\n")
+            with patch('utils.jobdef._get_source_type', return_value='FamilySplitSource'), \
+                 patch('utils.jobdef._get_output_modules', return_value=[]), \
+                 patch('utils.jobdef._run_fhicl_get',
+                       side_effect=subprocess.CalledProcessError(1, 'fhicl-get')):
+                tbs = _parse_job_args(['--inputs', listfile, '--merge-factor', '1'],
+                                      'template.fcl', {})
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        self.assertEqual(tbs['inputs'], {'source.fileNames': [1, files]})
+        self.assertEqual(tbs['subrunkey'], '')
+
+
 class TestCreateInputsFileExclude(unittest.TestCase):
     """Verify that _create_inputs_file honours the exclude_files parameter."""
 

@@ -300,6 +300,12 @@ def _validate_options_for_source_type(source_type: str, args_state: Dict) -> Non
             'required': ['inputs', 'merge_factor'],
             'allowed': ['description', 'auto_description']
         },
+        # Offline Sources FamilySplitSource (Mu2e/Offline#2154): reads art files
+        # like RootInput, one output event per family of a split stage-2 event.
+        'FamilySplitSource': {
+            'required': ['inputs', 'merge_factor'],
+            'allowed': ['description', 'auto_description']
+        },
         'SamplingInput': {
             'required': ['run_number', 'description', 'samplinginput'],
             'allowed': []
@@ -443,7 +449,7 @@ def _parse_job_args(job_args: List[str], template_path: str, config: Dict = None
         }
         tbs['subrunkey'] = 'source.firstSubRun'
         
-    elif source_type in ['RootInput', 'FromCorsikaBinary', 'FromSTMTestBeamData']:
+    elif source_type in ['RootInput', 'FromCorsikaBinary', 'FromSTMTestBeamData', 'FamilySplitSource']:
         if args_state['inputs_list']:
             tbs['inputs'] = {'source.fileNames': [args_state['merge_factor'], args_state['inputs_list']]}
         tbs['subrunkey'] = ''  # subrun comes from the inputs
