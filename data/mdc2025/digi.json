@@ -667,5 +667,25 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Digitization of the Extracted DYB cosmics (stage1.json ExtractedDYB MDC2025bf), set up like the CRY one at MDC2025bb_best_v1_5 so the two compare directly: ExtractedAllEvents.fcl writes the triggered stream (Output) and every event (AllOutput, -All), so muons that stop in the CRV and leave hits only there are kept; Sim_best v1_5 as for CRY; 8 dts per job (20000 dts to 2500 jobs). Push only after the dts dataset is complete.",
+        "desc": "CosmicDYBExtracted",
+        "dsconf": "MDC2025bf_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/ExtractedAllEvents.fcl",
+        "input_data": {
+            "dts.mu2e.CosmicDYBExtracted.MDC2025bf.art": 8
+        },
+        "fcl_overrides": {
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+            "outputs.AllOutput.fileName": "dig.owner.{desc}-All.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh"
     }
 ]
