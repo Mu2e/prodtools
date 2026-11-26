@@ -1968,6 +1968,119 @@ class TestStashMiss(unittest.TestCase):
         self.assertIn('/persistent/datasets/', result)
 
 
+class TestInputDataOffset(unittest.TestCase):
+    """input_data `offset`: the sorted list from `offset`, then `max_nfiles`,
+    so two entries can read disjoint ranges of one dataset (e.g. a main
+    stream on files 0-399 and a decay stream on files 400-444)."""
+
+    FILES = ['e', 'a', 'd', 'c', 'b']
+
+    def ordered(self, input_data, exclude_files=None):
+        from utils.config_utils import normalize_input_data
+        from utils.json2jobdef import _ordered_files
+        spec = normalize_input_data(input_data)[0]
+        with patch('utils.json2jobdef.list_files', return_value=list(self.FILES)):
+            return _ordered_files(spec, 'q', exclude_files)
+
+    def test_offset_slices_the_sorted_list(self):
+        self.assertEqual(self.ordered({'ds': {'count': 1, 'offset': 2, 'max_nfiles': 2}}), ['c', 'd'])
+        self.assertEqual(self.ordered({'ds': {'count': 1, 'offset': 3}}), ['d', 'e'])
+
+    def test_no_offset_keeps_sam_order(self):
+        from utils.config_utils import normalize_input_data
+        self.assertEqual(normalize_input_data({'ds': {'count': 1}})[0].offset, 0)
+        self.assertEqual(normalize_input_data({'ds': 1})[0].offset, 0)
+        self.assertEqual(self.ordered({'ds': {'count': 1}}), self.FILES)
+
+    def test_offset_then_exclude(self):
+        self.assertEqual(self.ordered({'ds': {'count': 1, 'offset': 1, 'max_nfiles': 3}},
+                                      exclude_files={'c'}), ['b', 'd'])
+
+    def test_offset_past_the_end_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, 'offset 5 leaves no files'):
+            self.ordered({'ds': {'count': 1, 'offset': 5}})
+
+    def test_offset_range_short_of_max_nfiles_is_an_error(self):
+        # "the next 3 files" must not quietly become 2: a sequential_aux
+        # entry would then reuse files across its jobs
+        with self.assertRaisesRegex(ValueError, 'offset 3 leaves 2 of the 3 files asked'):
+            self.ordered({'ds': {'count': 1, 'offset': 3, 'max_nfiles': 3}})
+
+    def test_offset_is_refused_where_it_would_do_nothing(self):
+        from utils.config_utils import normalize_input_data
+        from utils.json2jobdef import _create_inputs_file
+        for shape in ({'split_lines': 10}, {'chunk_lines': 10}):
+            with self.assertRaisesRegex(ValueError, 'offset applies only to SAM'):
+                normalize_input_data({'f.txt': {**shape, 'offset': 1}})
+        # a dir: inloc writes the input_data keys verbatim
+        orig, tmpdir = os.getcwd(), _mkdtemp()
+        os.chdir(tmpdir)
+        try:
+            with self.assertRaisesRegex(ValueError, 'offset applies only to SAM'):
+                _create_inputs_file({'inloc': 'dir:/some/dir/',
+                                     'input_data': {'a.art': {'count': 1, 'offset': 1}}})
+        finally:
+            os.chdir(orig)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_offset_is_refused_with_random_and_when_not_a_non_negative_int(self):
+        from utils.config_utils import normalize_input_data
+        with self.assertRaisesRegex(ValueError, 'offset cannot be combined with random'):
+            normalize_input_data({'ds': {'count': 1, 'offset': 400, 'random': True}})
+        for bad in (-1, 1.5, '4'):
+            with self.assertRaisesRegex(ValueError, 'offset must be a non-negative int'):
+                normalize_input_data({'ds': {'count': 1, 'offset': bad}})
+
+
+class TestFamilySplitSourceJobdef(unittest.TestCase):
+    """A FamilySplitSource template (Offline Sources, Mu2e/Offline#2154: one
+    output event per family of a split stage-2 event) reads art files as
+    RootInput does, so its cnf carries the same inputs and no subrun key."""
+
+    def test_familysplitsource_builds_like_rootinput(self):
+        from utils.jobdef import _parse_job_args
+        tmpdir = _mkdtemp()
+        try:
+            files = ["dts.owner.S2.conf.001430_00000000.art",
+                     "dts.owner.S2.conf.001430_00000001.art"]
+            listfile = os.path.join(tmpdir, "inputs.txt")
+            with open(listfile, "w") as f:
+                f.write("\n".join(files) + "\n")
+            with patch('utils.jobdef._get_source_type', return_value='FamilySplitSource'), \
+                 patch('utils.jobdef._get_output_modules', return_value=[]), \
+                 patch('utils.jobdef._run_fhicl_get',
+                       side_effect=subprocess.CalledProcessError(1, 'fhicl-get')):
+                tbs = _parse_job_args(['--inputs', listfile, '--merge-factor', '1'],
+                                      'template.fcl', {})
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        self.assertEqual(tbs['inputs'], {'source.fileNames': [1, files]})
+        self.assertEqual(tbs['subrunkey'], '')
+
+
+class TestAuxinFilesSequential(unittest.TestCase):
+    """The pre-submit check asks only for the aux files the jobs will open:
+    with sequential_aux, job i reads files [i*nreq, (i+1)*nreq), so jobs
+    0..njobs-1 read the first njobs*nreq; sampled selection may read any."""
+
+    def tbs(self, **kw):
+        return {'auxin': {'physics.filters.r.fileNames': [1, ['a', 'b', 'c', 'd']]}, **kw}
+
+    def test_sequential_checks_only_the_files_jobs_read(self):
+        from utils import check_inputs
+        self.assertEqual(check_inputs._auxin_files(self.tbs(sequential_aux=True, njobs=2)), ['a', 'b'])
+
+    def test_more_jobs_than_files_checks_them_all(self):
+        from utils import check_inputs
+        self.assertEqual(check_inputs._auxin_files(self.tbs(sequential_aux=True, njobs=9)),
+                         ['a', 'b', 'c', 'd'])
+
+    def test_derived_or_missing_njobs_and_sampled_check_everything(self):
+        from utils import check_inputs
+        for kw in ({'sequential_aux': True, 'njobs': -1}, {'sequential_aux': True}, {'njobs': 2}):
+            self.assertEqual(sorted(check_inputs._auxin_files(self.tbs(**kw))), ['a', 'b', 'c', 'd'])
+
+
 class TestCreateInputsFileExclude(unittest.TestCase):
     """Verify that _create_inputs_file honours the exclude_files parameter."""
 

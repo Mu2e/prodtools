@@ -228,8 +228,8 @@ computed automatically from the dataset's event count):
 
 Merge entry: `input_data` maps a dataset to its merge factor
 (`{"dts.mu2e.NoPrimary.Run1Ban-001.art": 10}` = 10 input files per job).
-The dict value form accepts `count`/`merge_factor`, plus `random` and
-`max_nfiles` (section 4); `split_lines` splits a local text file into
+The dict value form accepts `count`/`merge_factor`, plus `random`,
+`max_nfiles` and `offset` (section 4); `split_lines` splits a local text file into
 per-job chunks, and `chunk_lines` hands each job one N-line slice of a
 single local file (no `inputs.txt` — the per-job slice is materialized
 on the grid worker at runtime).
@@ -656,6 +656,15 @@ full sorted list:
   int). The non-random branch slices `sorted(files)[:M]`; the random
   branch bounds `total_needed`. `njobs` is NOT auto-recomputed — set it
   consistently yourself.
+- Optional `"offset": K` (non-negative int, non-random only; refused with
+  `random`) skips the first K files of the sorted list before `max_nfiles`
+  applies, so two entries read disjoint ranges of one dataset: e.g. a main
+  stream `{"count": 1, "max_nfiles": 400}` on files 0-399 and a decay
+  stream `{"count": 1, "offset": 400, "max_nfiles": 45}` on files 400-444,
+  the same files whatever the entry's `dsconf`. An offset that leaves no
+  file, or fewer than `max_nfiles`, is an error (a short range would make
+  sequential readers reuse files). SAM datasets only: refused with
+  `split_lines`, `chunk_lines` and a `dir:` inloc.
 
 ## 5. FCL Generation (`jobfcl`, `fcldump`)
 

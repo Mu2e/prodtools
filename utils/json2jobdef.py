@@ -191,6 +191,11 @@ def _create_inputs_file(config, exclude_files=None):
     #     "inloc": "dir:/cvmfs/.../DataFiles/PBI/",
     #     "input_data": {"PBI_Normal_33344.txt": 1}
     if _is_dir_inloc(config):
+        if any(spec.offset for spec in normalize_input_data(input_data)):
+            raise ValueError(
+                "input_data: offset applies only to SAM dataset selection; a dir: "
+                "inloc lists its files as the input_data keys, so list only the "
+                "files to read")
         with open('inputs.txt', 'w') as f:
             for key in input_data.keys():
                 f.write(key + '\n')
@@ -262,11 +267,24 @@ def _random_files(config, spec, query):
 
 
 def _ordered_files(spec, query, exclude_files=None):
-    """All matching files in SAM order (sorted prefix when `max_nfiles` caps
-    them), minus `exclude_files`."""
+    """All matching files in SAM order, or, when `offset` or `max_nfiles` is
+    set, the sorted list from `offset` capped at `max_nfiles`; minus
+    `exclude_files`."""
     files = list_files(query)
-    if spec.max_nfiles is not None:
-        files = sorted(files)[:spec.max_nfiles]
+    if spec.offset or spec.max_nfiles is not None:
+        matched = len(files)
+        stop = None if spec.max_nfiles is None else spec.offset + spec.max_nfiles
+        files = sorted(files)[spec.offset:stop]
+        if spec.offset and not files:
+            raise ValueError(
+                f"input_data spec for {spec.source}: offset {spec.offset} leaves no files "
+                f"({matched} matched {query!r})")
+        if spec.offset and spec.max_nfiles is not None and len(files) < spec.max_nfiles:
+            # A short range would make sequential readers reuse files.
+            raise ValueError(
+                f"input_data spec for {spec.source}: offset {spec.offset} leaves "
+                f"{len(files)} of the {spec.max_nfiles} files asked ({matched} matched "
+                f"{query!r})")
     if exclude_files:
         files = [f for f in files if f not in exclude_files]
     return files

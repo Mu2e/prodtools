@@ -18,10 +18,13 @@ class InputSpec(NamedTuple):
     max_nfiles: Optional[int]
     split_lines: Optional[int]
     chunk_lines: Optional[int]
+    # Files skipped at the start of the sorted list (non-random only), so
+    # two entries can read disjoint ranges of one dataset.
+    offset: int = 0
 
 
 _INPUT_SPEC_KEYS = {'count', 'merge_factor', 'random', 'max_nfiles',
-                    'split_lines', 'chunk_lines'}
+                    'split_lines', 'chunk_lines', 'offset'}
 
 
 def normalize_input_data(input_data) -> List[InputSpec]:
@@ -30,12 +33,14 @@ def normalize_input_data(input_data) -> List[InputSpec]:
 
         {source: N}                                  merge factor N per job
         {source: {"count"|"merge_factor": N,
-                  "random": bool, "max_nfiles": M}}  SAM selection spec
+                  "random": bool, "max_nfiles": M,
+                  "offset": K}}                      SAM selection spec
         {source: {"split_lines": N}}                 pre-split local text file
         {source: {"chunk_lines": N}}                 chunk-on-grid (tbs.chunk_mode)
 
-    Fails loud on non-dict input_data, unknown spec keys, and non-positive
-    max_nfiles. Entry order is preserved (consumers key off the first)."""
+    Fails loud on non-dict input_data, unknown spec keys, non-positive
+    max_nfiles, and an offset that is not a non-negative int or comes with
+    random (offset selects from the sorted list). Entry order is preserved (consumers key off the first)."""
     if not isinstance(input_data, dict):
         raise ValueError(f"input_data must be a dict, got {type(input_data)}")
     specs = []
@@ -50,13 +55,27 @@ def normalize_input_data(input_data) -> List[InputSpec]:
             if max_nfiles is not None and (not isinstance(max_nfiles, int) or max_nfiles <= 0):
                 raise ValueError(
                     f"input_data spec for {source}: max_nfiles must be a positive int, got {max_nfiles!r}")
+            offset = value.get('offset', 0)
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                raise ValueError(
+                    f"input_data spec for {source}: offset must be a non-negative int, got {offset!r}")
+            if offset and (value.get('split_lines') is not None
+                           or value.get('chunk_lines') is not None):
+                raise ValueError(
+                    f"input_data spec for {source}: offset applies only to SAM dataset "
+                    "selection, not to split_lines or chunk_lines")
+            if offset and value.get('random'):
+                raise ValueError(
+                    f"input_data spec for {source}: offset cannot be combined with random: true "
+                    "(offset skips files of the sorted list)")
             per_job = value.get('count') or value.get('merge_factor')
             specs.append(InputSpec(source,
                                    int(per_job) if per_job is not None else None,
                                    bool(value.get('random')),
                                    max_nfiles,
                                    value.get('split_lines'),
-                                   value.get('chunk_lines')))
+                                   value.get('chunk_lines'),
+                                   offset))
         else:
             specs.append(InputSpec(source, int(value), False, None, None, None))
     return specs

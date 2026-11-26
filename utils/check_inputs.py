@@ -64,6 +64,24 @@ def _group_by_dataset(files):
     return out
 
 
+def _auxin_files(tbs):
+    """Pileup files the jobs can read. With tbs.sequential_aux, job index i
+    reads files [i*nreq, (i+1)*nreq) (job_common._sequential_slice, rolling
+    over past the end), so indices 0..njobs-1 read only the first
+    njobs*nreq files of each list; checking the rest would demand staging
+    files no job opens. Otherwise (sampled selection) every file can be
+    picked, so all are checked."""
+    njobs = tbs.get('njobs')
+    if not tbs.get('sequential_aux') or not isinstance(njobs, int) or njobs <= 0:
+        return _section_files(tbs, 'auxin')
+    files = []
+    for value in tbs.get('auxin', {}).values():
+        if isinstance(value, list) and len(value) >= 2 and isinstance(value[1], list):
+            nreq = value[0] or len(value[1])
+            files.extend(value[1][:min(len(value[1]), njobs * nreq)])
+    return files
+
+
 def _tbs_of(tarball_path):
     """The cnf's frozen tbs block. Single home of the tarball read, so
     the input sections are named in one place."""
@@ -84,7 +102,7 @@ def split_inputs(tarball_path):
     reconstruction."""
     tbs = _tbs_of(tarball_path)
     primary = _group_by_dataset(_primary_files(tbs))
-    auxin = _group_by_dataset(_section_files(tbs, 'auxin'))
+    auxin = _group_by_dataset(_auxin_files(tbs))
     return (primary, auxin)
 
 
@@ -375,7 +393,7 @@ def check_inputs(tarball_path, inloc, *,
         # from input_data keys) need not conform. Primary and pileup
         # resolve against the same path, so nothing to route or group.
         tbs = _tbs_of(tarball_path)
-        problems = check_dir(_primary_files(tbs) + _section_files(tbs, 'auxin'),
+        problems = check_dir(_primary_files(tbs) + _auxin_files(tbs),
                              dir_inloc_path(inloc), file_size=disk_size)
         return (not problems, problems)
     if sam_sizes is None:
