@@ -130,5 +130,19 @@
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025ap/setup.sh",
         "owner": "mu2e"
+    },
+    {
+        "_comment": "Extracted-position cosmics with the Daya Bay muon generator (cosmic/ExtractedDYB.fcl, SimJob MDC2025bf), to compare with CRY (ExtractedCRY MDC2025bb above: 19,998 files, 155,600 s livetime). Same box, geometry (geom_common_extracted_v06), filter and run number as CRY. muEMin 106 MeV total energy, so muons that stop in the CRV are generated. DYB writes a CosmicLivetime per SubRun (Offline #2184). Smoke 2026-11-26 (10 x 50k muons): 53,787 muons per livetime second, 5.79% pass, 48.8 ms per muon, VmHWM 2240 MB. 20,000 x 420k muons = 8.4e9 muons, about 156,200 s livetime (CRY's within 0.4%), about 5.7 CPU-h per job and 114k CPU-h in total, about 486M events and 3 TB.",
+        "desc": "ExtractedDYB",
+        "dsconf": "MDC2025bf",
+        "fcl": "Production/JobConfig/cosmic/ExtractedDYB.fcl",
+        "njobs": 20000,
+        "events": 420000,
+        "run": 1400,
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh",
+        "owner": "mu2e"
     }
 ]

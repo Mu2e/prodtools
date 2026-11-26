@@ -1827,5 +1827,101 @@
             "*.art": "disk"
         },
         "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A muon-capture protons flat in kinetic energy (Production PR #611, Offline #2159), Michael MacKenzie's request (2026-11-25), for the charged-capture-product measurement; events need reweighting to the physical spectrum. SimJob MDC2025bf is the first with these fcl and the TriggerableHeavy OnSpill path. Stops from MuminusStopsCat.MDC2025ac with the geom_run1_a override all Run 1A primaries carry; the fcl's default filter, as Michael validated. Smoke 2026-11-26 (10 x 20k draws): 2.93% pass, 11.1 ms per draw, VmHWM 2533 MB (above the 2500MB default, hence 3000MB); OnSpill_run1a digitization keeps 64% of them. 200 x 500k draws.",
+        "desc": "MuCapProtonFlat",
+        "dsconf": "MDC2025bf",
+        "fcl": "Production/JobConfig/primary/MuCapProtonFlat.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 500000,
+        "njobs": 200,
+        "run": 1430,
+        "memory": "3000MB",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A muon-capture deuterons flat in kinetic energy (Production PR #611, Offline #2159), Michael MacKenzie's request (2026-11-25), for the charged-capture-product measurement; events need reweighting to the physical spectrum. SimJob MDC2025bf is the first with these fcl and the TriggerableHeavy OnSpill path. Stops from MuminusStopsCat.MDC2025ac with the geom_run1_a override all Run 1A primaries carry; the fcl's default filter, as Michael validated. Smoke 2026-11-26 (10 x 20k draws): 1.56% pass, 9.5 ms per draw, VmHWM 2533 MB (above the 2500MB default, hence 3000MB); OnSpill_run1a digitization keeps 57% of them. 200 x 500k draws.",
+        "desc": "MuCapDeuteronFlat",
+        "dsconf": "MDC2025bf",
+        "fcl": "Production/JobConfig/primary/MuCapDeuteronFlat.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 500000,
+        "njobs": 200,
+        "run": 1430,
+        "memory": "3000MB",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A muon-capture tritons flat in kinetic energy (Production PR #611, Offline #2159), Michael MacKenzie's request (2026-11-25), for the charged-capture-product measurement; events need reweighting to the physical spectrum. SimJob MDC2025bf is the first with these fcl and the TriggerableHeavy OnSpill path. Stops from MuminusStopsCat.MDC2025ac with the geom_run1_a override all Run 1A primaries carry; the fcl's default filter, as Michael validated. Smoke 2026-11-26 (10 x 20k draws): 0.95% pass, 7.1 ms per draw, VmHWM 2533 MB (above the 2500MB default, hence 3000MB); OnSpill_run1a digitization keeps 60% of them. 200 x 500k draws.",
+        "desc": "MuCapTritonFlat",
+        "dsconf": "MDC2025bf",
+        "fcl": "Production/JobConfig/primary/MuCapTritonFlat.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 500000,
+        "njobs": 200,
+        "run": 1430,
+        "memory": "3000MB",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
+    },
+    {
+        "_comment": "Run 1A muon-capture alphas flat in kinetic energy (Production PR #611, Offline #2159), Michael MacKenzie's request (2026-11-25), for the charged-capture-product measurement; events need reweighting to the physical spectrum. SimJob MDC2025bf is the first with these fcl and the TriggerableHeavy OnSpill path. Stops from MuminusStopsCat.MDC2025ac with the geom_run1_a override all Run 1A primaries carry; the fcl's default filter, as Michael validated. Smoke 2026-11-26 (10 x 20k draws): 0.66% pass, 6.7 ms per draw, VmHWM 2533 MB (above the 2500MB default, hence 3000MB); OnSpill_run1a digitization keeps 13% of them. 1000 x 500k draws. Alphas get 5x the draws of p/d/t because few reach the tracker.",
+        "desc": "MuCapAlphaFlat",
+        "dsconf": "MDC2025bf",
+        "fcl": "Production/JobConfig/primary/MuCapAlphaFlat.fcl",
+        "fcl_overrides": {
+            "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_a.txt"
+        },
+        "resampler_name": "TargetStopResampler",
+        "input_data": {
+            "sim.mu2e.MuminusStopsCat.MDC2025ac.art": 1
+        },
+        "events": 500000,
+        "njobs": 1000,
+        "run": 1430,
+        "memory": "3000MB",
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh",
+        "owner": "mu2e",
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "sequential_aux": true
     }
 ]
