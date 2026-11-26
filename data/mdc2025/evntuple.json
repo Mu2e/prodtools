@@ -811,12 +811,12 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
     },
     {
-        "_comment": "Generic draining EventNtuple of the triggered Extracted DYB reco, as for CRY (from_mcs-extracted.fcl). No AnalysisMDC2025 is backed on SimJob MDC2025bf yet; v02_04_00 (SimJob MDC2025be) has the same Extracted geometry v06. One mcs file per job.",
+        "_comment": "Generic draining EventNtuple of the triggered Extracted DYB reco, as for CRY (from_mcs-extracted.fcl). AnalysisMDC2025 v02_03_01, backed on SimJob MDC2025bb, as for CRY. One mcs file per job.",
         "desc": "evnt",
-        "dsconf": "MDC2025bf_best_v1_5",
+        "dsconf": "MDC2025bb_best_v1_5",
         "tarball_append": "-ExtractedDYB",
         "generic_tarball": true,
-        "input_pattern": "mcs.mu2e.CosmicDYBExtracted.MDC2025bf_best_v1_5.art",
+        "input_pattern": "mcs.mu2e.CosmicDYBExtracted.MDC2025bb_best_v1_5.art",
         "prestage": true,
         "fcl": "EventNtuple/fcl/from_mcs-extracted.fcl",
         "fcl_overrides": {
@@ -826,15 +826,15 @@
         "outloc": {
             "nts.*.root": "tape"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     },
     {
-        "_comment": "Generic draining EventNtuple of the Extracted DYB all-events stream (-All) with CRV pulses (crv.fillPulses, keepUnclusteredPulses), as the CRY -All re-ntuple at MDC2025bb_best_v1_5-001. Same release note as the triggered entry. One mcs file per job.",
+        "_comment": "Generic draining EventNtuple of the Extracted DYB all-events stream (-All) with CRV pulses (crv.fillPulses, keepUnclusteredPulses), as the CRY -All re-ntuple at MDC2025bb_best_v1_5-001. AnalysisMDC2025 v02_03_01, as for CRY. One mcs file per job.",
         "desc": "evnt",
-        "dsconf": "MDC2025bf_best_v1_5",
+        "dsconf": "MDC2025bb_best_v1_5",
         "tarball_append": "-ExtractedDYBAll",
         "generic_tarball": true,
-        "input_pattern": "mcs.mu2e.CosmicDYBExtracted-All.MDC2025bf_best_v1_5.art",
+        "input_pattern": "mcs.mu2e.CosmicDYBExtracted-All.MDC2025bb_best_v1_5.art",
         "prestage": true,
         "fcl": "EventNtuple/fcl/from_mcs-extracted_withCrvPulses.fcl",
         "fcl_overrides": {
@@ -844,6 +844,6 @@
         "outloc": {
             "nts.*.root": "tape"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_04_00/setup.sh"
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/AnalysisMDC2025/v02_03_01/setup.sh"
     }
 ]

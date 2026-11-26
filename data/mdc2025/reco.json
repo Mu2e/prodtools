@@ -956,12 +956,12 @@
     },
     {
         "_comment": "Reconstruction of the triggered stream of the Extracted DYB digitization, as for CRY at MDC2025bb_best_v1_5 (recoMC/Extracted.fcl). One dig file per job. Push only after the dig dataset is complete.",
-        "dsconf": "MDC2025bf_best_v1_5",
+        "dsconf": "MDC2025bb_best_v1_5",
         "desc": "CosmicDYBExtracted",
         "tarball_append": "-reco",
         "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
         "input_data": {
-            "dig.mu2e.CosmicDYBExtracted.MDC2025bf_best_v1_5.art": 1
+            "dig.mu2e.CosmicDYBExtracted.MDC2025bb_best_v1_5.art": 1
         },
         "fcl_overrides": {
             "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
@@ -972,16 +972,16 @@
         "outloc": {
             "*.art": "tape"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh"
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
     },
     {
         "_comment": "Reconstruction of the all-events stream (-All) of the Extracted DYB digitization, as for CRY: recoMC/ExtractedAllEvents.fcl keeps every CRV digi and pulse with its truth, so muons stopping in the CRV and their decay electrons survive. One dig file per job. Push only after the dig dataset is complete.",
-        "dsconf": "MDC2025bf_best_v1_5",
+        "dsconf": "MDC2025bb_best_v1_5",
         "desc": "CosmicDYBExtracted-All",
         "tarball_append": "-reco",
         "fcl": "Production/JobConfig/recoMC/ExtractedAllEvents.fcl",
         "input_data": {
-            "dig.mu2e.CosmicDYBExtracted-All.MDC2025bf_best_v1_5.art": 1
+            "dig.mu2e.CosmicDYBExtracted-All.MDC2025bb_best_v1_5.art": 1
         },
         "fcl_overrides": {
             "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
@@ -992,6 +992,6 @@
         "outloc": {
             "*.art": "tape"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh"
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
     }
 ]

@@ -669,9 +669,9 @@
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     },
     {
-        "_comment": "Digitization of the Extracted DYB cosmics (stage1.json ExtractedDYB MDC2025bf), set up like the CRY one at MDC2025bb_best_v1_5 so the two compare directly: ExtractedAllEvents.fcl writes the triggered stream (Output) and every event (AllOutput, -All), so muons that stop in the CRV and leave hits only there are kept; Sim_best v1_5 as for CRY; 8 dts per job (20000 dts to 2500 jobs). Push only after the dts dataset is complete.",
+        "_comment": "Digitization of the Extracted DYB cosmics (stage1.json ExtractedDYB MDC2025bf), set up exactly like the CRY one, same release (SimJob MDC2025bb), so the two differ only in the generator: ExtractedAllEvents.fcl writes the triggered stream (Output) and every event (AllOutput, -All), so muons that stop in the CRV and leave hits only there are kept; Sim_best v1_5 as for CRY; 8 dts per job (20000 dts to 2500 jobs). Push only after the dts dataset is complete.",
         "desc": "CosmicDYBExtracted",
-        "dsconf": "MDC2025bf_best_v1_5",
+        "dsconf": "MDC2025bb_best_v1_5",
         "fcl": "Production/JobConfig/digitize/ExtractedAllEvents.fcl",
         "input_data": {
             "dts.mu2e.CosmicDYBExtracted.MDC2025bf.art": 8
@@ -686,6 +686,36 @@
         "outloc": {
             "*.art": "tape"
         },
-        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh"
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Unmixed digitization of the four MuCap flat primaries (primary_muon.json MuCap{Proton,Deuteron,Triton,Alpha}Flat MDC2025bf, campaigns 436-439) with the release of the realistic-tracker epoch, SimJob MDC2025be, so the existing generic draining OnSpill reco and ntuples at MDC2025be_best_v2_0 (campaigns 340, 341) pick them up. MDC2025be predates the TriggerableHeavy path (Production #611), so mixing/NoPrimary.fcl keeps every event, as for MuCap1809keVCalo; the heavy-particle selection can be applied in analysis. Tested 2026-11-26: a bf proton dts digitized, reconstructed and ntupled with be and AnalysisMDC2025 v02_04_00, 591 of 591 events. 10 dts per job: 20 jobs each for p, d, t and 100 for alpha.",
+        "dsconf": "MDC2025be_best_v2_0",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run1a.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.MuCapProtonFlat.MDC2025bf.art": 10
+            },
+            {
+                "dts.mu2e.MuCapDeuteronFlat.MDC2025bf.art": 10
+            },
+            {
+                "dts.mu2e.MuCapTritonFlat.MDC2025bf.art": 10
+            },
+            {
+                "dts.mu2e.MuCapAlphaFlat.MDC2025bf.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art",
+            "#include": "Production/JobConfig/mixing/NoPrimary.fcl"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
     }
 ]
