@@ -259,7 +259,8 @@ def create_mcp_server():
 
     @mcp.tool(description='How a one-shot run went: json2jobdef --once / '
                           'submit_once on the grid, or --once --local / '
-                          'run_local on one node. Its receipt; for a grid '
+                          'run_local on one node (a gpvm, or the user\'s '
+                          'EAF server: executor "eaf"). Its receipt; for a grid '
                           'run the live queue, and once the cluster left '
                           'the queue the per-job exit codes and the output '
                           'paths on outstage; for a local run runlocal\'s '

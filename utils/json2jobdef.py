@@ -873,10 +873,19 @@ def main(argv=None):
                         'where, and run_status reports. Excludes '
                         '--prodtools-dir.')
     from utils.runlocal import DEFAULT_PARALLEL, GB_PER_JOB
+    from utils import eaf
     p.add_argument('--parallel', type=int, default=None,
                    help=f'With --local: jobs at once (default '
-                        f'{DEFAULT_PARALLEL}, as runlocal -j; at most '
+                        f'{DEFAULT_PARALLEL}, as runlocal -j; '
+                        f'{eaf.DEFAULT_PARALLEL} with --site eaf; at most '
                         f'{MAX_LOCAL_PARALLEL}).')
+    p.add_argument('--site', choices=['eaf'], default=None,
+                   help='With --local: run runlocal on your Fermilab EAF '
+                        'CPU server (8 cores guaranteed) instead of this '
+                        'node. Starts the server through the hub API with '
+                        'the token in /exp/mu2e/app/users/<you>/.eaf_token. '
+                        'Inputs: inloc "none" or "dir:/exp/..." only (no '
+                        'grid token on EAF).')
     p.add_argument('--extend', action='store_true',
                    help='Create delta job definition excluding already-processed inputs. '
                         'Auto-increments tarball version.')
@@ -903,6 +912,9 @@ def main(argv=None):
 
     if args.local and not args.once:
         sys.exit("json2jobdef: --local requires --once")
+    if args.site is not None and not args.local:
+        sys.exit("json2jobdef: --site requires --local (it says where "
+                 "runlocal runs)")
     if args.parallel is not None and not args.local:
         sys.exit("json2jobdef: --parallel requires --local")
     if args.parallel is not None and args.parallel < 1:
@@ -954,7 +966,8 @@ def main(argv=None):
         if args.once:
             receipt = submit_once(config, json_path=args.json,
                                   prodtools_dir=args.prodtools_dir,
-                                  local=args.local, parallel=args.parallel)
+                                  local=args.local, parallel=args.parallel,
+                                  site=args.site)
             from utils import run_receipt
             print(json.dumps({k: v for k, v in receipt.items()
                               if k != 'entry'}, indent=2))
@@ -982,7 +995,7 @@ ONCE_MAX_JOBS = 10000   # one `jobsub_submit -N` takes no more
 
 def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
                 build=None, submit=None, local=False, parallel=None,
-                launch=None):
+                launch=None, site=None, hub=None):
     """`--once`: build the cnf locally, submit every job in one go to
     outstage, and leave a receipt (utils/run_receipt). Returns the receipt.
 
@@ -1054,6 +1067,10 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
             require_worker_suffix_rule(config, worker_dir)
     except ValueError as exc:
         sys.exit(f"json2jobdef: {exc}")
+    if site is not None and not local:
+        sys.exit("json2jobdef: --site requires --local")
+    if site == 'eaf':
+        _refuse_for_eaf(config, root or run_receipt.runs_root(user))
 
     name = run_receipt.run_name(get_parfile_name(config))
     try:
@@ -1076,6 +1093,9 @@ def submit_once(config, *, json_path=None, prodtools_dir=None, root=None,
             raise ValueError(
                 f"--once needs between 1 and {ONCE_MAX_JOBS} jobs, the "
                 f"built cnf has njobs={njobs}")
+        if local and site == 'eaf':
+            return _start_eaf(run_dir, entry, njobs, parallel=parallel,
+                              hub=hub)
         if local:
             return _start_local(run_dir, entry, njobs, parallel=parallel,
                                 launch=launch)
@@ -1124,7 +1144,6 @@ def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
     import socket
     import subprocess
     from utils import run_receipt
-    from utils.jobdesc import code_of, inloc_of
     from utils.runlocal import DEFAULT_PARALLEL
 
     if parallel is None:
@@ -1139,7 +1158,21 @@ def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
     argv = [sys.executable, '-u',
             os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          'runlocal.py'),
-            '--jobdef', os.path.join(run_dir, entry['tarball']),
+            *_runlocal_args(run_dir, entry, njobs, parallel, summary)]
+    with open(log, 'w') as fh:
+        proc = launch(argv, cwd=run_dir, stdin=subprocess.DEVNULL,
+                      stdout=fh, stderr=subprocess.STDOUT,
+                      start_new_session=True)
+    return run_receipt.update(
+        run_dir, state='running', host=socket.getfqdn(), pid=proc.pid,
+        started_utc=run_receipt._now(), summary=summary, log=log,
+        njobs=njobs, parallel=parallel)
+
+
+def _runlocal_args(run_dir, entry, njobs, parallel, summary):
+    """runlocal's arguments for a `--once --local` run, wherever it runs."""
+    from utils.jobdesc import code_of, inloc_of
+    args = ['--jobdef', os.path.join(run_dir, entry['tarball']),
             '--inloc', inloc_of(entry),
             '--first', '0', '--num', str(njobs),
             '--parallel', str(parallel),
@@ -1147,13 +1180,91 @@ def _start_local(run_dir, entry, njobs, parallel=None, launch=None):
             '--json', summary]
     if code_of(entry):
         # runlocal unpacks it through the same code cache (utils/code_cache).
-        argv += ['--code', code_of(entry)]
-    with open(log, 'w') as fh:
-        proc = launch(argv, cwd=run_dir, stdin=subprocess.DEVNULL,
-                      stdout=fh, stderr=subprocess.STDOUT,
-                      start_new_session=True)
+        args += ['--code', code_of(entry)]
+    return args
+
+
+# The checkout this json2jobdef runs from: runlocal on EAF runs it too.
+_CHECKOUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _refuse_for_eaf(config, root):
+    """Every `--site eaf` refusal that needs no build, made before the run
+    name is reserved: a refusal after it would spend the desc+dsconf
+    pair."""
+    from utils import eaf
+    try:
+        eaf.check_inloc(config.get('inloc'))
+        eaf.check_visible(_CHECKOUT, 'this prodtools checkout')
+        if config.get('code'):
+            eaf.check_visible(config['code'], 'the code tarball')
+        token_path = eaf.token_file()
+        eaf.check_visible(token_path, 'the EAF token file')
+        eaf.read_token(token_path)
+    except eaf.EafError as exc:
+        sys.exit(f"json2jobdef: {exc}")
+    busy = eaf.busy_runs(root)
+    if busy:
+        sys.exit(f"json2jobdef: --site eaf runs one run at a time, and "
+                 f"{busy[0]} may still be going (no {eaf.DONE}, heartbeat "
+                 f"younger than {eaf.STALE_S} s). Wait for it, or stop it "
+                 f"with `python -m utils.eaf stop {busy[0]}`.")
+
+
+def _start_eaf(run_dir, entry, njobs, parallel=None, hub=None,
+               confirm_s=None, clock=None, sleep=None):
+    """`--once --local --site eaf`: start runlocal on the user's EAF
+    server, detached, and return the receipt `running` once it has.
+
+    The run directory is on /exp, which EAF mounts read-write, so nothing
+    is copied: the launch script is written next to the cnf, typed into a
+    terminal of the server with setsid nohup, and runlocal on EAF writes
+    the jobs and summary.json where a gpvm run would. Started is decided
+    by the launch script's own eaf.pid appearing on /exp, not by anything
+    the terminal prints. `hub` is an eaf.Hub, injectable for the tests.
+    """
+    import time
+    from utils import eaf, run_receipt
+
+    confirm_s = eaf.LAUNCH_CONFIRM_S if confirm_s is None else confirm_s
+    clock, sleep = clock or time.time, sleep or time.sleep
+    if parallel is None:
+        parallel = eaf.DEFAULT_PARALLEL
+    run_receipt.update(run_dir, state='starting', executor='eaf',
+                       server=eaf.SERVER, entry=entry)
+    summary = os.path.join(run_dir, LOCAL_SUMMARY)
+    log = os.path.join(run_dir, eaf.LOG)
+    token_path = eaf.token_file()
+    hub = hub or eaf.Hub(eaf.read_token(token_path))
+    script = os.path.join(run_dir, eaf.LAUNCH)
+    with open(script, 'w') as fh:
+        fh.write(eaf.launch_script(
+            run_dir, _runlocal_args(run_dir, entry, njobs, parallel, summary),
+            _CHECKOUT, token_path, hub.name))
+    os.chmod(script, 0o700)
+    server = hub.ensure_server()
+    hub.run_in_terminal(server, eaf.launch_line(run_dir))
+    t0 = clock()
+    while True:
+        got = eaf.read_pid(run_dir)
+        if got is not None:
+            break
+        code = eaf.read_done(run_dir)
+        if code is not None:
+            raise RuntimeError(
+                f"the EAF launch script exited {code} before runlocal "
+                f"started; see {log}")
+        if clock() - t0 > confirm_s:
+            raise RuntimeError(
+                f"runlocal did not report a pid ({eaf.PID}) within "
+                f"{confirm_s:.0f} s of the launch on EAF server "
+                f"{eaf.SERVER!r}. It may still start: look at {log} and "
+                f"`python -m utils.eaf status` before running this entry "
+                f"anywhere else.")
+        sleep(5)
+    pid, host = got
     return run_receipt.update(
-        run_dir, state='running', host=socket.getfqdn(), pid=proc.pid,
+        run_dir, state='running', host=host, pid=pid,
         started_utc=run_receipt._now(), summary=summary, log=log,
         njobs=njobs, parallel=parallel)
 
