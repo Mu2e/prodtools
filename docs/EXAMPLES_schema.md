@@ -170,7 +170,9 @@ When regenerating, read in this order:
    non-random branch slices `sorted(files)[:M]`; random branch bounds
    `total_needed`; `njobs` is NOT auto-recomputed), and the optional
    `"offset": K` (non-random only: `sorted(files)[K:K+M]`, so two entries
-   read disjoint ranges of one dataset; an offset leaving no file errors).
+   read disjoint ranges of one dataset; an offset leaving no file, or
+   fewer than M, errors; SAM datasets only, refused with `split_lines`,
+   `chunk_lines` and a `dir:` inloc).
 5. **FCL Generation (`jobfcl`, `fcldump`)** — from jobdef tarball, from
    dataset name, from target output filename. Include `--local-jobdef`.
    Cover the generic ({desc}-templated) cnf case: it defers desc and

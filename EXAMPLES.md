@@ -662,7 +662,9 @@ full sorted list:
   stream `{"count": 1, "max_nfiles": 400}` on files 0-399 and a decay
   stream `{"count": 1, "offset": 400, "max_nfiles": 45}` on files 400-444,
   the same files whatever the entry's `dsconf`. An offset that leaves no
-  file is an error.
+  file, or fewer than `max_nfiles`, is an error (a short range would make
+  sequential readers reuse files). SAM datasets only: refused with
+  `split_lines`, `chunk_lines` and a `dir:` inloc.
 
 ## 5. FCL Generation (`jobfcl`, `fcldump`)
 

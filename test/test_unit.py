@@ -2000,6 +2000,29 @@ class TestInputDataOffset(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'offset 5 leaves no files'):
             self.ordered({'ds': {'count': 1, 'offset': 5}})
 
+    def test_offset_range_short_of_max_nfiles_is_an_error(self):
+        # "the next 3 files" must not quietly become 2: a sequential_aux
+        # entry would then reuse files across its jobs
+        with self.assertRaisesRegex(ValueError, 'offset 3 leaves 2 of the 3 files asked'):
+            self.ordered({'ds': {'count': 1, 'offset': 3, 'max_nfiles': 3}})
+
+    def test_offset_is_refused_where_it_would_do_nothing(self):
+        from utils.config_utils import normalize_input_data
+        from utils.json2jobdef import _create_inputs_file
+        for shape in ({'split_lines': 10}, {'chunk_lines': 10}):
+            with self.assertRaisesRegex(ValueError, 'offset applies only to SAM'):
+                normalize_input_data({'f.txt': {**shape, 'offset': 1}})
+        # a dir: inloc writes the input_data keys verbatim
+        orig, tmpdir = os.getcwd(), _mkdtemp()
+        os.chdir(tmpdir)
+        try:
+            with self.assertRaisesRegex(ValueError, 'offset applies only to SAM'):
+                _create_inputs_file({'inloc': 'dir:/some/dir/',
+                                     'input_data': {'a.art': {'count': 1, 'offset': 1}}})
+        finally:
+            os.chdir(orig)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
     def test_offset_is_refused_with_random_and_when_not_a_non_negative_int(self):
         from utils.config_utils import normalize_input_data
         with self.assertRaisesRegex(ValueError, 'offset cannot be combined with random'):

@@ -59,6 +59,11 @@ def normalize_input_data(input_data) -> List[InputSpec]:
             if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
                 raise ValueError(
                     f"input_data spec for {source}: offset must be a non-negative int, got {offset!r}")
+            if offset and (value.get('split_lines') is not None
+                           or value.get('chunk_lines') is not None):
+                raise ValueError(
+                    f"input_data spec for {source}: offset applies only to SAM dataset "
+                    "selection, not to split_lines or chunk_lines")
             if offset and value.get('random'):
                 raise ValueError(
                     f"input_data spec for {source}: offset cannot be combined with random: true "
