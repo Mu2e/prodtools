@@ -262,11 +262,18 @@ def _random_files(config, spec, query):
 
 
 def _ordered_files(spec, query, exclude_files=None):
-    """All matching files in SAM order (sorted prefix when `max_nfiles` caps
-    them), minus `exclude_files`."""
+    """All matching files in SAM order, or, when `offset` or `max_nfiles` is
+    set, the sorted list from `offset` capped at `max_nfiles`; minus
+    `exclude_files`."""
     files = list_files(query)
-    if spec.max_nfiles is not None:
-        files = sorted(files)[:spec.max_nfiles]
+    if spec.offset or spec.max_nfiles is not None:
+        matched = len(files)
+        stop = None if spec.max_nfiles is None else spec.offset + spec.max_nfiles
+        files = sorted(files)[spec.offset:stop]
+        if spec.offset and not files:
+            raise ValueError(
+                f"input_data spec for {spec.source}: offset {spec.offset} leaves no files "
+                f"({matched} matched {query!r})")
     if exclude_files:
         files = [f for f in files if f not in exclude_files]
     return files

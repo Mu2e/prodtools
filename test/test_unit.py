@@ -1968,6 +1968,47 @@ class TestStashMiss(unittest.TestCase):
         self.assertIn('/persistent/datasets/', result)
 
 
+class TestInputDataOffset(unittest.TestCase):
+    """input_data `offset`: the sorted list from `offset`, then `max_nfiles`,
+    so two entries can read disjoint ranges of one dataset (e.g. a main
+    stream on files 0-399 and a decay stream on files 400-444)."""
+
+    FILES = ['e', 'a', 'd', 'c', 'b']
+
+    def ordered(self, input_data, exclude_files=None):
+        from utils.config_utils import normalize_input_data
+        from utils.json2jobdef import _ordered_files
+        spec = normalize_input_data(input_data)[0]
+        with patch('utils.json2jobdef.list_files', return_value=list(self.FILES)):
+            return _ordered_files(spec, 'q', exclude_files)
+
+    def test_offset_slices_the_sorted_list(self):
+        self.assertEqual(self.ordered({'ds': {'count': 1, 'offset': 2, 'max_nfiles': 2}}), ['c', 'd'])
+        self.assertEqual(self.ordered({'ds': {'count': 1, 'offset': 3}}), ['d', 'e'])
+
+    def test_no_offset_keeps_sam_order(self):
+        from utils.config_utils import normalize_input_data
+        self.assertEqual(normalize_input_data({'ds': {'count': 1}})[0].offset, 0)
+        self.assertEqual(normalize_input_data({'ds': 1})[0].offset, 0)
+        self.assertEqual(self.ordered({'ds': {'count': 1}}), self.FILES)
+
+    def test_offset_then_exclude(self):
+        self.assertEqual(self.ordered({'ds': {'count': 1, 'offset': 1, 'max_nfiles': 3}},
+                                      exclude_files={'c'}), ['b', 'd'])
+
+    def test_offset_past_the_end_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, 'offset 5 leaves no files'):
+            self.ordered({'ds': {'count': 1, 'offset': 5}})
+
+    def test_offset_is_refused_with_random_and_when_not_a_non_negative_int(self):
+        from utils.config_utils import normalize_input_data
+        with self.assertRaisesRegex(ValueError, 'offset cannot be combined with random'):
+            normalize_input_data({'ds': {'count': 1, 'offset': 400, 'random': True}})
+        for bad in (-1, 1.5, '4'):
+            with self.assertRaisesRegex(ValueError, 'offset must be a non-negative int'):
+                normalize_input_data({'ds': {'count': 1, 'offset': bad}})
+
+
 class TestCreateInputsFileExclude(unittest.TestCase):
     """Verify that _create_inputs_file honours the exclude_files parameter."""
 

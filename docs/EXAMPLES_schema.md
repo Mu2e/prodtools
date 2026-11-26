@@ -168,7 +168,9 @@ When regenerating, read in this order:
    form and its deterministic-seed guarantee. Mention the optional
    `"max_nfiles": M` cap inside the same nested-dict value (positive int;
    non-random branch slices `sorted(files)[:M]`; random branch bounds
-   `total_needed`; `njobs` is NOT auto-recomputed).
+   `total_needed`; `njobs` is NOT auto-recomputed), and the optional
+   `"offset": K` (non-random only: `sorted(files)[K:K+M]`, so two entries
+   read disjoint ranges of one dataset; an offset leaving no file errors).
 5. **FCL Generation (`jobfcl`, `fcldump`)** — from jobdef tarball, from
    dataset name, from target output filename. Include `--local-jobdef`.
    Cover the generic ({desc}-templated) cnf case: it defers desc and
