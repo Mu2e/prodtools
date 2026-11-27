@@ -422,6 +422,15 @@ reading the code:
   `json2jobdef --once --local` (runlocal started detached, the same
   receipt; `--parallel N` jobs at once, default 4, at most 16);
   `run_status` on the read-only MCP server reports on either.
+  `--local --site eaf` (MCP `run_local(site="eaf")`) runs that runlocal
+  on the user's Fermilab EAF CPU server instead (8 cores guaranteed,
+  64 GiB), started through the hub API with the token in
+  `/exp/mu2e/app/users/<you>/.eaf_token` (mode 600, made at
+  https://analytics-hub.fnal.gov/hub/token). EAF mounts /exp read-write,
+  so the run directory is shared and nothing is copied; it has no grid
+  token, so only `inloc` `none` or `dir:/exp/...` is accepted. One EAF
+  run at a time; `--parallel` defaults to 8; the server stops itself
+  when the run ends; `python -m utils.eaf stop <run>` stops a run.
 - `runlocal` runs cnf jobs on the current node, several at a time, and
   pushes NOTHING: no pushOutput, no SAM declare, no manifest. It shares
   the worker's own prep (`runmu2e.process_jobdef`), so a local run
