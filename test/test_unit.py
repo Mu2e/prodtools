@@ -21051,6 +21051,48 @@ class TestMcpRunStatus(unittest.TestCase):
         self.assertEqual(out['outputs'][1], [
             f'{self.OUT}/42/1/dts.alice.CeEndpoint.T1.001430_00000001.art'])
 
+    def _big_summary(self):
+        n = self.runs.INDEX_CAP + 50
+        jobs = [{'index': i, 'rc': 0, 'outputs': [f'f{i}']} for i in range(n)]
+        return n, {'jobs': jobs, 'ok': n, 'failed': list(range(n, 2 * n)),
+                   'unknown': []}
+
+    def test_outputs_are_capped_by_default(self):
+        # A person asking how a 10000-job run went gets a reply that fits.
+        n, summary = self._big_summary()
+        out = {}
+        self.runs._fill_jobs(out, 2 * n, summary)
+        self.assertEqual(len(out['outputs']), self.runs.INDEX_CAP)
+        self.assertEqual(out['outputs_truncated'], n)
+
+    def test_all_outputs_lists_every_ok_jobs_outputs(self):
+        # A caller that collects the run's files asks for all of them;
+        # the failure lists stay capped either way.
+        n, summary = self._big_summary()
+        out = {}
+        self.runs._fill_jobs(out, 2 * n, summary, all_outputs=True)
+        self.assertEqual(len(out['outputs']), n)
+        self.assertNotIn('outputs_truncated', out)
+        self.assertEqual(len(out['jobs']['failed']), self.runs.INDEX_CAP)
+        self.assertEqual(out['jobs']['truncated'], {'failed': n, 'unknown': 0})
+
+    def test_run_status_passes_all_outputs_through(self):
+        self._submitted()
+        seen = {}
+        real = self.runs._fill_jobs
+
+        def spy(out, njobs, summary, all_outputs=False):
+            seen['all_outputs'] = all_outputs
+            return real(out, njobs, summary, all_outputs=all_outputs)
+        with patch.object(self.runs, '_fill_jobs', spy):
+            self.runs.run_status(self.NAME, user='alice', runs_root=self.root,
+                                 clusters_fn=lambda owner: ({}, None),
+                                 codes_fn=lambda *a, **k: {0: 0, 1: 0, 2: 0},
+                                 job_pars_fn=lambda path: SimpleNamespace(
+                                     job_outputs=lambda i: {}),
+                                 all_outputs=True)
+        self.assertEqual(seen, {'all_outputs': True})
+
     def test_a_nonzero_exit_code_is_short_and_names_the_index(self):
         self._submitted()
         out, _ = self._status(clusters={}, codes={0: 0, 1: 65, 2: 0})

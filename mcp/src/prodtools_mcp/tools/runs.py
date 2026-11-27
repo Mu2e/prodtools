@@ -30,7 +30,9 @@ from ..adapters import ToolError
 from . import status
 
 # Indices listed per bucket. A 10000-job run that lost everything must
-# not answer with 10000 numbers.
+# not answer with 10000 numbers. A caller that collects the run's files
+# asks for every ok job's outputs with all_outputs=True; the failure lists
+# stay capped either way.
 INDEX_CAP = 200
 
 
@@ -61,7 +63,7 @@ def _default_job_pars_fn(path):
 
 def run_status(name, mine=False, user=None, runs_root=None,
                clusters_fn=None, codes_fn=None, job_pars_fn=None,
-               alive_fn=None, host_fn=None):
+               alive_fn=None, host_fn=None, all_outputs=False):
     from utils import jobwait, run_receipt
     root, login = _root_for(mine, user)
     root = runs_root or root
@@ -86,7 +88,8 @@ def run_status(name, mine=False, user=None, runs_root=None,
         if receipt.get('state') != 'running':
             return out          # building / starting / failed
         return _local_status(out, receipt, alive_fn or _default_alive_fn,
-                             host_fn or socket.getfqdn)
+                             host_fn or socket.getfqdn,
+                             all_outputs=all_outputs)
     if receipt.get('state') != 'submitted':
         # building / submitting / failed: no cluster this receipt vouches
         # for, so nothing to look up. 'submitting' on a run that is not
@@ -113,7 +116,8 @@ def run_status(name, mine=False, user=None, runs_root=None,
         SimpleNamespace(jobdef=cnf, cluster=receipt['jobid'], njobs=njobs,
                         first=0, outstage=receipt.get('outstage')),
         codes, (job_pars_fn or _default_job_pars_fn)(cnf))
-    failed, unknown = _fill_jobs(out, njobs, summary)
+    failed, unknown = _fill_jobs(out, njobs, summary,
+                                 all_outputs=all_outputs)
     if unknown:
         out['state'] = 'unknown'
         out['note'] = (f'condor history has no record of how {len(unknown)} '
@@ -126,10 +130,11 @@ def run_status(name, mine=False, user=None, runs_root=None,
     return out
 
 
-def _fill_jobs(out, njobs, summary):
+def _fill_jobs(out, njobs, summary, all_outputs=False):
     """The `jobs` and `outputs` blocks, from a summary in the shape
     jobwait and runlocal share (`jobs` of {index, rc, outputs}, `ok`,
-    `failed`) plus `unknown`. Returns (failed, unknown), uncapped."""
+    `failed`) plus `unknown`. `outputs` is capped at INDEX_CAP unless
+    all_outputs. Returns (failed, unknown), uncapped."""
     failed, unknown = summary['failed'], summary['unknown']
     out['jobs'] = {'expected': njobs, 'ok': summary['ok'],
                    'failed': failed[:INDEX_CAP],
@@ -143,14 +148,14 @@ def _fill_jobs(out, njobs, summary):
                                     'unknown': len(unknown)}
     out['outputs'] = {j['index']: j['outputs'] for j in summary['jobs']
                       if j['rc'] == 0}
-    if len(out['outputs']) > INDEX_CAP:
+    if not all_outputs and len(out['outputs']) > INDEX_CAP:
         keep = sorted(out['outputs'])[:INDEX_CAP]
         out['outputs'] = {i: out['outputs'][i] for i in keep}
         out['outputs_truncated'] = summary['ok']
     return failed, unknown
 
 
-def _local_status(out, receipt, alive_fn, host_fn):
+def _local_status(out, receipt, alive_fn, host_fn, all_outputs=False):
     """A `--once --local` run that was started: runlocal's summary once
     it wrote one, else whether its process is still there. The state is
     recomputed on every call; the receipt is never rewritten."""
@@ -190,7 +195,8 @@ def _local_status(out, receipt, alive_fn, host_fn):
     outside = sorted(i for i in seen if not 0 <= i < njobs)
     summary = dict(summary,
                    unknown=[i for i in range(njobs) if i not in seen])
-    failed, unknown = _fill_jobs(out, njobs, summary)
+    failed, unknown = _fill_jobs(out, njobs, summary,
+                                 all_outputs=all_outputs)
     if unknown or outside:
         out['state'] = 'unknown'
         notes = []
