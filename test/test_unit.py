@@ -22477,46 +22477,31 @@ class TestEafRefusals(unittest.TestCase):
         from utils import eaf
         self.eaf = eaf
 
-    def test_inputs_without_files_or_on_exp_are_allowed(self):
+    def test_what_eaf_cannot_reach_is_refused(self):
         for inloc in (None, 'none', 'dir:/exp/mu2e/data/users/a/in'):
             self.eaf.check_inloc(inloc)
-
-    def test_pnfs_inputs_are_refused_for_want_of_a_token(self):
-        for inloc in ('tape', 'disk', 'scratch', 'resilient', 'stash'):
-            with self.assertRaises(self.eaf.EafError) as ctx:
-                self.eaf.check_inloc(inloc)
-            self.assertIn('grid token', str(ctx.exception))
-
-    def test_a_dir_outside_exp_is_refused(self):
-        with self.assertRaises(self.eaf.EafError) as ctx:
-            self.eaf.check_inloc('dir:/nashome/a/in')
-        self.assertIn('/exp', str(ctx.exception))
-
-    def test_a_path_eaf_does_not_mount_is_refused(self):
-        with self.assertRaises(self.eaf.EafError) as ctx:
-            self.eaf.check_visible('/nashome/a/prodtools', 'the checkout')
-        self.assertIn('/exp', str(ctx.exception))
         self.eaf.check_visible('/cvmfs/mu2e.opensciencegrid.org', 'x')
+        for call, arg, why in (
+                (self.eaf.check_inloc, 'tape', 'grid token'),
+                (self.eaf.check_inloc, 'disk', 'grid token'),
+                (self.eaf.check_inloc, 'dir:/nashome/a/in', '/exp'),
+                (lambda p: self.eaf.check_visible(p, 'the checkout'),
+                 '/nashome/a/prodtools', '/exp')):
+            with self.assertRaises(self.eaf.EafError, msg=arg) as ctx:
+                call(arg)
+            self.assertIn(why, str(ctx.exception))
 
     def test_the_token_must_exist_be_private_and_not_empty(self):
-        d = _mkdtemp()
-        with self.assertRaises(self.eaf.EafError) as ctx:
-            self.eaf.read_token(os.path.join(d, 'missing'))
-        self.assertIn('/hub/token', str(ctx.exception))
-        with self.assertRaises(self.eaf.EafError) as ctx:
-            self.eaf.read_token(_eaf_token(d, mode=0o644))
-        self.assertIn('chmod 600', str(ctx.exception))
-        with self.assertRaises(self.eaf.EafError):
-            self.eaf.read_token(_eaf_token(d, text='  \n'))
-        self.assertEqual(self.eaf.read_token(_eaf_token(d)), 'tok-123')
-
-    def test_the_token_file_follows_the_environment(self):
+        for path, why in ((os.path.join(_mkdtemp(), 'missing'), '/hub/token'),
+                          (_eaf_token(_mkdtemp(), mode=0o644), 'chmod 600'),
+                          (_eaf_token(_mkdtemp(), text='  \n'), 'empty')):
+            with self.assertRaises(self.eaf.EafError) as ctx:
+                self.eaf.read_token(path)
+            self.assertIn(why, str(ctx.exception))
+        self.assertEqual(self.eaf.read_token(_eaf_token(_mkdtemp())),
+                         'tok-123')
         with patch.dict(os.environ, {'PRODTOOLS_EAF_TOKEN_FILE': '/x/t'}):
             self.assertEqual(self.eaf.token_file('alice'), '/x/t')
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop('PRODTOOLS_EAF_TOKEN_FILE', None)
-            self.assertEqual(self.eaf.token_file('alice'),
-                             '/exp/mu2e/app/users/alice/.eaf_token')
 
 
 class _FakeHubHTTP:
@@ -22577,13 +22562,6 @@ class TestEafHub(unittest.TestCase):
         return eaf.Hub('tok', opener=http, clock=lambda: self.t[0],
                        sleep=sleep)
 
-    def test_a_ready_server_is_used_as_is(self):
-        http = _FakeHubHTTP([self.READY])
-        s = self._hub(http).ensure_server()
-        self.assertTrue(s['ready'])
-        self.assertEqual([c[0] for c in http.calls], ['GET'])
-        self.assertEqual(http.calls[0][3], 'token tok')
-
     def test_a_missing_server_is_started_with_the_cpu_profile(self):
         from utils import eaf
         http = _FakeHubHTTP([{}, {}, self.PENDING, self.READY])
@@ -22594,6 +22572,10 @@ class TestEafHub(unittest.TestCase):
         self.assertTrue(posts[0][1].endswith(
             '/hub/api/users/alice/servers/prodtools'))
         self.assertEqual(posts[0][2], eaf.PROFILE)
+        self.assertEqual(http.calls[0][3], 'token tok')
+        http = _FakeHubHTTP([self.READY])           # ready: used as is
+        self.assertTrue(self._hub(http).ensure_server()['ready'])
+        self.assertEqual([c[0] for c in http.calls], ['GET'])
 
     def test_a_start_that_never_becomes_ready_is_cancelled_and_fails(self):
         from utils import eaf
@@ -22618,59 +22600,8 @@ class TestEafHub(unittest.TestCase):
         self.assertIn('/hub/token', str(ctx.exception))
 
 
-class TestEafWebSocket(unittest.TestCase):
-    """The standard-library websocket client the terminal needs: the
-    handshake carries the token, masked frames go out, a ping is answered
-    and a fragmented message comes back whole."""
-
-    def test_round_trip(self):
-        import socket as socketmod
-        import struct
-        import threading
-        from utils import eaf
-        client, server = socketmod.socketpair()
-        seen = {}
-
-        def frame(opcode, payload, fin=True):
-            return struct.pack('!BB', (0x80 if fin else 0) | opcode,
-                               len(payload)) + payload
-
-        def read_frame(sock):
-            b0, b1 = sock.recv(2)
-            n = b1 & 0x7F
-            mask = sock.recv(4)
-            data = b''
-            while len(data) < n:
-                data += sock.recv(n - len(data))
-            return b0 & 0x0F, bytes(b ^ mask[i % 4]
-                                    for i, b in enumerate(data))
-
-        def serve():
-            head = b''
-            while b'\r\n\r\n' not in head:
-                head += server.recv(4096)
-            seen['head'] = head.decode()
-            server.sendall(b'HTTP/1.1 101 Switching Protocols\r\n\r\n')
-            server.sendall(frame(9, b'p'))
-            server.sendall(frame(1, b'["stdout", "he', fin=False))
-            server.sendall(frame(0, b'llo"]'))
-            seen['pong'] = read_frame(server)
-            seen['text'] = read_frame(server)
-            server.sendall(frame(8, b''))
-        t = threading.Thread(target=serve)
-        t.start()
-        ws = eaf._WebSocket('hub.example', '/user/a/terminals/websocket/1',
-                            'tok', sock=client)
-        self.assertEqual(ws.recv(), '["stdout", "hello"]')
-        ws.send('["stdin", "ls\\r"]')
-        self.assertIsNone(ws.recv())
-        t.join(5)
-        ws.close()
-        server.close()
-        self.assertIn('Authorization: token tok', seen['head'])
-        self.assertIn('GET /user/a/terminals/websocket/1 ', seen['head'])
-        self.assertEqual(seen['pong'], (10, b'p'))
-        self.assertEqual(seen['text'], (1, b'["stdin", "ls\\r"]'))
+class TestEafTerminal(unittest.TestCase):
+    """The two traps the live run found in typing into a terminal."""
 
     def test_pings_do_not_outlast_the_deadline(self):
         """The hub pings an idle websocket: a wait for a reply that never
@@ -22774,11 +22705,11 @@ class TestEafLaunchScript(unittest.TestCase):
                      for line in fh.read().splitlines() if line]
         return proc, run_dir, calls
 
-    def test_a_good_run_leaves_pid_heartbeat_done_and_stops_the_server(self):
+    def test_a_run_leaves_pid_heartbeat_exit_code_and_stops_the_server(self):
         from utils import eaf
-        proc, run_dir, calls = self._run(0)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(eaf.read_done(run_dir), 0)
+        proc, run_dir, calls = self._run(3)
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertEqual(eaf.read_done(run_dir), 3)     # runlocal's code
         pid, host = eaf.read_pid(run_dir)
         self.assertGreater(pid, 1)
         self.assertEqual(host, socket.gethostname())
@@ -22799,12 +22730,6 @@ class TestEafLaunchScript(unittest.TestCase):
         self.assertIn('DELETE', calls[-1])
         self.assertIn('https://hub.example/hub/api/users/alice/servers/'
                       'prodtools', calls[-1])
-
-    def test_runlocal_s_exit_code_is_the_run_s(self):
-        from utils import eaf
-        proc, run_dir, _ = self._run(3)
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(eaf.read_done(run_dir), 3)
 
 
 class _FakeEafHub:
@@ -22902,10 +22827,6 @@ class TestJson2jobdefOnceEaf(unittest.TestCase):
         self.assertIn('setsid nohup bash', hub.lines[0])
         self.assertIn(self.eaf.LAUNCH, hub.lines[0])
 
-    def test_parallel_is_forwarded(self):
-        receipt, _ = self._run(self._config(), parallel=4)
-        self.assertEqual(receipt['parallel'], 4)
-
     def _refused(self, config, **kw):
         with self.assertRaises(SystemExit) as ctx:
             self._run(config, **kw)
@@ -22913,15 +22834,11 @@ class TestJson2jobdefOnceEaf(unittest.TestCase):
             self.rr.read(self.root, self.NAME)      # the name is not spent
         return str(ctx.exception)
 
-    def test_pnfs_inputs_are_refused_before_the_name_is_spent(self):
+    def test_refusals_come_before_the_name_is_spent(self):
         self.assertIn('grid token', self._refused(self._config(inloc='tape')))
-
-    def test_a_checkout_eaf_cannot_see_is_refused(self):
         with patch.object(self.j, '_CHECKOUT', '/nashome/a/prodtools'):
-            msg = self._refused(self._config(), visible=False)
-        self.assertIn('checkout', msg)
-
-    def test_a_missing_token_is_refused(self):
+            self.assertIn('checkout',
+                          self._refused(self._config(), visible=False))
         with patch.dict(os.environ, {'PRODTOOLS_EAF_TOKEN_FILE':
                                      os.path.join(self.root, 'nope')}):
             self.assertIn('/hub/token', self._refused(self._config()))

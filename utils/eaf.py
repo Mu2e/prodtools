@@ -2,35 +2,15 @@
 """Fermilab EAF (Elastic Analysis Facility) as a place to run a
 `json2jobdef --once --local` run: `--local --site eaf`.
 
-EAF is JupyterHub on Kubernetes. Each user gets servers (pods) they start
-through the hub's REST API with a personal API token; a CPU server
-guarantees 8 cores (bursting to 32 when its node is idle) and caps memory
-at 64 GiB. There is no batch queue and no ssh. A run here is runlocal
-started detached in a terminal of the user's named server `prodtools`.
+runlocal runs detached in a terminal of the user's EAF server `prodtools`,
+started through the JupyterHub REST API with a personal API token. EAF
+mounts /exp read-write and /cvmfs, so the run directory on /exp is shared
+with the gpvm and nothing is copied. The launch script writes into it
+eaf.pid ("<pid> <host>"), eaf.alive (epoch seconds, every HEARTBEAT_S),
+eaf.done ("exit=<rc>", last) and runlocal.log. EAF has no grid token and
+mounts nothing else, so inputs come from /exp or nowhere.
 
-Why this works without copying anything: EAF mounts /exp read-write (the
-same CephFS the gpvms see) and /cvmfs. The run directory
-(/exp/mu2e/data/users/<you>/prodtools/runs/<name>/) is built on the gpvm
-as for any local run, and runlocal on EAF reads the cnf from it and
-writes the jobs and summary.json into it. The gpvm reads them back
-directly.
-
-Files the launch script writes into the run directory, all on /exp:
-
-    eaf_launch.sh   the script itself (written by json2jobdef)
-    eaf.pid         "<runlocal pid> <pod hostname>", once runlocal started
-    eaf.alive       epoch seconds, rewritten every HEARTBEAT_S
-    eaf.done        "exit=<rc>", written last, when runlocal has exited
-    runlocal.log    runlocal's own output (and the setup's)
-
-What EAF cannot do, refused before a run name is spent:
-- read /pnfs: no grid token there, so `inloc` must be `none` or
-  `dir:/exp/...`;
-- see /nashome or a gpvm's /tmp: the prodtools checkout and any code
-  tarball must live under /exp.
-
-Standard library only: the read-only MCP server imports this module for
-its file names and staleness rule, and must not pull in anything else.
+Standard library only: the read-only MCP server imports this module.
 """
 
 import argparse
@@ -411,13 +391,9 @@ def launch_script(run_dir, runlocal_args, checkout, token_path, user,
                   server=SERVER, hub=HUB, env_setup=ENV_SETUP,
                   heartbeat_s=HEARTBEAT_S):
     """The bash script EAF runs for one run (written to run_dir/LAUNCH).
-
-    runlocal runs in the background so the script can record its pid and
-    `wait` for it; a `kill -TERM <pid in eaf.pid>` reaches runlocal, whose
-    handler stops the jobs. The EXIT trap writes eaf.done LAST of the run's
-    files, then stops this server: one run at a time per server, so the
-    server's work is over and the 8 cores go back to EAF.
-    """
+    runlocal runs in the background so its pid can go to eaf.pid (SIGTERM
+    to it stops the jobs). The EXIT trap writes eaf.done last, then stops
+    the server: one run per server, so its cores go back to EAF."""
     q = shlex.quote
     rd = q(run_dir)
     api = f"{hub}/hub/api/users/{user}"
