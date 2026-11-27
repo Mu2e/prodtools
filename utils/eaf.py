@@ -35,7 +35,6 @@ its file names and staleness rule, and must not pull in anything else.
 
 import argparse
 import base64
-import datetime
 import json
 import os
 import re
@@ -63,9 +62,9 @@ PROFILE = {'profile': 'fife-sl7-unpriv-interactive-htcondor',
 START_TIMEOUT_S = 420
 POLL_S = 10
 # 8 cores are guaranteed; the quota allows 32 on an idle node, and memory
-# (64 GiB at runlocal's ~2.5 GB a job) runs out near 25.
+# (64 GiB at runlocal's ~2.5 GB a job) runs out near 25. json2jobdef's
+# MAX_LOCAL_PARALLEL caps --parallel here as on a gpvm.
 DEFAULT_PARALLEL = 8
-MAX_PARALLEL = 16
 HEARTBEAT_S = 60
 STALE_S = 300
 # How long json2jobdef waits for eaf.pid after typing the launch line.
@@ -293,13 +292,6 @@ class Hub:
         text = _ANSI.sub('', out)
         return text.split('__EAF_DONE__', 1)[0]
 
-    def post_activity(self, name=SERVER):
-        now = datetime.datetime.now(datetime.timezone.utc).strftime(
-            '%Y-%m-%dT%H:%M:%SZ')
-        self.call('POST', f'/hub/api/users/{self.name}/activity',
-                  {'last_activity': now,
-                   'servers': {name: {'last_activity': now}}})
-
 
 _ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\r')
 
@@ -428,23 +420,26 @@ def launch_script(run_dir, runlocal_args, checkout, token_path, user,
     """
     q = shlex.quote
     rd = q(run_dir)
-    auth = (f"printf 'Authorization: token %s\\n' "
-            f"\"$(tr -d '[:space:]' < {q(token_path)})\"")
     api = f"{hub}/hub/api/users/{user}"
     runlocal = ' '.join(q(a) for a in runlocal_args)
     return f"""#!/bin/bash
 # Written by json2jobdef --once --local --site eaf; runs on EAF server
 # {server!r}. Reads and writes only {run_dir}.
 cd {rd} || exit 90
-child=
 hb=
+# The token is read on every call (a renewed one is picked up) and sent
+# on stdin, never in argv.
+hub_api() {{
+    printf 'Authorization: token %s\\n' \\
+        "$(tr -d '[:space:]' < {q(token_path)})" \\
+        | curl -sS -m 30 -H @- "$@" > /dev/null 2>&1
+}}
 finish() {{
     rc=$?
     trap - EXIT
     [ -n "$hb" ] && kill "$hb" 2>/dev/null
     echo "exit=$rc" > {rd}/{DONE}
-    {auth} | curl -sS -m 30 -H @- -X DELETE {q(api + '/servers/' + server)} \\
-        > /dev/null 2>&1
+    hub_api -X DELETE {q(api + '/servers/' + server)}
     exit "$rc"
 }}
 trap finish EXIT
@@ -452,10 +447,10 @@ heartbeat() {{
     while :; do
         date -u +%s > {rd}/{ALIVE}
         now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        {auth} | curl -sS -m 30 -H @- -H 'Content-Type: application/json' \\
-            -X POST -d "{{\\"last_activity\\": \\"$now\\", \\"servers\\": \
+        hub_api -H 'Content-Type: application/json' -X POST \\
+            -d "{{\\"last_activity\\": \\"$now\\", \\"servers\\": \
 {{\\"{server}\\": {{\\"last_activity\\": \\"$now\\"}}}}}}" \\
-            {q(api + '/activity')} > /dev/null 2>&1
+            {q(api + '/activity')}
         sleep {int(heartbeat_s)}
     done
 }}
@@ -479,13 +474,21 @@ def launch_line(run_dir):
 
 # -- reading a run's files (run_status uses these) --------------------------
 
-def read_pid(run_dir):
-    """(pid, host) from eaf.pid, or None while there is none."""
+def _read(run_dir, name):
+    """The stripped text of run_dir/name, or None while there is none."""
     try:
-        with open(os.path.join(run_dir, PID)) as fh:
-            fields = fh.read().split()
+        with open(os.path.join(run_dir, name)) as fh:
+            return fh.read().strip()
     except FileNotFoundError:
         return None
+
+
+def read_pid(run_dir):
+    """(pid, host) from eaf.pid, or None while there is none."""
+    text = _read(run_dir, PID)
+    if text is None:
+        return None
+    fields = text.split()
     if len(fields) != 2 or not fields[0].isdigit():
         raise ValueError(f"{os.path.join(run_dir, PID)} is not "
                          f"'<pid> <host>': {fields!r}")
@@ -494,10 +497,8 @@ def read_pid(run_dir):
 
 def read_done(run_dir):
     """runlocal's exit code from eaf.done, or None while there is none."""
-    try:
-        with open(os.path.join(run_dir, DONE)) as fh:
-            text = fh.read().strip()
-    except FileNotFoundError:
+    text = _read(run_dir, DONE)
+    if text is None:
         return None
     m = re.fullmatch(r'exit=(\d+)', text)
     if not m:
@@ -510,11 +511,8 @@ def heartbeat_age(run_dir, now=None):
     """Seconds since the launch script last wrote eaf.alive, or None
     while it never has."""
     try:
-        with open(os.path.join(run_dir, ALIVE)) as fh:
-            stamp = int(fh.read().strip())
-    except FileNotFoundError:
-        return None
-    except ValueError:
+        stamp = int(_read(run_dir, ALIVE))
+    except (TypeError, ValueError):     # none yet, or half-written
         return None
     return (time.time() if now is None else now) - stamp
 

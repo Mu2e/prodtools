@@ -19,8 +19,10 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import importlib.machinery
@@ -29,6 +31,7 @@ import sys
 import types
 import tarfile
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -22753,7 +22756,7 @@ class TestEafLaunchScript(unittest.TestCase):
         with open(os.path.join(bindir, 'curl'), 'w') as fh:
             fh.write('#!/bin/bash\n'
                      f'{{ printf "%s\\0" "$@"; printf "STDIN:%s\\0" '
-                     f'"$(cat)"; echo; }} >> {shlex_quote(curl_log)}\n')
+                     f'"$(cat)"; echo; }} >> {shlex.quote(curl_log)}\n')
         os.chmod(os.path.join(bindir, 'curl'), 0o755)
         token = _eaf_token(tmp)
         script = os.path.join(run_dir, eaf.LAUNCH)
@@ -22778,7 +22781,7 @@ class TestEafLaunchScript(unittest.TestCase):
         self.assertEqual(eaf.read_done(run_dir), 0)
         pid, host = eaf.read_pid(run_dir)
         self.assertGreater(pid, 1)
-        self.assertEqual(host, socket_hostname())
+        self.assertEqual(host, socket.gethostname())
         self.assertIsNotNone(eaf.heartbeat_age(run_dir))
         with open(os.path.join(run_dir, 'seen.json')) as fh:
             seen = json.load(fh)
@@ -22802,16 +22805,6 @@ class TestEafLaunchScript(unittest.TestCase):
         proc, run_dir, _ = self._run(3)
         self.assertEqual(proc.returncode, 3)
         self.assertEqual(eaf.read_done(run_dir), 3)
-
-
-def shlex_quote(s):
-    import shlex
-    return shlex.quote(s)
-
-
-def socket_hostname():
-    return subprocess.run(['hostname'], capture_output=True,
-                          text=True).stdout.strip()
 
 
 class _FakeEafHub:
@@ -22937,7 +22930,7 @@ class TestJson2jobdefOnceEaf(unittest.TestCase):
         other = self.rr.reserve(self.root, 'cnf.alice.Gen.T0.0', {})
         self.rr.update(other, state='running', executor='eaf')
         with open(os.path.join(other, self.eaf.ALIVE), 'w') as fh:
-            fh.write(str(int(time_now())))
+            fh.write(str(int(time.time())))
         self.assertIn('cnf.alice.Gen.T0.0', self._refused(self._config()))
         with open(os.path.join(other, self.eaf.DONE), 'w') as fh:
             fh.write('exit=0\n')                    # finished: no longer busy
@@ -22969,11 +22962,6 @@ class TestJson2jobdefOnceEaf(unittest.TestCase):
                 self.assertRaises(SystemExit) as ctx:
             self.j.main()
         self.assertIn('--site requires --local', str(ctx.exception))
-
-
-def time_now():
-    import time
-    return time.time()
 
 
 class TestMcpRunStatusEaf(unittest.TestCase):

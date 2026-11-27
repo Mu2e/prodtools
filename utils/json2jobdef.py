@@ -1211,23 +1211,14 @@ def _refuse_for_eaf(config, root):
                  f"with `python -m utils.eaf stop {busy[0]}`.")
 
 
-def _start_eaf(run_dir, entry, njobs, parallel=None, hub=None,
-               confirm_s=None, clock=None, sleep=None):
-    """`--once --local --site eaf`: start runlocal on the user's EAF
-    server, detached, and return the receipt `running` once it has.
-
-    The run directory is on /exp, which EAF mounts read-write, so nothing
-    is copied: the launch script is written next to the cnf, typed into a
-    terminal of the server with setsid nohup, and runlocal on EAF writes
-    the jobs and summary.json where a gpvm run would. Started is decided
-    by the launch script's own eaf.pid appearing on /exp, not by anything
-    the terminal prints. `hub` is an eaf.Hub, injectable for the tests.
-    """
+def _start_eaf(run_dir, entry, njobs, parallel=None, hub=None):
+    """`--once --local --site eaf`: start runlocal detached on the user's
+    EAF server (see utils/eaf) and return the receipt `running` once the
+    launch script's eaf.pid appears on /exp -- not on anything the
+    terminal prints. `hub` is an eaf.Hub, injectable for the tests."""
     import time
     from utils import eaf, run_receipt
 
-    confirm_s = eaf.LAUNCH_CONFIRM_S if confirm_s is None else confirm_s
-    clock, sleep = clock or time.time, sleep or time.sleep
     if parallel is None:
         parallel = eaf.DEFAULT_PARALLEL
     run_receipt.update(run_dir, state='starting', executor='eaf',
@@ -1244,7 +1235,7 @@ def _start_eaf(run_dir, entry, njobs, parallel=None, hub=None,
     os.chmod(script, 0o700)
     server = hub.ensure_server()
     hub.run_in_terminal(server, eaf.launch_line(run_dir))
-    t0 = clock()
+    t0 = time.time()
     while True:
         got = eaf.read_pid(run_dir)
         if got is not None:
@@ -1254,14 +1245,14 @@ def _start_eaf(run_dir, entry, njobs, parallel=None, hub=None,
             raise RuntimeError(
                 f"the EAF launch script exited {code} before runlocal "
                 f"started; see {log}")
-        if clock() - t0 > confirm_s:
+        if time.time() - t0 > eaf.LAUNCH_CONFIRM_S:
             raise RuntimeError(
                 f"runlocal did not report a pid ({eaf.PID}) within "
-                f"{confirm_s:.0f} s of the launch on EAF server "
+                f"{eaf.LAUNCH_CONFIRM_S:.0f} s of the launch on EAF server "
                 f"{eaf.SERVER!r}. It may still start: look at {log} and "
                 f"`python -m utils.eaf status` before running this entry "
                 f"anywhere else.")
-        sleep(5)
+        time.sleep(5)
     pid, host = got
     return run_receipt.update(
         run_dir, state='running', host=host, pid=pid,
