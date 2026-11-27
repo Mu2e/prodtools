@@ -953,5 +953,65 @@
             "mcs.*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the triggered stream of the Extracted DYB digitization, as for CRY at MDC2025bb_best_v1_5 (recoMC/Extracted.fcl). One dig file per job. Push only after the dig dataset is complete.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "CosmicDYBExtracted",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/Extracted.fcl",
+        "input_data": {
+            "dig.mu2e.CosmicDYBExtracted.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Reconstruction of the all-events stream (-All) of the Extracted DYB digitization, as for CRY: recoMC/ExtractedAllEvents.fcl keeps every CRV digi and pulse with its truth, so muons stopping in the CRV and their decay electrons survive. One dig file per job. Push only after the dig dataset is complete.",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "desc": "CosmicDYBExtracted-All",
+        "tarball_append": "-reco",
+        "fcl": "Production/JobConfig/recoMC/ExtractedAllEvents.fcl",
+        "input_data": {
+            "dig.mu2e.CosmicDYBExtracted-All.MDC2025bb_best_v1_5.art": 1
+        },
+        "fcl_overrides": {
+            "outputs.KinematicLineOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Generic draining OnSpill reco at MDC2025bf_best_v2_0 (SimJob MDC2025bf, recoMC/OnSpill.fcl with the Run 1A reco settings, Sim_best v2_0) for the MuCap flat digitization (digi.json). One dig file per job. Tested 2026-11-26 on a bf proton dig file: 1116 of 1116 events.",
+        "desc": "reco",
+        "dsconf": "MDC2025bf_best_v2_0",
+        "tarball_append": "-OnSpill",
+        "generic_tarball": true,
+        "input_pattern": "dig.mu2e.%OnSpill.MDC2025bf_best_v2_0.art",
+        "prestage": true,
+        "fcl": "Production/JobConfig/recoMC/OnSpill.fcl",
+        "fcl_overrides": {
+            "outputs.LoopHelixOutput.fileName": "mcs.owner.{desc}.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "mcs.*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh"
     }
 ]

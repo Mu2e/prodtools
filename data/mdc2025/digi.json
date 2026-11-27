@@ -667,5 +667,54 @@
             "*.art": "tape"
         },
         "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025be/setup.sh"
+    },
+    {
+        "_comment": "Digitization of the Extracted DYB cosmics (stage1.json ExtractedDYB MDC2025bf), set up exactly like the CRY one, same release (SimJob MDC2025bb), so the two differ only in the generator: ExtractedAllEvents.fcl writes the triggered stream (Output) and every event (AllOutput, -All), so muons that stop in the CRV and leave hits only there are kept; Sim_best v1_5 as for CRY; 8 dts per job (20000 dts to 2500 jobs). Push only after the dts dataset is complete.",
+        "desc": "CosmicDYBExtracted",
+        "dsconf": "MDC2025bb_best_v1_5",
+        "fcl": "Production/JobConfig/digitize/ExtractedAllEvents.fcl",
+        "input_data": {
+            "dts.mu2e.CosmicDYBExtracted.MDC2025bf.art": 8
+        },
+        "fcl_overrides": {
+            "outputs.Output.fileName": "dig.owner.{desc}.version.sequencer.art",
+            "outputs.AllOutput.fileName": "dig.owner.{desc}-All.version.sequencer.art",
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v1_5"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bb/setup.sh"
+    },
+    {
+        "_comment": "Unmixed digitization of the four MuCap flat primaries (primary_muon.json MuCap{Proton,Deuteron,Triton,Alpha}Flat MDC2025bf, campaigns 436-439) with the same release, SimJob MDC2025bf: OnSpill_run1a.fcl, whose OnSpill paths include TriggerableHeavyPath (bit 22, Production #611), so events are kept as Michael MacKenzie designed. Local test 2026-11-26 (3 dts each): kept p 64%, d 57%, t 60%, alpha 13%; about 10 ms/event, VmHWM 0.93 GB. 10 dts per job: 20 jobs each for p, d, t and 100 for alpha.",
+        "dsconf": "MDC2025bf_best_v2_0",
+        "fcl": "Production/JobConfig/digitize/OnSpill_run1a.fcl",
+        "input_data": [
+            {
+                "dts.mu2e.MuCapProtonFlat.MDC2025bf.art": 10
+            },
+            {
+                "dts.mu2e.MuCapDeuteronFlat.MDC2025bf.art": 10
+            },
+            {
+                "dts.mu2e.MuCapTritonFlat.MDC2025bf.art": 10
+            },
+            {
+                "dts.mu2e.MuCapAlphaFlat.MDC2025bf.art": 10
+            }
+        ],
+        "fcl_overrides": {
+            "services.DbService.purpose": "Sim_best",
+            "services.DbService.version": "v2_0",
+            "outputs.Output.fileName": "dig.owner.{desc}OnSpill.version.sequencer.art"
+        },
+        "inloc": "tape",
+        "outloc": {
+            "*.art": "tape"
+        },
+        "simjob_setup": "/cvmfs/mu2e.opensciencegrid.org/Musings/SimJob/MDC2025bf/setup.sh"
     }
 ]
