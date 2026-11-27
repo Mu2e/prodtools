@@ -488,6 +488,11 @@ def create_campaign(db_path, *, tarball, entry, slice_size, origin=None):
     """
     if slice_size < 1:
         raise ValueError(f"slice_size must be >= 1, got {slice_size}")
+    if not isinstance(entry, dict):
+        # json.dumps(None) is 'null', which passes NOT NULL: such a row
+        # has no njobs or outputs, and every reader of it must cope.
+        raise ValueError(
+            f"campaign entry must be a JSON object, got {type(entry).__name__}")
     con = _connect(db_path)
     try:
         dup = con.execute(

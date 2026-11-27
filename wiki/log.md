@@ -1486,3 +1486,7 @@ After reviewing RobMina/hep-endpoints, probed EAF from mu2egpvm with a hub API t
 ## [2026-11-27] update | draining campaigns never resend an unconfirmed submit
 Pages updated: 2026-07-18-direct-recovery-loop (pending predicate)
 `draining_state` counted only `active` rows as in flight, so the files of a `submitting` row (a tick killed inside jobsub_submit) or a `failed` row (after `submissions resume`) went back into the next batch, though either can have made a cluster. They are now held in a new `unconfirmed` bucket; the tick prints ATTENTION and exits 2 until `submissions reconcile <row>`. Rule borrowed from RobMina/hep-endpoints: an attempt nobody saw finish may only be reconciled, never resent.
+
+## [2026-11-27] fix | list_campaigns(mine=true) died on a campaign with no entry
+Pages updated: none (code + tests)
+Campaign 62 of oksuzian's ledger (cancelled, desc RereadDesc, 2026-11-10, the name a unit test uses) has entry_json 'null'; njobs_of(None) raised AttributeError and the whole listing failed. list_campaigns and campaign_status now show such a campaign with njobs null and outputs state unknown; create_campaign refuses an entry that is not an object.

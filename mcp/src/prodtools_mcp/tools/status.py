@@ -360,6 +360,14 @@ def _matches(camp, campaign, campaign_id):
     return True
 
 
+def _entry_njobs(entry):
+    """njobs of a campaign's stored entry, or None when the ledger holds no
+    entry (a row written with entry_json 'null'), so one such row cannot
+    take down a whole listing."""
+    from utils.jobdesc import njobs_of
+    return njobs_of(entry) if isinstance(entry, dict) else None
+
+
 def campaign_status(campaign=None, campaign_id=None, include_queue=True,
                     include_outputs=True, mine=False, user=None,
                     db_path=None, clusters_fn=None, count_fn=None,
@@ -369,8 +377,6 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
     With neither `campaign` nor `campaign_id`, this is ledger-only: local
     sqlite, no network, and the queue/outputs blocks are omitted.
     """
-    from utils.jobdesc import njobs_of
-
     resolved_db, owner = _resolve_identity(mine, user)
     # db_path is test-only: it is not exposed through MCP (server.py
     # offers no such parameter). It wins over the ledger `mine` derived,
@@ -414,7 +420,7 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
 
     out = []
     for camp in selected:
-        njobs = njobs_of(camp['entry'])
+        njobs = _entry_njobs(camp['entry'])
         rec = {
             'id': camp['id'],
             'state': camp['state'],
@@ -443,7 +449,13 @@ def campaign_status(campaign=None, campaign_id=None, include_queue=True,
             rec['queue'] = covered_queue_block(cluster_ids, open_schedds,
                                                clusters, owner,
                                                reason=queue_reason)
-        if want_outputs:
+        if want_outputs and not isinstance(camp['entry'], dict):
+            # No stored entry: nothing says which outputs to count. Unknown,
+            # with no count keys, never a zero to misread.
+            rec['outputs'] = {'state': 'unknown',
+                              'reason': 'the ledger holds no entry for this '
+                                        'campaign (entry_json is null)'}
+        elif want_outputs:
             rec['outputs'] = _outputs_block(
                 camp['entry'], njobs, camp['cursor'],
                 count_fn or _default_count_fn, rows=camp_rows,
@@ -468,14 +480,13 @@ def list_campaigns(state=None, mine=False, user=None, db_path=None):
     resolved_db, _ = _resolve_identity(mine, user)
     db_path = db_path or resolved_db
     camps = ledger_ro.campaigns(db_path, state=state)
-    from utils.jobdesc import njobs_of
     listing = [{
         'id': c['id'],
         'state': c['state'],
         'tarball': c['tarball'],
         'origin': c['origin'],
         'cursor': c['cursor'],
-        'njobs': njobs_of(c['entry']),
+        'njobs': _entry_njobs(c['entry']),
         'slice_size': c['slice_size'],
         'created_utc': c['created_utc'],
     } for c in camps]
