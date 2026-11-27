@@ -131,6 +131,10 @@ Every tool takes a required `run_as`:
   PreToolUse hook prompts. Both gates are deliberate: a hook can be
   un-armed by a settings reload.
 
+`start_write_mcp.sh --self-only` starts a server that refuses
+`run_as="mu2epro"` in every tool, confirm or not. Use it for clients that
+ask no human before a tool call, such as an agent's automations.
+
 A third write tool, `submit_once`, is the one path that declares
 nothing: every output to outstage, no SAM record (the cnf included), no
 ledger, no recovery, `run_as="self"` only. `run_status(name, user=)` on

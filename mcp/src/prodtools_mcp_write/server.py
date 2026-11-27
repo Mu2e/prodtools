@@ -19,16 +19,28 @@ TOOL_FUNCTIONS = {
 TOOL_NAMES = tuple(TOOL_FUNCTIONS)
 
 
+SELF_ONLY_TEXT = (
+    'This server runs self-only (started with --self-only): every tool '
+    'takes run_as="self", which writes only your own scratch, datasets and '
+    'ledger. run_as="mu2epro" is refused, confirm or not.')
+
+
 def get_write_server_info():
-    return {
-        'name': 'prodtools-write',
-        'performs_writes': True,
-        'description': (
+    from prodtools_mcp_write import runner
+    if runner.SELF_ONLY:
+        description = 'Write-capable prodtools submission. ' + SELF_ONLY_TEXT
+    else:
+        description = (
             'Write-capable prodtools submission. run_as="self" needs no '
             'privilege and writes only your own scratch, datasets and '
             'ledger. run_as="mu2epro" registers artifacts in production '
             'SAM and submits production grid jobs; it is refused unless '
-            'confirm=true.'),
+            'confirm=true.')
+    return {
+        'name': 'prodtools-write',
+        'performs_writes': True,
+        'self_only': runner.SELF_ONLY,
+        'description': description,
         'tools': list(TOOL_NAMES),
     }
 
@@ -54,7 +66,11 @@ def create_write_mcp_server():
     from mcp.server.mcpserver import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
 
-    mcp = MCPServer('prodtools-write')
+    from prodtools_mcp_write import runner
+
+    # Self-only: say so up front, so a client's model never tries mu2epro.
+    mcp = MCPServer('prodtools-write',
+                    instructions=SELF_ONLY_TEXT if runner.SELF_ONLY else None)
     for name, fn in TOOL_FUNCTIONS.items():
         mcp.tool(name=name)(_forwarding(fn, ToolError))
     return mcp

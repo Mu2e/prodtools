@@ -2,7 +2,7 @@
 title: prodtools MCP server (read-only)
 tags: [reference, mcp, tooling, commissioned]
 sources: [2026-07-26-prodtools-mcp-design]
-updated: 2026-11-13
+updated: 2026-11-27
 ---
 
 # prodtools MCP server (read-only)
@@ -206,6 +206,26 @@ the host admin. A missing or expired token surfaces as
 Only the read-only server is servable this way. `prodtools-write` stays
 stdio: `ksu`, `confirm=true` and the PreToolUse hook do not survive
 being reached over a port.
+
+**Self-only write server (2026-11-27).** `start_write_mcp.sh --self-only`
+sets `PRODTOOLS_WRITE_SELF_ONLY=1`. Every tool then refuses
+`run_as="mu2epro"`, whatever `confirm` says. The check sits in
+`runner.check_run_as`, which `require_confirmed` and `run_cli` (the path
+of every tool) both call, so nothing runs.
+- It is for a client that asks no human before a tool call, such as
+  HEP-Genesis-Agent and its automations. There `confirm=true` is the model
+  confirming itself and no PreToolUse hook runs.
+- The mode is fixed at process start; no tool argument changes it.
+- Any value other than unset, empty or `0` turns it on (fails closed).
+- The launcher refuses unknown arguments, so a mistyped flag cannot start
+  a server that takes mu2epro.
+- Production stays with a second entry started without the flag, or with
+  Claude Code, where the hook prompts. Other users need nothing: without
+  mu2epro in its `.k5login`, `ksu mu2epro` refuses them anyway.
+- Verified over stdio with an mcp 1.28 client: in self-only mode a
+  `run_submissions` call as mu2epro is refused naming the mode, with
+  `confirm` false and true. Started without the flag, it is refused only
+  for the missing confirm.
 
 Verified live 2026-09-17 on 127.0.0.1:8899 — `initialize` returns the
 server info, `list_campaigns` with no identity reads production (5
