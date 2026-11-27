@@ -7,7 +7,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
+            "outputs.compressedOutput136.fileName": "dts.mu2e.{desc}136.Run1Ban-001.sequence.art"
         },
         "resampler_name": "beamResampler",
         "input_data": {
@@ -32,7 +32,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
+            "outputs.compressedOutput136.fileName": "dts.mu2e.{desc}136.Run1Ban-001.sequence.art"
         },
         "resampler_name": "beamResampler",
         "input_data": {
@@ -57,7 +57,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_no_tsu_ps_v01.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Ban-001.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Ban-001.sequence.art"
+            "outputs.compressedOutput136.fileName": "dts.mu2e.{desc}136.Run1Ban-001.sequence.art"
         },
         "resampler_name": "TargetStopResampler",
         "input_data": {
@@ -82,7 +82,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Baq.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Baq.sequence.art"
+            "outputs.compressedOutput136.fileName": "dts.mu2e.{desc}136.Run1Baq.sequence.art"
         },
         "resampler_name": "beamResampler",
         "input_data": {
@@ -107,7 +107,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Baq.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Baq.sequence.art"
+            "outputs.compressedOutput136.fileName": "dts.mu2e.{desc}136.Run1Baq.sequence.art"
         },
         "resampler_name": "beamResampler",
         "input_data": {
@@ -132,7 +132,7 @@
             "services.GeometryService.inputFile": "Offline/Mu2eG4/geom/geom_run1_b_v40.txt",
             "services.GeometryService.bFieldFile": "Offline/Mu2eG4/geom/bfgeom_DSOff.txt",
             "outputs.compressedOutput101.fileName": "dts.mu2e.{desc}101.Run1Baq.sequence.art",
-            "outputs.compressedOutput116.fileName": "dts.mu2e.{desc}116.Run1Baq.sequence.art"
+            "outputs.compressedOutput136.fileName": "dts.mu2e.{desc}136.Run1Baq.sequence.art"
         },
         "resampler_name": "TargetStopResampler",
         "input_data": {
