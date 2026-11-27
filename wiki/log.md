@@ -1482,3 +1482,7 @@ A cosmic stage-2 CPU question was answered by hand-scanning 112k job logs before
 ## [2026-11-26] update | EAF as a site for --once --local runs
 Pages added: 2026-11-26-eaf-site-for-local-runs; index (Decisions)
 After reviewing RobMina/hep-endpoints, probed EAF from mu2egpvm with a hub API token: /exp is shared read-write, Mu2e software sets up, no grid token. Built `--local --site eaf` on branch eaf-site (utils/eaf.py, json2jobdef `_start_eaf`, run_status `executor: "eaf"`, MCP `run_local(site=)`), verified live 8/8.
+
+## [2026-11-27] update | draining campaigns never resend an unconfirmed submit
+Pages updated: 2026-07-18-direct-recovery-loop (pending predicate)
+`draining_state` counted only `active` rows as in flight, so the files of a `submitting` row (a tick killed inside jobsub_submit) or a `failed` row (after `submissions resume`) went back into the next batch, though either can have made a cluster. They are now held in a new `unconfirmed` bucket; the tick prints ATTENTION and exits 2 until `submissions reconcile <row>`. Rule borrowed from RobMina/hep-endpoints: an attempt nobody saw finish may only be reconciled, never resent.

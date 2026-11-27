@@ -679,12 +679,19 @@ discriminator everywhere in `submissions.py` — never sniff
 `indices_json`/`entry` shape by hand.
 
 **Pending predicate.** No cursor: `draining_state` recomputes fresh
-from SAM every tick — `pending = inputs − landed − in_flight − parked`,
+from SAM every tick — `pending = inputs − landed − in_flight − parked −
+unconfirmed`,
 where `landed` means every one of a file's expected outputs (computed
 per-file from the cnf's own `job_outputs`, via `expected_outputs_for`)
 already exists in SAM. Nothing counts as done until its output exists —
 the structural fix for `drainingn`'s launch-time snapshot cursor (see
-[[poms-reference]] for the mechanics this replaces).
+[[poms-reference]] for the mechanics this replaces). `unconfirmed` (since
+2026-11-27) is the files of a `submitting` or `failed` row: a tick killed
+inside jobsub_submit, or a submit that exited non-zero, can still have
+made a cluster, so those files are never resent on a guess. The tick
+prints ATTENTION and exits 2 until `submissions reconcile <row>`. Before
+this, only index campaigns were protected (their slice-overlap guard
+skips draining rows), and the next tick resent the files.
 
 **Two gates** before a candidate batch dispatches: a settling-age gate
 (`min_age_minutes`, default 60, against SAM `create_date` — the key

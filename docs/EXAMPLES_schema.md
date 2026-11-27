@@ -587,7 +587,11 @@ reading the code:
 - Draining campaigns track pending work in SAM, not a cursor: pending
   = inputs whose expected outputs (computed per-file from the cnf's
   own `job_outputs` mapping) don't exist yet, minus files already
-  in-flight or parked. Nothing counts as done until its output exists.
+  in-flight or parked, and minus files of a row whose submit was never
+  confirmed (`submitting` or `failed`: a killed tick or a failed
+  jobsub_submit can still have made a cluster). Those are held, and the
+  tick exits 2, until `submissions reconcile <row>` says the jobs are
+  absent. Nothing counts as done until its output exists.
 - A draining entry's `outputs[].dataset` globs must be tier-specific
   (`mcs.*.art`, never `*.art`): a glob that matches the input pattern
   is refused at enqueue, because the worker's push manifest would

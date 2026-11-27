@@ -326,9 +326,19 @@ def draining_state(camp, db_path, *,
 
         inputs    pattern datasets' files (exclude_desc removed)
         landed    inputs whose expected outputs ALL exist in SAM
-        in_flight files in this campaign's ACTIVE rows
-        parked    files in exhausted rows whose outputs are still missing
-        pending   inputs − landed − in_flight − parked   (sorted)
+        in_flight   files in this campaign's ACTIVE rows
+        parked      files in exhausted rows whose outputs are still missing
+        unconfirmed {row id: files} of 'submitting' and 'failed' rows,
+                    outputs still missing
+        pending     inputs − landed − in_flight − parked − unconfirmed
+                    (sorted)
+
+    An unconfirmed row is a submit nobody saw finish: a tick killed
+    inside jobsub_submit leaves 'submitting', and a submit that exited
+    non-zero leaves 'failed', yet either can have made a cluster. Its
+    files are never resent on a guess (a resend duplicates the physics);
+    they wait for a human's `submissions reconcile <id>`, which says the
+    jobs are absent and puts them back in pending.
 
     Dataset enumeration is definition-based (production convention).
     Each name SAM hands back is re-verified: must parse as a 5-field
@@ -364,7 +374,7 @@ def draining_state(camp, db_path, *,
     existing = {ds: set(sam_lister(ds)) for ds in sorted(out_datasets)}
     landed = {f for f, outs in out_of.items()
               if all(o in existing[_dataset_of(o)] for o in outs)}
-    in_flight, exhausted = set(), set()
+    in_flight, exhausted, unconfirmed = set(), set(), {}
     for r in submission_ledger.all_rows(db_path):
         if r['tarball'] != camp['tarball'] or not is_draining(r['entry']):
             continue
@@ -372,10 +382,16 @@ def draining_state(camp, db_path, *,
             in_flight.update(r['indices'])
         elif r['state'] == 'exhausted':
             exhausted.update(r['indices'])
+        elif r['state'] in submission_ledger.RECONCILABLE_STATES:
+            missing = set(r['indices']) - landed
+            if missing:
+                unconfirmed[r['id']] = missing
     parked = exhausted - landed
-    pending = sorted(inputs - landed - in_flight - parked)
+    held = set().union(*unconfirmed.values())
+    pending = sorted(inputs - landed - in_flight - parked - held)
     return {'inputs': inputs, 'landed': landed, 'in_flight': in_flight,
-            'parked': parked, 'pending': pending}
+            'parked': parked, 'unconfirmed': unconfirmed,
+            'pending': pending}
 
 
 # dCache locality -> which _gate_batch bucket a file lands in. Any state
@@ -1015,6 +1031,16 @@ def drain_tick(db_path, cap, dry_run=False, count_fn=total_queued,
         print(f"campaign {cid}: landed {len(st['landed'])}/{n_in} "
               f"({pct:.1f}%) | in-flight {len(st['in_flight'])} | "
               f"parked {len(st['parked'])} | pending {len(st['pending'])}")
+        if st['unconfirmed']:
+            ids = sorted(st['unconfirmed'])
+            n = sum(len(f) for f in st['unconfirmed'].values())
+            print(f"ATTENTION: campaign {cid}: {n} file(s) in row(s) "
+                  f"{', '.join(map(str, ids))} whose submit was never "
+                  f"confirmed are held back, never resent. Check "
+                  f"jobsub_q for the cluster; if it is not there, "
+                  f"`submissions reconcile {ids[0]}` (each row) returns "
+                  f"the files to pending.")
+            bump('drain-unconfirmed')
         if not st['pending']:
             bump('drain-idle')
             continue
@@ -1555,7 +1581,8 @@ def _acquire_lock(db_path):
 # the tick exit 2, repeated every tick until someone clears the cause.
 ATTENTION_KEYS = ('held', 'exhausted', 'would-exhaust', 'child-missing',
                   'campaign-paused', 'would-pause-overlap', 'count-error',
-                  'paused-campaign', 'drain-error', 'child-reserved')
+                  'paused-campaign', 'drain-error', 'child-reserved',
+                  'drain-unconfirmed')
 
 
 def _run_pass(args):
