@@ -15926,6 +15926,63 @@ class TestResamplerRereadGuard(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class TestCampaignWithoutEntry(unittest.TestCase):
+    """A ledger row whose entry_json is 'null' (one was written 2026-11-10
+    to a personal ledger) took down list_campaigns(mine=true) whole:
+    njobs_of(None) raised AttributeError. The read side now shows that
+    campaign with no njobs and the rest as before; create_campaign refuses
+    an entry that is not an object, so no new such row is written."""
+
+    def _ledger(self, td):
+        import sqlite3
+        from utils import submission_ledger
+        db = os.path.join(td, 'ledger.db')
+        entry = {'njobs': 40, 'outputs': [
+            {'dataset': 'dig.mu2e.X.Y.art', 'location': 'disk'}]}
+        good = submission_ledger.create_campaign(
+            db, tarball='cnf.mu2e.Good.Y.0.tar', entry=entry, slice_size=10)
+        bad = submission_ledger.create_campaign(
+            db, tarball='cnf.mu2e.Bad.Y.0.tar', entry=entry, slice_size=10)
+        con = sqlite3.connect(db)
+        con.execute("UPDATE campaigns SET entry_json = 'null' WHERE id = ?",
+                    (bad,))
+        con.commit()
+        con.close()
+        return db, good, bad
+
+    def test_list_campaigns_shows_it_without_njobs(self):
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db, good, bad = self._ledger(td)
+            got = status.list_campaigns(db_path=db)
+        by_id = {c['id']: c for c in got['campaigns']}
+        self.assertEqual(got['count'], 2)
+        self.assertEqual(by_id[good]['njobs'], 40)
+        self.assertIsNone(by_id[bad]['njobs'])
+
+    def test_campaign_status_says_its_outputs_are_unknown(self):
+        from prodtools_mcp.tools import status
+        with tempfile.TemporaryDirectory() as td:
+            db, _, bad = self._ledger(td)
+            got = status.campaign_status(
+                campaign_id=bad, include_queue=False, db_path=db,
+                count_fn=lambda *a, **k: self.fail('nothing to count'))
+        camp = got['campaigns'][0]
+        self.assertIsNone(camp['njobs'])
+        self.assertEqual(camp['outputs']['state'], 'unknown')
+        self.assertNotIn('produced', camp['outputs'])
+
+    def test_create_campaign_refuses_an_entry_that_is_not_an_object(self):
+        from utils import submission_ledger
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'ledger.db')
+            for entry in (None, [], 'x'):
+                with self.assertRaises(ValueError):
+                    submission_ledger.create_campaign(
+                        db, tarball='cnf.mu2e.Z.Y.0.tar', entry=entry,
+                        slice_size=10)
+
+
 class TestEraAgreement(unittest.TestCase):
     """validate_era_agreement compares the era letters of a dsconf with
     those of the Musing that processes it. It must compare only when
