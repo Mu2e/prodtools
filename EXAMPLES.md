@@ -1341,7 +1341,11 @@ Notes:
 - Draining campaigns track pending work in SAM, not a cursor: pending =
   inputs whose expected outputs (computed per-file from the cnf's own
   `job_outputs` mapping) don't exist yet, minus files already in-flight
-  or parked. Nothing counts as done until its output exists.
+  or parked, and minus files of a row whose submit was never confirmed
+  (`submitting` or `failed`: a killed tick or a failed jobsub_submit can
+  still have made a cluster). Those are held, and the tick exits 2, until
+  `submissions reconcile <row>` says the jobs are absent. Nothing counts
+  as done until its output exists.
 - Cap resolution is `--max-queued` flag > `MU2E_MAX_QUEUED` env >
   `5000`, resolved once per invocation; nothing persists between runs
   — the effective cap is always readable off the crontab line via

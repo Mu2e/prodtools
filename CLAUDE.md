@@ -74,8 +74,9 @@ recovers nothing.
 
 **Never wrap `submissions run` in `timeout`.** The kill lands after
 jobsub has submitted but before the ledger records the cluster,
-orphaning it: it runs, nothing tracks it, recovery re-submits the
-same indices.
+orphaning it: it runs and nothing tracks it. Its row stays
+`submitting` and blocks those indices or files until a human checks
+jobsub_q and runs `submissions reconcile <row>`.
 
 ## MCP server
 

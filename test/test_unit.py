@@ -14586,6 +14586,34 @@ class TestDrainingState(unittest.TestCase):
         self.assertEqual(st['in_flight'], {ins[0]})
         self.assertEqual(st['parked'], {ins[1]})
 
+    def test_files_of_an_unconfirmed_submit_are_never_resent(self):
+        # A tick killed inside jobsub_submit leaves its row 'submitting';
+        # a submit that exited non-zero leaves it 'failed'. Either may
+        # have made a cluster, so their files are held back until a human
+        # reconciles the row -- after which they are pending again.
+        ins = [_mk_file('A', i) for i in range(4)]
+        rows = [{'id': 7, 'tarball': self.CAMP['tarball'],
+                 'state': 'submitting', 'entry': self.CAMP['entry'],
+                 'indices': [ins[0]]},
+                {'id': 8, 'tarball': self.CAMP['tarball'], 'state': 'failed',
+                 'entry': self.CAMP['entry'], 'indices': [ins[1]]},
+                {'id': 9, 'tarball': self.CAMP['tarball'],
+                 'state': 'reconciled', 'entry': self.CAMP['entry'],
+                 'indices': [ins[2]]}]
+        st = self._state(in_files=ins, out_files=[], rows=rows)
+        self.assertEqual(st['pending'], sorted(ins[2:]))
+        self.assertEqual(st['unconfirmed'], {7: {ins[0]}, 8: {ins[1]}})
+
+    def test_a_landed_file_of_an_unconfirmed_submit_is_not_held(self):
+        ins = [_mk_file('A', 0), _mk_file('A', 1)]
+        rows = [{'id': 7, 'tarball': self.CAMP['tarball'],
+                 'state': 'submitting', 'entry': self.CAMP['entry'],
+                 'indices': list(ins)}]
+        st = self._state(in_files=ins, out_files=[_mk_out('A', 0)],
+                         rows=rows)
+        self.assertEqual(st['unconfirmed'], {7: {ins[1]}})
+        self.assertEqual(st['pending'], [])
+
     def test_landed_exhausted_file_is_not_parked(self):
         ins = [_mk_file('A', 0)]
         rows = [{'tarball': self.CAMP['tarball'], 'state': 'exhausted',
@@ -14998,7 +15026,7 @@ class TestDrainTick(unittest.TestCase):
 
     def _tick(self, *, pending=None, cap=100, count=10, dry_run=False,
               gate=None, submit_ok=True, camps=None, prestage_camp=False,
-              state_map=None):
+              state_map=None, unconfirmed=None):
         """state_map: optional {camp_id: pending_list | TestDrainTick.RAISE}
         for multi-campaign scenarios — RAISE makes that campaign's
         state_fn raise (pins the fail-closed `continue`). Without it,
@@ -15017,6 +15045,7 @@ class TestDrainTick(unittest.TestCase):
         if state_map is None:
             state_map = {c['id']: (pending if pending is not None else [])
                          for c in camps}
+        unconfirmed = unconfirmed or {}
         self.state_calls = []
         self.submit_calls = []
         submitted = []
@@ -15028,7 +15057,7 @@ class TestDrainTick(unittest.TestCase):
                 raise RuntimeError('state boom')
             return {'inputs': set(val), 'landed': set(),
                     'in_flight': set(), 'parked': set(),
-                    'pending': sorted(val)}
+                    'unconfirmed': unconfirmed, 'pending': sorted(val)}
 
         def fake_submit(c, batch, db):
             self.submit_calls.append(c['id'])
@@ -15097,6 +15126,19 @@ class TestDrainTick(unittest.TestCase):
             pending=pend, gate=gate, prestage_camp=True)
         self.assertEqual(prestaged, [[sorted(pend)[1]]])
         self.assertEqual(submitted, [[sorted(pend)[0]]])
+
+    def test_an_unconfirmed_submit_needs_a_human_but_the_rest_still_feeds(
+            self):
+        from utils import submissions
+        pend = [_mk_file('A', 2)]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            summary, submitted, _, _ = self._tick(
+                pending=pend, unconfirmed={7: {_mk_file('A', 1)}})
+        self.assertEqual(summary.get('drain-unconfirmed'), 1)
+        self.assertIn('drain-unconfirmed', submissions.ATTENTION_KEYS)
+        self.assertIn('submissions reconcile 7', out.getvalue())
+        self.assertEqual(submitted, [pend])
 
     def test_index_campaigns_are_ignored(self):
         camps = [{'id': 1, 'state': 'active', 'tarball': 't',
@@ -17809,7 +17851,7 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
         def fake_state(camp, db):
             return {'inputs': set(pending), 'landed': set(),
                     'in_flight': set(), 'parked': set(),
-                    'pending': list(pending)}
+                    'unconfirmed': {}, 'pending': list(pending)}
         def fake_submit_entry(entry, idx, options):
             return {'status': 'failed', 'cluster_id': None}
         with patch.object(submit, 'submit_entry', fake_submit_entry):
@@ -17833,7 +17875,7 @@ class TestTickAdvanceRequiresEvidence(unittest.TestCase):
         def fake_state(camp, db):
             return {'inputs': set(pending), 'landed': set(),
                     'in_flight': set(), 'parked': set(),
-                    'pending': list(pending)}
+                    'unconfirmed': {}, 'pending': list(pending)}
         def fake_submit_entry(entry, idx, options):
             self.sl.record_submission(
                 self.db, tarball=tarball, entry=entry, indices=pending,
