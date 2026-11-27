@@ -315,6 +315,27 @@ jobsub_submit, a receipt, nothing in SAM), or run it on this node with
 detached under the same receipt (`--parallel N` jobs at once, default 4,
 at most 16). Neither pushes anything to SAM.
 
+`--local --site eaf` runs that `runlocal` on your Fermilab EAF CPU
+server instead of this node (8 cores guaranteed, 64 GiB; `--parallel`
+defaults to 8). It starts the server through the hub API with your
+token, which you make once at https://analytics-hub.fnal.gov/hub/token
+and save with mode 600 to `/exp/mu2e/app/users/$USER/.eaf_token` (or
+`$PRODTOOLS_EAF_TOKEN_FILE`). EAF mounts `/exp` read-write, so the run
+directory is the same one a gpvm run uses and `run_status` reads it
+from any gpvm; EAF has no grid token, so the entry's `inloc` must be
+`none` or `dir:/exp/...`. One EAF run goes at a time, and the server
+stops itself when the run ends:
+
+```bash
+# my_outstage.json: an entry like the one above, with "inloc": "none"
+json2jobdef --json my_outstage.json --desc POT_Run1_a \
+            --dsconf MDC2025bb --once --local --site eaf
+python -m utils.eaf status                                  # the server, as the hub sees it
+python -m utils.eaf stop cnf.$USER.POT_Run1_a.MDC2025bb.0   # SIGTERM to that run's runlocal
+```
+
+The write MCP server's `run_local(..., site="eaf")` does the same.
+
 Other consumed keys: `sequencer_from_index` (default true: output
 sequencer = run + job index; set `false` to inherit the input file's
 sequencer), `sequencer_suffix` (a label, `[A-Za-z0-9_-]+`, appended to

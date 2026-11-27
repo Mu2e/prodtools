@@ -465,10 +465,17 @@ def _receipt_from(result, what):
 
 
 def run_local(json: str, desc: str, dsconf: str, run_as: str,
-              parallel: Optional[int] = None):
+              parallel: Optional[int] = None, site: Optional[str] = None):
     """Run one entry's jobs on THIS node with runlocal -- `json2jobdef
     --once --local`. Returns as soon as runlocal has started; the jobs
     keep running after the call.
+
+    site="eaf" runs runlocal on your Fermilab EAF CPU server instead (8
+    cores guaranteed, 64 GiB), started through the hub API with the token
+    in /exp/mu2e/app/users/<you>/.eaf_token; the server stops itself when
+    the run ends. Inputs must be inloc "none" or "dir:/exp/..." (EAF has
+    no grid token), and one EAF run goes at a time. `python -m utils.eaf
+    stop <name>` stops such a run.
 
     The same rules as submit_once: every `outloc` value must be
     "outstage", a desc+dsconf pair is used once per user (a local run and
@@ -496,6 +503,9 @@ def run_local(json: str, desc: str, dsconf: str, run_as: str,
         raise ValueError(
             f"run_local is run_as=\"self\" only, got {run_as!r}: it runs "
             f"the jobs on this node, as you.")
+    if site not in (None, 'eaf'):
+        raise ValueError(f"run_local: site must be omitted (this node) or "
+                         f"\"eaf\", got {site!r}")
     simjob_setup, _ = _select_push_params(json, desc, dsconf,
                                           allow_code=True)
     argv = ['bin/json2jobdef', '--json', json, '--desc', desc,
@@ -503,6 +513,8 @@ def run_local(json: str, desc: str, dsconf: str, run_as: str,
     if parallel is not None:
         # Range-checked by json2jobdef, before it builds anything.
         argv += ['--parallel', str(parallel)]
+    if site is not None:
+        argv += ['--site', site]
     result = runner.run_cli(argv, run_as, simjob_setup=simjob_setup)
     if result['rc'] != 0:
         raise RuntimeError(

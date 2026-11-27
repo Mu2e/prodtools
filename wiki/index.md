@@ -39,6 +39,7 @@
 - [[2026-07-03-file-resolver-and-sam-query-plan]] — IMPLEMENTED 2026-07-06: `utils/file_resolver.py` owns all dCache/CVMFS path grammar; `samweb_wrapper` deepened into the only SAM access path (q_* builders + fail-loud named queries); verified byte-identical fcl on real cnfs. MetaCat seam now real _(proposed 2026-07-03, implemented 2026-07-06)_
 - [[2026-07-10-firstjob-index-windows]] — POMS-map entries can window a cnf's index space (`firstjob`: entry runs cnf indices `[F, F+njobs)`); the supported statistics-expansion mechanism (baseSeed = 1+index, so only fresh indices give fresh physics — `version`/run bumps do NOT); same tarball reusable once per window, mkrecovery/db_builder/submit were window-aware (mkrecovery/db_builder since retired — see [[2026-08-08-retire-poms-backend]]) _(implemented 2026-07-10)_
 - [[2026-08-08-retire-poms-backend]] — remove the POMS submission backend entirely: dispatch (`runmu2e --jobdesc`), recovery (`mkrecovery` + SAM index definitions), and monitoring (`poms_db`/`db_builder`/`db_analyzer`/`pomsMonitor` + `web/pomsMonitor`); the direct backend (`submit_map --enqueue` + `submissions run`) is now the only submission path; ~2,800 lines deleted, SQLAlchemy dependency gone; `pre-poms-removal` git tag is the escape hatch _(decided 2026-08-08)_
+- [[2026-11-26-eaf-site-for-local-runs]] — `--once --local --site eaf`: runlocal on your EAF CPU server (8 cores, /exp shared rw), started via hub API token; inloc none or dir:/exp only; verified 8/8 live _(2026-11-26)_
 
 ### Runs
 <!-- entries added by wiki-ingest -->

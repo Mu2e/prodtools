@@ -17,6 +17,11 @@ A `--once --local` run (receipt `executor: "local"`) has no cluster: its
 record is runlocal's own summary.json (written atomically, so a missing
 file means runlocal never finished), and while there is none, whether
 runlocal's process is still there -- asked of /proc, on its own host.
+
+A `--once --local --site eaf` run (receipt `executor: "eaf"`) runs that
+same runlocal on the user's Fermilab EAF server, writing into the same
+run directory on /exp. Its liveness is read from files there
+(utils/eaf: eaf.done, the eaf.alive heartbeat), so any gpvm can answer.
 """
 
 import json
@@ -63,7 +68,7 @@ def _default_job_pars_fn(path):
 
 def run_status(name, mine=False, user=None, runs_root=None,
                clusters_fn=None, codes_fn=None, job_pars_fn=None,
-               alive_fn=None, host_fn=None, all_outputs=False):
+               alive_fn=None, host_fn=None, now_fn=None, all_outputs=False):
     from utils import jobwait, run_receipt
     root, login = _root_for(mine, user)
     root = runs_root or root
@@ -81,15 +86,21 @@ def run_status(name, mine=False, user=None, runs_root=None,
            ('name', 'state', 'created_utc', 'submitted_utc', 'jobid',
             'cluster_id', 'njobs', 'outstage', 'prodtools_dir', 'error',
             'executor', 'host', 'pid', 'started_utc', 'summary', 'log',
-            'parallel')
+            'parallel', 'server')
            if receipt.get(k) is not None}
     out['receipt'] = os.path.join(root, name, run_receipt.RECEIPT)
-    if receipt.get('executor') == 'local':
+    executor = receipt.get('executor')
+    if executor in ('local', 'eaf'):
         if receipt.get('state') != 'running':
             return out          # building / starting / failed
-        return _local_status(out, receipt, alive_fn or _default_alive_fn,
-                             host_fn or socket.getfqdn,
-                             all_outputs=all_outputs)
+        if executor == 'eaf':
+            import time
+            probe = _eaf_probe(out, receipt, os.path.join(root, name),
+                               now_fn or time.time)
+        else:
+            probe = _local_probe(receipt, alive_fn or _default_alive_fn,
+                                 host_fn or socket.getfqdn)
+        return _runlocal_status(out, receipt, probe, all_outputs)
     if receipt.get('state') != 'submitted':
         # building / submitting / failed: no cluster this receipt vouches
         # for, so nothing to look up. 'submitting' on a run that is not
@@ -155,38 +166,80 @@ def _fill_jobs(out, njobs, summary, all_outputs=False):
     return failed, unknown
 
 
-def _local_status(out, receipt, alive_fn, host_fn, all_outputs=False):
-    """A `--once --local` run that was started: runlocal's summary once
-    it wrote one, else whether its process is still there. The state is
+def _runlocal_status(out, receipt, probe, all_outputs=False):
+    """A `--once --local` run that was started, on either executor:
+    runlocal's summary once it wrote one, else what `probe()` says of
+    runlocal -- (state, note), state 'gone' when it exited. The state is
     recomputed on every call; the receipt is never rewritten."""
     njobs, path = int(receipt['njobs']), receipt['summary']
     summary, bad = _read_summary(path)
     if summary is None and bad is None:
-        pid, host = receipt['pid'], receipt.get('host')
-        if host != host_fn():
-            out['state'] = 'unknown'
-            out['note'] = (f'the run is on {host} and has written no '
-                           f'summary yet; only that host can say whether '
-                           f'runlocal (pid {pid}) is still going.')
-            return out
-        alive = alive_fn(pid, path)
-        if alive is None:
-            out['state'] = 'unknown'
-            out['note'] = (f'cannot read /proc/{pid} on this host, so '
-                           f'whether runlocal is still going is unknown.')
-            return out
-        if alive:
-            out['state'] = 'running'
+        state, note = probe()
+        if state != 'gone':
+            out['state'] = state
+            if note:
+                out['note'] = note
             return out
         # Gone -- but runlocal may have written its summary and exited
-        # between the read above and /proc. `failed` is final to a
+        # between the read above and the probe. `failed` is final to a
         # caller, so read the summary again before saying it.
         summary, bad = _read_summary(path)
         if summary is None and bad is None:
             out['state'] = 'failed'
-            out['note'] = (f'runlocal (pid {pid}) is gone and wrote no '
-                           f'summary; see {receipt.get("log")}')
+            out['note'] = note
             return out
+    return _from_summary(out, njobs, summary, bad, all_outputs)
+
+
+def _local_probe(receipt, alive_fn, host_fn):
+    """runlocal on a gpvm: asked of /proc, on its own host."""
+    def probe():
+        pid, host = receipt['pid'], receipt.get('host')
+        if host != host_fn():
+            return 'unknown', (f'the run is on {host} and has written no '
+                               f'summary yet; only that host can say whether '
+                               f'runlocal (pid {pid}) is still going.')
+        alive = alive_fn(pid, receipt['summary'])
+        if alive is None:
+            return 'unknown', (f'cannot read /proc/{pid} on this host, so '
+                               f'whether runlocal is still going is unknown.')
+        if alive:
+            return 'running', None
+        return 'gone', (f'runlocal (pid {pid}) is gone and wrote no '
+                        f'summary; see {receipt.get("log")}')
+    return probe
+
+
+def _eaf_probe(out, receipt, run_dir, now_fn):
+    """runlocal on EAF: read from the launch script's files on /exp
+    (eaf.done, else the eaf.alive heartbeat), so any gpvm can answer. The
+    hub is never asked: this server performs no network writes and holds
+    no EAF token."""
+    from utils import eaf
+
+    def probe():
+        try:
+            code = eaf.read_done(run_dir)
+        except ValueError as exc:
+            return 'unknown', str(exc)
+        if code is not None:
+            return 'gone', (f'runlocal on EAF exited {code} and wrote no '
+                            f'summary; see {receipt.get("log")}')
+        age = eaf.heartbeat_age(run_dir, now_fn())
+        if age is not None and age < eaf.STALE_S:
+            out['heartbeat_age_s'] = int(age)
+            return 'running', None
+        return 'unknown', (
+            f'no summary, no {eaf.DONE}, and the heartbeat is '
+            + ('missing' if age is None else f'{int(age)} s old')
+            + f': the EAF server may have been stopped under the run. '
+              f'`python -m utils.eaf status` shows the server; see '
+              f'{receipt.get("log")}')
+    return probe
+
+
+def _from_summary(out, njobs, summary, bad, all_outputs=False):
+    """The verdict from runlocal's summary (or why it cannot be read)."""
     if bad is not None:
         out['state'] = 'unknown'
         out['note'] = bad

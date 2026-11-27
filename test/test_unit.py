@@ -19,8 +19,10 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import importlib.machinery
@@ -29,6 +31,7 @@ import sys
 import types
 import tarfile
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -22456,6 +22459,510 @@ class TestMcpRunStatusLocal(unittest.TestCase):
         proc.kill()
         proc.wait()
         self.assertFalse(self.runs._default_alive_fn(proc.pid, self.summary))
+
+
+def _eaf_token(directory, mode=0o600, text='tok-123\n'):
+    path = os.path.join(directory, '.eaf_token')
+    with open(path, 'w') as fh:
+        fh.write(text)
+    os.chmod(path, mode)
+    return path
+
+
+class TestEafRefusals(unittest.TestCase):
+    """utils/eaf: what a job on EAF cannot do is refused from the entry
+    alone, with the remedy in the text."""
+
+    def setUp(self):
+        from utils import eaf
+        self.eaf = eaf
+
+    def test_what_eaf_cannot_reach_is_refused(self):
+        for inloc in (None, 'none', 'dir:/exp/mu2e/data/users/a/in'):
+            self.eaf.check_inloc(inloc)
+        self.eaf.check_visible('/cvmfs/mu2e.opensciencegrid.org', 'x')
+        for call, arg, why in (
+                (self.eaf.check_inloc, 'tape', 'grid token'),
+                (self.eaf.check_inloc, 'disk', 'grid token'),
+                (self.eaf.check_inloc, 'dir:/nashome/a/in', '/exp'),
+                (lambda p: self.eaf.check_visible(p, 'the checkout'),
+                 '/nashome/a/prodtools', '/exp')):
+            with self.assertRaises(self.eaf.EafError, msg=arg) as ctx:
+                call(arg)
+            self.assertIn(why, str(ctx.exception))
+
+    def test_the_token_must_exist_be_private_and_not_empty(self):
+        for path, why in ((os.path.join(_mkdtemp(), 'missing'), '/hub/token'),
+                          (_eaf_token(_mkdtemp(), mode=0o644), 'chmod 600'),
+                          (_eaf_token(_mkdtemp(), text='  \n'), 'empty')):
+            with self.assertRaises(self.eaf.EafError) as ctx:
+                self.eaf.read_token(path)
+            self.assertIn(why, str(ctx.exception))
+        self.assertEqual(self.eaf.read_token(_eaf_token(_mkdtemp())),
+                         'tok-123')
+        with patch.dict(os.environ, {'PRODTOOLS_EAF_TOKEN_FILE': '/x/t'}):
+            self.assertEqual(self.eaf.token_file('alice'), '/x/t')
+
+
+class _FakeHubHTTP:
+    """urlopen stand-in for the JupyterHub REST API: serves GET
+    /hub/api/user from a scripted list of server states and records every
+    other request."""
+
+    def __init__(self, servers, status=None):
+        self.servers = list(servers)      # successive `servers` dicts
+        self.status = status              # force every reply's status
+        self.calls = []
+
+    def __call__(self, req, timeout=None):
+        import urllib.error
+        method, url = req.get_method(), req.full_url
+        body = json.loads(req.data) if req.data else None
+        self.calls.append((method, url, body,
+                           req.get_header('Authorization')))
+        if self.status:
+            raise urllib.error.HTTPError(url, self.status, 'no', {},
+                                         io.BytesIO(b'{"message": "no"}'))
+        if method == 'GET' and url.endswith('/hub/api/user'):
+            servers = self.servers.pop(0) if len(self.servers) > 1 \
+                else self.servers[0]
+            raw = json.dumps({'name': 'alice', 'servers': servers}).encode()
+            return _FakeResponse(200, raw)
+        return _FakeResponse(201 if method == 'POST' else 204, b'')
+
+
+class _FakeResponse:
+    def __init__(self, status, raw):
+        self.status, self.raw = status, raw
+
+    def read(self):
+        return self.raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestEafHub(unittest.TestCase):
+    """eaf.Hub: start the named server when it is not running, wait for
+    it, cancel a start that never became ready, and say what to do when
+    the hub refuses the token."""
+
+    READY = {'prodtools': {'ready': True, 'url': '/user/alice/prodtools/'}}
+    PENDING = {'prodtools': {'ready': False, 'pending': 'spawn'}}
+
+    def _hub(self, http):
+        from utils import eaf
+        self.t = [0.0]
+
+        def sleep(s):
+            self.t[0] += s
+        return eaf.Hub('tok', opener=http, clock=lambda: self.t[0],
+                       sleep=sleep)
+
+    def test_a_missing_server_is_started_with_the_cpu_profile(self):
+        from utils import eaf
+        http = _FakeHubHTTP([{}, {}, self.PENDING, self.READY])
+        s = self._hub(http).ensure_server()
+        self.assertTrue(s['ready'])
+        posts = [c for c in http.calls if c[0] == 'POST']
+        self.assertEqual(len(posts), 1)
+        self.assertTrue(posts[0][1].endswith(
+            '/hub/api/users/alice/servers/prodtools'))
+        self.assertEqual(posts[0][2], eaf.PROFILE)
+        self.assertEqual(http.calls[0][3], 'token tok')
+        http = _FakeHubHTTP([self.READY])           # ready: used as is
+        self.assertTrue(self._hub(http).ensure_server()['ready'])
+        self.assertEqual([c[0] for c in http.calls], ['GET'])
+
+    def test_a_start_that_never_becomes_ready_is_cancelled_and_fails(self):
+        from utils import eaf
+        http = _FakeHubHTTP([{}, self.PENDING])
+        with self.assertRaises(eaf.EafError) as ctx:
+            self._hub(http).ensure_server(timeout=30, poll=10)
+        self.assertIn('capacity', str(ctx.exception))
+        self.assertEqual(http.calls[-1][0], 'DELETE')
+
+    def test_a_spawn_that_fails_stops_the_wait_early(self):
+        from utils import eaf
+        http = _FakeHubHTTP([{}, self.PENDING, {}])
+        with self.assertRaises(eaf.EafError) as ctx:
+            self._hub(http).ensure_server(timeout=420, poll=10)
+        self.assertIn('gone', str(ctx.exception))
+        self.assertLess(self.t[0], 420)
+
+    def test_a_refused_token_says_to_make_a_new_one(self):
+        from utils import eaf
+        with self.assertRaises(eaf.EafError) as ctx:
+            self._hub(_FakeHubHTTP([{}], status=403)).user()
+        self.assertIn('/hub/token', str(ctx.exception))
+
+
+class TestEafTerminal(unittest.TestCase):
+    """The two traps the live run found in typing into a terminal."""
+
+    def test_pings_do_not_outlast_the_deadline(self):
+        """The hub pings an idle websocket: a wait for a reply that never
+        comes must still end (a live run hung on exactly this)."""
+        import socket as socketmod
+        import struct
+        import threading
+        import time
+        from utils import eaf
+        client, server = socketmod.socketpair()
+        stop = threading.Event()
+
+        def serve():
+            head = b''
+            while b'\r\n\r\n' not in head:
+                head += server.recv(4096)
+            server.sendall(b'HTTP/1.1 101 Switching Protocols\r\n\r\n')
+            while not stop.is_set():
+                try:
+                    server.sendall(struct.pack('!BB', 0x89, 1) + b'p')
+                    server.recv(65536)              # the pong
+                except OSError:
+                    return
+                time.sleep(0.1)
+        t = threading.Thread(target=serve)
+        t.start()
+        ws = eaf._WebSocket('hub.example', '/t', 'tok', sock=client)
+        t0 = time.time()
+        with self.assertRaises(eaf.EafError):
+            ws.recv(deadline=time.time() + 1, what='a reply')
+        self.assertLess(time.time() - t0, 10)
+        stop.set()
+        ws.close()
+        server.close()
+        t.join(5)
+
+    def test_the_typed_launch_is_valid_bash_and_returns_at_once(self):
+        """`launch &` then the marker: run as a terminal would run it."""
+        from utils import eaf
+        run_dir = _mkdtemp()
+        with open(os.path.join(run_dir, eaf.LAUNCH), 'w') as fh:
+            fh.write('sleep 0.2; touch launched\n')
+        text = eaf.typed(eaf.launch_line(run_dir)).replace('\r', '\n')
+        proc = subprocess.run(['bash'], input=text, capture_output=True,
+                              text=True, timeout=30, cwd=run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('__EAF_DONE__', proc.stdout)
+        for _ in range(50):
+            if os.path.exists(os.path.join(run_dir, 'launched')):
+                break
+            subprocess.run(['sleep', '0.1'])
+        self.assertTrue(os.path.exists(os.path.join(run_dir, 'launched')))
+
+
+class TestEafLaunchScript(unittest.TestCase):
+    """The script EAF runs, executed here in bash with a stand-in runlocal
+    and curl: eaf.pid names runlocal, the heartbeat writes eaf.alive and
+    posts hub activity, eaf.done carries runlocal's exit code, and the
+    server is stopped last."""
+
+    def _run(self, runlocal_rc):
+        from utils import eaf
+        tmp = _mkdtemp()
+        run_dir = os.path.join(tmp, 'run dir')       # a space, on purpose
+        os.makedirs(run_dir)
+        checkout = os.path.join(tmp, 'checkout')
+        os.makedirs(os.path.join(checkout, 'bin'))
+        os.makedirs(os.path.join(checkout, 'utils'))
+        with open(os.path.join(checkout, 'bin', 'setup.sh'), 'w') as fh:
+            fh.write('export FROM_SETUP=1\n')
+        with open(os.path.join(checkout, 'utils', 'runlocal.py'), 'w') as fh:
+            fh.write(
+                'import json, os, sys, time\n'
+                'time.sleep(1.5)\n'
+                'json.dump({"argv": sys.argv[1:],'
+                ' "muse": os.environ.get("MUSE_WORK_DIR"),'
+                ' "setup": os.environ.get("FROM_SETUP")},'
+                ' open("seen.json", "w"))\n'
+                f'sys.exit({runlocal_rc})\n')
+        bindir = os.path.join(tmp, 'bin')
+        os.makedirs(bindir)
+        curl_log = os.path.join(tmp, 'curl.log')
+        with open(os.path.join(bindir, 'curl'), 'w') as fh:
+            fh.write('#!/bin/bash\n'
+                     f'{{ printf "%s\\0" "$@"; printf "STDIN:%s\\0" '
+                     f'"$(cat)"; echo; }} >> {shlex.quote(curl_log)}\n')
+        os.chmod(os.path.join(bindir, 'curl'), 0o755)
+        token = _eaf_token(tmp)
+        script = os.path.join(run_dir, eaf.LAUNCH)
+        with open(script, 'w') as fh:
+            fh.write(eaf.launch_script(
+                run_dir, ['--jobdef', 'x y.tar', '--parallel', '8'],
+                checkout, token, 'alice', hub='https://hub.example',
+                env_setup='', heartbeat_s=1))
+        env = dict(os.environ, PATH=bindir + os.pathsep + os.environ['PATH'],
+                   MUSE_WORK_DIR='/stale')
+        proc = subprocess.run(['bash', script], env=env, timeout=60,
+                              capture_output=True, text=True)
+        with open(curl_log) as fh:
+            calls = [line.rstrip('\0').split('\0')
+                     for line in fh.read().splitlines() if line]
+        return proc, run_dir, calls
+
+    def test_a_run_leaves_pid_heartbeat_exit_code_and_stops_the_server(self):
+        from utils import eaf
+        proc, run_dir, calls = self._run(3)
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertEqual(eaf.read_done(run_dir), 3)     # runlocal's code
+        pid, host = eaf.read_pid(run_dir)
+        self.assertGreater(pid, 1)
+        self.assertEqual(host, socket.gethostname())
+        self.assertIsNotNone(eaf.heartbeat_age(run_dir))
+        with open(os.path.join(run_dir, 'seen.json')) as fh:
+            seen = json.load(fh)
+        self.assertEqual(seen['argv'], ['--jobdef', 'x y.tar',
+                                        '--parallel', '8'])
+        self.assertIsNone(seen['muse'])         # runlocal needs it unset
+        self.assertEqual(seen['setup'], '1')
+        activity = [c for c in calls if 'https://hub.example/hub/api/users'
+                    '/alice/activity' in c]
+        self.assertTrue(activity)
+        body = json.loads(activity[0][activity[0].index('-d') + 1])
+        self.assertIn('last_activity', body)
+        self.assertIn('last_activity', body['servers']['prodtools'])
+        self.assertIn('STDIN:Authorization: token tok-123', activity[0])
+        self.assertIn('DELETE', calls[-1])
+        self.assertIn('https://hub.example/hub/api/users/alice/servers/'
+                      'prodtools', calls[-1])
+
+
+class _FakeEafHub:
+    """eaf.Hub stand-in for json2jobdef: the server is ready, and typing
+    the launch line runs `on_launch(run_dir)` (what EAF would do)."""
+
+    name = 'alice'
+
+    def __init__(self, on_launch):
+        self.on_launch, self.lines = on_launch, []
+
+    def ensure_server(self):
+        return {'ready': True, 'url': '/user/alice/prodtools/'}
+
+    def run_in_terminal(self, server, line, wait_s=60):
+        self.lines.append(line)
+        self.on_launch()
+        return ''
+
+
+class TestJson2jobdefOnceEaf(unittest.TestCase):
+    """`json2jobdef --once --local --site eaf`: the --local refusals and
+    build, plus EAF's own refusals before the name is spent; then the
+    launch script on /exp, typed into the server, and the receipt
+    `running` once runlocal's pid appears."""
+
+    NAME = 'cnf.alice.Gen.T1.0'
+
+    def setUp(self):
+        from utils import eaf, json2jobdef, run_receipt
+        self.eaf, self.j, self.rr = eaf, json2jobdef, run_receipt
+        self.root = _mkdtemp()
+        self.run_dir = os.path.join(self.root, self.NAME)
+        self.cwd = os.getcwd()
+        self.addCleanup(os.chdir, self.cwd)
+        tok_dir = _mkdtemp()
+        env = patch.dict(os.environ,
+                         {'PRODTOOLS_EAF_TOKEN_FILE': _eaf_token(tok_dir)})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def _config(self, **over):
+        c = {'desc': 'Gen', 'dsconf': 'T1', 'owner': 'alice',
+             'fcl': 'x.fcl', 'njobs': 3, 'events': 10, 'run': 1,
+             'inloc': 'none', 'outloc': {'*.art': 'outstage'},
+             'simjob_setup': '/cvmfs/x/setup.sh'}
+        c.update(over)
+        return c
+
+    def _entry(self, config):
+        entry = {'tarball': self.NAME + '.tar', 'njobs': config['njobs'],
+                 'inloc': config.get('inloc', 'none'),
+                 'outputs': [{'dataset': '*.art', 'location': 'outstage'}]}
+        if config.get('code'):
+            entry['code'] = config['code']
+        return entry
+
+    def _pid_appears(self):
+        with open(os.path.join(self.run_dir, self.eaf.PID), 'w') as fh:
+            fh.write('777 jupyter-alice-prodtools\n')
+
+    def _run(self, config, hub=None, parallel=None, visible=True):
+        hub = hub or _FakeEafHub(self._pid_appears)
+
+        def submit(*args, **kwargs):
+            raise AssertionError('--site eaf must never submit')
+        check = (lambda path, what: None) if visible else \
+            self.eaf.check_visible
+        with patch.object(self.j, 'build_jobdesc', side_effect=self._entry), \
+             patch.object(self.j.account, 'current_account',
+                          return_value='alice'), \
+             patch.object(self.eaf, 'check_visible', side_effect=check), \
+             patch('time.sleep'):
+            return self.j.submit_once(
+                config, json_path='/j.json', root=self.root,
+                build=lambda cfg, **kw: None, submit=submit, local=True,
+                parallel=parallel, site='eaf', hub=hub), hub
+
+    def test_the_launch_is_typed_on_eaf_and_the_receipt_names_runlocal(self):
+        receipt, hub = self._run(self._config())
+        self.assertEqual(receipt['state'], 'running')
+        for key, want in (('executor', 'eaf'), ('server', 'prodtools'),
+                          ('host', 'jupyter-alice-prodtools'), ('pid', 777),
+                          ('njobs', 3), ('parallel', self.eaf.DEFAULT_PARALLEL),
+                          ('summary', os.path.join(self.run_dir,
+                                                   'summary.json'))):
+            self.assertEqual(receipt[key], want, key)
+        script = os.path.join(self.run_dir, self.eaf.LAUNCH)
+        self.assertEqual(os.stat(script).st_mode & 0o777, 0o700)
+        with open(script) as fh:
+            text = fh.read()
+        self.assertIn('runlocal.py', text)
+        self.assertIn("--inloc none --first 0 --num 3 --parallel 8", text)
+        self.assertEqual(len(hub.lines), 1)
+        self.assertIn('setsid nohup bash', hub.lines[0])
+        self.assertIn(self.eaf.LAUNCH, hub.lines[0])
+
+    def _refused(self, config, **kw):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(config, **kw)
+        with self.assertRaises(self.rr.RunNotFound):
+            self.rr.read(self.root, self.NAME)      # the name is not spent
+        return str(ctx.exception)
+
+    def test_refusals_come_before_the_name_is_spent(self):
+        self.assertIn('grid token', self._refused(self._config(inloc='tape')))
+        with patch.object(self.j, '_CHECKOUT', '/nashome/a/prodtools'):
+            self.assertIn('checkout',
+                          self._refused(self._config(), visible=False))
+        with patch.dict(os.environ, {'PRODTOOLS_EAF_TOKEN_FILE':
+                                     os.path.join(self.root, 'nope')}):
+            self.assertIn('/hub/token', self._refused(self._config()))
+
+    def test_a_second_run_waits_for_the_first(self):
+        other = self.rr.reserve(self.root, 'cnf.alice.Gen.T0.0', {})
+        self.rr.update(other, state='running', executor='eaf')
+        with open(os.path.join(other, self.eaf.ALIVE), 'w') as fh:
+            fh.write(str(int(time.time())))
+        self.assertIn('cnf.alice.Gen.T0.0', self._refused(self._config()))
+        with open(os.path.join(other, self.eaf.DONE), 'w') as fh:
+            fh.write('exit=0\n')                    # finished: no longer busy
+        receipt, _ = self._run(self._config())
+        self.assertEqual(receipt['state'], 'running')
+
+    def test_a_launch_that_exits_before_runlocal_is_failed(self):
+        def dies():
+            with open(os.path.join(self.run_dir, self.eaf.DONE), 'w') as fh:
+                fh.write('exit=81\n')
+        with self.assertRaises(SystemExit):
+            self._run(self._config(), hub=_FakeEafHub(dies))
+        got = self.rr.read(self.root, self.NAME)
+        self.assertEqual(got['state'], 'failed')
+        self.assertIn('exited 81', got['error'])
+
+    def test_no_pid_in_time_is_failed_and_says_it_may_still_start(self):
+        with patch.object(self.eaf, 'LAUNCH_CONFIRM_S', -1), \
+                self.assertRaises(SystemExit):
+            self._run(self._config(), hub=_FakeEafHub(lambda: None))
+        got = self.rr.read(self.root, self.NAME)
+        self.assertEqual(got['state'], 'failed')
+        self.assertIn('may still start', got['error'])
+
+    def test_site_needs_local_on_the_command_line(self):
+        with patch.object(sys, 'argv', ['json2jobdef', '--json', 'x.json',
+                                        '--desc', 'D', '--dsconf', 'C',
+                                        '--once', '--site', 'eaf']), \
+                self.assertRaises(SystemExit) as ctx:
+            self.j.main()
+        self.assertIn('--site requires --local', str(ctx.exception))
+
+
+class TestMcpRunStatusEaf(unittest.TestCase):
+    """run_status on an EAF run: read from the run directory on /exp, so
+    any gpvm answers. Never asks condor, /proc or the hub."""
+
+    NAME = 'cnf.alice.Gen.T1.0'
+
+    def setUp(self):
+        from prodtools_mcp import runtime
+        from prodtools_mcp.tools import runs
+        from utils import eaf, run_receipt
+        self.runs, self.rr, self.eaf = runs, run_receipt, eaf
+        self.addCleanup(runtime.set_shared, False)
+        self.root = _mkdtemp()
+        self.dir = run_receipt.reserve(self.root, self.NAME,
+                                       {'tarball': self.NAME + '.tar'})
+        self.summary = os.path.join(self.dir, 'summary.json')
+        self.rr.update(self.dir, state='running', executor='eaf',
+                       server='prodtools', host='jupyter-alice-prodtools',
+                       pid=777, njobs=2, parallel=8, summary=self.summary,
+                       log=os.path.join(self.dir, 'runlocal.log'))
+
+    def _write(self, name, text):
+        with open(os.path.join(self.dir, name), 'w') as fh:
+            fh.write(text)
+
+    def _status(self, now=1000.0):
+        def never(*args, **kwargs):
+            raise AssertionError('an EAF run is read from its files')
+        return self.runs.run_status(
+            self.NAME, user='alice', runs_root=self.root, clusters_fn=never,
+            codes_fn=never, alive_fn=never, host_fn=never,
+            now_fn=lambda: now)
+
+    def test_a_fresh_heartbeat_is_running(self):
+        self._write(self.eaf.ALIVE, '990\n')
+        out = self._status()
+        self.assertEqual(out['state'], 'running')
+        self.assertEqual(out['heartbeat_age_s'], 10)
+        self.assertEqual(out['executor'], 'eaf')
+        self.assertEqual(out['server'], 'prodtools')
+
+    def test_a_stale_or_missing_heartbeat_is_unknown_not_failed(self):
+        out = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('missing', out['note'])
+        self._write(self.eaf.ALIVE, '100\n')
+        out = self._status()
+        self.assertEqual(out['state'], 'unknown')
+        self.assertIn('900 s old', out['note'])
+
+    def test_done_without_a_summary_is_failed_with_the_exit_code(self):
+        self._write(self.eaf.DONE, 'exit=83\n')
+        out = self._status()
+        self.assertEqual(out['state'], 'failed')
+        self.assertIn('exited 83', out['note'])
+
+    def test_the_summary_decides_once_it_exists(self):
+        jobs = [{'index': i, 'rc': rc, 'outputs': [f'/o/{i}.art']}
+                for i, rc in ((0, 0), (1, 0))]
+        self._write('summary.json', json.dumps(
+            {'jobs': jobs, 'ok': 2, 'failed': []}))
+        self._write(self.eaf.DONE, 'exit=0\n')
+        out = self._status()
+        self.assertEqual(out['state'], 'done')
+        self.assertEqual(out['jobs']['ok'], 2)
+
+
+class TestRunLocalToolEafSite(TestRunLocalTool):
+    """run_local(site="eaf") forwards --site; any other site is refused
+    before anything runs."""
+
+    def test_site_eaf_is_forwarded(self):
+        _, run = self._call(self._ok(), site='eaf')
+        self.assertEqual(run.call_args[0][0][-2:], ['--site', 'eaf'])
+
+    def test_an_unknown_site_is_refused(self):
+        with patch('prodtools_mcp_write.runner.run_cli') as run:
+            with self.assertRaises(ValueError) as ctx:
+                self.tools.run_local(self.json_path, 'D', 'C', 'self',
+                                     site='nersc')
+        self.assertIn('eaf', str(ctx.exception))
+        run.assert_not_called()
 
 
 if __name__ == '__main__':
