@@ -1490,3 +1490,7 @@ Pages updated: 2026-07-18-direct-recovery-loop (pending predicate)
 ## [2026-11-27] fix | list_campaigns(mine=true) died on a campaign with no entry
 Pages updated: none (code + tests)
 Campaign 62 of oksuzian's ledger (cancelled, desc RereadDesc, 2026-11-10, the name a unit test uses) has entry_json 'null'; njobs_of(None) raised AttributeError and the whole listing failed. list_campaigns and campaign_status now show such a campaign with njobs null and outputs state unknown; create_campaign refuses an entry that is not an object.
+
+## [2026-11-27] update | self-only write server (start_write_mcp.sh --self-only)
+Pages updated: prodtools-mcp-server
+An agent that asks no human before a tool call (HEP-Genesis-Agent) could pass confirm=true itself and act as mu2epro. `--self-only` refuses mu2epro in every tool at `runner.check_run_as`; production stays with a server started without the flag, or Claude Code with its hook.

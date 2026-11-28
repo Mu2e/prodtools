@@ -12423,6 +12423,7 @@ class TestWriteRunnerGate(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runner.require_confirmed('root', True)
 
+
     def test_ksu_wrapper_has_every_required_env_export(self):
         # Each of these is a known failure, not a style choice:
         # a caller-owned workdir breaks condor_vault_storer, an
@@ -12682,6 +12683,56 @@ class TestWriteRunnerGate(unittest.TestCase):
         remainder = script.replace(expected_quoted, '', 1)
         self.assertNotIn(' id ', remainder)
         self.assertNotIn(' id\n', remainder)
+
+
+class TestWriteSelfOnly(unittest.TestCase):
+    """start_write_mcp.sh --self-only (PRODTOOLS_WRITE_SELF_ONLY): a write
+    server for an agent that asks no human before a tool call. mu2epro is
+    refused at the one run_as check every tool passes, whatever confirm
+    says; self works as before."""
+
+    def setUp(self):
+        from prodtools_mcp_write import runner
+        self.runner = runner
+        patcher = patch.object(runner, 'SELF_ONLY', True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_mu2epro_is_refused_even_with_confirm(self):
+        with self.assertRaises(PermissionError) as ctx:
+            self.runner.require_confirmed('mu2epro', True)
+        self.assertIn('self-only', str(ctx.exception))
+
+    def test_self_still_works(self):
+        self.runner.require_confirmed('self', False)     # must not raise
+
+    def test_run_cli_refuses_mu2epro_before_running_anything(self):
+        with patch.object(self.runner.subprocess, 'run') as run, \
+                patch.object(self.runner.subprocess, 'Popen') as popen:
+            with self.assertRaises(PermissionError):
+                self.runner.run_cli(['bin/submissions', 'run'], 'mu2epro')
+        run.assert_not_called()
+        popen.assert_not_called()
+
+    def test_the_switch_reads_the_environment_failing_closed(self):
+        f = self.runner.self_only_from_env
+        self.assertFalse(f({}))
+        self.assertFalse(f({'PRODTOOLS_WRITE_SELF_ONLY': ''}))
+        self.assertFalse(f({'PRODTOOLS_WRITE_SELF_ONLY': '0'}))
+        for value in ('1', 'yes', 'true', 'on'):
+            self.assertTrue(f({'PRODTOOLS_WRITE_SELF_ONLY': value}), value)
+
+    def test_server_info_says_self_only(self):
+        from prodtools_mcp_write.server import get_write_server_info
+        info = get_write_server_info()
+        self.assertTrue(info['self_only'])
+        self.assertIn('self-only', info['description'])
+
+    def test_the_launcher_flag_sets_the_switch(self):
+        launcher = (Path(__file__).resolve().parent.parent / 'mcp' / 'scripts'
+                    / 'start_write_mcp.sh').read_text()
+        self.assertIn('--self-only', launcher)
+        self.assertIn('export PRODTOOLS_WRITE_SELF_ONLY=1', launcher)
 
 
 class TestRunCliExitStatusSentinel(unittest.TestCase):

@@ -10,6 +10,37 @@ import subprocess
 
 RUN_AS_VALUES = ('self', 'mu2epro')
 
+# Self-only mode (`start_write_mcp.sh --self-only`): for a client that
+# asks no human before a tool call (an agent, an automation), where
+# confirm=true is the model confirming itself and no PreToolUse hook
+# runs. mu2epro is then refused whatever confirm says. Fixed when the
+# process starts: no tool argument can change it.
+SELF_ONLY_ENV = 'PRODTOOLS_WRITE_SELF_ONLY'
+
+
+def self_only_from_env(environ):
+    """Whether `environ` asks for self-only mode. Fails closed: any value
+    but unset, empty or "0" turns it on."""
+    return environ.get(SELF_ONLY_ENV, '').strip() not in ('', '0')
+
+
+SELF_ONLY = self_only_from_env(os.environ)
+
+
+def check_run_as(run_as):
+    """Refuse a run_as this server does not take: an unknown value, and
+    mu2epro when the server runs self-only. Every write passes here
+    (require_confirmed, run_cli) before anything is run."""
+    if run_as not in RUN_AS_VALUES:
+        raise ValueError(
+            f"run_as must be one of {RUN_AS_VALUES}, got {run_as!r}")
+    if run_as == 'mu2epro' and SELF_ONLY:
+        raise PermissionError(
+            "this prodtools-write server runs self-only "
+            f"(start_write_mcp.sh --self-only, {SELF_ONLY_ENV}): "
+            "run_as='mu2epro' is refused, confirm or not. Use run_as='self', "
+            "or a prodtools-write server started without --self-only.")
+
 # --- the exit status of anything run through `ksu -e` is UNUSABLE ------
 #
 # MIT ksu (krb5 1.21.1, this host) does NOT propagate the child's exit
@@ -201,9 +232,7 @@ def require_confirmed(run_as, confirm):
     can be un-armed by a settings reload, and an irreversible action
     must not depend on that.
     """
-    if run_as not in RUN_AS_VALUES:
-        raise ValueError(
-            f"run_as must be one of {RUN_AS_VALUES}, got {run_as!r}")
+    check_run_as(run_as)
     if run_as == 'mu2epro' and not confirm:
         raise PermissionError(
             "run_as='mu2epro' registers artifacts in production SAM and "
@@ -323,9 +352,7 @@ def run_cli(argv, run_as, cwd=None, simjob_setup=None):
     away from being reused for mu2epro, and an unchecked rc is the
     failure mode this whole mechanism exists to prevent.
     """
-    if run_as not in RUN_AS_VALUES:
-        raise ValueError(
-            f"run_as must be one of {RUN_AS_VALUES}, got {run_as!r}")
+    check_run_as(run_as)
     _validate_entry_point(argv[0])
     if run_as == 'mu2epro':
         if cwd is not None:

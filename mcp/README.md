@@ -225,7 +225,16 @@ though `CLAUDE.md` documents the gate as present. Run `/hooks` (or
 start a fresh session) after any change here before relying on the
 prompt.
 
-Health check: `bash mcp/scripts/start_write_mcp.sh --check`.
+Self-only: `start_write_mcp.sh --self-only` (sets
+`PRODTOOLS_WRITE_SELF_ONLY=1`) refuses `run_as="mu2epro"` in every tool,
+confirm or not, and says so in the server's instructions. It is for clients
+that ask no human before a tool call (an agent, its automations): there
+`confirm=true` is the model confirming itself and no PreToolUse hook runs.
+The mode is fixed at start; an unknown launcher argument is refused, so a
+typo cannot start a server that takes mu2epro.
+
+Health check: `bash mcp/scripts/start_write_mcp.sh --check` (add
+`--self-only` to check that mode).
 
 Both launchers share environment setup via `mcp/scripts/_mcp_env.sh`.
 
